@@ -137,8 +137,19 @@ def run_propose_demotions(store, auth, at, failures=None):
         run.did(SR.words_of(found["made"], "rule suggested", "No rules to suggest"))
 
 
+def run_engineering_exceptions(store, auth, at, failures=None):
+    # Plain code (backend/pipeline_exceptions.py): a manager on the Manager profile is woken with its board's exceptions
+    # only when an entry is new since the last list; no entry, or no new one, is a quiet run.
+    with SR.recording(store, "engineering_exceptions", failures) as run:
+        from . import pipeline_exceptions
+        with store.transaction() as c:
+            woke = pipeline_exceptions.deliver(c, stamp(at))
+        run.did(SR.words_of(woke, "manager woken", "No new exceptions"), quiet=not woke)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
-         "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report, "propose_demotions": run_propose_demotions}
+         "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report, "propose_demotions": run_propose_demotions,
+         "engineering_exceptions": run_engineering_exceptions}
 
 
 def run_now(store, auth, key, actor):
@@ -229,15 +240,19 @@ class Scheduler:
             # A completed run's notes are settled where its result is recorded; this settles any that path missed.
             H.notes_settle_catch_up(c, 500)
 
+        def source_outages_tick(c):
+            from . import source_outages
+            source_outages.sync(c, self.store.settings)
+
         def company_turns_tick(c):
             from . import org_turns
-            org_turns.observe(c, self.store.settings)
+            org_turns.observe(c, self.store.settings, detailed=False)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
+        # Fleet classification for the Health finding runs on a read connection between two short writes, so claim
+        # renewals and events are not parked behind every queued bot's refusal check (TK / #1654 residual).
         with SR.recording(self.store, "turn_fixer", failures) as run:
             from . import turn_fixer
-            with locked("turn_fixer") as c:
-                freed, incident = turn_fixer.run(c, self.execution, self.store.settings,
-                                                 self.execution.auth.owner_id(c) if self.execution.auth else '')
+            freed, incident = turn_fixer.run_split(self.execution, self.store.settings, locked, self.store.read)
             run.did(turn_fixer.words(freed, incident), quiet=not freed)
         with self.store.read() as c:
             from . import start_places
@@ -254,6 +269,7 @@ class Scheduler:
                      self.execution.auto_reconcile,
                      self.execution.release_deploy_drains,
                      self.execution.release_limits,      # a usage limit lifts at its reset, not at the next claim
+                     source_outages_tick,
                      company_turns_tick,
                      wake_presets_tick,                         # wake presets let go of the notices and sweeps now due
                      self.execution.hold_unrunnable,
@@ -645,9 +661,45 @@ class Scheduler:
                         aged = step_age.sweep(c, stamp(at))
                 except Exception as exc:
                     failures.append({"step_age": type(exc).__name__})
+                # A turn that ended and left its ticket or check in progress with nothing queued: its owner, once.
+                nudged = []
+                try:
+                    from . import step_age
+                    with self.store.transaction() as c:
+                        nudged = step_age.turn_ended(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"turn_ended": type(exc).__name__})
+                # Work piling up at a step with a backlog setting: whoever it names hears of it (backend/step_backlog.py).
+                backlogged = []
+                try:
+                    from . import step_backlog
+                    with self.store.transaction() as c:
+                        backlogged = [f"{n} at {s}" + (f" for {o}" if o else "") for s, o, n, _ in step_backlog.sweep(c, stamp(at))]
+                except Exception as exc:
+                    failures.append({"step_backlog": type(exc).__name__})
+                # Tickets waiting at an assigning step go to the least busy bot of its pool (backend/task_allocator.py).
+                allocated = []
+                try:
+                    from . import task_allocator
+                    with self.store.transaction() as c:
+                        allocated = [f"{t} to {b}" for t, b in task_allocator.allocate(c, stamp(at))]
+                except Exception as exc:
+                    failures.append({"task_allocator": type(exc).__name__})
+                # A check open past its step's timeout is closed and its round skipped (backend/step_flow.py).
+                timed_out = []
+                try:
+                    from . import verdict_moves
+                    with self.store.transaction() as c:
+                        timed_out = verdict_moves.timeouts(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"check_timeouts": type(exc).__name__})
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
-                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or []}
+                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
+                         "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
+                         "late tickets nobody told": aged.get("untold") or [],
+                         "owners woken after an idle turn": nudged,
+                         "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

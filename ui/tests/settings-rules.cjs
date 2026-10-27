@@ -78,6 +78,7 @@ async function open(browser, role, hash = '#/settings/rules', viewport = {width:
     if (p === '/api/v2/task-types') return json({types: TYPES});
     if (p === '/api/v2/event-types') return json({items: CATALOG});
     if (p === '/api/v2/triggers') return json({triggers: [{id: 'shop', name: 'Shop', event: 'webhook.shop', routines: [], builtin: false}]});
+    if (p === '/api/v2/tags') return json({tags: [{id: 'g1', key: 'billing', is_template: false}, {id: 'g2', key: 'urgent', is_template: false}]});
     if (p === '/api/v2/webhooks') return json({items: [{id: 'wh1', name: 'Zapier', host: 'hooks.zapier.com', events: ['*'], enabled: true}], more: false});
     // The server lists only the suggestions the viewer may act on.
     if (p === '/api/v2/rules/suggestions') return json({suggestions: role === 'owner' ? suggestions.filter(x => x.status !== 'dismissed') : [], more: false});
@@ -238,7 +239,7 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
       assert.deepEqual(await off('select[name=scope_kind] option'), ['type', 'task']);
       assert.deepEqual(await off('select[name=then] option'), ['batch']);
       await form.locator('select[name=then]').selectOption('action');
-      assert.deepEqual(await off('select[name=action] option'), ['close', 'move_step', 'set_wait', 'relate', 'note']);
+      assert.deepEqual(await off('select[name=action] option'), ['close', 'move_step', 'set_wait', 'relate', 'note', 'assign', 'add_tag', 'remove_tag']);
       assert.equal(await form.locator('select[name=action]').inputValue(), 'wake_bot');
       await form.locator('select[name=action]').selectOption('send_webhook');
       assert.equal(await form.locator('[name=param_note]').isVisible(), false);
@@ -286,6 +287,27 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
       await form.locator('button[type=submit]').click();
       await form.waitFor({state: 'detached'});
       assert.deepEqual(writes[3].body.params, {action: 'forward', webhook: 'wh1'});
+      // Label-driven actions: assign names a bot or a person by actor id; tags are typed comma-separated and sent as a list.
+      await page.locator('[data-rule-new]').click();
+      await form.locator('select[name=event]').selectOption('comment');
+      await form.locator('[name=tag]').fill('billing');
+      await form.locator('select[name=then]').selectOption('action');
+      await form.locator('select[name=action]').selectOption('assign');
+      assert.equal(await form.locator('select[name=param_owner]').isVisible(), false, "create_task's bot list stays hidden");
+      await form.locator('select[name=param_assignee]').selectOption('bot:ops');
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[4].body.params, {action: 'assign', owner: 'bot:ops'});
+      assert.deepEqual(writes[4].body.when, {tag: 'billing'});
+      await page.locator('[data-rule-new]').click();
+      await form.locator('select[name=event]').selectOption('comment');
+      await form.locator('select[name=then]').selectOption('action');
+      await form.locator('select[name=action]').selectOption('add_tag');
+      assert.deepEqual(await form.locator('#rule-tag-keys option').evaluateAll(els => els.map(e => e.value)), ['billing', 'urgent']);
+      await form.locator('[name=param_tag]').fill('urgent, billing');
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[5].body.params, {action: 'add_tag', tag: ['urgent', 'billing']});
       assert.deepEqual(errors, []);
       await page.close();
     }

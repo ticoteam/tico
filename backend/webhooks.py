@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from fastapi import Request
 from pydantic import Field
 
-from . import egress
+from . import destinations, egress
 from . import hubdb as H
 from . import models as M
 from . import webhook_delivery as D
@@ -49,6 +49,9 @@ MAX_HEADER_VALUE = 1000
 MAX_FILTER = 50
 REFUSED_HEADERS = ("host", "content-length", "content-type", "transfer-encoding", "connection")
 HEADER_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
+# Why an endpoint is paused after its address changed and its secret header values were cleared: it stays paused until
+# each one is typed again or removed (`update`), and sends nothing without them (webhook_delivery.deliver).
+NEEDS_VALUE = "A secret header needs its value again: the address changed and its saved value was cleared"
 REPLAY_BATCH = 500
 DISABLE_DAYS = 5
 DISABLE_SPAN_HOURS = 12
@@ -496,9 +499,16 @@ def headers_of(hook):
 
 
 def open_headers(c, vault, hook_id, stored):
-    """The headers to send: a secret's value opened. Name to value."""
+    """The headers to send: a secret's value opened. Name to value. A secret whose value was cleared has none to send
+    (`needs_value`), so the send waits instead (webhook_delivery.deliver)."""
     return {h["name"]: (vault.cipher.unseal(c, _context(hook_id, h["name"]), h["value"]) if h["secret"] else h["value"])
-            for h in stored}
+            for h in stored if not h.get("needs")}
+
+
+def needs_value(stored):
+    """The secret headers whose value was cleared when the address changed: the endpoint sends nothing until each is
+    typed again or removed."""
+    return [h["name"] for h in stored if h.get("secret") and h.get("needs")]
 
 
 def _actor_may_use(c, actor, hook, name):
@@ -607,7 +617,9 @@ def view(hook, who, tally=None):
             "requested_by": hook["requested_by"] or None, "created": hook["created"], "updated": hook["updated"],
             "revision": hook["revision"], "old_secret_until": grace, "can_change": mine,
             "filter": {"departments": [], "bots": [], "task_types": [], **filter_of(hook)},
-            "headers": [{"name": h["name"], "secret": h["secret"], **({"set": True} if h["secret"] else {"value": h["value"]})}
+            "headers": [{"name": h["name"], "secret": h["secret"],
+                         **(({"set": False, "needs_value": True} if h.get("needs") else {"set": True}) if h["secret"]
+                            else {"value": h["value"]})}
                         for h in headers_of(hook)] if mine else [],
             "disabled_at": hook["disabled_at"], "disabled_reason": hook["disabled_reason"] or None,
             "last_7_days": tally or {"delivered": 0, "failed": 0, "pending": 0}}
@@ -665,6 +677,9 @@ class WebhookUpdate(Contract):
     filter: FilterIn | None = None
     headers: list[HeaderIn] | None = Field(default=None, max_length=MAX_HEADERS)
     expected_revision: int | None = None
+    # When the address moves to another destination while secret headers keep their saved values: "keep" sends them
+    # to the new address, "clear" removes them (named "needs value") and pauses the endpoint until they are typed again.
+    credentials: str | None = Field(default=None, max_length=10)
 
 
 class WebhookSend(Contract):
@@ -770,11 +785,65 @@ def create(c, vault, who, body):
     return {"approval": {"id": aid, "status": "pending"}, "webhook": None}
 
 
+def carried(before, after):
+    """The secret headers whose saved value an edit keeps as it was: the credentials a new address would receive."""
+    old = {h["name"]: h["value"] for h in before if h.get("secret") and not h.get("needs") and h.get("value")}
+    return [h["name"] for h in after if h.get("secret") and not h.get("needs") and old.get(h["name"]) == h.get("value")]
+
+
+def destination_change(c, hook, url, kept, vault=None):
+    """What moving `hook` to `url` does to the secret headers it keeps (`kept`, names): None when none is kept or the
+    destination is the same (scheme, host, port, path and query: shared receivers tell recipients apart by path),
+    else the safe old and new destination (backend/destinations.py)."""
+    if not kept:
+        return None
+    key = vault.cipher.key(c) if vault is not None and getattr(vault, "configured", False) else b""
+    return destinations.change(hook["url"], url, path_counts=True, key=key)
+
+
+UPDATE_PATH = re.compile(r"/api/v2/webhooks/([^/]+)/update")
+
+
+def kept_by(before, items):
+    """The saved secret headers a headers list (`items`, as sent) keeps with their saved value: a secret listed
+    without a value keeps the one it has (`clean_headers`). With no list, every saved secret is kept. The same answer
+    `carried` gives after the save, read before it, so a card and the save agree on what a new address receives."""
+    if items is None:
+        return carried(before, before)
+    saved = set(carried(before, before))
+    out = []
+    for item in items:
+        item = item if isinstance(item, dict) else getattr(item, "__dict__", {})
+        name = str(item.get("name") or "").strip().lower()
+        if item.get("secret") and item.get("value") in (None, "") and name in saved and name not in out:
+            out.append(name)
+    return out
+
+
+def pending_change(c, who, hook_id, body, vault=None):
+    """For BotOps' Confirm card (backend/app.py `person_card`): (endpoint, destination change or None, kept secret
+    header names) that `body`, an update asked for `who`, would make, without saving. Refused at once when `who` may not
+    change the endpoint, as the tap would be. A secret listed without a value keeps its saved one, as the save does."""
+    hook = _row(c, hook_id)
+    may_manage(who, hook)
+    body = body if isinstance(body, dict) else {}
+    url = body.get("url") or hook["url"]
+    items = body.get("headers")
+    kept = kept_by(headers_of(hook), items if isinstance(items, list) or items is None else [])
+    return hook, destination_change(c, hook, url, kept, vault), kept
+
+
 def update(c, who, hook_id, body, vault=None):
+    """Change an endpoint. A new address for another destination while secret headers keep their saved values is
+    held (`destinations.held`) until the body says `credentials: "keep"` (they go to the new address) or `"clear"`
+    (their values are removed, their names kept as needing a value, and the endpoint pauses until each is typed again
+    or removed); either leaves one `integration.destination_changed` event. Any address change needs
+    `expected_revision`, so the decision is about the endpoint as the editor saw it."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
     if body.expected_revision is not None and body.expected_revision != hook["revision"]:
         raise Problem("version_conflict", "This endpoint changed; refresh before saving", 409)
+    option = destinations.choice(body.credentials)
     name = body.name if body.name is not None else hook["name"]
     url = body.url if body.url is not None else hook["url"]
     allow = bool(hook["allow_http"] if body.allow_http is None else body.allow_http)
@@ -783,17 +852,40 @@ def update(c, who, hook_id, body, vault=None):
             raise Problem("forbidden", "Only the owner turns plain http to this computer on or off", 403)
     events = clean_events(body.events) if body.events is not None else json.loads(hook["events_json"])
     host = check_address(url, allow)
+    if url != hook["url"] and body.expected_revision is None:
+        raise Problem("expected_revision", "Changing the address needs expected_revision: the revision you read", 422)
     filt = clean_filter(c, body.filter) if body.filter is not None else filter_of(hook)
-    headers = headers_of(hook)
+    before = headers_of(hook)
+    headers = before
     if body.headers is not None:
         if vault is None:
             raise Problem("webhook", "Headers cannot be changed here", 422)
         headers = clean_headers(c, vault, hook_id, body.headers, headers)
+    kept = carried(before, headers)
+    moved = destination_change(c, hook, url, kept, vault)
+    if moved and not option:
+        raise destinations.held("webhook", moved, kept, hook["revision"], hook["name"])
+    destinations.require_tap(who, moved)
+    if moved and option == destinations.CLEAR:
+        headers = [{"name": h["name"], "secret": True, "value": "", "needs": True} if h["name"] in kept else h
+                   for h in headers]
+    enabled, reason = hook["enabled"], hook["paused_reason"] or ""
+    if needs_value(headers):
+        if enabled or reason == NEEDS_VALUE:
+            enabled, reason = 0, NEEDS_VALUE              # nothing goes out without the header (Product: pause)
+        # An endpoint already paused or turned off for another reason keeps that reason, so typing the values again
+        # never turns back on what someone paused on purpose.
+    elif reason == NEEDS_VALUE:
+        enabled, reason = 1, ""                           # every cleared value was typed again or removed
     c.execute("UPDATE webhooks SET name=?, url=?, host=?, events_json=?, rate_per_hour=?, allow_http=?, "
-              "filter_json=?, headers_json=?, revision=revision+1, updated=? WHERE id=?",
+              "filter_json=?, headers_json=?, enabled=?, paused_reason=?, revision=revision+1, updated=? WHERE id=?",
               (name, url, host, json.dumps(events), body.rate_per_hour or hook["rate_per_hour"], int(allow),
-               json.dumps(filt), json.dumps(headers), H.now(), hook_id))
+               json.dumps(filt), json.dumps(headers), enabled, reason, H.now(), hook_id))
     H.event(c, who.actor, "webhook.updated", hook_id, {"name": name})
+    if moved:
+        destinations.record(c, who, "webhook", hook_id, moved, kept, option, hook["revision"] + 1)
+    if enabled and not hook["enabled"]:
+        _refresh(c)
     return view(_row(c, hook_id), who, counts(c, [hook_id]).get(hook_id))
 
 
@@ -822,6 +914,9 @@ def pause(c, who, hook_id, reason=""):
 def resume(c, who, hook_id):
     hook = _row(c, hook_id)
     may_manage(who, hook)
+    if needs_value(headers_of(hook)):
+        raise Problem("needs_value", "Type the value of " + ", ".join(needs_value(headers_of(hook))) + " again, or remove "
+                      "it, before turning this endpoint back on", 409)
     c.execute("UPDATE webhooks SET enabled=1, paused_reason='', disabled_at=NULL, disabled_reason='', failing_since=NULL, "
               "revision=revision+1, updated=? WHERE id=?", (H.now(), hook_id))
     H.event(c, who.actor, "webhook.resumed", hook_id, {})

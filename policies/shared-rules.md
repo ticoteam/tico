@@ -30,7 +30,7 @@ These sit alongside `handoffs.md` and `approvals.md`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until `outbound_send` is on. See `documentation.md`.
-- **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. When a review must come from a different model family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different.
+- **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. Reviews prefer a model family different from the work's; when you choose a reviewer by family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different. A different family is a preference, never a requirement: when no reviewer from another family is free or healthy, a same-family review goes ahead rather than the work waiting or anyone being asked to rule on it.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until `outbound_send` is on; then follow the requested work and standing instructions.
 - **Ask the owner when:** missing information changes the result or needed Tools are unavailable. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,
@@ -106,7 +106,10 @@ they own, its title your question and its body your note, with Yes and No on the
 question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and is not a card for them. When they
 answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.
 Write the ask to them: one or two plain sentences saying what you need and what happens after, at most 40 words,
-with no ids, hashes, file paths, `s3://` links or tool names; Tico refuses it otherwise. Working notes go in a comment.
+with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare `#1555` is not); Tico refuses it
+otherwise. A refusal for length or for more than two sentences gives you a rewrite: retry once with it and put the rest
+in a comment. When no shorter wording keeps the decision, it gives the exact fix instead and nothing is sent. Working notes go
+in a comment.
 One question, one card. Don't file a separate task just to ask, and don't hand another bot a subtask that waits on
 the same person for the same thing: if the card this asks for is already open in the task's tree, your ask joins it.
 - Good: `--on ana --note "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."`

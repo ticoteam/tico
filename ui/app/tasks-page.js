@@ -11,7 +11,8 @@ function pageTasks(forced, openId = '') {
   const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '', who: 'me', side: 'plate',
     loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
     filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
-    selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map()};
+    selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map(),
+    fullAt: 0, stale: false, fullRead: null};
   const query = tasksFiltersFromURL(state);
   const hadQuery = [...query.keys()].length > 0;
   if (state.urlView && TASK_VIEWS.some(([k]) => k === state.urlView)) forced = state.urlView;
@@ -162,6 +163,7 @@ function pageTasks(forced, openId = '') {
   });
   state.layoutAbort = new AbortController();
   taskBoardBind(state, body);
+  pullToRefresh($('#tasks-pane'), () => tasksPulled(state), {signal: state.layoutAbort.signal, skip: () => taskBoardHolding(state)});
   document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
@@ -229,7 +231,8 @@ function taskOwnerOptions(selected = '') {
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.name)}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+      `<option value="${esc(e.name)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
+        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
 }
 function taskCreateModal() {
   let d = $('#task-create');
@@ -342,15 +345,17 @@ async function tasksLoad(state, opts = {}) {
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
   const cursor = state.since;
+  if (!cursor) state.activeComplete = false;
   state.loading = !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/routines'), v2Get('/v2/tasks/labels'),
     taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
-  let changed = null, active = null, rec, lab;
+  let changed = null, active = null, rec, lab, held = null;
+  const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
     [changed, rec, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.since = null; }
+    if (!changed || changed.reset) { changed = null; state.since = null; state.activeComplete = false; }
   }
   if (!changed) {
     if (cursor) tasksRender(state);
@@ -361,17 +366,22 @@ async function tasksLoad(state, opts = {}) {
     const gone = new Set((changed.gone || []).map(String));
     state.tasks = mergeTaskRows((state.tasks || []).filter(t => !gone.has(String(t.id))), changed.tasks || []);
     state.since = changed.cursor;
-  } else {
-    const activeIds = new Set((active?.tasks || []).map(t => String(t.id)));
-    const finished = (state.tasks || []).filter(t => ['done', 'closed'].includes(String(t.status)) && !activeIds.has(String(t.id)));   // reopened ones are active again
-    state.tasks = mergeTaskRows(finished, active?.tasks || []);
+  } else if (active) {
+    // Read in full. The open tasks already held stay until every page has come, so a later page that fails leaves the
+    // list as long as it was; only a list read to its end drops the ones the server no longer lists as open (below).
+    // A finished copy held is replaced when the task is open again.
+    held = new Set((state.tasks || []).filter(t => !isFinished(t)).map(t => String(t.id)));
+    (active.tasks || []).forEach(t => seen.add(String(t.id)));
+    state.tasks = mergeTaskRows(state.tasks || [], active.tasks || []);
   }
+  // A read that failed (offline, the server away) leaves the list as it was rather than empty; the next poll reads again.
   state.routines = rec?.routines || null;
   state.labels = lab?.labels || [];
   state.tags = lab?.tags || [];
   state.loading = false;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
+  if (tasksNeedsQueue(state)) void askFilteredLoad(state);
   tasksFilterMenuLoaded(state);
   tasksPeekSync(state);
   tasksFinishPending(state, seq);
@@ -389,16 +399,27 @@ async function tasksLoad(state, opts = {}) {
   const drain = async next => {
     while (next != null && TASKS_ST === state && state.loadSeq === seq) {
       const page = await v2Get(activeTasksPath(next));
-      if (!page || TASKS_ST !== state || state.loadSeq !== seq) return;
+      if (!page || TASKS_ST !== state || state.loadSeq !== seq) return false;
       state.tasks = mergeTaskRows(state.tasks, page.tasks || []);
+      (page.tasks || []).forEach(t => seen.add(String(t.id)));
       next = page.next_offset;
       tasksTools(state); tasksRender(state);
     }
+    return next == null;
   };
+  let complete = true;
   if (active) {
-    await drain(active.next_offset);
-    // Only a list read to its end can be caught up from its cursor.
-    if (TASKS_ST === state && state.loadSeq === seq) state.since = active.cursor || null;
+    complete = await drain(active.next_offset);
+    if (TASKS_ST !== state || state.loadSeq !== seq) return;      // a newer read took over
+    // Only a list read to its end can be caught up from its cursor, drops what left it, and starts the clock for the
+    // next full read again (refresh.js tasksFreshen).
+    state.activeComplete = complete;
+    state.since = complete ? active.cursor || null : null;
+    if (complete) {
+      state.tasks = state.tasks.filter(t => !held.has(String(t.id)) || seen.has(String(t.id)) || isFinished(t));
+      state.fullAt = Date.now(); state.stale = false;
+      tasksTools(state); tasksRender(state);
+    }
   }
   // Done and Closed keep their own paging. A reload after a change folds in the newest page; the poll does that too, but
   // only while finished tasks are on screen (Done, Closed, or an unfolded board), and never more than that one page.
@@ -406,6 +427,27 @@ async function tasksLoad(state, opts = {}) {
   const doneShown = tasksFinishedShown(state);
   const reloadDone = opts.poll ? doneShown && state.doneLoaded : (state.doneLoaded || doneShown);
   if (reloadDone && TASKS_ST === state && state.loadSeq === seq) await (state.doneLoaded ? tasksDoneMerge(state) : tasksLoadDone(state, true));
+  return changed ? true : active ? complete : false;
+}
+// The whole list read again, as on opening the page: the cursor is dropped and the kept copies of the task paths are
+// forgotten, so the server reads every row afresh rather than answering 304. A delta read and the live stream carry
+// only what the change log names; a fact a row shows that changes without a task change (a run of the task's own
+// starting, a question growing stale) reaches an open list only this way. One full read at a time: a second call
+// while one is on its way shares it.
+function tasksReadFull(state, opts = {}) {
+  if (state.fullRead) return state.fullRead;
+  state.since = null;
+  getForget();
+  getForgetTagged(p => p.startsWith('/v2/tasks'));
+  const read = state.fullRead = tasksLoad(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
+  return read;
+}
+// Pulled down at the top on a touch screen (pull-refresh.js): the list, Needs you and the counts read again.
+async function tasksPulled(state) {
+  const [ok] = await Promise.all([tasksReadFull(state), v2Refresh().catch(() => {})]);
+  if (TASKS_ST !== state) return;
+  tasksTools(state); tasksRender(state);
+  if (ok === false) toast('Could not refresh the tasks. Check the connection and pull again.', true);
 }
 // A save took its task out of the view? Once a load that started after the save has drawn, the list and the peek
 // move on (tasksAfterFinish). Any load may land it: an older one overtaken by the poll returns before it gets here.

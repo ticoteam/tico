@@ -290,3 +290,107 @@ def test_waiters_are_dropped_below_the_warning_so_claims_stop_taking_the_write_l
     monkeypatch.setattr(api.app.state.execution, 'claim', lambda *a, **k: wrote.append(1) or {'attempt': None})
     assert claim(api, machine, 'finance') is None
     assert not wrote                # answered on the read connection
+
+
+def test_claim_admission_and_quiet_fixer_do_not_classify_the_queued_backlog(api, monkeypatch):
+    """Detailed queue explanations must not run inside each claim's writer transaction."""
+    from backend import start_places, turn_fixer
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'chat/ops', {'text': 'A synthetic request still starts while the backlog is large.'})
+
+    def detailed(*args, **kwargs):
+        raise AssertionError('Admission must not classify every queued bot')
+
+    monkeypatch.setattr(start_places, 'summary', detailed)
+    attempt = claim(api, machine, 'ops')
+    assert attempt is not None
+    assert post(api, 'attempts/' + attempt['id'] + '/start-place', {}, machine['token'])['reserved']
+    with api.app.state.store.transaction() as c:
+        assert not turn_fixer.tend(c, api.app.state.store.settings).get('active')
+
+
+def test_lightweight_observation_keeps_full_counts_only_on_warning_crossings(api, monkeypatch):
+    from backend import org_turns, start_places
+    one_person(api)
+    machine = waiters(api, n=1, running=1)
+    store = api.app.state.store
+    with store.transaction() as c:
+        org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 2, 'stop_per_person': 3})
+    summaries = []
+    original = start_places.summary
+
+    def detailed(c, rid, *args, **kwargs):
+        summaries.append(rid)
+        return original(c, rid, *args, **kwargs)
+
+    monkeypatch.setattr(start_places, 'summary', detailed)
+    with store.transaction() as c:
+        first = org_turns.observe(c, store.settings, detailed=False)
+        assert first['in_use'] == 2 and first['at_warning'] and not first['at_stop']
+        assert set(('running', 'starting', 'waiting', 'queued')) <= first.keys()
+        assert summaries == [machine['runner_id']]
+        again = org_turns.observe(c, store.settings, detailed=False)
+        assert again['in_use'] == 2 and summaries == [machine['runner_id']]
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-1'")
+        cleared = org_turns.observe(c, store.settings, detailed=False)
+        assert cleared['in_use'] == 1 and not cleared['at_warning']
+        assert summaries == [machine['runner_id'], machine['runner_id']]
+        incident = org_turns.saved(c, org_turns.INCIDENT)
+        assert not incident['active'] and incident['counts']['in_use'] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='turns.warning_crossed'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='turns.warning_cleared'").fetchone()[0] == 1
+
+
+def test_health_and_queued_labels_do_not_classify_the_fleet_for_at_stop(api, monkeypatch):
+    """Health's stuck-queue gate and chat queued labels only need the turn ceiling, not every bot's refusal.
+
+    Per-computer Health lines still call start_places.summary for their own counts; the company at_stop
+    decision and the company-turns check must not rebuild a whole-fleet snapshot on every poll.
+    """
+    from backend import org_turns, views
+
+    one_person(api)
+    machine = waiters(api, n=99, running=1)
+    independent(api, machine)
+    assert claim(api, machine, 'finance') is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'",
+                  (H.shift(H.now(), minutes=-3),))
+    monkeypatch.setattr(org_turns, 'snapshot', lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('at_stop and company-turns Health paths must use admission, not snapshot')))
+    health = get(api, 'health')
+    queue = next(x for x in health['checks'] if x['id'] == 'queue')
+    assert any(i.get('reason') == 'company_limit' for i in queue['items'])
+    company = next(x for x in health['checks'] if x['id'] == 'company_turns')
+    assert company['status'] == 'warn' and company['items'][0]['at_stop']
+    with api.app.state.store.read() as c:
+        location = {'online': True, 'awake': True, 'ready': True, 'machine': {'runner_id': machine['runner_id'],
+                                                                              'label': 'Synthetic'}}
+        label, _ = views.queued_label(c, 'finance', location, api.app.state.store.settings, human=True)
+    assert label == 'Saved — ' + org_turns.REASON
+
+
+def test_snapshot_shares_one_company_default_across_runners(api, monkeypatch):
+    """Each claim_refusal used to rebuild company pools/groups; one Default memo covers the whole pass."""
+    from backend import org_turns, usage_limits
+
+    first = waiters(api, n=0, running=0)
+    second = runner(api, label='Other synthetic computer')
+    assign(api, second, 'finance')
+    ready(api, second, ['finance'])
+    calls = []
+    real = usage_limits.company
+
+    def once(c):
+        calls.append(1)
+        return real(c)
+
+    monkeypatch.setattr(usage_limits, 'company', once)
+    with api.app.state.store.read() as c:
+        value = org_turns.snapshot(c, api.app.state.store.settings)
+        runners = {row['id'] for row in c.execute('SELECT id FROM runners')}
+    assert {first['runner_id'], second['runner_id']} <= runners
+    assert len(calls) == 1
+    assert set(('running', 'starting', 'waiting', 'queued')) <= value.keys()

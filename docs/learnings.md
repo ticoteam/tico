@@ -45,7 +45,9 @@ Only the computer the bot is assigned to may report for it.
   computer.
 - **Learnings and Decisions** show `memory/learnings.md` and `memory/decisions.md` as the shared repository
   has them. Uncommitted or unpushed changes are not sent, and a bot with no shared repository sends commit
-  subjects only.
+  subjects only. Each file may be up to 4,000,000 UTF-8 bytes. If it grows beyond that, its view warns
+  that the file is too large and dates the saved copy, or says no saved copy is available. The next report
+  of a file that fits replaces the copy and clears the warning.
 - **Source.** The prompt asks the bot to end a memory commit's message with `Tico-Run: <run id>`. For
   a bot that is not shared, a commit made during a run is that run's even without the line. A run
   must belong to the bot or its family (an original and its branches share one repository);
@@ -57,9 +59,16 @@ Only the computer the bot is assigned to may report for it.
 Branches of a shared bot write the same repository, so a lesson one branch pushes shows in every
 branch's history and reaches their next run after the repository syncs.
 
+Update the server before its computers ([updates](updates.md)). Computers normally follow the server's
+release. A newer runner manually connected to an older server may have large reports refused until that
+server is upgraded; the runner retains those reports for retry.
+
 ## API
 
-- `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`, `next_before`.
+- `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`,
+  `document_status`, `next_before`. Each path in `document_status` has `oversized` and
+  `updated` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
+  while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
 
 ## Nightly learning run

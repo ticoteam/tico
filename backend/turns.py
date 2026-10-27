@@ -279,7 +279,9 @@ def annotate(c, auth, who, messages):
     mark_delivery(c, messages)
     mark_prompts(c, messages)
     titles = {}
-    for tid in {v for m in messages for v in task_refs(m)}:
+    refs = {v for m in messages for v in task_refs(m)}
+    H.prime_tasks(c, refs)
+    for tid in refs:
         row = H.task(c, tid)
         if row and readable(lambda: auth.task_row(c, who, row)):
             titles[tid] = {"title": row["title"], "owner": row["owner"], "status": row["status"]}

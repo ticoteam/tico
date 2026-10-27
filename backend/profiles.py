@@ -1,6 +1,6 @@
 """Bot profiles: how a bot is woken and what work it takes (quiet task flow, section 5).
 
-`bot_config.profile` is `doer`, `reviewer`, `lead`, `responder`, `monitor` or `custom`. A profile is a fixed set of
+`bot_config.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
@@ -8,6 +8,8 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
+    manager    people, work given to it, its timers,   note                 no                no      any
+               its exceptions list
     responder  people                                  note                 no                no      none
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
@@ -37,14 +39,14 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 
-DOER, REVIEWER, LEAD, RESPONDER, MONITOR, CUSTOM = "doer", "reviewer", "lead", "responder", "monitor", "custom"
-NAMES = (DOER, REVIEWER, LEAD, RESPONDER, MONITOR, CUSTOM)
+DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
+    "doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
+NAMES = (DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM)
 MAX_SECONDS = 7 * 86400
 TOKEN_SAVER_SECONDS = 30 * 60           # a window this long or longer is what older clients call Token saver
 DIGEST_HOUR = 9                         # a lead's digest, in the team's time zone
 MATERIALISED = "profile"                # `created_by` of the rows a custom profile copied into the rules table
 # Traditional gate requests require a parent; explicit release QA can cover an entire release.
-REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Security)\b", re.I)
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
@@ -61,6 +63,11 @@ SPEC = {
                               "takes review and QA tasks only."},
     LEAD: {**BASE, "label": "Lead", "pulls": "none", "sweeps": False, "digest_hour": DIGEST_HOUR, "batch_scope": "bot",
            "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day."},
+    # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
+    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": False, "batch_scope": "bot",
+              "description": "Works from one exceptions list, sent about hourly when it has a new entry. Wakes for people, "
+                             "work given to it and its own timers; ticket news, verdicts and subtask results wait for "
+                             "its next run."},
     RESPONDER: {**BASE, "label": "Responder", "pulls": "none", "sweeps": False, "takes": "none",
                 "description": "Answers people in chat. Wakes for people only and takes no tasks."},
     MONITOR: {**BASE, "label": "Monitor", "sweeps": False, "takes": "watcher",
@@ -202,8 +209,32 @@ def is_review_task(c, row, *, parent_id=None):
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
         return False
-    return bool(REVIEW_TITLE.match(title) or ACCEPTANCE_TITLE.search(title)
+    return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
+
+
+def _check_title(c, parent, title):
+    """A request titled for one of the parent board's check steps (backend/step_flow.titled), or a Security check."""
+    from . import step_flow
+    from .check_pools import is_security
+    return bool(parent) and (is_security(title) or step_flow.is_kind(c, parent, title))
+
+
+def is_check(c, row):
+    """A check that finishes only with a verdict: titled for a check step of its ticket's board (Review 1/2, QA or Post
+    Release QA on the Dev board), or Security, under a ticket another owner
+    holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
+    and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
+    child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
+    owner = str(row.get("owner") or "")
+    if H.is_bot(owner) and H.check_model(c, row["id"], owner[len("bot:"):]):
+        return True
+    if H.is_human(owner):
+        return False
+    parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
+    title = str(row.get("title") or "").strip()
+    return bool(parent and parent["owner"] != owner and
+                (_check_title(c, parent, title) or RELEASE_QA_TITLE.match(title)))
 
 
 def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):
@@ -247,7 +278,7 @@ class BotProfile(Contract):
     """Set a bot's profile. A named profile takes its own values (send only the numbers to change); the numbers
     set again each time. `pulls`, `sweeps` and `takes` are for `custom`, whose rows are edited on the Rules page.
     Leaving `custom` for a named profile drops the rows it copied into the rules table: `confirm_drop_rules`."""
-    profile: Literal["doer", "reviewer", "lead", "responder", "monitor", "custom"]
+    profile: Literal["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
     expected_revision: int = Field(ge=1)
     batch_seconds: int | None = Field(default=None, ge=0, le=MAX_SECONDS)
     batch_scope: Literal["bot", "conversation"] | None = None

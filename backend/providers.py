@@ -643,17 +643,15 @@ def author_provider(author):
 
 
 def check_choice(record, author, available=None):
-    """The check model for work written on `author` (a provider, model or runtime): the first in check_order from
-    another provider, and on a runtime in `available` (the signed-in runtimes) when that is given. A check that
-    runs on the author's own provider is no second opinion, so it is refused rather than picked."""
+    """The check model for work written on `author` (a provider, model or runtime): the first in check_order on a
+    runtime in `available` (the signed-in runtimes) when that is given, from another provider when one qualifies. A
+    second opinion from another provider is preferred; with none, the author's own provider still checks the work."""
     own = author_provider(author)
-    for row in check_order(record):
-        if row["provider"] == own or (available is not None and row["runtime"] not in available):
-            continue
+    rows = [row for row in check_order(record) if available is None or row["runtime"] in available]
+    for row in [r for r in rows if r["provider"] != own] + [r for r in rows if r["provider"] == own]:
         return row
-    raise ProviderError("check_model", "No check model from a provider other than "
-                        f"{PROVIDER_BY_ID[own]['label'] if own else 'the author'}: enable or sign in another AI "
-                        "provider in Settings > Computers, or name one with --check-model", 409)
+    raise ProviderError("check_model", "No check model can run: enable or sign in an AI provider in "
+                        "Settings > Computers, or name one with --check-model", 409)
 
 
 # ----------------------------------------------------------------------------- resolution

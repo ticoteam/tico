@@ -18,6 +18,7 @@ from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from starlette.requests import ClientDisconnect
 
 from clients.agent_skill import WHO_NEEDS_ME
@@ -27,7 +28,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
-from . import ceo_bot, invites, owner_link
+from . import ask_ingest, ceo_bot, invites, owner_link
 from . import login_holds
 from . import step_age
 from . import bot_stops, turn_budgets
@@ -72,7 +73,7 @@ from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
-from .store import H, P, Problem, Store, bot_readiness, encode, message_page, repo_url, task_message_page
+from .store import H, P, Problem, Store, bot_readiness, encode, message_page, refused, repo_url, task_message_page
 
 
 
@@ -246,6 +247,9 @@ def create_app(settings=None):
                 # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
                 from . import move_retry
                 move_retry.tick(app.state.github_app)
+                # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
+                from . import task_blocked
+                task_blocked.fresh(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
@@ -322,6 +326,11 @@ def create_app(settings=None):
         index_stop = threading.Event()
         index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
+        # History rows' read dependencies, settled beside the server (backend/read_deps.py); a read of a row not
+        # settled yet walks its provenance as before.
+        from . import read_deps
+        reads_stop = threading.Event()
+        reads_task = asyncio.create_task(asyncio.to_thread(read_deps.loop, store, reads_stop)) if timers else None
         demo_task = None
         if settings.demo:
             from . import demo
@@ -343,11 +352,14 @@ def create_app(settings=None):
             app.state.doc_sources.stop.set()
             copy_stop.set()
             index_stop.set()
+            reads_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
             await index_task
+            if reads_task:
+                await reads_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:
@@ -606,7 +618,7 @@ def create_app(settings=None):
                 size = request.headers.get("content-length", "0")
                 if not size.isdigit():
                     raise Problem("content_length", "Invalid Content-Length", 400)
-                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
+                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/uploads/assistant/messages", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
                 docs_import = (request.url.path in ("/api/v2/docs/import", "/api/v2/market/import")
                                and request.state.identity.role in ("human", "owner", "bot"))
                 # A bot's computer publishes files up to 25 MB as raw bytes (backend/files.py).
@@ -615,9 +627,11 @@ def create_app(settings=None):
                 # A run's raw provider stream: up to 5 MB of frames, escaped once more as a JSON string.
                 captured = (request.url.path.startswith("/api/v2/attempts/") and request.url.path.endswith("/capture")
                             and request.state.identity.role == "runner")
+                memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
+                                 and request.state.identity.role == "runner")
                 streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -662,11 +676,16 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
+                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    setting = (not approves and request.state.identity.via == "assistant"
+                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
                     if not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and assistant_instructed(request.method, request.url.path, raw, decides=bool(approves))):
+                            and (setting or assistant_instructed(request.method, request.url.path, raw,
+                                                                 decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval or answering a bot's "
-                                      "question that the person clearly asked for in this chat runs when you cite their "
+                                      "own. A task change, comment or link, declining an approval, answering a bot's "
+                                      "question or a direct setting (`hub settings set`) that the person clearly asked "
+                                      "for in this chat runs when you cite their "
                                       "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
                                       "(or POST /api/v2/assistant/actions), several actions on one card (path "
                                       "/api/v2/assistant/batch); approving is a card unless the person lets you "
@@ -676,6 +695,15 @@ def create_app(settings=None):
                         with store.read() as c:
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
+                            if setting:
+                                def trial(e, target, body):
+                                    # The route's own rule (repositories.needs_card), tried and rolled back.
+                                    from . import repositories
+                                    with store.transaction() as tc:
+                                        return repositories.card_words(tc, settings, auth, request.state.identity,
+                                                                       target["bot"], body)[0]
+                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial,
+                                                                    settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
@@ -1082,8 +1110,14 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
-        for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
+        value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
+        hold_kind = value.pop("blocked_kind", None)
+        for field in ("blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
+        # A review-gate or worktree hold says its own why, so the screen never folds it into a bot wait's line
+        # (ui/app/tasks.js taskBotWait); other kinds stay server-only.
+        if hold_kind in ("gate", "worktree"):
+            value["blocked_kind"] = hold_kind
         # Most list rows have no hold or accumulated clock; omit empty optional fields.
         for field in ("blocked_since", "blocked_reason", "building_started_at", "building_seconds"):
             if not value.get(field):
@@ -1096,7 +1130,9 @@ def create_app(settings=None):
                 pipelines = H.type_list(c)
         typ = next((t for t in pipelines if t["id"] == row.get("type_id")), None)
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
-        value["step"] = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
+        step = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
+        # A step's check pool and flow are the type's settings (Settings > Tasks), not sent again on each of a board's tasks.
+        value["step"] = {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow")} if step else None
         if c is not None:
             value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
             value["roles"] = TRo.roles_of(c, row["id"])
@@ -1117,10 +1153,15 @@ def create_app(settings=None):
             value["links"] = H.task_links(c, row["id"])
             from .worktree_waits import for_task as worktree_waits_for
             value["worktree_waits"] = worktree_waits_for(c, row["id"])
+            from .check_pools import for_task as check_waits_for
+            value["check_waits"] = check_waits_for(c, row["id"])     # a check waiting for a free reviewer
             # What it waits for besides tasks: a pull request to merge, a release to be published (Dev 256).
             value["milestone_waits"] = milestone_waits.waits(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
+            from .qa_waivers import waivers as qa_waivers_of
+            # A person's QA waiver for an exact head: shown as a waiver, never as a QA verdict (backend/qa_waivers.py).
+            value["qa_waivers"] = qa_waivers_of(c, row, value["links"])
             if parts is None:
                 counts = c.execute("SELECT COUNT(*), SUM(status IN ('done','closed')) FROM tasks WHERE id IN ("
                                    + TR.CHILD_IDS + ") AND (" + visible_sql + ")", (row["id"],)).fetchone()
@@ -1578,8 +1619,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Search is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1600,8 +1640,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Fetch is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1622,7 +1661,8 @@ def create_app(settings=None):
         vault = app.state.vault
         with store.transaction() as c:
             gateway_connection.save(c, vault, who, {"key": body.key.get_secret_value() if body.key else "",
-                                                    "url": body.url, "expected_revision": body.expected_revision},
+                                                    "url": body.url, "expected_revision": body.expected_revision,
+                                                    "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
         with store.read() as c:
@@ -1695,7 +1735,7 @@ def create_app(settings=None):
         """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""
         admin_only(who, does)
         with store.read() as c:
-            return gateway_connection.key(c, app.state.vault, settings), gateway_connection.url(c, settings)
+            return gateway_connection.target(c, app.state.vault, settings)[:2]
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
@@ -2644,7 +2684,37 @@ def create_app(settings=None):
 
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
-        return mutate(request, body, lambda c: send(c, request.state.identity, body))
+        who = request.state.identity
+        # Ask ingest (backend/ask_ingest.py): a bot's question to a person is judged before it is written, whatever
+        # task or message it refers to; sent back with the filter on, it is withdrawn as soon as it is asked.
+        ingest = None
+        if body.kind == "ask":
+            title = body.text.strip().split("\n")[0][:300]
+            tref = (body.refs or {}).get("task")
+            tref = tref[0] if isinstance(tref, list) and tref else tref
+            if isinstance(tref, str) and ask_ingest.gated(who, settings.assistant_bot):
+                # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
+                with store.read() as c:
+                    try:
+                        title = auth.task(c, who, tref).get("title") or title
+                    except Problem:
+                        pass
+            ingest = ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
+                                          kind="question" if tref else "loose")
+
+        def work(c):
+            # Judged against the plate before the question is on it.
+            gate = ask_ingest.apply(c, ingest) if ingest else None
+            message = send(c, who, body)
+            if not ask_ingest.matches(ingest, message.get("to_actor")) or message.get("kind") != "ask":
+                return message
+            tid = H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"]))
+            verdict = {**ingest, "kind": "question" if tid else "loose"}
+            ask_ingest.record(c, verdict, gate, tid or message["id"], message["id"])
+            if gate["acts"]:
+                ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
+            return {**message, **ask_ingest.reply(gate)}
+        return mutate(request, body, work)
 
     @app.get("/api/v2/messages/{mid}")
     def message(request: Request, mid: str):
@@ -3080,6 +3150,64 @@ def create_app(settings=None):
             return views.take_recommendation(c, auth, who, asked, body.version)
         return mutate(request, body, work)
 
+    def task_filters(c, owner=None, requester=None, status=None, lane=None, label=None, type=None, step=None,
+                     number=None, updated_since=None, member=None, role=None, snoozed=None, by_id=False, exact=False):
+        """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
+        change (`POST /api/v2/task-bulk`) selects with the same ones. `exact` refuses an owner or requester that names
+        nobody, where a list would quietly drop the filter: a bulk change must never widen to every task."""
+        found_owner = H.resolve_actor(c, owner) if owner else None
+        found_requester = H.resolve_actor(c, requester) if requester else None
+        if exact and (owner and not found_owner or requester and not found_requester):
+            raise Problem("owner" if owner and not found_owner else "requester",
+                          "owner and requester are a person or a bot on the roster", 422)
+        if member:
+            member = H.resolve_actor(c, member)
+            if not member:
+                raise Problem("member", "member is a person or a bot on the roster", 422)
+        if role and not TRo.role_name(role):
+            raise Problem("role", "role is a short name in lower-case letters, digits, - or _", 422)
+        if role and not member:
+            raise Problem("role", "role filters member: pass both", 422)
+        if lane and lane not in H.TASK_LANES:
+            raise Problem("kind", "lane is company or product", 422)
+        typ = H.type_get(c, type) if type else None
+        if type and not typ:
+            raise Problem("type", "No task type " + type, 422)
+        step_ids = None
+        if step:
+            # By id or name: in the type when one is given, else every type's step of that name.
+            steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name FROM task_steps"))
+            step_ids = [s["id"] for s in steps if step in (s["id"], s["name"])]
+            if not step_ids:
+                raise Problem("step", "No step " + step + (" in " + typ["name"] if typ else ""), 422)
+        if snoozed not in (None, "hide", "only", "all"):
+            raise Problem("snoozed", "snoozed is hide, only or all", 422)
+        if number is not None and not 1 <= number <= 999_999_999:
+            raise Problem("number", "number is a task number, from 1", 422)
+        since = H.parse_ts(updated_since) if updated_since else None
+        if updated_since and (not since or since.tzinfo is None):
+            raise Problem("date", "updated_since must be an ISO-8601 date/time with a timezone", 422)
+        return found_owner, found_requester, dict(
+            status=status.split(",") if status and status != "all" else None, lane=lane, label=label,
+            type_id=typ["id"] if typ else None, step_ids=step_ids, number=number,
+            updated_since=views.since_time(updated_since) if since else None,
+            member=member, role=TRo.role_name(role) if role else None,
+            snoozed=None if snoozed == "all" or (snoozed is None and by_id) else snoozed or "hide")
+
+    def task_idents(c, who, ids, visible_sql):
+        """`ids` (1 to 100 task ids or numbers, comma-separated) as typed, each with the task it names for this reader
+        or None (unknown, ambiguous or not readable)."""
+        typed = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
+        if not typed or len(typed) > 100:
+            raise Problem("ids", "ids is 1 to 100 task ids or numbers, comma-separated", 422)
+        found = {}
+        for ident in typed:
+            try:
+                found[ident] = auth.resolve_task(c, who, ident, visible=visible_sql)
+            except Problem:
+                found[ident] = None
+        return typed, found
+
     @app.get("/api/v2/tasks")
     def tasks(request: Request, response: Response, owner: str | None = None, requester: str | None = None,
               status: str | None = None, lane: str | None = None, label: str | None = None, limit: int = 500,
@@ -3091,64 +3219,26 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         with store.read_transaction() as c:
-            owner = H.resolve_actor(c, owner) if owner else None
-            if member:
-                member = H.resolve_actor(c, member)
-                if not member:
-                    raise Problem("member", "member is a person or a bot on the roster", 422)
-            if role and not TRo.role_name(role):
-                raise Problem("role", "role is a short name in lower-case letters, digits, - or _", 422)
-            if role and not member:
-                raise Problem("role", "role filters member: pass both", 422)
-            requester = H.resolve_actor(c, requester) if requester else None
-            if lane and lane not in H.TASK_LANES:
-                raise Problem("kind", "lane is company or product", 422)
             if limit < 1 or limit > 500:
                 raise Problem("limit", "limit is between 1 and 500", 422)
             if offset < 0:
                 raise Problem("offset", "offset is zero or greater", 422)
             if sort not in ("queue", "finished", "step"):
                 raise Problem("sort", "sort is queue, finished or step", 422)
-            typ = H.type_get(c, type) if type else None
-            if type and not typ:
-                raise Problem("type", "No task type " + type, 422)
-            step_ids = None
-            if step:
-                # By id or name: in the type when one is given, else every type's step of that name.
-                steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name FROM task_steps"))
-                step_ids = [s["id"] for s in steps if step in (s["id"], s["name"])]
-                if not step_ids:
-                    raise Problem("step", "No step " + step + (" in " + typ["name"] if typ else ""), 422)
-            if snoozed not in (None, "hide", "only", "all"):
-                raise Problem("snoozed", "snoozed is hide, only or all", 422)
-            if number is not None and not 1 <= number <= 999_999_999:
-                raise Problem("number", "number is a task number, from 1", 422)
-            since = H.parse_ts(updated_since) if updated_since else None
-            if updated_since and (not since or since.tzinfo is None):
-                raise Problem("date", "updated_since must be an ISO-8601 date/time with a timezone", 422)
+            owner, requester, filters = task_filters(
+                c, owner=owner, requester=requester, status=status, lane=lane, label=label, type=type, step=step,
+                number=number, updated_since=updated_since, member=member, role=role, snoozed=snoozed,
+                # A snoozed task is off every list until its date unless asked for by id, number or filter.
+                by_id=ids is not None or number is not None)
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
             visible_sql = auth.task_sql(c, who)
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
             typed = None
             if ids is not None:
-                typed = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
-                if not typed or len(typed) > 100:
-                    raise Problem("ids", "ids is 1 to 100 task ids or numbers, comma-separated", 422)
+                typed, found = task_idents(c, who, ids, visible_sql)
                 if changed_after is not None:
                     raise Problem("ids", "ids and changed_after are separate reads", 422)
-                found = {}
-                for ident in typed:
-                    try:
-                        found[ident] = auth.resolve_task(c, who, ident, visible=visible_sql)
-                    except Problem:
-                        found[ident] = None
-            filters = dict(status=status.split(",") if status and status != "all" else None, lane=lane, label=label,
-                           order=sort, type_id=typ["id"] if typ else None, step_ids=step_ids, number=number,
-                           updated_since=views.since_time(updated_since) if since else None, visible_sql=visible_sql,
-                           member=member, role=TRo.role_name(role) if role else None,
-                           # A snoozed task is off every list until its date unless asked for by id, number or filter.
-                           snoozed=None if snoozed == "all" or (snoozed is None and (ids is not None or number is not None))
-                           else snoozed or "hide")
+            filters.update(order=sort, visible_sql=visible_sql)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
             def brief_rows(rows):
@@ -3412,7 +3502,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3438,7 +3528,10 @@ def create_app(settings=None):
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
-                                       actor=who.actor)
+                                       actor=who.actor, title=body.title, body=body.body)
+        # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
+        sealed = (not guest and privacy.private_execution(c, source)
+                  and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -3470,6 +3563,25 @@ def create_app(settings=None):
                        or parent and H.task_private(c, parent))
         if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
+        from . import blocker_asks
+        blocker_key, joins, asked_of = None, None, owner
+        if body.blocker:
+            try:
+                blocker_key = blocker_asks.key(body.blocker.model_dump())
+            except ValueError as exc:
+                raise Problem("blocker", str(exc), 422)
+            if who.role == "bot" and not private and owner != who.actor:
+                # The same blocker already asked about: this task waits on that ask instead of reaching its owner.
+                joins = blocker_asks.open_ask(c, blocker_key, owner, parent_id)
+            if joins:
+                owner, check, unchecked = who.actor, None, None
+        # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
+        # with the filter on, it stays the bot's own task; the reply says why.
+        gate = None
+        if ingest and not joins and owner == ingest["person"]:
+            gate = ask_ingest.apply(c, ingest)
+            if gate["acts"]:
+                owner, check, unchecked = who.actor, None, None
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
@@ -3510,8 +3622,18 @@ def create_app(settings=None):
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
-                            qa_not_checkable_live=body.qa_not_checkable_live)
+                            qa_not_checkable_live=body.qa_not_checkable_live,
+                            quiet_notice=bool(joins) or bool(gate and gate["acts"]))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if gate:
+            ask_ingest.record(c, ingest, gate, row["id"])
+        if sealed:
+            # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
+            H._task_event(c, parent_id, who.actor, "handed", None, owner,
+                          f"Handed to {H.actor_id(owner)} in a private subtask")
+            H._task_event(c, row["id"], who.actor, "sealed", None, who.actor,
+                          f"Filed by {H.actor_id(who.actor)} from private work it does not share")
+        joined = blocker_asks.record(c, who.actor, row, blocker_key, joins, asked_of) if blocker_key else None
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
             # reviewer's default comes from its own setting.
@@ -3544,28 +3666,38 @@ def create_app(settings=None):
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
-        own_subtask = None
+        own_subtask = []
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
-            own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
+            own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
         note = " ".join(filter(None, (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),
-                                      own_subtask)))
+                                      *own_subtask, joined)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
+                **({"joined": {"task": joins["id"], "title": joins["title"], "owner": joins["owner"]}} if joins else {}),
+                **ask_ingest.reply(gate),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
-        from . import review_gate
+        from . import review_gate, step_flow
         # None is reserved for a genuinely unconfigured GitHub integration.
         # If a skipped preflight becomes applicable during mutation, fail closed.
-        if child_title is not None and not review_gate.REVIEW.match(child_title):
-            return {}
+        if child_title is not None:
+            # A child titled for one of the parent board's review steps; a parent this caller cannot read is
+            # refused by the create itself.
+            with store.read() as c:
+                try:
+                    parent = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    return {}
+                if not review_gate.is_review(c, parent, child_title):
+                    return {}
         if child_title is None and step is None and status is None and task_type is None:
             return {}
         with store.read() as c:
@@ -3590,7 +3722,7 @@ def create_app(settings=None):
                     named = current
                 else:
                     named = next((s for s in typ["steps"] if s["status"] == effective), None)
-                if not named or named["name"] not in ("Review 1", "Review 2"):
+                if not named or not step_flow.gated(c, named["id"]):
                     return {}
             if not review_gate.engineering(c, row):
                 return {}
@@ -3601,7 +3733,9 @@ def create_app(settings=None):
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots))
+        ingest = ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
+        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
+                                                           ingest=ingest))
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -3612,55 +3746,248 @@ def create_app(settings=None):
         with store.read() as c:
             return check(c, auth, who, body)
 
+    def task_update_one(c, caller, tid, body, snapshots, view=True, ingest=None):
+        """One task's change, as `POST /api/v2/tasks/{tid}` makes it and each task of a bulk change
+        (`POST /api/v2/task-bulk`, which needs no view of each task back): the same permissions, events and wakes."""
+        # A person's request to BotOps can purge tasks that are not really needed, as that person.
+        who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+        task_id = auth.resolve_task(c, who, tid)
+        row = auth.task(c, who, task_id)
+        if body.private is False and H.task_private(c, row) and (caller.role == "bot" or caller.task_actor):
+            raise Problem("privacy", "Only the human requester can make a private task company-visible",
+                          422 if who.role == "bot" else 403)
+        if who is not caller:
+            H.event(c, caller.actor, "task.update_delegated", task_id,
+                    {"on_behalf_of": who.actor, "message_id": body.on_behalf_of,
+                     "close": body.close, "status": body.status, "owner": body.owner})
+        if row["version"] != body.version:
+            raise Problem("version_conflict", "Task changed; fetch it and retry your update", 409)
+        if body.owner:
+            auth.require_bot_contact(c, who, auth.target(c, who, body.owner, need="write"), task_id=task_id, kind="task")
+        if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
+            raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
+        if body.goal_id and not G.goal(c, body.goal_id):
+            raise Problem("not_found", "Unknown goal", 404)
+        if body.close:
+            if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
+                                           body.labels, body.waiting_on, body.rank, body.roles,
+                                           body.goal_id, body.type, body.step, body.step_rank, body.number, body.private, body.visibility, body.public_title, body.public_summary, body.size,
+                                           body.verdict, body.verdict_head)):
+                raise Problem("close", "Close and edit are separate operations", 422)
+            note = body.note or ""
+            if (note.strip() and getattr(who, "via", "") == "botops" and who.actor != "bot:" + BOTOPS
+                    and row["owner"] == "bot:" + BOTOPS):
+                # The close is the person's (only the requester or a human closes), but the words are
+                # BotOps' own report on its own task: they read as BotOps, like its other progress notes.
+                H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
+                note = ""
+            H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
+            warnings, gates = None, []
+        else:
+            fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
+            privacy.require_wait(c, caller, row, body.waiting_on)
+            gates, waits = [], []
+            for verdict in ingest or ():
+                # Ask ingest (backend/ask_ingest.py), judged against the plate before the change: a bot handing its
+                # own task to a person is filing it for them, and sent back or FYI with the filter on the task stays
+                # the bot's; a wait sent back or FYI is not set. One request may do both, each judged on its own.
+                if verdict["kind"] == "task" and row["owner"] == who.actor and body.owner and \
+                        H.resolve_actor(c, body.owner) == verdict["person"]:
+                    gate = ask_ingest.apply(c, verdict)
+                    ask_ingest.record(c, verdict, gate, task_id)
+                    if gate["acts"]:
+                        fields["owner"] = None
+                elif verdict["kind"] == "wait" and row["owner"] == who.actor and \
+                        row.get("waiting_on") != verdict["person"] and \
+                        H.resolve_actor(c, body.waiting_on) == verdict["person"]:
+                    gate = ask_ingest.apply(c, verdict)
+                    waits.append((verdict, gate))
+                    if gate["acts"]:
+                        fields["waiting_on"] = None
+                        if fields.get("status") == "waiting":
+                            fields["status"] = None
+                else:
+                    continue
+                gates.append(gate)
+            if "size" in body.model_fields_set and body.size is None:
+                fields["clear_size"] = True
+            after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
+                                  receipt_owner=Access.load_owner(c, settings)["email"])
+            warnings = after.get("warnings")
+            for verdict, gate in waits:
+                # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
+                # their Needs you, so the gate's row names it (Hands needed reads it).
+                card = after.get("asked_in") if not gate["acts"] else None
+                ask_ingest.record(c, verdict, gate, card["id"] if card else task_id)
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
+        return {**({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
+                **({"warnings": warnings} if warnings else {}),
+                **(ask_ingest.reply(*gates) if not body.close else {})}
+
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
+        ingest = []
+        if (body.owner or body.waiting_on) and ask_ingest.gated(caller, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, caller, auth.resolve_task(c, caller, tid))
+                except Problem:
+                    row = None
+            if row and row["owner"] == caller.actor:
+                # The handoff and the wait are judged each on its own: a request may name both.
+                ingest = [v for v in (
+                    handoff_preflight(caller, row, body.owner, body.note) if body.owner else None,
+                    ask_ingest.preflight(store, app.state.judge, caller, body.waiting_on, row["title"],
+                                         body.note or row.get("note") or "", kind="wait") if body.waiting_on else None)
+                    if v]
+        return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots, ingest=ingest))
+
+    def handoff_preflight(caller, row, owner, note=None):
+        """Ask ingest for a bot handing its own task `row` to `owner`: judged like a task filed for them."""
+        return ask_ingest.preflight(store, app.state.judge, caller, owner, row["title"],
+                                    "\n\n".join(filter(None, (row.get("body"), note))), kind="task")
+
+    # One bulk change holds the write lock for every task it changes, and answers with a line for each:
+    # past this many matching tasks it is refused whole, and the caller narrows the filter.
+    BULK_CAP = 200
+
+    def bulk_select(c, who, f):
+        """The ids of the tasks `f` (M.TaskFilter) selects that `who` may read, in the list's order. A filter that
+        names nothing, or more than BULK_CAP matches, is refused."""
+        named = (f.owner, f.requester, f.status not in (None, "", "all") or None, f.label, f.type, f.step, f.number,
+                 f.updated_since, f.member, f.ids)
+        if not any(named):
+            raise Problem("filter", "Name at least one filter: a bulk change never applies to every task", 422)
+        owner, requester, filters = task_filters(
+            c, owner=f.owner, requester=f.requester, status=f.status, lane=f.lane, label=f.label, type=f.type,
+            step=f.step, number=f.number, updated_since=f.updated_since, member=f.member, role=f.role,
+            snoozed=f.snoozed, by_id=f.ids is not None or f.number is not None, exact=True)
+        visible_sql = auth.task_sql(c, who)
+        if f.ids is not None:
+            _, found = task_idents(c, who, ",".join(f.ids), visible_sql)
+            filters["ids"] = [tid for tid in found.values() if tid]
+        rows = H.tasks(c, owner=owner, requester=requester, limit=BULK_CAP + 1, visible=visible_sql, **filters)
+        if len(rows) > BULK_CAP:
+            raise Problem("too_many", f"More than {BULK_CAP} tasks match; a bulk change takes at most {BULK_CAP}: "
+                          "narrow the filter", 422, extra={"cap": BULK_CAP})
+        return [row["id"] for row in rows]
+
+    def bulk_change(c, row, body):
+        """The single update (M.TaskUpdate) `body` (M.TaskBulk) makes to the task `row`, or None when the task already
+        is that way."""
+        base = {"version": row["version"], **({"note": body.note} if body.note else {})}
+        if body.action == "close":
+            return None if row["status"] == "closed" else M.TaskUpdate(**base, close=True)
+        if body.action == "status":
+            return None if row["status"] == body.status else M.TaskUpdate(**base, status=body.status)
+        if body.action == "owner":
+            return None if H.resolve_actor(c, body.owner) == row["owner"] else M.TaskUpdate(**base, owner=body.owner)
+        if body.action == "step":
+            # By id or name within the task's own type, as a single update reads it.
+            steps = (H.type_get(c, row.get("type_id") or H.GENERAL_TYPE) or {}).get("steps") or []
+            target = next((s for s in steps if s["id"] == body.step), None) or next(
+                (s for s in steps if s["name"] == body.step), None)
+            return None if target and target["id"] == row.get("step_id") else M.TaskUpdate(**base, step=body.step)
+        labels = H.task_labels(row)
+        add = [key for key in dict.fromkeys(str(t).strip().lower() for t in body.add) if key not in labels]
+        drop = {str(t).strip().lower() for t in body.remove}
+        changed = [key for key in labels if key not in drop] + add
+        return None if changed == labels else M.TaskUpdate(**base, labels=changed)
+
+    @app.post("/api/v2/task-bulk")
+    def task_bulk(request: Request, body: M.TaskBulk):
+        """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made as its single
+        update would be: a task the caller may not change is skipped with the reason, the rest still change. A dry
+        run makes every change and rolls all of them back, so its counts are the real ones."""
+        caller = request.state.identity
+        auth.domain(caller)
+        with store.read() as c:
+            chosen = bulk_select(c, caller, body.filter)
+        # A move into a review step reads each task's pull requests first, outside the write lock (review_preflight).
+        snapshots, unchecked, ingests = {}, {}, {}
+        if body.action == "owner" and body.owner and not body.dry_run and ask_ingest.gated(caller, settings.assistant_bot):
+            # A bot handing its own tasks to a person: each is judged by ask ingest first, a few calls at a time.
+            with store.read() as c:
+                mine = [r for r in (H.task(c, tid) for tid in chosen) if r and r["owner"] == caller.actor]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for r, verdict in zip(mine, pool.map(lambda r: handoff_preflight(caller, r, body.owner, body.note), mine)):
+                    if verdict:
+                        ingests[r["id"]] = verdict
+        if body.action in ("step", "status"):
+            for tid in chosen:
+                try:
+                    snapshots[tid] = review_preflight(caller, tid, step=body.step, status=body.status)
+                except Problem as exc:
+                    unchecked[tid] = exc
+
         def work(c):
-            # A person's request to BotOps can purge tasks that are not really needed, as that person.
-            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
-            task_id = auth.resolve_task(c, who, tid)
-            row = auth.task(c, who, task_id)
-            if body.private is False and H.task_private(c, row) and (caller.role == "bot" or caller.task_actor):
-                raise Problem("privacy", "Only the human requester can make a private task company-visible",
-                              422 if who.role == "bot" else 403)
-            if who is not caller:
-                H.event(c, caller.actor, "task.update_delegated", task_id,
-                        {"on_behalf_of": who.actor, "message_id": body.on_behalf_of,
-                         "close": body.close, "status": body.status, "owner": body.owner})
-            if row["version"] != body.version:
-                raise Problem("version_conflict", "Task changed; fetch it and retry your update", 409)
-            if body.owner:
-                auth.require_bot_contact(c, who, auth.target(c, who, body.owner, need="write"), task_id=task_id, kind="task")
-            if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
-                raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
-            if body.goal_id and not G.goal(c, body.goal_id):
-                raise Problem("not_found", "Unknown goal", 404)
-            if body.close:
-                if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
-                                               body.labels, body.waiting_on, body.rank, body.roles,
-                                               body.goal_id, body.type, body.step, body.step_rank, body.number, body.private, body.visibility, body.public_title, body.public_summary, body.size,
-                                               body.verdict, body.verdict_head)):
-                    raise Problem("close", "Close and edit are separate operations", 422)
-                note = body.note or ""
-                if (note.strip() and getattr(who, "via", "") == "botops" and who.actor != "bot:" + BOTOPS
-                        and row["owner"] == "bot:" + BOTOPS):
-                    # The close is the person's (only the requester or a human closes), but the words are
-                    # BotOps' own report on its own task: they read as BotOps, like its other progress notes.
-                    H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
-                    note = ""
-                H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
-                warnings = None
-            else:
-                fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
-                privacy.require_wait(c, caller, row, body.waiting_on)
-                if "size" in body.model_fields_set and body.size is None:
-                    fields["clear_size"] = True
-                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
-                                         receipt_owner=Access.load_owner(c, settings)["email"]).get("warnings")
-            c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
-                    **({"warnings": warnings} if warnings else {})}
+            # Every task this call skips keeps its refusal on record, and the call counts once toward quarantine.
+            token = H.BULK_CALL.set(H.new_id())
+            try:
+                return bulk_work(c)
+            finally:
+                H.BULK_CALL.reset(token)
+
+        def bulk_work(c):
+            # Chosen again under the write lock, so each task is judged as it is now.
+            ids = bulk_select(c, caller, body.filter)
+            changed, unchanged, skipped, judged = [], [], [], {}
+            # Work queued to run after commit (a webhook's doorbell) goes with the rows a rollback takes back.
+            queued = len(c.after_commit)
+            if body.dry_run:
+                c.execute("SAVEPOINT bulk_dry_run")
+            for tid in ids:
+                row = H.task(c, tid)
+                try:
+                    change = bulk_change(c, row, body)
+                except ValidationError as exc:
+                    skipped.append((tid, "invalid", exc.errors()[0]["msg"]))
+                    continue
+                if change is None:
+                    unchanged.append(tid)
+                    continue
+                c.execute("SAVEPOINT bulk_task")
+                before = len(c.after_commit)
+                try:
+                    if tid in unchecked or tid not in snapshots and body.action in ("step", "status"):
+                        raise unchecked.get(tid) or Problem("changed", "Task changed during the bulk change; try again", 409)
+                    done = task_update_one(c, caller, tid, change, snapshots.get(tid), view=False,
+                                           ingest=[ingests[tid]] if tid in ingests else None)
+                except H.Refused as exc:
+                    # Audited and answered as the single update's refusal would be; the other tasks go on.
+                    del c.after_commit[before:]
+                    problem = refused(c, caller, exc, savepoint="bulk_task")
+                    skipped.append((tid, problem.code, problem.detail))
+                except Problem as exc:
+                    c.execute("ROLLBACK TO bulk_task")
+                    c.execute("RELEASE bulk_task")
+                    del c.after_commit[before:]
+                    skipped.append((tid, exc.code, exc.detail))
+                else:
+                    c.execute("RELEASE bulk_task")
+                    changed.append(tid)
+                    if done.get("ingest"):
+                        judged[tid] = done["ingest"]      # what ask ingest did with this handoff, and why
+            if body.dry_run:
+                c.execute("ROLLBACK TO bulk_dry_run")
+                c.execute("RELEASE bulk_dry_run")
+                del c.after_commit[queued:]
+            # Each task the caller can still read is named; one a change took out of their sight is only counted.
+            visible = auth.task_sql(c, caller)
+            readable = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) "
+                                                f"AND ({visible})", (json.dumps(ids),))}
+            def line(tid, code=None, reason=None):
+                row = H.task(c, tid)
+                return {"id": tid, "number": row.get("number"), "title": row["title"],
+                        **({"code": code, "reason": reason} if code else {}),
+                        **({"ingest": judged[tid]} if tid in judged else {})}
+            return {"dry_run": body.dry_run, "matched": len(ids), "cap": BULK_CAP,
+                    "changed": len(changed), "unchanged": len(unchanged), "skipped": len(skipped),
+                    "tasks": {"changed": [line(t) for t in changed if t in readable],
+                              "skipped": [line(t, code, reason) for t, code, reason in skipped if t in readable]}}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/run-now")
@@ -3683,13 +4010,40 @@ def create_app(settings=None):
                     raise Problem("forbidden", "This task involves a bot whose activity BotOps may not read", 403)
             else:
                 row = auth.task(c, who, task_id)
-                if who.role not in ("human", "owner") and who.actor != row["requester"]:
-                    raise Problem("forbidden", "Only a person, the task's requester or BotOps starts it early", 403)
+                if (who.role not in ("human", "owner")
+                        and not H.task_represents(c, who.actor, row["requester"])
+                        and not (who.actor != row["owner"] and H.task_represents(c, who.actor, row["owner"]))):
+                    raise Problem("forbidden", "Only a person, the task's requester, a party's manager or BotOps starts it early", 403)
                 # Running it wakes the bot: that is a request to it.
                 if str(row["owner"]).startswith("bot:") and who.actor != row["owner"]:
                     auth.require_write(c, who, H.actor_id(row["owner"]))
             after, queued = H.task_run_now(c, who.actor, task_id)
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who), "queued": queued}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/qa-waiver")
+    def task_qa_waiver(request: Request, tid: str, body: M.TaskQaWaiver):
+        """Waive a Dev ticket's current In QA step for one exact pull request head, with a reason: the ticket's owner
+        or a manager, always a person (backend/qa_waivers.py). Recorded in task history as a waiver, never as a QA
+        verdict; hosted checks and both reviews on that head stay required."""
+        from . import qa_waivers, review_gate
+        who = request.state.identity
+        # BotOps or the Assistant acting for a person carries the person's actor; the waiver is still a bot's call.
+        person_only(who, "waives a Dev ticket's QA step")
+        with store.read() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            prs = review_gate.links(c, row) if review_gate.engineering(c, row) else []
+        # A fresh GitHub read outside the write lock, as a review move takes (review_preflight).
+        snapshots = review_gate.snapshot(app.state.github_app, prs) if prs else {}
+        def work(c):
+            task_id = auth.resolve_task(c, who, tid)
+            current = auth.task(c, who, task_id)
+            owner = current["owner"]
+            manager = mover(c, who) or who.role == "human" and auth.manages(
+                c, who, "bot" if H.is_bot(owner) else "person", H.actor_id(owner))
+            waiver = qa_waivers.waive(c, who.actor, task_id, body.head, body.reason, body.step, snapshots,
+                                      manager=bool(manager))
+            return {"waiver": waiver, "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/snooze")
@@ -3737,18 +4091,55 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/ask")
     def task_ask(request: Request, tid: str, body: M.Answer):
+        """The owner's one question to the task's requester (hubdb.task_ask). A bot's question to a person passes
+        ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked and the task does
+        not wait on them."""
+        who = request.state.identity
+        ingest = None
+        if ask_ingest.gated(who, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    row = None
+            if row:
+                ingest = ask_ingest.preflight(store, app.state.judge, who, row["requester"], row["title"], body.text,
+                                              kind="task_ask")
+
         def work(c):
-            task_id = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, task_id)
-            lifecycle.refuse_send(c, request.state.identity, None, what="task questions")
-            return H.task_ask(c, request.state.identity.actor, task_id, body.text)
+            task_id = auth.resolve_task(c, who, tid)
+            row = auth.task(c, who, task_id)
+            lifecycle.refuse_send(c, who, None, what="task questions")
+            gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester"]) else None
+            # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
+            msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]))
+            if gate:
+                ask_ingest.record(c, ingest, gate, task_id, msg["id"])
+                if gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, task_id, msg["id"])
+                    # Why, on the task's record, quiet as the merge and let-through notes are.
+                    H.task_comment(c, H.KEEPER, task_id, gate["text"], wake=False)
+            return {**msg, **ask_ingest.reply(gate)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. It wakes the bot on the task when the comment is meant for it
-        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
+        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task. A bot's question to a person
+        passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked."""
         who = request.state.identity
+        ingest = None
+        if body.ask and ask_ingest.gated(who, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    row = None
+            if row:
+                asked = body.ask.who or (row["owner"] if who.actor == row["requester"] else row["requester"])
+                ingest = ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text,
+                                              kind="question")
+
         def work(c):
             mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
@@ -3768,15 +4159,23 @@ def create_app(settings=None):
             if people and not wakes_bot:
                 ask, people = H.mention_ask(body.text, people[0]), people[1:]
             if ask:
-                wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
+                wake = who.role == "bot" or H.task_participant(c, who.actor, row) or moves
             else:
                 wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
                     who.role == "bot" and body.needs_action)
             extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
             if body.needs_action:
                 extra["needs_action"] = True
+            # Judged against the plate before the question is on it.
+            gate = ask_ingest.apply(c, ingest) if ingest and ask else None
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
+            if gate and not ask_ingest.matches(ingest, msg.get("to_actor")):
+                gate = None
+            if gate:
+                ask_ingest.record(c, ingest, gate, task_id, msg["id"])
+                if gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, task_id, msg["id"])
             copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
                       for person in people]
             for item in attached:
@@ -3790,7 +4189,7 @@ def create_app(settings=None):
             waits = bot_to_bot.held_reason(msg)
             return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
-                    **({"visuals": report} if report else {})}
+                    **({"visuals": report} if report else {}), **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -3818,7 +4217,7 @@ def create_app(settings=None):
             from .task_review import answer_task
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or mover(c, who)
+            wake = who.role == "bot" or H.task_participant(c, who.actor, row) or mover(c, who)
             return answer_task(c, auth, who, task_id, body, wake=wake)
         return mutate(request, body, work)
 
@@ -4770,7 +5169,15 @@ def create_app(settings=None):
                 scope = rest[len("usage/pools/"):]
                 return usage_limits.pool_only_lowers(c, "company" if scope == "company" else "group:" + scope.split("/", 1)[-1], body)
             return usage_limits.only_lowers(c, rest[len("usage/limits/"):] if rest.startswith("usage/limits/") else None, body)
-        if not path or not botops_act.card_for_person(method, path, body, rules, lowers):
+        # A Gateway URL change sends the saved key to the proposed address as a connection check.
+        # Require the owner's tap whenever a key is saved, even when botops_direct is on. A key the server's
+        # environment sets can't be changed here at all, so that save is refused at once rather than carded.
+        gateway_put = method == "PUT" and path == botops_act.API + "providers/gateway"
+        moved, shown, what, refusal = destination_card(c, acting, method, path, body)
+        gateway_key_address_change = gateway_put and (bool(body.get("url")) or bool(moved)) and (
+            gateway_connection.connected(c, settings) and not gateway_connection.env_key(settings))
+        if not path or not botops_act.card_for_person(method, path, body, rules, lowers,
+                                                       force_confirm=gateway_key_address_change or bool(moved)):
             return None
         # Told at once, not handed a card that fails on the tap.
         who_may = ("the owner" if botops_act.owner_only(method, path, body) and acting.role != "owner"
@@ -4779,9 +5186,72 @@ def create_app(settings=None):
         if who_may:
             raise Problem("forbidden", "Only " + who_may + " can do this", 403, extra=botops_act.refusal_for_person(
                 path, "Your role can't change this: ask " + who_may, settings.public_url))
+        if refusal:
+            raise refusal
         with store.transaction() as w:
-            card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body))
+            card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body),
+                                what=what, shown=shown)
         return JSONResponse(card)
+
+    def destination_card(c, acting, method, path, body):
+        """For BotOps acting for a person: (change, card lines, card title, refusal) when `body` moves saved credentials
+        to another service (backend/destinations.py). It always waits for the person's own tap; until BotOps
+        says which (`credentials` "keep" or "clear") and names the revision it read, it is refused at once (`refusal`,
+        raised once the person's role is checked) with what the person must decide, so no card keeps or clears
+        anything without their word. An address edit that moves nothing saved gets no change and no refusal, but still
+        its card lines and title, so no card for either integration shows an address as typed. Else Nones."""
+        from . import destinations, webhooks
+        from .assistant import spoken
+        if method == "PUT" and path == botops_act.API + "providers/gateway":
+            moved, labels = gateway_connection.destination_change(c, body, settings), [gateway_connection.LABEL_KEY]
+            current, integration, name = gateway_connection.revision(c), "gateway", gateway_client.LABEL
+            old_url, new_url = gateway_connection.url(c, settings), gateway_client.base_url(str(body.get("url") or ""))
+        elif method == "POST" and (hook := webhooks.UPDATE_PATH.fullmatch(path)):
+            row, moved, labels = webhooks.pending_change(c, acting, hook.group(1), body, app.state.vault)
+            current, integration, name = row["revision"], "webhook", row["name"]
+            old_url, new_url = row["url"], body.get("url") or row["url"]
+        else:
+            return None, None, None, None
+        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
+        # only as its safe destination, never as typed).
+        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
+        and_also = f", and change {', '.join(spoken(k) for k in also)}" if also else ""
+        others = [{"field": k, "new": shown_value(body[k])} for k in also]
+        if not moved:
+            if "url" not in body:
+                return None, None, None, None
+            seen = destinations.shown(old_url, new_url)
+            old, new = seen["old"]["address"], seen["new"]["address"] or "an address that is not a URL"
+            what = f"Change {name}'s address to {new} ({seen['path']}; nothing saved moves to another service)"
+            return None, [{"field": "destination", "old": old, "new": new}, {"field": "path", "new": seen["path"]},
+                          *others], (what + and_also)[:300], None
+        option = destinations.choice(body.get("credentials"))
+        if not option:
+            return moved, None, None, destinations.held(integration, moved, labels, current, name)
+        if body.get("expected_revision") is None:
+            return moved, None, None, Problem("expected_revision", "Changing where saved credentials go needs "
+                                              "expected_revision: the revision you read", 422)
+        if not isinstance(body["expected_revision"], int) or body["expected_revision"] != int(current):
+            return moved, None, None, Problem("version_conflict", name + " changed since you read it; read it again", 409)
+        old, new, listed = moved["old"]["address"], moved["new"]["address"], ", ".join(labels)
+        what = (f"Send {name}'s saved {listed} to {new} instead of {old}" if option == destinations.KEEP
+                else f"Move {name} to {new} and clear its saved {listed}")
+        shown = [{"field": "destination", "old": old, "new": new},
+                 *([{"field": "path", "new": moved["path"]}] if "path" in moved else []),
+                 {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed},
+                 *others]
+        return moved, shown, (what + and_also)[:300], None
+
+    def shown_value(value):
+        """A short card value for a field that changes alongside a destination: a scalar as itself, a header list as
+        its names (a secret's value is refused before any card), anything else by size."""
+        if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            return value[:120]
+        if isinstance(value, list) and all(isinstance(h, dict) and "name" in h for h in value):
+            return ", ".join(str(h["name"])[:60] for h in value) or "none"
+        return f"{len(value)} item{'s' if len(value) != 1 else ''}" if isinstance(value, (list, dict)) else "changed"
 
     def botops_run_identity(c, attempt_id):
         """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
@@ -4799,13 +5269,13 @@ def create_app(settings=None):
             return None
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary, what=None):
+    def propose_card(c, acting, method, path, body, summary, what=None, shown=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
         and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
         route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
         card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what,
-                               routes=app.routes)
+                               routes=app.routes, shown=shown)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}
@@ -5053,12 +5523,15 @@ def create_app(settings=None):
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
+        # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
+        # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
                                                           "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
-                                                          "attempt_thread": True, "runner_drain": True}}
+                                                          "attempt_thread": True, "runner_drain": True,
+                                                          "capacity_continue": True, "source_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -5402,14 +5875,17 @@ def create_app(settings=None):
 
     def computer_rows(c, who):
         from .performance import load_status
+        from . import usage_limits
         from .start_places import summary as turn_counts, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
+        # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
+        limits = usage_limits.company(c)
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-            counts = turn_counts(c, r["id"], settings)
+            counts = turn_counts(c, r["id"], settings, limits)
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:
@@ -6115,13 +6591,14 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/renew")
     def renew(request: Request, aid: str, body: M.Empty):
-        if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
-            with store.read_transaction() as c:
-                validate_identity(c, request.state.identity)
-                fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
-                if fresh is not None:
-                    return fresh
-        return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid))
+        with execution.calling(request.state.identity, aid) as arrived:
+            if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
+                with store.read_transaction() as c:
+                    validate_identity(c, request.state.identity)
+                    fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                    if fresh is not None:
+                        return fresh
+            return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid, arrived=arrived))
 
     @app.post("/api/v2/attempts/{aid}/start-place")
     def start_place(request: Request, aid: str, body: M.StartPlace):
@@ -6137,12 +6614,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/events")
     def events(request: Request, aid: str, body: M.EventBatch):
-        body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
-        # Warm neutral provenance in a read snapshot. The transaction checks current
-        # permissions again, and only reuses this graph while its source clock matches.
-        with store.read_transaction() as c:
-            execution.attempt(c, request.state.identity, aid, active=False)
-        return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
+        with execution.calling(request.state.identity, aid):
+            body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
+            # Warm neutral provenance in a read snapshot. The transaction checks current
+            # permissions again, and only reuses this graph while its source clock matches.
+            with store.read_transaction() as c:
+                execution.attempt(c, request.state.identity, aid, active=False)
+            return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
     def keep_capture(request: Request, aid: str, body: M.StreamCapture):
@@ -6267,7 +6745,7 @@ def create_app(settings=None):
     from .archive import install_archives
     install_archives(app, store)
     from .media import install_media
-    install_media(app, store, auth, mutate, send, task_create)
+    install_media(app, store, auth, mutate, send, task_create, review_preflight)
     from .downloads import install_downloads
     install_downloads(app, store)
     from .team_icon import install_team_icon
@@ -6293,6 +6771,7 @@ def create_app(settings=None):
     install_sql(app, store, auth)
     from .judge import install_judge
     install_judge(app, store, auth)
+    ask_ingest.install(app, store, auth)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
@@ -6315,7 +6794,7 @@ def create_app(settings=None):
     install_messaging(app, store, auth)
     from .integrations import install_integrations
     install_integrations(app, store, auth, mutate)
-    from .memory_history import install_memory_history
+    from .memory_history import MAX_REPORT_BYTES, install_memory_history
     install_memory_history(app, store, auth, mutate)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)

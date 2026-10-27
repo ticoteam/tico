@@ -45,6 +45,11 @@ pub fn unpushed(bot: &str) -> bool {
     UNPUSHED.lock().unwrap().as_ref().is_some_and(|s| s.contains(bot))
 }
 
+#[cfg(test)]
+pub(crate) fn mark_unpushed(bot: &str) {
+    UNPUSHED.lock().unwrap().get_or_insert_with(HashSet::new).insert(bot.to_string());
+}
+
 /// The bot's checkout was pushed: its refreshed product files are upstream now.
 pub fn pushed(bot: &str) {
     if let Some(s) = UNPUSHED.lock().unwrap().as_mut() {

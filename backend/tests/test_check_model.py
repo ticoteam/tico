@@ -52,9 +52,11 @@ def test_stale_entries_are_skipped_and_never_fail_a_save():
         ["grok", "codex:gpt-6-sol"]
     assert "grok-4.6" not in [row["model"] for row in P.check_order(P._record({**off, "check_models": ["grok"]}))]
     alone = P._record({"enabled": ["anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "check_models": ["grok"]})
+    # Another provider is preferred, not required: with only the author's own on, it checks the work.
+    assert P.check_choice(alone, "claude")["provider"] == "anthropic"
     with pytest.raises(P.ProviderError) as refused:
-        P.check_choice(alone, "claude")
-    assert refused.value.status == 409 and "other than Anthropic" in refused.value.detail
+        P.check_choice(alone, "claude", available=set())
+    assert refused.value.status == 409 and "No check model can run" in refused.value.detail
 
 
 @pytest.mark.parametrize("choice", ["gemini", "claude-opus-5", "claude:", ":"])

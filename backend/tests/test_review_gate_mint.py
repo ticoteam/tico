@@ -45,6 +45,7 @@ def test_snapshot_mint_failure_keeps_safe_cause(exc, cause, retryable, auth):
     assert cause in result['why']
     assert ('could not sign in' in result['why']) is auth
     assert result['retryable'] is retryable
+    assert result['auth'] is auth
     assert 'synthetic-secret' not in str(result)
     assert 'head_sha' not in result
     if isinstance(exc, Problem) and exc.code == 'github_unreachable':
@@ -58,8 +59,37 @@ def test_snapshot_http_status_exception(status, retryable, auth):
     result = review_gate.mint_failure(exc, 'acme/widget')
     assert f'HTTP {status}' in result['why']
     assert result['retryable'] is retryable
+    assert result['auth'] is auth
     assert ('could not sign in' in result['why']) is auth
     assert 'synthetic-secret' not in str(result)
+
+
+@pytest.mark.parametrize('failure,retryable,auth', [
+    (503, True, False),
+    (429, True, False),
+    (401, False, True),
+    (403, False, True),
+    (422, False, False),
+    ('timeout', True, False),
+    ('boom', False, False),
+])
+def test_snapshot_read_failure_keeps_cause(failure, retryable, auth):
+    def mint(*args):
+        return ('synthetic-token', '2030-01-01T00:00:00Z')
+    def call(method, path, **kw):
+        if failure == 'timeout':
+            raise TimeoutError('synthetic-secret')
+        if failure == 'boom':
+            raise RuntimeError('synthetic-secret')
+        return SimpleNamespace(status_code=failure, json=lambda: {})
+    service = SimpleNamespace(store=SimpleNamespace(read=lambda: nullcontext(None)),
+                              row=lambda c: True, mint=mint, _call=call)
+    result = review_gate.snapshot(service, [{'id': 'pr', 'repo': 'acme/widget', 'number': 1}])['pr']
+    assert result['error'] is True
+    assert result['retryable'] is retryable
+    assert result['auth'] is auth
+    assert 'synthetic-secret' not in str(result)
+    assert 'head_sha' not in result
 
 
 @pytest.mark.parametrize('failure,cause,retryable,auth', [
@@ -112,4 +142,8 @@ def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cau
     if failure in ('timeout', 'transport'):
         assert 'HTTP' not in error['detail']
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'Blocked' and current['version'] > task['version']
+    assert current['step_id'] == task['step_id'] and current['version'] == task['version']
+    assert not current.get('blocked_since') and not current.get('blocked_gate_json')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 1
+        assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()

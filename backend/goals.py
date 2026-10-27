@@ -27,7 +27,7 @@ from . import people as P
 COLOURS = ("red", "yellow", "green")
 STATUSES = COLOURS + ("done", "dropped")
 AUTO_STATUSES = COLOURS + ("gray",)       # what the arithmetic may say; gray is no data
-LIVE = ("red", "yellow", "green")         # statuses a goal is still worked under; None is proposed
+LIVE = ("red", "yellow", "green")         # statuses a goal is still worked under; None is unscored
 COMPANY = "company"                       # the owner of a company goal
 GOAL_MANAGER = "goal-manager"             # the built-in bot that keeps the KPIs and sets the automatic colours
 AUTO_ACTOR = "bot:" + GOAL_MANAGER        # who an automatic status says set it
@@ -91,7 +91,7 @@ def history(conn, goal_id):
 
 def kpis(conn, goal_id):
     """The goal's KPIs: each one's fields and latest reading, its link with the target, and its status."""
-    return K.goal_views(conn, [goal_id])[goal_id]
+    return K.goal_views(conn, [goal_id], include_archived=True)[goal_id]
 
 
 def kpi(conn, kpi_id):
@@ -246,8 +246,8 @@ def _bet(conn, actor, bet_id):
 
 
 def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id=None):
-    """A new goal. With a parent it is proposed: `status` is NULL until whoever owns the parent sets
-    its first colour. With none it is only unlinked."""
+    """A new goal starts uncoloured until its data supplies an automatic colour or a person sets one.
+    A parent links it to the goal it supports; with none it is simply unlinked."""
     H._writer(conn, actor)
     title = str(title or "").strip()
     if not title:
@@ -300,16 +300,11 @@ def set_status(conn, actor, goal_id, status, note=""):
 
 def _before_finish(conn, goal_id):
     """The status a done or dropped goal had while it was live: its last change from a live status (or none) to done
-    or dropped. None when it had no colour yet, as a proposed goal has none."""
+    or dropped. None when it had no colour yet."""
     row = conn.execute("SELECT old FROM goal_events WHERE goal_id=? AND field='status' AND new IN ('done','dropped') "
                        "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY ts DESC, rowid DESC LIMIT 1",
                        (goal_id,)).fetchone()
     return row[0] if row else None
-
-
-def was_proposed(conn, row):
-    """A finished goal that ended before anyone gave it a first colour: brought back, it is still a proposal."""
-    return row["status"] in ("done", "dropped") and bool(row["parent_id"]) and _before_finish(conn, row["id"]) is None
 
 
 def _before_drop(conn, goal_id):
@@ -332,10 +327,10 @@ def _before_drop(conn, goal_id):
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     """A done or dropped goal back in the live list. `status` is a colour, which sticks as one set by hand does, or
-    `auto`: the colour it had is put back and the CEO Bot works it out again (a proposed goal stays proposed). The
-    goals that moved up when it was dropped stay where they are. The history says it was reopened, and why. `undo`
-    is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its note, setter and time
-    when a person set it, read from the history; it takes no colour or note."""
+    `auto`: the colour it had is put back and the CEO Bot works it out again (a goal that never had one gets it from
+    its data, if any). The goals that moved up when it was dropped stay where they are. The history says it was
+    reopened, and why. `undo` is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its
+    note, setter and time when a person set it, read from the history; it takes no colour or note."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -637,16 +632,20 @@ def score(conn, row, at=None):
         return fallback
     if views:
         return {"status": "gray", "basis": "kpis", "reason": views[0]["reason"]}
+    measures = K.goal_views(conn, [row["id"]], at, include_archived=True)[row["id"]]
+    if len(measures) == 1 and measures[0].get("archived_at"):
+        return {"status": "gray", "basis": "kpis",
+                "reason": f"Its only measure was archived on {K.day(measures[0]['archived_at'])}"}
     return {"status": "gray", "basis": "none", "reason": "No data yet: no KPI, check-in or task progress"}
 
 
 def apply_auto(conn, goal_id, at=None):
     """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a
-    visible suggestion when the arithmetic disagrees, never a change. Done, dropped and proposed goals
+    visible suggestion when the arithmetic disagrees, never a change. Done and dropped goals
     are left alone. Nothing at all while the owner has the CEO Bot's regular checks off (backend/ceo_bot.py `checks`):
     turning them back on works every colour out again. Returns what happened, or None."""
     row = goal(conn, goal_id)
-    if not row or row["status"] in ("done", "dropped") or (row["status"] is None and row["parent_id"]):
+    if not row or row["status"] in ("done", "dropped"):
         return None
     if not ceo_bot.checks(conn):
         return None

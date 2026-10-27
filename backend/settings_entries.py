@@ -140,7 +140,7 @@ ENTRIES = TEAM_RULES + [
       "computers/{computer}/performance", "mode", "text", _card("devices")),
     S("computer.inbox_only", "Inbox only", COMPUTERS, "operator", "direct", "POST", "computers/{computer}/inbox-only",
       "enabled", card=_card("devices")),
-    S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "direct", "POST",
+    S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
     S("computer.revoke", "Revoke a computer", COMPUTERS, "operator", "confirm", "POST", "computers/{computer}/revoke",
       value="json", card=_card("devices")),
@@ -195,8 +195,16 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
+    # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
+    # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
-      value="json", card=_card("repos", "set-repos")),
+      value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
+                    ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
+                    ("create_product_repositories", (True,))),
+      why="A Run workflows or Edit workflow files tick (a kept one coming back too), turning Create product "
+          "repositories back on (the owner only), or taking access away needs a Confirm card: running or editing "
+          "workflows starts CI, which uses the repository's secrets"),
     # CEO bot
     S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
       card=_card("ceo")),
@@ -310,7 +318,7 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
                "bot.budget", "ceo.checks", "ceo.level",
                "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "webhooks.outgoing", "listening.destination", "listening.destination.remove", "roadmap.public",
+               "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else

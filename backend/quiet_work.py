@@ -83,11 +83,22 @@ CARRIED_SQL = "SELECT ts, detail_json FROM events WHERE action=? AND target=? OR
 ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts WHERE id=?"
 
 
-def _own_job_sql():
+def _own_job_sql(claimable=False):
+    eligibility = ""
+    if claimable:
+        from .execution import scoped_sql, unfenced_sql
+        from .statuses import PARKED_SQL
+        # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
+        eligibility = ("AND (j.state!='queued' OR m.from_actor LIKE 'human:%' OR NOT EXISTS "
+                       "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot "
+                       f"AND pc.onboarding_state IN {PARKED_SQL} "
+                       "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
+                       f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
     return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
             f"AND {_H().MESSAGE_TASK_SQL}=? "
+            + eligibility +
             "ORDER BY j.created LIMIT 1")
 
 
@@ -96,12 +107,12 @@ def _last_sql(outcomes):
             f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY ts DESC LIMIT 1")
 
 
-def _own_job(conn, row):
-    """The run of its own a task has waiting or going: (job id, attempt id or None, created), or None."""
+def own_job(conn, row, *, claimable=False):
+    """The task's queued or active run; `claimable` excludes queued work held by onboarding or task fences."""
     from .read_cache import one
     H = _H()
     try:
-        return one(conn, _own_job_sql(), (H.actor_id(row["owner"]), row["id"]))
+        return one(conn, _own_job_sql(claimable), (H.actor_id(row["owner"]), row["id"]))
     except Exception:  # noqa: BLE001 - a local hub has no jobs table
         return None
 
@@ -198,7 +209,7 @@ def view(conn, row, history=True):
     quiet = bool(row.get("next_run"))
     if not quiet and not (history and was_quiet(conn, row["id"])):
         return None
-    job = _own_job(conn, row)
+    job = own_job(conn, row)
     if job:
         return {"state": "queued", "job": job["id"], "run": job["attempt_id"], "since": job["created"],
                 "words": "A run of its own is " + ("going" if job["state"] != "queued" else "waiting") + "."}
@@ -295,8 +306,8 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
     H._task_private_writer(conn, actor, row)
-    if H.is_bot(actor) and actor != row["owner"]:
-        H.refuse(conn, actor, "identity", "only the task's own bot, or a person, says when it is picked up again")
+    if H.is_bot(actor) and not H.task_represents(conn, actor, row["owner"]):
+        H.refuse(conn, actor, "identity", "only the task's own bot, its managers or a person say when it is picked up again")
     if sum(bool(x) for x in (after, at, next_run, handled)) != 1:
         H.refuse(conn, actor, "defer", "give one of --after <task>, --at <time>, --next-run or --handled")
     if not row.get("next_run") or row["status"] != "open":
@@ -350,7 +361,7 @@ def resume(conn, row, why, trigger):
     conn.execute("UPDATE tasks SET resume_json=NULL, next_run=0, updated=? WHERE id=?", (H.now(), row["id"]))
     H._task_event(conn, row["id"], H.KEEPER, "next_run", "1", "0", "resume: " + why)
     after = H.task(conn, row["id"])
-    if not _own_job(conn, after):
+    if not own_job(conn, after):
         H._wake(conn, after, after["owner"], f"Resume: {after['title']}\n{why}",
                 {"wake": "resume", "resume": why}, trigger=trigger)
     return after

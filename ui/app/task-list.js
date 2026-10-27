@@ -30,6 +30,7 @@ const TL_ICON = {
   chart: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M2 12h10M4 10V7M7 10V3.5M10 10V5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   pin: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M5 1.8h4M5.6 1.8v3.6L3.6 8h6.8L8.4 5.4V1.8M7 8v4.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   caret: '<svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true" focusable="false"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  all: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><rect x="2" y="2" width="10" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 7.2l1.7 1.6 3.2-3.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 function tasksFiltersFromURL(state) {
   const query = new URLSearchParams(String(location.hash).split('?')[1] || '');
@@ -558,7 +559,10 @@ function tasksListHTML(items, state) {
     const k = 'need:' + (it.need || 'do');
     extra.set(k, [...(extra.get(k) || []), it]);
   }
-  if (!items.length && asks) return `<div class="tl">${asks}</div>`;
+  // What the ask filter kept off the plate today, folded at the foot (askFilteredHTML).
+  const filtered = cards ? askFilteredHTML(state) : '';
+  if (!items.length && asks) return `<div class="tl">${asks}${filtered}</div>`;
+  if (!items.length && !extra.size && filtered) return `<div class="tl">${tasksEmptyHTML(state, 'Nothing needs you.')}${filtered}</div>`;
   if (!items.length && !extra.size) {
     const who = tasksWhoKey(state);
     const emptyWhat = queue ? 'Nothing needs you.' : state.view === 'foryou' ? who === 'all' ? 'Nothing open.' : state.side === 'asked' ? 'Nothing asked.'
@@ -599,7 +603,7 @@ function tasksListHTML(items, state) {
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
       <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : it.kind === 'stale' ? staleCardHTML(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
-  }).join('')}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
+  }).join('')}${filtered}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
 // Done: everything finished, newest first, a page at a time (routine runs live under Recurring).
 function tasksDoneHTML(items, state) {
@@ -791,7 +795,7 @@ function tasksVisibleKeys() {
 function tasksSelectionPrune(state) {
   if (!state.selected.size) return;
   const seen = new Set(tasksVisibleKeys());
-  for (const k of [...state.selected]) if (!seen.has(k)) state.selected.delete(k);
+  for (const k of [...state.selected]) if (!seen.has(k)) { state.selected.delete(k); state.bulkScope = null; }
   for (const k of [...(state.bulkFail?.keys() || [])]) if (!seen.has(k)) state.bulkFail.delete(k);
 }
 function tasksSelectionPaint(state) {
@@ -808,6 +812,7 @@ function tasksSelectionPaint(state) {
 }
 function tasksSelect(state, key, how = 'toggle') {
   if (!tasksCanSelect()) return;
+  state.bulkScope = null;          // a hand-picked selection is those tasks, not a filter
   if (how === 'range' && state.anchor) {
     const keys = tasksVisibleKeys(), a = keys.indexOf(state.anchor), b = keys.indexOf(key);
     if (a >= 0 && b >= 0) { for (const k of keys.slice(Math.min(a, b), Math.max(a, b) + 1)) state.selected.add(k); tasksSelectionPaint(state); return; }
@@ -818,7 +823,7 @@ function tasksSelect(state, key, how = 'toggle') {
   tasksSelectionPaint(state);
 }
 function tasksSelectionClear(state) {
-  state.selected.clear(); state.bulkFail = new Map(); state.bulkMsg = ''; state.bulkUndo = null;
+  state.selected.clear(); state.bulkFail = new Map(); state.bulkMsg = ''; state.bulkUndo = null; state.bulkScope = null;
   tasksSelectionPaint(state);
   for (const row of document.querySelectorAll('#task-body .tl-row.failed')) row.classList.remove('failed');
   document.querySelectorAll('#task-body .tl-failed').forEach(el => el.remove());
@@ -831,8 +836,11 @@ function tasksBulkBar(state) {
   const show = tasksCanSelect() && (n || state.bulkMsg);
   bar.hidden = !show;
   if (!show) { bar.innerHTML = ''; bar.dataset.html = ''; return; }
-  const busy = !!state.bulkBusy;
-  const html = `${n ? `<span class="tl-bulk-n tnum">${n} selected</span>
+  const busy = !!state.bulkBusy, scope = n && state.bulkScope;
+  // Select all: every task the list shows, when only some are picked (a board column has its own, in its header)
+  const all = n && !scope && state.view !== 'board' ? tasksVisibleKeys().filter(k => k.startsWith('t')).length : 0;
+  const html = `${n ? `<span class="tl-bulk-n tnum">${scope ? `All ${n} ${esc(scope.label)}` : `${n} selected`}</span>
+    ${all > n ? `<button type="button" data-bulk="all"${busy ? ' disabled' : ''}>Select all ${all}</button>` : ''}
     <button type="button" data-bulk="status" aria-haspopup="true"${busy ? ' disabled' : ''}>Status</button>
     <button type="button" data-bulk="owner" aria-haspopup="true"${busy ? ' disabled' : ''}>Owner</button>
     <button type="button" data-bulk="tags" aria-haspopup="true"${busy ? ' disabled' : ''}>Tags</button>
@@ -845,6 +853,43 @@ function tasksBulkBar(state) {
   bar.innerHTML = bar.dataset.html = html;
   if (focused) (bar.querySelector(`[data-bulk="${focused}"]`) || bar.querySelector('[data-bulk]'))?.focus();
 }
+// ---- all of a column or a list at once. The selection is every task shown, and with it the filter that shows them,
+// so the change is one call (POST /v2/task-bulk) and the server makes it to each task as that task's own update.
+// A filter the server cannot run (a team, a repo, a search, two owners, a fold that hides some) goes as the ids shown.
+const BULK_IDS = 100;
+const BULK_SERVER_CHIPS = {owner: 'owner', asked: 'requester', tag: 'label'};
+function tasksBulkFilter(state, base, keys) {
+  const f = state.filters || {};
+  const plain = base && state.activeComplete && !state.q && !state.boardFocus
+    && Object.entries(f).every(([k, v]) => !v?.length || (BULK_SERVER_CHIPS[k] && v.length === 1));
+  if (plain) {
+    const filter = {...base, lane: 'company'};
+    for (const [k, field] of Object.entries(BULK_SERVER_CHIPS)) {
+      const v = f[k]?.[0]; if (!v) continue;
+      filter[field] = k === 'tag' ? v : resolveMe(v).includes(':') ? resolveMe(v) : 'bot:' + v;
+    }
+    return filter;
+  }
+  return keys.length <= BULK_IDS ? {ids: keys.map(k => k.slice(1))} : null;
+}
+// What the list shows is a server filter only where it is one: the open list or Everyone's (not Needs you, a person's
+// plate, or a page of finished tasks), with every matching row unfolded.
+function tasksListBase(state, keys) {
+  const everyone = state.view === 'foryou' && tasksWhoKey(state) === 'all' && state.side !== 'asked';
+  if (state.view !== 'list' && !everyone) return null;
+  if (keys.length !== taskItems(state).length) return null;
+  return {type: state.type || 'general', status: 'open,doing,waiting,review,ready,declined'};
+}
+function tasksBulkSelectAll(state, keys, base, label) {
+  if (!tasksCanSelect() || state.bulkBusy) return;
+  keys = keys.filter(k => k.startsWith('t'));
+  if (!keys.length) return;
+  const filter = tasksBulkFilter(state, base, keys);
+  state.selected = new Set(keys); state.anchor = keys.at(-1);
+  state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = '';
+  state.bulkScope = filter ? {filter, label} : null;     // past the id limit, the tasks go one by one as before
+  tasksSelectionPaint(state);
+}
 // the selected tasks, in the order they show (the selection only ever holds visible rows)
 function tasksSelectedTasks(state) {
   const byId = tasksById(state);
@@ -854,9 +899,10 @@ const tasksSelectedTitle = (state, key) => tasksById(state).get(key.slice(1))?.t
 // Each task is its own update (POST /v2/tasks/{id}) with its latest version; a 409 refetches it and tries once more.
 // A failure is named, kept selected and marked; nothing is dropped quietly. No typed comment goes with a bulk change:
 // an unsent one stays in its task's box, where the person can see it, rather than leave unseen with Done.
-async function tasksBulkApply(state, describe, bodyFor) {
+async function tasksBulkApply(state, describe, bodyFor, action) {
   const tasks = tasksSelectedTasks(state);
   if (!tasks.length || state.bulkBusy || !tasksCanSelect()) return;
+  if (state.bulkScope && action) return tasksBulkServer(state, describe, action, tasks);
   tasksMenuClose();
   state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
   tasksBulkBar(state);
@@ -900,6 +946,39 @@ async function tasksBulkApply(state, describe, bodyFor) {
   tasksSelectionPaint(state);
   tasksBulkSettle(state, closed.length ? 10000 : 4000);
 }
+// One call for the whole selection. The server says what changed, what already was so, and what it skipped and why:
+// a skipped task stays selected and marked, as a failed one-by-one update does. A refused call changes nothing and
+// keeps the selection to try again.
+async function tasksBulkServer(state, describe, action, tasks) {
+  const scope = state.bulkScope;
+  tasksMenuClose();
+  state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
+  tasksBulkBar(state);
+  let out = null, error = '';
+  try { out = await post('/v2/task-bulk', {filter: scope.filter, ...action}); }
+  catch (e) { error = e.message || 'Not saved'; }
+  if (TASKS_ST !== state) return;
+  state.bulkBusy = false;
+  if (!out) { state.bulkMsg = error; toast(error, true); tasksBulkBar(state); return; }
+  const byId = tasksById(state), skipped = out.tasks?.skipped || [];
+  const failed = new Map(skipped.map(s => ['t' + s.id, s.reason || 'Not changed']));
+  state.bulkScope = null;
+  state.bulkFail = failed;
+  state.selected = new Set(failed.keys());
+  const names = skipped.map(s => s.title || '#' + s.number);
+  state.bulkMsg = [`${out.changed} ${describe.done}`, out.unchanged ? `${out.unchanged} already ${describe.already || 'so'}` : '',
+    out.skipped ? `${out.skipped} not changed: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}` : ''].filter(Boolean).join(', ');
+  if (describe.close) {
+    const closed = (out.tasks?.changed || []).map(c => byId.get(String(c.id))).filter(Boolean).map(t => ({id: t.id, title: t.title, status: t.status,
+      step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
+    if (closed.length) state.bulkUndo = {items: closed, until: Date.now() + 10000};
+  }
+  if (skipped.length) toast(`${skipped.length} not changed: ${skipped.map(s => `${s.title || '#' + s.number} (${s.reason})`).join('; ')}`, true);
+  await tasksLoad(state);
+  if (TASKS_ST !== state) return;
+  tasksSelectionPaint(state);
+  tasksBulkSettle(state, state.bulkUndo ? 10000 : 4000);
+}
 // The result line stays a moment (Undo for ten seconds after a Close), then goes.
 function tasksBulkSettle(state, ms) {
   clearTimeout(state.bulkTimer);
@@ -942,14 +1021,15 @@ async function tasksBulkUndo(state) {
 function tasksBulkMenu(state, kind, anchor) {
   if (kind === 'clear') { tasksSelectionClear(state); return; }
   if (kind === 'undo') { void tasksBulkUndo(state); return; }
-  if (kind === 'close') { void tasksBulkApply(state, {close: true, done: 'closed', already: 'closed'}, t => t.status === 'closed' ? null : {close: true}); return; }
+  if (kind === 'all') { const keys = tasksVisibleKeys(); tasksBulkSelectAll(state, keys, tasksListBase(state, keys), 'matching'); return; }
+  if (kind === 'close') { void tasksBulkApply(state, {close: true, done: 'closed', already: 'closed'}, t => t.status === 'closed' ? null : {close: true}, {action: 'close'}); return; }
   if (kind === 'status') {
     tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Set status"><div class="tl-menu-h" aria-hidden="true">Status</div>
       ${BULK_STATUSES.map(s => `<button type="button" role="menuitem" class="tl-mi" data-bulk-status="${s}"><span>${esc(STATUS_WORD[s] || s)}</span></button>`).join('')}</div>`, pop => {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-status]'); if (!b) return;
         const status = b.dataset.bulkStatus, word = STATUS_WORD[status] || status;
-        void tasksBulkApply(state, {status, done: `moved to ${word}`, already: word}, t => t.status === status ? null : {status});
+        void tasksBulkApply(state, {status, done: `moved to ${word}`, already: word}, t => t.status === status ? null : {status}, {action: 'status', status});
       };
     });
   } else if (kind === 'owner') {
@@ -965,7 +1045,7 @@ function tasksBulkMenu(state, kind, anchor) {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-owner]'); if (!b) return;
         const owner = b.dataset.bulkOwner, actor = owner.includes(':') ? owner : 'bot:' + owner;
-        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner});
+        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner}, {action: 'owner', owner});
       };
     });
   } else if (kind === 'tags') {
@@ -981,7 +1061,7 @@ function tasksBulkMenu(state, kind, anchor) {
         const has = (t.labels || []).includes(tag);
         if (remove ? !has : has) return null;
         return {labels: remove ? t.labels.filter(l => l !== tag) : [...(t.labels || []), tag]};
-      });
+      }, {action: 'tags', [remove ? 'remove' : 'add']: [tag]});
       pop.querySelector('.tl-menu-new').onsubmit = ev => {
         ev.preventDefault();
         const tag = ev.target.querySelector('input').value.trim().toLowerCase();

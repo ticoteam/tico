@@ -315,8 +315,8 @@ def gateway(settings, store=None, vault=None):
                 secret, url, bot = settings.gateway_key, settings.gateway_url, None
             else:
                 keys = vault or Vault(store)
-                secret = gateway_connection.key(c, keys, settings) if keys.configured else ""
-                url = G.decisions_url(gateway_connection.url(c, settings))
+                secret, url, _ = gateway_connection.target(c, keys, settings) if keys.configured else ("", "", "")
+                url = G.decisions_url(url)
                 bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
         if not secret:
             raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")

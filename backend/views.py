@@ -479,7 +479,11 @@ def operation_issues(c, who, auth):
                     runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
                 reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
-                if billing:
+                resume = login_holds.fallback_resume_reason(c, last['id']) if last else None
+                if resume:
+                    add("bot", bot["display_name"] + " needs attention", f"{runtime}; {resume}",
+                        bot=slug, severity="warning", needs_person=False)
+                elif billing:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
@@ -762,7 +766,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
-    elif settings and org_turns.snapshot(c, settings)['at_stop']:
+    elif settings and org_turns.admission(c)['at_stop']:
+        # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
     elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
             c, location["machine"]["runner_id"])["overloaded"]:
@@ -884,6 +889,9 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                                (cid, job["bot"])).fetchone()
             label, readiness_reason = queued_label(c, job["bot"], location, settings,
                                                    human=H.is_human(message.get("from_actor") or ""), behind=bool(behind))
+            if ((H.status(c, job['bot']) or {}).get('state') == 'limited'
+                    and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
+                label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
             parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
@@ -1044,7 +1052,7 @@ def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing
 # What a card takes, as the groups Needs you shows in this order: a yes/no or a pick, money, an account to sign in to
 # or connect, something written to read and let go out, and everything else. Read from the card's own words, so the
 # same card always lands in the same group.
-NEED_GROUPS = ("decide", "pay", "connect", "review", "do")
+NEED_GROUPS = ("decide", "pay", "connect", "review", "hands", "do")     # hands: chores the ask filter grouped
 _NEED_PAY = re.compile(r"\b(pay|paid|payment|invoices?|billing|bills|subscription|renew(al)?|refund|purchase|"
                        r"top[- ]up|credit card|card on file|company card)\b", re.I)
 # Words that are about money only next to an amount: "spend $400", not "spend an hour"; "buy" but not "buy-in".
@@ -1587,9 +1595,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         return items
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
+    from . import ask_ingest
+    # The chores the ask filter let through under their own budget (backend/ask_ingest.py) group as Hands needed.
+    hands = ask_ingest.hands_ids(c, who.actor) if H.is_human(who.actor) else set()
     for item in items:
         item["pressing"] = pressing(item, at)
-        item["need"] = need_of(item)
+        item["need"] = "hands" if item.get("id") in hands else need_of(item)
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
@@ -1813,6 +1824,18 @@ def install_views(app, store, auth, mutate, task_view):
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
+        latest_run = {row["bot"]: row["id"] for row in c.execute(
+            "SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY finished DESC,id DESC) AS n "
+            "FROM turns WHERE finished IS NOT NULL) WHERE n=1")}
+        from .usage_records import ran_on
+        run_views = ran_on(c, list(latest_run.values()))
+        latest_models = {}
+        for slug, turn_id in latest_run.items():
+            segments = run_views[turn_id].get("segments") or []
+            families = {part["family"] for part in segments if part.get("family")}
+            family = next(iter(families)) if len(families) == 1 and all(part.get("family") for part in segments) else None
+            models = list(dict.fromkeys(part.get("model") for part in segments if part.get("model")))
+            latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
         from .report_order import positions
@@ -1880,10 +1903,20 @@ def install_views(app, store, auth, mutate, task_view):
                 resolved_runtime, resolved_model = providers.resolve(company, config)
             except providers.ProviderError:
                 resolved_runtime = resolved_model = ""
+            resolved_provider = (providers.MODEL_BY_ID.get(resolved_model or "") or {}).get("provider", "")
+            resolved_provider_label = providers.PROVIDER_BY_ID.get(resolved_provider, {}).get("label", "")
+            resolved_model_label = (providers.MODEL_BY_ID.get(resolved_model or "") or {}).get("label") or resolved_model
+            latest_family, latest_model = latest_models.get(slug, (None, ""))
+            show_latest = bool(latest_model) and (not latest_family or latest_family != resolved_provider)
             own = bool(providers._named(config.get("runtime")) or providers._named(config.get("model")))
             # The effort it runs at, said beside the model on hover; empty when the bot has none.
             resolved_effort = str(config.get("reasoning_effort") or config.get("effort") or bot.get("effort") or "") if resolved_runtime else ""
-            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model, "resolved_effort": resolved_effort,
+            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model,
+                         "resolved_model_label": resolved_model_label,
+                         "resolved_provider": resolved_provider_label, "resolved_effort": resolved_effort,
+                         "latest_runtime_model": latest_model if show_latest else "",
+                         "latest_runtime_provider": providers.PROVIDER_BY_ID.get(latest_family, {}).get("label")
+                         if show_latest and latest_family else "Unknown provider" if show_latest else "",
                          "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
@@ -2043,6 +2076,11 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from . import usage_limits
+            from .start_places import summary, describe
+            # One company Default for every computer's queue classify: without it each summary rebuilds
+            # pools/groups/spend for every queued bot (same waste Health's snapshot already dropped).
+            limits = usage_limits.company(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2056,8 +2094,7 @@ def install_views(app, store, auth, mutate, task_view):
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
                         if a[0] not in hidden]
                 value = dict(row)
-                from .start_places import summary, describe
-                value["turn_counts"] = summary(c, row["id"], store.settings)
+                value["turn_counts"] = summary(c, row["id"], store.settings, limits)
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])

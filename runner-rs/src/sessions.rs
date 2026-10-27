@@ -34,6 +34,11 @@ pub const NO_UPSTREAM: &str = "the bot's checkout has no upstream to share betwe
 const WORKTREE_WAIT_S: u64 = 120;
 const WORKTREE_RETRY_S: u64 = 10;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WORKTREE_WAIT: std::cell::Cell<Option<(Duration, Duration)>> = const { std::cell::Cell::new(None) };
+}
+
 fn slug_ok(name: &str) -> bool {
     static SLUG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     SLUG.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$").unwrap()).is_match(name)
@@ -934,10 +939,13 @@ impl Runner {
                 // its worktree first, holding nothing a chat needs.
                 log(&format!("Tico runner: {}: task {} waits for its worktree ({problem})", place.bot, place.task));
                 place.checkout = None;
-                let until = Instant::now() + Duration::from_secs(WORKTREE_WAIT_S);
+                let (span, retry) = (Duration::from_secs(WORKTREE_WAIT_S), Duration::from_secs(WORKTREE_RETRY_S));
+                #[cfg(test)]
+                let (span, retry) = WORKTREE_WAIT.with(|v| v.get().unwrap_or((span, retry)));
+                let until = Instant::now() + span;
                 while !problem.is_empty() && Instant::now() < until {
                     let aid = text_of(&attempt["id"]);
-                    let waited = self.during_drain(&aid, async { Ok(pause(Duration::from_secs(WORKTREE_RETRY_S), lost).await) }).await;
+                    let waited = self.during_drain(&aid, async { Ok(pause(retry, lost).await) }).await;
                     if !waited.map_err(|e| e.text)? {
                         break;
                     }

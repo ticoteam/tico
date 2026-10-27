@@ -26,6 +26,7 @@ use crate::util::{log, mark, text_of, truthy};
 
 pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
+const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
 const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
 const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop", "Timeout:", "Runner stopped during execution", "Computer lost or heartbeat stopped"];
 
@@ -381,6 +382,8 @@ pub struct Fresh {
     pub told: String,
     /// The session the host confirmed.
     pub confirmed: Mutex<Option<String>>,
+    /// A confirmed fallback is kept under its job and handed to the server before completion.
+    pub source: Option<crate::source_resume::Saved>,
 }
 
 /// How long a saved thread's compaction may take before the turn gives it up for a new session.
@@ -398,6 +401,23 @@ fn serves_session(name: &str) -> bool {
         return on && name == "run_session";
     }
     crate::follow::feature(name)
+}
+
+/// Whether the server takes `continues` and hands out `continue_thread` (backend/execution.py capacity_continuation).
+fn capacity_continue() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::CAPACITY_CONTINUE.with(|on| on.get()) {
+        return on;
+    }
+    crate::follow::feature("capacity_continue")
+}
+
+fn source_continue() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::SOURCE_CONTINUE.with(|on| on.get()) {
+        return on;
+    }
+    crate::follow::feature("source_continue")
 }
 
 /// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
@@ -420,6 +440,16 @@ impl Runner {
         keep_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, session).await?;
         if let Some(old) = fresh.left.as_deref().filter(|old| *old != session) {
             drop_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, old).await?;
+        }
+        if let Some(source) = &fresh.source {
+            let mut source = source.clone();
+            source.thread_id = session.to_string();
+            let aid = &fresh.aid;
+            self.client.post(&format!("attempts/{aid}/thread"),
+                &json!({"thread_id": session, "source_continuation": source}),
+                Some(&format!("source-thread:{aid}:{}", fresh.runtime))).await?;
+            *fresh.confirmed.lock().unwrap() = Some(session.to_string());
+            return Ok(());
         }
         *fresh.confirmed.lock().unwrap() = Some(session.to_string());
         if session != fresh.told && thread_updates() {
@@ -551,6 +581,8 @@ pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'sta
 pub(crate) struct Flags {
     pub(crate) lost: AtomicBool,
     pub(crate) stopped: AtomicBool,
+    /// Why the hub stopped the turn when it said (a quarantine, Dev 573); a person's Stop gives none.
+    pub(crate) stop_reason: Mutex<Option<String>>,
     pub(crate) done: AtomicBool,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
@@ -561,8 +593,13 @@ pub(crate) struct Drove {
     pub(crate) reply: String,
     pub(crate) tokens: Value,
     pub(crate) limited: bool,
+    /// The model produced a message or tool call, so a saved fallback must retain its own work.
+    pub(crate) acted: bool,
     /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
     pub(crate) capacity: bool,
+    /// The model was at capacity after the turn acted: no fallback or fresh thread may take it, but its own thread can
+    /// continue it in a later turn (backend/execution.py capacity_continuation).
+    pub(crate) continues: bool,
     pub(crate) retryable: bool,
     /// The turn running when the drive ended (a goal's continuation, a carried input's turn).
     pub(crate) turn: String,
@@ -574,7 +611,7 @@ pub(crate) struct Drove {
 
 impl Drove {
     fn interrupted() -> Drove {
-        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, capacity: false, retryable: false, turn: String::new(), yielded: false }
+        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, acted: false, capacity: false, continues: false, retryable: false, turn: String::new(), yielded: false }
     }
 }
 
@@ -719,7 +756,7 @@ impl Runner {
         e
     }
 
-    /// Release capacity only if a lane really blocks; all subsequent preparation needs a fresh grant.
+    /// Release capacity only if preparation really blocks; subsequent preparation needs a fresh grant.
     async fn pre_start_lock<T>(&self, attempt: &Value, flags: &Flags,
         waiting: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
         let mut waiting = std::pin::pin!(waiting);
@@ -727,9 +764,13 @@ impl Runner {
         match first {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => {
-                self.wait_before_start(attempt, "pre-start requirements").await?;
+                if let Err(error) = self.wait_before_start(attempt, "pre-start requirements").await {
+                    // The first poll may have started git; finish it with its locks before returning an API error.
+                    let _ = waiting.await;
+                    return Err(error);
+                }
                 let result = waiting.await?;
-                self.wait_start_place(attempt, flags).await?;
+                self.during_drain(&text_of(&attempt["id"]), self.wait_start_place(attempt, flags)).await?;
                 Ok(result)
             },
         }
@@ -879,6 +920,21 @@ impl Runner {
             let _one = self.push_lock.lock().await; // one push at a time on this computer
             publish_history(path, &repository, env).await
         };
+        self.published(bot, &repository, (state, detail))
+    }
+
+    /// Initial history publication shares the computer's push queue, but a queued turn holds no start place.
+    async fn publish_before_start(&self, attempt: &Value, flags: &Flags, bot: &str, path: &Path, env: &Env) -> Result<(&'static str, String), Fail> {
+        let repository = env.get(crate::gitcred::REPOSITORY_KEY).cloned().unwrap_or_default();
+        if repository.is_empty() { return Ok(("skipped", String::new())); }
+        let result = self.pre_start_lock(attempt, flags, async {
+            let _one = self.during_drain(&text_of(&attempt["id"]), async { Ok(self.push_lock.lock().await) }).await?;
+            Ok(publish_history(path, &repository, env).await)
+        }).await?;
+        Ok(self.published(bot, &repository, result))
+    }
+
+    fn published(&self, bot: &str, repository: &str, (state, detail): (&'static str, String)) -> (&'static str, String) {
         let note = if state == "failed" { format!("{repository}: {detail}") } else { String::new() };
         let mut notes = self.publish_notes.lock().unwrap();
         if state == "published" {
@@ -1082,6 +1138,7 @@ impl Runner {
         // Pushes from the task's worktrees from here on are this turn's (crate::worktrees::pushes).
         let begun = crate::util::epoch_s() as i64;
         self.state.record(&attempt)?;
+        let source_resume = crate::source_resume::apply(&mut attempt);
         let config = attempt["config"].clone();
         let key = session_key(&attempt);
         // Goal continuations count per thread: one task's stuck goal does not pause another's.
@@ -1099,6 +1156,7 @@ impl Runner {
         let flags = Arc::new(Flags {
             lost: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
@@ -1141,7 +1199,8 @@ impl Runner {
         let mut auth_rejected: Option<(String, String)> = None;
         let mut selected: Option<Profile> = None;
         let mut subscription_unavailable: Option<Value> = None;
-        let mut fallback: Option<String> = None;
+        let mut fallback: Option<String> = source_resume.as_ref().map(|s| s.harness.clone());
+        let mut source_saved = source_resume.clone();
         // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
         let mut session: Option<crate::continuity::Session> = None;
         // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own.
@@ -1156,6 +1215,9 @@ impl Runner {
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
         let refs = attempt["message"]["refs"].clone();
+        // The thread a turn the model's capacity stopped after it acted left to continue (backend/execution.py
+        // capacity_continuation): only that thread, on the bot's own login, takes it; never a fallback or a fresh one.
+        let continuing = text_of(&attempt["continue_thread"]);
         let mut uses: Vec<String> = vec![runtime.clone()];
         if let Some(hop) = crate::fallback::configured(&config) {
             uses.push(hop.runtime);
@@ -1261,18 +1323,36 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
+            let start_attempt = attempt.clone();
             if p.has_checkout() {
                 // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
                 crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
                 // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
                 // run no turn on a copy that shares no history with GitHub's.
-                let (published, detail) = self.publish(&bot, &execution_path, &env).await;
+                let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
                 if published == "failed" && detail.contains("unrelated history") {
                     return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                 }
-                self.refresh_checkout(p, &mut attempt, &env).await;
+                let refresh = async {
+                    self.refresh_checkout(p, &mut attempt, &env).await;
+                    Ok(())
+                };
+                if p.task.is_empty() {
+                    refresh.await?;
+                } else {
+                    // A task refresh can wait on the shared git lock before pushing product files.
+                    self.pre_start_lock(&start_attempt, &flags, refresh).await?;
+                }
             }
-            conv.push_str(self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)?);
+            // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
+            // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
+            conv.push_str(self.pre_start_lock(&start_attempt, &flags, async {
+                self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
+            }).await?);
+            if source_resume.is_some() {
+                // Save and lookup share the actual login binding and confirmed checkout placement.
+                conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
+            }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
@@ -1306,7 +1386,9 @@ impl Runner {
             // task-model fallback runs in a side session of its own, started from the task's checkpoint (prompt()
             // supplies it), and never touches the thread this runtime saved: the turns that use that thread resume it.
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
-            let previous = if side_run { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let binding_changed = source_resume.as_ref().is_some_and(|s|
+                s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
+            let previous = if side_run || binding_changed { None } else { self.state.session(&bot, &conv, &session_runtime)? };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
@@ -1362,6 +1444,7 @@ impl Runner {
                 shared: crate::sessions::is_shared(&config),
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
+                require_existing_session: !continuing.is_empty(),
             };
             let mut resumed = false;
             if side_run {
@@ -1380,8 +1463,10 @@ impl Runner {
                         session = Some(crate::continuity::Session::new(why, Some(error)));
                     }
                 }
-                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag).
-                if resumed && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
+                // continuation compacts only the thread it continues; another one is left as it is for CONTINUE_LOST.
+                let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
+                if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
                         Ok(()) => session = Some(crate::continuity::Session::compacted()),
@@ -1400,14 +1485,16 @@ impl Runner {
                 session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
             }
             if thread.is_none() {
-                thread = Some(h.start_thread(&bot, &settings).await?);
+                // A capacity continuation must acknowledge its lost thread so the server holds it for review,
+                // without creating or saving a replacement session before that acknowledgement.
+                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
             }
             let th = thread.clone().unwrap();
             self.note_session(&aid, &bot, session.as_ref());
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && continuing.is_empty() && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -1415,8 +1502,9 @@ impl Runner {
                 told: if thread_updates() { left.clone().or_else(|| previous.clone()).unwrap_or_else(|| th.clone()) } else { th.clone() },
                 left: left.clone(),
                 confirmed: Mutex::new(None),
+                source: None,
             });
-            if fresh.is_none() && !side_run {
+            if fresh.is_none() && !side_run && continuing.is_empty() {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -1457,6 +1545,10 @@ impl Runner {
                 return Err(Fail::runtime(crate::drain::WAITING));
             }
             self.state.phase(&aid, "running")?;
+            if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
+                // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
+                return Err(Fail::runtime(CONTINUE_LOST));
+            }
             // A resumed thread already holds the repo rules unless they changed since it was given them.
             let digest = p.rules_digest.clone();
             attempt["_repo_rules_changed"] = json!(!digest.is_empty() && self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str()));
@@ -1532,8 +1624,9 @@ impl Runner {
                         self.confirm_thread(f, &session).await?;
                     }
                 }
-                // A fresh session that never came up leaves the previous session in place; a side session is never kept.
-                if !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
+                // A continuation already has its saved thread: never write it back over a Clear, a replacement,
+                // or a refused resume. A fresh session that never came up and a side session are not kept.
+                if continuing.is_empty() && !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
                     keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
                 }
                 Ok::<(), Fail>(())
@@ -1574,9 +1667,9 @@ impl Runner {
         } else {
             config.clone()
         };
-        let mut pending = if unavailable && drove.outcome != "completed" && !native_control { crate::fallback::configured(&fallback_config) } else { None };
+        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() { crate::fallback::configured(&fallback_config) } else { None };
         let turn_env = base_env.clone().unwrap_or_default();
-        if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
+        if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared && continuing.is_empty() {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
@@ -1692,6 +1785,7 @@ impl Runner {
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
+                    require_existing_session: false,
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
@@ -1717,6 +1811,34 @@ impl Runner {
                     None => format!("{primary} was unavailable"),
                 };
                 let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
+                let live_source = source_continue() && thread_updates();
+                let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
+                    format!("{}:{}", hop.runtime, hop.harness)
+                } else { hop.runtime.clone() };
+                let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
+                    place.as_ref().is_some_and(|p| p.session_path.is_some()));
+                let fallback_fresh = if live_source {
+                    // Fence the old primary identity before this side session can do any work.
+                    self.client.post(&format!("attempts/{aid}/thread"), &json!({"thread_id": th, "source_pending": true}),
+                        Some(&format!("source-pending:{aid}:{}", hop.harness))).await?;
+                    if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
+                        self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
+                    }
+                    Some(Fresh {
+                        bot: bot.clone(), conversation: scope.clone(), runtime: kept_runtime.clone(), aid: aid.clone(),
+                        left: None, told: th.clone(), confirmed: Mutex::new(None),
+                        source: Some(crate::source_resume::Saved {
+                            thread_id: th.clone(), runtime: hop.runtime.clone(), harness: hop.harness.clone(),
+                            model: hop.model.clone(), reasoning_effort: hop.reasoning_effort.clone().unwrap_or_default(),
+                            profile: selected.as_ref().map_or(String::new(), |p| p.name.clone()), epoch: clear_epoch(&attempt, &key),
+                        }),
+                    })
+                } else { None };
+                if !h.confirms_threads() {
+                    if let Some(fresh) = &fallback_fresh {
+                        self.confirm_thread(fresh, &h.session_id(&th)).await?;
+                    }
+                }
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let d = Drive {
@@ -1733,10 +1855,40 @@ impl Runner {
                     bot: &bot,
                     session: &key,
                     login: yields(&attempt, &login_held),
-                    // A fallback's thread is for this turn only: never kept for the conversation.
-                    fresh: None,
+                    // Its confirmed thread belongs to the job, never to the primary conversation.
+                    fresh: fallback_fresh.as_ref(),
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if let Some(fresh) = fallback_fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
+                    if let Some(confirmed) = h.confirmed(&th) {
+                        // A transient handoff failure must not erase a completed result or start a new provider.
+                        if self.confirm_thread(fresh, &confirmed).await.is_err() {
+                            self.diagnose(&aid, "Fallback session kept locally; its cloud handoff is still unconfirmed.");
+                        }
+                    }
+                }
+                // Keep the actual fallback thread under this job, separate from every normal conversation session.
+                // A refusal before any message or tool call can still use the next ready fallback.
+                // A host that has not confirmed its provider session cannot promise strict continuation.
+                if (drove.limited && !drove.capacity && drove.acted || drove.continues) && source_continue()
+                    && (!h.confirms_threads() || h.confirmed(&th).is_some()) {
+                    let saved = h.session_id(&th);
+                    let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
+                        format!("{}:{}", hop.runtime, hop.harness)
+                    } else { hop.runtime.clone() };
+                    let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
+                        place.as_ref().is_some_and(|p| p.session_path.is_some()));
+                    if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
+                        self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
+                    }
+                    keep_session(&self.state, &bot, &scope, &kept_runtime, &saved).await?;
+                    source_saved = Some(crate::source_resume::Saved {
+                        thread_id: saved, runtime: hop.runtime.clone(), harness: hop.harness.clone(),
+                        model: hop.model.clone(), reasoning_effort: hop.reasoning_effort.clone().unwrap_or_default(),
+                        profile: selected.as_ref().map_or(String::new(), |p| p.name.clone()),
+                        epoch: clear_epoch(&attempt, &key),
+                    });
+                }
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
                 let why = match &busy {
@@ -1759,7 +1911,7 @@ impl Runner {
             // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
-            if drove.limited && hop.default && !native_control && spent < 2 {
+            if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
                 let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
@@ -1778,8 +1930,11 @@ impl Runner {
             fallback = None;
             subscription_unavailable = None;
         }
-        // A continuation resumes only the primary's kept session. A fallback's thread is a side session, never kept,
-        // and the primary's does not hold what the fallback did, so an interrupted fallback turn is held for review.
+        // A turn the model's capacity stopped after it acted continues its kept thread in the job's next turn, where the
+        // server takes that (backend/execution.py capacity_continuation): the primary or an explicitly saved fallback.
+        let continues = drove.continues && (fallback.is_none() && !side_run || source_saved.is_some()) && capacity_continue();
+        // Generic drain/login interruptions resume the primary. Other fallback interruptions need the explicit
+        // saved-source contract; the primary session does not contain their work.
         let resumable = fallback.is_none() && !side_run;
         // An interrupted turn queued to continue (an update drain's cap, or the end of a shared login's grace) ran and
         // may have acted; when it cannot resume, a fresh thread could repeat that, so it is held for review like any
@@ -1803,6 +1958,8 @@ impl Runner {
         }
         if drove.capacity {
             log(&format!("Tico runner: {bot}: {ran_on} model is at capacity for now; the cloud will retry shortly"));
+        } else if continues {
+            log(&format!("Tico runner: {bot}: {ran_on} model is at capacity after the turn acted; its thread is kept and continues after a short wait"));
         } else if drove.limited {
             log(&format!("Tico runner: {bot} hit a {ran_on} usage limit; the cloud will retry later"));
         } else if drove.retryable && subscription_unavailable.is_none() {
@@ -1913,7 +2070,7 @@ impl Runner {
             }
         }
         if let Some(g) = goal.chat_goal.as_ref().filter(|g| g["status"] == "active") {
-            if drove.outcome != "completed" && !drove.limited && !drove.retryable && !drove.yielded {
+            if drove.outcome != "completed" && !drove.limited && !drove.retryable && !drove.yielded && !continues {
                 let note = goal.failure.clone().unwrap_or_else(|| format!("The harness run {}", drove.outcome));
                 let _ = self.state.append(&aid, "goal", &json!({"goal_id": g["id"], "revision": g["updated_at"], "status": "stopped", "note": note}));
             }
@@ -1968,6 +2125,11 @@ impl Runner {
             spent.insert("segments".into(), json!(parts));
             completion.insert("usage".into(), Value::Object(spent));
         }
+        if drove.limited || continues {
+            if let Some(saved) = source_saved.as_ref().filter(|_| source_continue()) {
+                completion.insert("source_continuation".into(), json!(saved));
+            }
+        }
         if drove.limited {
             completion.insert("limited".into(), json!(true));
             // The provider's own reset, so the bot resumes then; only a server that takes the field is sent it.
@@ -1984,6 +2146,9 @@ impl Runner {
         }
         if drove.retryable && !drove.limited {
             completion.insert("retryable".into(), json!(true));
+        }
+        if continues {
+            completion.insert("continues".into(), json!(true));
         }
         if held.is_some() {
             // The server held the bot's own login and it was never tried; with no fallback either, the turn ends
@@ -2231,7 +2396,7 @@ impl Runner {
 
     /// The assigned subscription cannot run here: a failed, retryable result that names it, and a heartbeat now.
     fn settle_unavailable(&self, aid: &str, u: &crate::profiles::Unavailable, drove: &mut Drove, rejected: &mut Option<(String, String)>, out: &mut Option<Value>) {
-        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, capacity: false, retryable: true, turn: drove.turn.clone(), yielded: false };
+        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, acted: drove.acted, capacity: false, continues: false, retryable: true, turn: drove.turn.clone(), yielded: false };
         *rejected = None;
         let _ = self.state.append(aid, "diagnostic", &json!({"text": u.problem, "detail": {"runtime": u.runtime}}));
         *out = Some(u.detail());
@@ -2270,6 +2435,8 @@ mod tests {
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
         pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static SOURCE_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
@@ -2279,11 +2446,14 @@ mod tests {
 
     impl Drop for RunControls {
         fn drop(&mut self) {
+            crate::sessions::WORKTREE_WAIT.with(|v| v.set(None));
             RENEW_EVERY.with(|v| v.borrow_mut().take());
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
             THREAD_UPDATES.with(|on| on.set(None));
+            CAPACITY_CONTINUE.with(|on| on.set(None));
+            SOURCE_CONTINUE.with(|on| on.set(None));
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
@@ -2349,7 +2519,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.active.lock().unwrap().extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
@@ -2377,7 +2547,7 @@ mod tests {
     }
 
     fn lease_flags() -> Flags {
-        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
     }
 
@@ -2439,7 +2609,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.places.lock().unwrap().insert("a1".into());
         runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
@@ -2453,6 +2623,53 @@ mod tests {
         assert!(runner.places.lock().unwrap().contains("a1"), "preparation resumes only after a new server grant");
         assert_eq!(seen.lock().unwrap().len(), 3);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_start_place_release_finishes_inflight_preparation_before_returning() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (409, r#"{"error":{"code":"synthetic_release_failure","detail":"synthetic release refused"}}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "release-failure");
+        let turn = json!({"id": "a-release-fail", "start_reservation_seconds": 180});
+        let finished = AtomicBool::new(false);
+        let result = runner.pre_start_lock(&turn, &lease_flags(), async {
+            tokio::task::yield_now().await;
+            finished.store(true, Ordering::SeqCst);
+            // Returning the release error must not depend on the preparation succeeding.
+            Err::<(), _>(Fail::runtime("synthetic git failure"))
+        }).await;
+        assert!(finished.load(Ordering::SeqCst), "a release API error dropped preparation in flight");
+        assert!(result.unwrap_err().text.contains("synthetic release refused"));
+        assert_eq!(seen.lock().unwrap().len(), 1, "do not reserve after the release failed");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_the_fresh_start_grant_after_placement_finishes() {
+        let (url, seen, server) = recording_server_waiting_to_start(None, Some(false)).await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let turn = json!({"id": "a-regrant", "start_reservation_seconds": 180});
+        runner.state.record(&turn).unwrap();
+        runner.drain.register("a-regrant");
+        let flags = lease_flags();
+        let work = runner.pre_start_lock(&turn, &flags, async {
+            tokio::task::yield_now().await;
+            Ok(())
+        });
+        let drain = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while seen.lock().unwrap().len() < 2 { tokio::task::yield_now().await; }
+            }).await.expect("fixture never reached its fresh-grant capacity wait");
+            runner.shut_down();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async { tokio::join!(work, drain) })
+            .await.expect("fresh-grant wait ignored the pre-start drain");
+        assert!(result.is_err());
+        assert!(runner.drain.returning("a-regrant"));
+        assert!(runner.state.pending("a-regrant").unwrap().iter().any(|e| e["payload"]["yielded"].is_string()));
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -2499,7 +2716,7 @@ mod tests {
         *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
-        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                                done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
         assert_eq!(over(&flags()), "");
@@ -2573,6 +2790,61 @@ mod tests {
     }
 
     async fn recording_server_waiting_to_start(hold: Option<Arc<Notify>>, revoke_start: Option<bool>) -> (String, Arc<Mutex<Vec<(String, String, Value)>>>, tokio::task::JoinHandle<()>) {
+        recording_server_start_window(hold, revoke_start, None).await
+    }
+
+    /// A synthetic server clock: renewals keep the delivery alive but cannot extend a hard start deadline.
+    struct StartWindow {
+        now: u64,
+        until: Option<u64>,
+        expired: bool,
+        started: bool,
+        renewed_at: Option<u64>,
+        publish_repository: bool,
+    }
+
+    impl StartWindow {
+        fn answer(&mut self, path: &str, body: &Value) -> Option<(bool, Value)> {
+            if self.publish_repository && path.ends_with("/github/token") {
+                // No token or remote call: a non-git checkout skips history publication after the queue frees.
+                return Some((false, json!({"configured": true, "repository": "acme/synthetic-bot"})));
+            }
+            if !["/renew", "/start-place", "/started"].iter().any(|p| path.ends_with(p)) { return None; }
+            if !self.started && self.until.is_some_and(|until| self.now >= until) {
+                self.expired = true;
+            }
+            if self.expired {
+                return Some((true, json!({"error": {"code": "stale_lease", "detail": "Start reservation expired"}})));
+            }
+            if path.ends_with("/start-place") {
+                let waiting = body.get("waiting").is_some();
+                self.until = (!waiting).then_some(self.now + 180);
+                return Some((false, json!({"reserved": !waiting})));
+            }
+            if path.ends_with("/started") {
+                assert!(self.until.is_some(), "the runner must reserve before starting");
+                self.started = true;
+            } else {
+                self.renewed_at = Some(self.now);
+            }
+            Some((false, json!({"lease_seconds": 120})))
+        }
+    }
+
+    #[test]
+    fn start_window_server_refuses_expired_reservations_even_after_a_late_wait() {
+        let mut window = StartWindow { now: 0, until: Some(180), expired: false, started: false, renewed_at: None, publish_repository: false };
+        assert!(!window.answer("/renew", &json!({})).unwrap().0);
+        assert_eq!(window.until, Some(180), "renewals must not extend the hard reservation");
+        window.now = 181;
+        let (rejected, error) = window.answer("/renew", &json!({})).unwrap();
+        assert!(rejected && window.expired);
+        assert_eq!(error["error"]["code"], "stale_lease");
+        assert!(window.answer("/start-place", &json!({"waiting": "worktree"})).unwrap().0);
+    }
+
+    async fn recording_server_start_window(hold: Option<Arc<Notify>>, revoke_start: Option<bool>,
+        window: Option<Arc<Mutex<StartWindow>>>) -> (String, Arc<Mutex<Vec<(String, String, Value)>>>, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -2583,6 +2855,7 @@ mod tests {
                 let Ok((mut socket, _)) = listener.accept().await else { return };
                 let kept = kept.clone();
                 let hold = hold.clone();
+                let window = window.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 8192];
@@ -2608,12 +2881,14 @@ mod tests {
                     let mut first = text.lines().next().unwrap_or_default().split_whitespace();
                     let (method, path) = (first.next().unwrap_or_default().to_string(), first.next().unwrap_or_default().to_string());
                     let body = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
-                    let rejected = revoke_start.is_some() && path.ends_with("/started");
+                    let model = window.as_ref().and_then(|w| w.lock().unwrap().answer(&path, &body));
+                    let rejected = model.as_ref().map_or(revoke_start.is_some() && path.ends_with("/started"), |(rejected, _)| *rejected);
                     let waiting = revoke_start.is_some_and(|after_start| !after_start ||
                         kept.lock().unwrap().iter().any(|(_, p, _)| p.ends_with("/started")));
                     // Events are acknowledged up to the last one sent, as the server does.
                     let answer = match body["events"].as_array().and_then(|e| e.last()) {
                         Some(last) => json!({"ack_seq": last["seq"]}),
+                        None if model.is_some() => model.unwrap().1,
                         None if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         None if path.ends_with("/start-place") => json!({"reserved": !waiting}),
                         None => json!({}),
@@ -2779,7 +3054,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -2855,7 +3130,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -2867,6 +3142,10 @@ for line in sys.stdin:
         // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
         assert!(drove.yielded && drove.outcome == "interrupted", "{}", drove.outcome);
         assert!(goal.failure.is_none());
+        let terminal: i64 = runner.state.with(|c| c.query_row(
+            "SELECT count(*) FROM events WHERE attempt_id='a-ops' AND kind='diagnostic' AND json_extract(payload,'$.interruption_complete')=1",
+            [], |r| r.get(0))).unwrap();
+        assert_eq!(terminal, 0, "a forced grace expiry must not claim the host acknowledged its end");
         assert!(std::fs::read_to_string(&interrupts).unwrap().contains("t1"), "the turn was never interrupted");
         drop(held);
         drop(tokio::time::timeout(Duration::from_secs(5), review).await.expect("the waiter got the login").unwrap());
@@ -3175,6 +3454,12 @@ for line in sys.stdin:
         t, tid = "t%d" % count("turns"), params["threadId"]
         say({"id": i, "result": {"turn": {"id": t}}})
         say({"method": "turn/started", "params": {"threadId": tid, "turn": {"id": t}}})
+        if m.get("turn") == "capacity":
+            item = {"type": "commandExecution", "id": "cmd" + t, "command": "git status", "status": "completed", "exitCode": 0}
+            say({"method": "item/started", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "failed", "error": {"message": "Selected model is at capacity"}}}})
+            continue
         say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": {"type": "agentMessage", "id": "i" + t, "text": "Done.", "phase": "final_answer"}}})
         say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "completed"}}})
     elif method == "thread/compact/start":
@@ -3209,22 +3494,32 @@ for line in sys.stdin:
             let program = dir.join("codex");
             std::fs::write(&program, FAKE_CODEX).unwrap();
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let env: Env = [("PATH".to_string(), format!("{}:/usr/bin:/bin", dir.display()))].into_iter().collect();
+            let env: Env = [("PATH".to_string(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default()))].into_iter().collect();
             HOST_CODEX.with(|e| *e.borrow_mut() = Some(env));
             CodexRig { runner, dir, seen, server, _controls: controls }
         }
 
         /// One task turn (`n`, from 0) with the fake in `mode`; the config is merged over the bot's. The result Tico got.
         async fn turn(&self, n: usize, mode: Value, extra: Value) -> Value {
+            self.turn_continuing(n, mode, extra, None).await
+        }
+
+        async fn turn_continuing(&self, n: usize, mode: Value, extra: Value, continuing: Option<&str>) -> Value {
             std::fs::write(self.dir.join("mode.json"), mode.to_string()).unwrap();
             let mut config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"});
             config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
-            let attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+            let mut attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c-watch", "kind": "task"},
                                  "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
                                           "checkpoint": "Build 40 green; waiting on build 41.", "checkpoint_at": "2026-10-22T08:00:00Z"},
                                  "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
                                  "history": [], "config": config});
+            if let Some(thread) = continuing {
+                attempt["continue_thread"] = json!(thread);
+            }
+            if let Some(epoch) = extra.get("test_session_epoch") {
+                attempt["session_epoch"] = epoch.clone();
+            }
             tokio::time::timeout(Duration::from_secs(60), self.runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
             let seen = self.seen.lock().unwrap().clone();
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-codex-{n}/complete"))).map(|(_, _, b)| b).collect();
@@ -3262,6 +3557,64 @@ for line in sys.stdin:
             self.server.abort();
             std::fs::remove_dir_all(&self.dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_resumes_the_thread_that_ran_tools() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let done = rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        assert_eq!(done["outcome"], "failed", "{done}");
+        assert_eq!(done["continues"], true, "{done}");
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({}), Some(&first)).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        assert_eq!(rig.methods(), ["thread/start", "turn/start", "thread/resume", "turn/start"]);
+        let turns: Vec<Value> = rig.calls().into_iter().filter(|c| c["method"] == "turn/start").collect();
+        assert!(turns.iter().all(|c| c["params"]["threadId"] == first));
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_replaces_a_missing_or_refused_thread() {
+        for mode in ["missing", "refuse"] {
+            let rig = CodexRig::new().await;
+            CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+            rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+            let first = rig.saved().unwrap();
+            let done = rig.turn_continuing(1, json!({"resume": mode}), json!({}), Some(&first)).await;
+            assert_eq!(done["outcome"], "interrupted", "{done}");
+            assert_ne!(done["continues"], true, "{done}");
+            assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+            assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "turn/start").count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cleared_capacity_continuation_never_resurrects_its_session() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"test_session_epoch": 1}), Some(&first)).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(rig.saved().is_none(), "Clear must survive continuation settlement");
+        assert_eq!(rig.methods(), ["thread/start", "turn/start"]);
+        assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_compacts_a_thread_it_does_not_continue() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({}), json!({})).await;
+        let saved = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"compact_first": true}), Some("another-thread")).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(!rig.methods().iter().any(|m| m == "thread/compact/start"), "{:?}", rig.methods());
+        assert_eq!(rig.saved().as_deref(), Some(saved.as_str()));
     }
 
     #[tokio::test]
@@ -3582,7 +3935,7 @@ for line in sys.stdin:
         let (runner, dir, server) = drain_test_runner(300).await;
         let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
         let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other)).unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let turns: Vec<_> = (0..3).map(|i| Turn::new(&format!("waiter{i}"), "", Class::Other).of(&format!("work{i}"), &format!("a{i}"))).collect();
         for turn in &turns { runner.state.record(&json!({"id": turn.attempt, "bot": turn.bot})).unwrap(); }
@@ -3628,7 +3981,7 @@ for line in sys.stdin:
         let th = host.start_thread("ops", &settings).await.unwrap();
         runner.state.save_session("ops", "c-cap", "pi", &th).unwrap();
         let t = host.start_turn(&th, "Wait", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,
@@ -3706,6 +4059,95 @@ for line in sys.stdin:
             assert!(runner.state.pending("a-start-wait").unwrap().is_empty(), "handback must flush its history");
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    async fn placement_wait_survives_start_window(kind: &str) {
+        let _controls = RunControls;
+        RENEW_EVERY.with(|v| *v.borrow_mut() = Some(Duration::from_millis(20)));
+        // Keep the production 120s/10s policy; compress only the retry fixture's local clock.
+        crate::sessions::WORKTREE_WAIT.with(|v| v.set(Some((Duration::from_millis(200), Duration::from_millis(20)))));
+        let window = Arc::new(Mutex::new(StartWindow { now: 0, until: Some(180), expired: false, started: false, renewed_at: None, publish_repository: kind == "publish" }));
+        let (url, seen, server) = recording_server_start_window(None, None, Some(window.clone())).await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let bot = format!("wait-{}", uuid::Uuid::new_v4().simple());
+        let attempt = json!({"id": "a-placement", "bot": bot, "token": "synthetic", "lease_seconds": 120,
+            "start_reservation_seconds": 180, "lane": "task:t-acme", "task": {"id": "t-acme"},
+            "conversation": {"id": "c1"}, "message": {"refs": {}},
+            "config": {"runtime": "pi", "harness": "pi", "model": "synthetic"}});
+        let main = crate::sessions::local_path(&runner.config, &bot, &attempt["config"]);
+        std::fs::create_dir_all(&main).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(),
+            format!("cat > /dev/null; cat '{}'", fixture.display())]));
+        if matches!(kind, "refresh git" | "retry fallback") { crate::product_files::mark_unpushed(&bot); }
+        let checkout = if matches!(kind, "refresh git" | "publish") { None } else { Some(runner.lanes.checkout(&bot).lock_owned().await) };
+        let git = if matches!(kind, "retry fallback" | "publish") { None } else { Some(runner.lanes.git_lock(&main).lock_owned().await) };
+        let push = if kind == "publish" { Some(runner.push_lock.lock().await) } else { None };
+        let work = runner.clone().execute(attempt);
+        let release = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting = seen.lock().unwrap().iter().any(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_some());
+                    if waiting && runner.places.lock().unwrap().is_empty() { break; }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("placement did not release its reservation before waiting");
+            // Advance the SERVER past START_SECONDS while the actual lock remains held, then exercise real renewal.
+            window.lock().unwrap().now = 181;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if window.lock().unwrap().renewed_at == Some(181) { break; }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("delivery did not renew beyond the original start deadline");
+            if kind == "retry fallback" {
+                // Both the retry span and its unbounded checkout fallback must hold no reservation.
+                tokio::time::sleep(Duration::from_millis(350)).await;
+            }
+            assert!(!window.lock().unwrap().expired);
+            assert_eq!(posted(&seen, "/attempts/a-placement/started"), 0, "the occupied lock must still fence the start");
+            assert!(runner.places.lock().unwrap().is_empty());
+            assert!(runner.lanes.lane(&bot, "task:t-acme").try_lock_owned().is_err(), "the task must keep its lane");
+            drop((git, checkout, push));
+        };
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let (result, ()) = tokio::join!(work, release);
+            result.unwrap();
+        }).await.expect("turn did not start after its lock was released");
+        server.abort();
+        crate::product_files::pushed(&bot);
+        let window = window.lock().unwrap();
+        assert!(window.started && !window.expired, "waiting work must neither expire nor lose its lease");
+        let requests = seen.lock().unwrap();
+        let started = requests.iter().position(|(_, p, _)| p.ends_with("/started")).unwrap();
+        let waiting = requests.iter().position(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_some()).unwrap();
+        assert!(requests[waiting + 1..started].iter().any(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_none()),
+            "a fresh reservation must follow the wait and precede the started post");
+        let completions: Vec<_> = requests.iter().filter(|(_, p, _)| p.ends_with("/complete")).collect();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].2["outcome"], "completed");
+        assert!(!requests.iter().any(|(_, _, b)| b.to_string().contains("Attempt lease lost while waiting")));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn initial_publish_push_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("publish").await;
+    }
+
+    #[tokio::test]
+    async fn task_worktree_git_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("task git").await;
+    }
+
+    #[tokio::test]
+    async fn refresh_checkout_git_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("refresh git").await;
+    }
+
+    #[tokio::test]
+    async fn worktree_retry_and_checkout_fallback_release_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("retry fallback").await;
     }
 
     #[tokio::test]
@@ -3939,6 +4381,252 @@ else:
         assert!(resumed.windows(2).any(|pair| pair == ["--resume", "canonical-acme-session"]), "{args:?}");
         server.abort();
         std::fs::remove_dir_all(dir).ok();
+    }
+
+
+    /// A synthetic Claude process: its first turn says something (it acted) and then the model is at capacity; a turn
+    /// that resumes its thread finishes. Every prompt it reads is kept in prompts.jsonl.
+    fn capacity_host(dir: &Path) {
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, os, pathlib, signal, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+signal.alarm(20)
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+with (root / 'prompts.jsonl').open('a') as f:
+    f.write(json.dumps(sys.stdin.readline()) + '\n')
+print(json.dumps({'type':'system','subtype':'init','session_id':'capacity-session'}), flush=True)
+if '--resume' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'success','result':'Finished the Acme invoice run.'}), flush=True)
+else:
+    print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':'Sent the Acme invoice'}]}}), flush=True)
+    print(json.dumps({'type':'result','subtype':'error_during_execution','is_error':True,
+                      'result':'Selected model is at capacity. Please try a different model.'}), flush=True)
+"#).unwrap();
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec![crate::env::python().display().to_string(), script.display().to_string()]));
+        HOST_CLAUDE.with(|on| on.set(true));
+    }
+
+    fn capacity_attempt(id: &str, continue_thread: Option<&str>) -> Value {
+        // Codex's configuration on the synthetic Claude process, with a fallback ready: no fallback may take a turn
+        // whose thread already acted.
+        let mut attempt = json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+                                 "conversation": {"id": "c1"}, "message": {"refs": {}},
+                                 "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "bot",
+                                            "fallback": {"harness": "claude", "model": "synthetic-fallback"}}});
+        if let Some(th) = continue_thread {
+            attempt["continue_thread"] = json!(th);
+        }
+        attempt
+    }
+
+    fn completion(seen: &Mutex<Vec<(String, String, Value)>>, aid: &str) -> Value {
+        let done: Vec<Value> = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/{aid}/complete"))).map(|(_, _, b)| b.clone()).collect();
+        assert_eq!(done.len(), 1, "{done:?}");
+        done[0].clone()
+    }
+
+    #[tokio::test]
+    async fn a_turn_at_capacity_after_it_acted_keeps_its_thread_and_the_next_turn_continues_it() {
+        for server_takes_it in [false, true] {
+            let _controls = RunControls;
+            CAPACITY_CONTINUE.with(|on| on.set(Some(server_takes_it)));
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "capacity");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            capacity_host(&dir);
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-cap", None))).await.expect("the turn ends").unwrap();
+            let done = completion(&seen, "a-cap");
+            assert_eq!(done["outcome"], "failed", "{done:?}");
+            assert_ne!(done["limited"], true, "a turn that acted is not a limit a fallback or a replay may retry: {done:?}");
+            // The primary's thread is kept whatever the server takes: a person resuming the held run continues it.
+            assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("capacity-session"));
+            if !server_takes_it {
+                // An older server holds it for review as before: the runner does not ask it to continue.
+                assert_ne!(done["continues"], true, "{done:?}");
+                server.abort();
+                std::fs::remove_dir_all(dir).ok();
+                continue;
+            }
+            assert_eq!(done["continues"], true, "{done:?}");
+            // The server queues the job again and, after the capacity hold, hands it out naming that thread.
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-next", Some("capacity-session")))).await.expect("the continuation ends").unwrap();
+            assert_eq!(completion(&seen, "a-next")["outcome"], "completed");
+            let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            assert_eq!(args.len(), 2, "no fallback or fresh thread ran: {args:?}");
+            let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert!(resumed.windows(2).any(|pair| pair == ["--resume", "capacity-session"]), "{args:?}");
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_continuation_whose_thread_is_gone_is_held_for_review_without_running() {
+        let _controls = RunControls;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "capacity-lost");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        capacity_host(&dir);
+        // This computer never ran the thread the stopped turn left (the bot moved, or its session was cleared).
+        tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-lost", Some("capacity-session")))).await.expect("the turn ends").unwrap();
+        assert_eq!(posted(&seen, "/attempts/a-lost/started"), 1, "started, so the server holds it rather than queueing it again");
+        let done = completion(&seen, "a-lost");
+        assert_eq!(done["outcome"], "interrupted", "{done:?}");
+        assert!(done["fallback"].is_null(), "{done:?}");
+        assert!(!dir.join("prompts.jsonl").exists(), "no fresh thread or fallback was given the request");
+        assert!(runner.state.session("ops", "bot", "codex").unwrap().is_none(), "lost continuation must not save its thread");
+        let events = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with("/attempts/a-lost/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect::<Vec<_>>();
+        assert!(events.iter().any(|e| e.to_string().contains("could not be resumed")), "{events:?}");
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+    #[tokio::test]
+    async fn quota_capacity_or_computer_stopped_fallback_survives_a_runner_restart_in_its_own_session() {
+        for mode in ["quota", "capacity", "computer"] {
+          for (worktree, named) in [(false, false), (true, false), (false, true), (true, true)] {
+            let quota = mode == "quota";
+            let _controls = RunControls;
+            SOURCE_CONTINUE.with(|on| on.set(Some(true)));
+            THREAD_UPDATES.with(|on| on.set(Some(true)));
+            CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "fallback-quota");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            let runner = if named {
+                let mut config = runner.config.clone();
+                let login_dir = dir.join("lab-login");
+                std::fs::create_dir_all(&login_dir).unwrap();
+                config.data.insert("profiles".into(), json!({"lab": {"dir": login_dir, "share_operator": true}}));
+                config.data.insert("default_profile".into(), json!("lab"));
+                config.save().unwrap();
+                Arc::new(Runner::new(config, runner.client.clone(), runner.state.clone()))
+            } else { runner };
+            if worktree {
+                // A real isolated checkout exercises place_turn's worktree suffix, not a fabricated session key.
+                let main = dir.join("projects/bot-ops");
+                let remote = dir.join("synthetic-origin.git");
+                for args in [
+                    vec!["init".into(), "--bare".into(), "--initial-branch=main".into(), remote.display().to_string()],
+                    vec!["init".into(), "--initial-branch=main".into(), main.display().to_string()],
+                    vec!["-C".into(), main.display().to_string(), "-c".into(), "user.name=Acme".into(),
+                         "-c".into(), "user.email=bot@acme.example".into(), "commit".into(), "--allow-empty".into(), "-m".into(), "Synthetic fixture".into()],
+                    vec!["-C".into(), main.display().to_string(), "remote".into(), "add".into(), "origin".into(), remote.display().to_string()],
+                    vec!["-C".into(), main.display().to_string(), "push".into(), "-u".into(), "origin".into(), "main".into()],
+                ] {
+                    let out = std::process::Command::new("git").args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
+                    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+                }
+            }
+            capacity_host(&dir);
+            let script = dir.join("synthetic_claude.py");
+            let code = std::fs::read_to_string(&script).unwrap().replace(
+                "Selected model is at capacity. Please try a different model.",
+                "Usage limit reached; resets at 2099-01-01T07:00:00Z");
+            if quota { std::fs::write(&script, code).unwrap(); }
+            if mode == "computer" {
+                let code = std::fs::read_to_string(&script).unwrap().replace(
+                    "    print(json.dumps({'type':'result','subtype':'error_during_execution'",
+                    "    import time; time.sleep(5)\n    print(json.dumps({'type':'result','subtype':'error_during_execution'");
+                std::fs::write(&script, code).unwrap();
+            }
+            let mut first = capacity_attempt("a-side", None);
+            if worktree {
+                first["task"] = json!({"id": "fallback-task", "status": "doing"});
+                // Placement follows the claimed lane, not the task object on a main-chat turn.
+                first["lane"] = json!("task:fallback-task");
+            }
+            let profile = runner.turn_profile(&first).unwrap();
+            assert_eq!(profile.as_ref().map(|p| p.name.as_str()), named.then_some("lab"));
+            let profile_suffix = profile.as_ref().map_or(String::new(), |p| format!(":profile:{}:{}", p.name, p.binding()));
+            let primary_scope = format!("bot{profile_suffix}{}", if worktree { ":worktree" } else { "" });
+            // The primary's qualified identity belongs to this epoch and must remain separate from the fallback.
+            runner.state.epoch_moved("ops", "", &primary_scope, 3).unwrap();
+            runner.state.save_session("ops", &primary_scope, "codex", "primary-untouched").unwrap();
+            first["job_id"] = json!("job-side");
+            first["bot_session_epoch"] = json!(3);
+            first["config"]["primary_held"] = json!("2099-01-01T07:00:00Z");
+            let observe = async {
+                if mode != "computer" { return; }
+                tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        let handed = seen.lock().unwrap().iter().any(|(_, path, body)|
+                            path.ends_with("/attempts/a-side/thread") && body["source_continuation"].is_object());
+                        if handed { break; }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.expect("the live side session is handed off before its result");
+                assert_eq!(posted(&seen, "/attempts/a-side/complete"), 0);
+                runner.shut_down();
+                runner.shut_down();
+            };
+            let run = runner.clone();
+            let (ran, _) = tokio::join!(tokio::time::timeout(Duration::from_secs(30), run.execute(first.clone())), observe);
+            ran.unwrap().unwrap();
+            let done = completion(&seen, "a-side");
+            if quota { assert_eq!(done["limited"], true, "{done}"); }
+            else if mode == "capacity" { assert_eq!(done["continues"], true, "{done}"); }
+            else { assert_eq!(done["outcome"], "interrupted", "{done}"); }
+            let saved = seen.lock().unwrap().iter().find_map(|(_, path, body)|
+                (path.ends_with("/attempts/a-side/thread") && body["source_continuation"].is_object())
+                    .then(|| body["source_continuation"].clone())).expect("confirmed source persisted while live");
+            assert_eq!(saved["thread_id"], "capacity-session", "{done}");
+            assert_eq!(saved["runtime"], "claude", "{done}");
+            let expected_scope = format!("source:job-side{profile_suffix}{}", if worktree { ":worktree" } else { "" });
+            assert_eq!(runner.state.session("ops", &expected_scope, "claude").unwrap().as_deref(), Some("capacity-session"),
+                       "{mode}: worktree={worktree}, named={named}");
+            if worktree {
+                let path = crate::sessions::path_for(&runner.config.projects_dir(), "ops", "fallback-task");
+                assert!(path.join(".git").is_file(), "the task used its real worktree");
+            }
+            assert_eq!(runner.state.session("ops", &primary_scope, "codex").unwrap().as_deref(), Some("primary-untouched"));
+            let next = Arc::new(Runner::new(runner.config.clone(), runner.client.clone(), runner.state.clone()));
+            first["id"] = json!("a-side-again");
+            first["source_continuation"] = saved;
+            first["continue_thread"] = json!("capacity-session");
+            tokio::time::timeout(Duration::from_secs(30), next.execute(first)).await.unwrap().unwrap();
+            assert_eq!(completion(&seen, "a-side-again")["outcome"], "completed");
+            let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            assert_eq!(args.len(), 2, "no primary or fresh replay: {args:?}");
+            let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert!(resumed.windows(2).any(|p| p == ["--resume", "capacity-session"]), "{args:?}");
+            assert_eq!(runner.state.session("ops", &primary_scope, "codex").unwrap().as_deref(), Some("primary-untouched"));
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+          }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fallback_continuation_with_a_changed_login_or_epoch_never_starts_fresh() {
+        for changed_profile in [false, true] {
+            let _controls = RunControls;
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "fallback-binding");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            capacity_host(&dir);
+            if changed_profile {
+                runner.state.epoch_moved("ops", "", "source:job-side", 2).unwrap();
+            }
+            runner.state.save_session("ops", "source:job-side", "claude", "capacity-session").unwrap();
+            let mut attempt = capacity_attempt("a-binding", Some("capacity-session"));
+            attempt["job_id"] = json!("job-side");
+            attempt["bot_session_epoch"] = json!(2);
+            attempt["source_continuation"] = json!({"thread_id":"capacity-session", "runtime":"claude", "harness":"claude",
+                "model":"synthetic-fallback", "reasoning_effort":"", "profile": if changed_profile {"old-login"} else {""},
+                "epoch": if changed_profile {json!(["",2])} else {json!(["",1])}});
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(attempt)).await.unwrap().unwrap();
+            assert_eq!(completion(&seen, "a-binding")["outcome"], "interrupted");
+            assert!(!dir.join("argv.jsonl").exists(), "changed binding must not launch any provider turn");
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 
 }

@@ -600,6 +600,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .brepo-row:has([data-brepo-pick]:not(:checked)) .repo-seg{visibility:hidden}
 .brepo-run{display:flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .brepo-row:has([data-brepo-pick]:not(:checked)) .brepo-run{visibility:hidden}
+.brepo-run:has(input:disabled){opacity:.6}
+.brepo-why{margin:0;font-size:var(--t-xs);line-height:1.4}
 .brepo-eff{display:flex;gap:8px;align-items:baseline;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .brepo-eff>span:last-child{display:flex;flex-wrap:wrap;gap:2px 10px;min-width:0}
 .brepo-eff-item{overflow-wrap:anywhere;font-family:var(--mono);font-size:var(--t-sm)}
@@ -817,7 +819,8 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .computer-add-dialog .model-login-body{padding:0}
 .computer-add-dialog .computer-add-terminal{margin:12px 0 0;overflow-wrap:anywhere}
 .computer-add-dialog .computer-add-terminal code{white-space:pre-wrap;overflow-wrap:anywhere}
-.model-login.tmodal-shell>.model-login-body{flex:1;min-height:0;overflow:auto}
+/* An auto basis gives an intrinsically sized WebKit dialog room for instructions received after it opens. */
+.model-login.tmodal-shell>.model-login-body{flex:1 1 auto;min-height:0;overflow:auto}
 .model-login.tmodal-shell>:is(.model-login-status,.model-login-actions){flex:none}
 
 /* Settings > Computers: hosted servers (ui/app/settings-hosted.js) */
@@ -867,6 +870,19 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 #set-sleep .settings-cell-note{margin:6px 0 0}
 .wh-since{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
 .wh-since input{width:auto}
+
+/* The task lifecycle remains readable without horizontal scrolling. */
+.task-setting-picker {display:flex;align-items:center;gap:12px;margin:16px 0}
+.task-setting-picker select {max-width:100%}
+.task-setting-section {border-top:1px solid var(--line);padding:20px 0}
+.task-setting-section h3 .muted {font-size:.8em;font-weight:normal;margin-right:8px}
+.task-setting-row {padding:14px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.task-setting-action {margin:0 0 8px}
+.task-setting-action b {font-size:.8em;margin-right:6px;color:var(--muted)}
+.task-setting-meta {display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:.85em}
+.task-setting-step {padding:8px 0 12px 14px;border-left:2px solid var(--line);margin:14px 0}
+.task-setting-step h4 {margin:0 0 8px}
+@media(max-width:600px) {.task-setting-picker {display:block}.task-setting-picker select {display:block;width:100%;margin-top:8px}.task-setting-step {padding-left:8px}}
 /* Settings stage 1: one red line under a control that failed, the "admins only" line, the bot editor's waiting changes,
    and a routine's switch and Edit on its row. */
 .field-err{grid-column:1/-1;flex-basis:100%;margin:4px 0 0;font-size:var(--t-sm);overflow-wrap:anywhere}

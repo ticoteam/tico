@@ -16,6 +16,23 @@ function runStateWord(a) {
   const word = a.state === 'completed' ? (a.outcome || 'completed') : a.state;
   return RUN_STATE_WORDS[word] || String(word || '').replace(/_/g, ' ');
 }
+// The job's state beside its recovery decision; a saved choice still waiting for its lane is held (backend/run_view.py).
+const RUN_JOB_WORDS = {uncertain: 'Held', cancelled: 'Cancelled', queued: 'Queued', leased: 'Running', running: 'Running',
+  input: 'Running', completed: 'Done'};
+// "Cancelled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
+// from the decision record each time (job_recovery), so a later decision replaces it. The decision carries `state` only
+// while it is about the job's current try; once a later try ran, it says only what was decided ("Resumed by BotOps
+// at 09:50Z"). '' with no decision.
+function runDecisionWords(a) {
+  const d = a.decision;
+  if (!d) return '';
+  const who = d.by_kind === 'tico' ? "Tico's auto-reconcile" : actorLabel(d.by), at = new Date(d.at || '');
+  const hhmm = isNaN(at) ? '' : ` at ${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')}Z`;
+  const verb = d.decision === 'resume' ? 'resumed' : 'dismissed';
+  const what = d.state ? `${RUN_JOB_WORDS[d.state] || String(d.state).replace(/^./, ch => ch.toUpperCase())}: ${verb}`
+    : verb.replace(/^./, ch => ch.toUpperCase());
+  return `${what} by ${who === 'You' ? 'you' : who}${hhmm}`;
+}
 const runByWord = by => !by ? '' : by === 'keeper' ? 'automatically' : 'by ' + actorLabel(by);
 const runMs = ms => ms == null ? '' : durationWords(ms / 1000);
 
@@ -47,8 +64,11 @@ function runReportHTML(a) {
 function runAttemptHTML(a, open) {
   const model = ranOn(a.ran_on);
   const took = a.took_s != null ? durationWords(a.took_s) : a.started ? 'for ' + ago(a.started).replace(/ ago$/, '') : '';
-  const head = [`Try ${a.try} of ${a.tries}`, runStateWord(a), took, model].filter(Boolean).join(' · ');
-  const nxt = a.next ? `<p class="truns-next"><span class="truns-what">${esc(RUN_NEXT_WORDS[a.next.kind] || a.next.kind)}</span> ${esc([runByWord(a.next.by),
+  const decided = runDecisionWords(a);
+  const head = [`Try ${a.try} of ${a.tries}`, runStateWord(a), decided, took, model].filter(Boolean).join(' · ');
+  // The decision line says what `next` would for a resume or dismiss, with the note beside it.
+  const nxt = decided ? `<p class="truns-next truns-decision" data-decision="${esc(a.decision.decision)}"><span class="truns-what">${esc(decided)}</span>${a.decision.note
+    ? `<span class="truns-note">, ${esc(a.decision.note)}</span>` : ''}</p>` : a.next ? `<p class="truns-next"><span class="truns-what">${esc(RUN_NEXT_WORDS[a.next.kind] || a.next.kind)}</span> ${esc([runByWord(a.next.by),
     a.next.at ? ago(a.next.at) : ''].filter(Boolean).join(', '))}${a.next.note ? `<span class="truns-note">${esc(a.next.note)}</span>` : ''}</p>` : '';
   const lease = (a.lease || []).map(l => `<li class="muted">${esc(l.kind === 'grace' ? 'Lease lapsed; the runner was given time to report back'
     : 'Lease restored by the runner')} · ${esc(ago(l.at))}</li>`).join('');

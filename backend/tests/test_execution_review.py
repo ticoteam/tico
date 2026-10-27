@@ -398,7 +398,7 @@ def test_a_run_that_says_it_reports_tool_calls_resumes_plainly_when_it_called_no
     assert 'recorded no tool call' in claim(api, machine)['message']['body']
 
 
-def restarted_mid_turn(api, calls, *, reported=True, hop=False):
+def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True):
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
     by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
     does not report its calls (`tool_events: false`, runner-rs execute.rs)."""
@@ -416,7 +416,7 @@ def restarted_mid_turn(api, calls, *, reported=True, hop=False):
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
     if reported:
         post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': len(events),
-             'text': 'Runner restarted during execution'}, machine['token'])
+             'text': 'Runner restarted during execution' if restart else 'Execution interrupted'}, machine['token'])
     else:
         expire(api, attempt['id'])
         assert claim(api, machine) is None
@@ -451,7 +451,7 @@ def test_a_run_that_only_read_waits_out_a_lapsed_lease_for_the_runner_to_restore
 @pytest.mark.parametrize('writer', [('Bash', None), ('Write', 'call-1'), ('mcp__hub__hub_task_update', None)])
 def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls(api, writer):
     """Any call outside the reads, a subagent's included, holds the run for review; the card names every call."""
-    machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Agent', None), writer])
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Agent', None), writer], restart=False)
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert [(t['tool'], t['nested'], t['status']) for t in review['tools']] == [
@@ -487,13 +487,13 @@ def test_a_run_that_only_read_but_consumed_an_approval_is_held(api):
 
 def test_a_run_that_read_then_hopped_to_a_silent_host_is_held_and_never_called_read_only(api):
     """Its Read was recorded; what the fallback host did was not. The sweep holds it, and the card agrees."""
-    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], hop=True)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], hop=True, restart=False)
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert review['stopped'] == 'unknown' and [t['tool'] for t in review['tools']] == ['Read']
 
 
-def test_a_read_only_run_that_stops_again_after_its_resume_is_not_resumed_early(api):
+def test_a_read_only_run_that_stops_again_after_its_resume_is_dismissed_at_once(api):
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
     assert [d['state'] for d in sweep(api)] == ['queued']
     ready(api, machine, ['ops'])
@@ -503,9 +503,7 @@ def test_a_read_only_run_that_stops_again_after_its_resume_is_not_resumed_early(
         {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]}, machine['token'])
     post(api, f"attempts/{again['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
          'text': 'Runner restarted during execution'}, machine['token'])
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    assert get(api, 'bots/ops/execution-review')['jobs'][0]['stopped'] == 'twice'    # not "Try again" first
-    aged(api, again['id'])
+    assert get(api, 'bots/ops/execution-review')['jobs'][0]['stopped'] == 'twice'
     assert [d['state'] for d in sweep(api)] == ['cancelled']
 
 
@@ -649,6 +647,107 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
+
+
+def later():
+    """Times for a test's turns from just after its message was written, so the message never reads as a person's
+    after a limit (person_wrote_since), and within its first claim's start reservation."""
+    from backend.store import H
+    base = H.shift(H.now(), seconds=5)
+    return lambda seconds: H.shift(base, seconds=seconds)
+
+
+def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=True, thread='capacity-thread'):
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
+    events = [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'send_email', 'text': 'Sent'}}] if acted else []
+    events.append({'seq': len(events) + 1, 'kind': 'error',
+                   'payload': {'error': 'Selected model is at capacity. Please try a different model.', 'limit': True}})
+    post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'last_seq': len(events), 'text': '',
+                                                     'limited': not acted, 'continues': continues}, machine['token'])
+
+
+def claim_at(api, monkeypatch, machine, at, continues=True):
+    """A claim at `at` by a runner that does (`continues`) or does not advertise capacity continuation."""
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
+                                    "capabilities": ['capacity_continue_v1'] if continues else []}, token=machine['token'])
+    return claim(api, machine)
+
+
+@pytest.mark.parametrize('continuation_acted', [False, True])
+def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch, continuation_acted):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []                  # not held for a person
+    assert claim_at(api, monkeypatch, machine, at(60)) is None   # the capacity hold
+    following = claim_at(api, monkeypatch, machine, at(121))
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
+    assert following['message']['body'].endswith(execution.CONTINUE_NOTE)
+    # A second capacity refusal exhausts the one continuation, whether or not it ran another tool.
+    capacity_turn(api, monkeypatch, machine, following, at(180), acted=continuation_acted,
+                  continues=continuation_acted)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.H.status(c, 'ops')['state'] == 'crashed'
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert claim_at(api, monkeypatch, machine, at(600)) is None
+
+
+def test_a_capacity_continuation_with_a_missing_session_is_held_without_a_silent_retry(api, monkeypatch):
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    following = claim_at(api, monkeypatch, machine, at(121))
+    post(api, f"attempts/{following['id']}/started", {'thread_id': 'capacity-thread'}, machine['token'])
+    post(api, f"attempts/{following['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'error', 'payload': {'error': 'No conversation found with session ID: capacity-thread'}}
+    ]}, machine['token'])
+    post(api, f"attempts/{following['id']}/complete", {'outcome': 'failed', 'last_seq': 1, 'text': ''}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert claim_at(api, monkeypatch, machine, at(600)) is None
+
+
+def test_a_runner_that_cannot_continue_a_thread_is_never_handed_the_continuation(api, monkeypatch):
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    # A runner from before capacity continuation would ignore `continue_thread` and start the job on a fresh thread.
+    assert claim_at(api, monkeypatch, machine, at(121), continues=False) is None
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    following = claim_at(api, monkeypatch, machine, at(130))
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
+
+
+def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_moves_to_a_fallback(api, monkeypatch):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0), continues=False)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.capacity_continuation(c, attempt['job_id']) is None
+    # A job that continues a thread waits out its own login's hold even where a fallback is ready.
+    monkeypatch.setattr(execution, 'primary_hold', lambda *a, **k: 'held')
+    monkeypatch.setattr(execution, 'fallback_choice', lambda *a, **k: ('', 'claude'))
+    with api.app.state.store.transaction() as c:
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) is None
+        c.execute("UPDATE attempts SET thread_id='kept',result_json=json_set(result_json,'$.capacity_continue',json('true')) "
+                  "WHERE id=?", (attempt['id'],))
+        assert execution.capacity_continuation(c, attempt['job_id']) == 'kept'
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) == 'held'
 
 
 def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(api):
@@ -1057,7 +1156,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
                                '2 queued requests wait until you decide.')
     assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
                               'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
-                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}]}]
+                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'decided': None}]
     assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
@@ -1116,6 +1215,71 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
         post(api, f"jobs/{job['id']}/reconcile", {'attempt_id': job['attempt_id'], 'decision': 'resume',
              'note': 'Check what already happened, then continue.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
+
+
+def busy_folded_run(api):
+    """A run interrupted with a comment folded into it, a second comment queued behind it and the bot's lane busy:
+    one Needs you line settling two requests, where a choice is saved for the lane's next turn (deferred)."""
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
+    task_id = task.get('task', task).get('id') or task['refs']['task']
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.'})
+    carried = post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']
+    post(api, f"attempts/{attempt['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})   # waits behind the held run
+    rival(api, machine, attempt)
+    [line] = stopped_issue(api)['runs']
+    assert len(line['jobs']) == 2 and line['decided'] is None and all('decided' not in j for j in line['jobs'])
+    return line['jobs']
+
+
+def beside_open_work(monkeypatch):
+    """Another stopped run that still holds work up keeps the bot's card listing its runs: a run whose every request
+    has a saved choice holds nothing up (execution.held_back), so alone it leaves the card."""
+    from backend import execution
+    monkeypatch.setattr(execution, 'held_back', lambda *args, **kwargs: (1, ['Another task']))
+
+
+def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api, monkeypatch):
+    """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
+    a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
+    choice saved for it; the line carries it once every request it settles has one, so the card shows the outcome."""
+    first, second = busy_folded_run(api)
+    body = {'decision': 'resume', 'note': 'Check what already happened, then continue.',
+            'acknowledge_uncertain_effects': True}
+    assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'attempt_id': first['attempt_id']})['deferred'] is True
+    # Partway: the saved request says so, the other is still to decide, so the line still offers its choice.
+    [line] = stopped_issue(api)['runs']
+    assert [j.get('decided') for j in line['jobs']] == ['resume', None] and line['decided'] is None
+    assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'attempt_id': second['attempt_id']})['deferred'] is True
+    assert 'runs' not in stopped_issue(api)
+    beside_open_work(monkeypatch)
+    [line] = stopped_issue(api)['runs']
+    assert [j['decided'] for j in line['jobs']] == ['resume', 'resume'] and line['decided'] == 'resume'
+    # A reader who may not decide still sees that a choice is saved, without the handles.
+    [seen] = stopped_issue(api, 'ben-test')['runs']
+    assert seen['decided'] == 'resume' and 'jobs' not in seen
+
+
+def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api, monkeypatch):
+    """The Details card decides each folded request on its own, so one can be saved as Try again and the other as
+    Don't retry. The line is still settled ("mixed"): without it the card offered a choice that sends nothing."""
+    first, second = busy_folded_run(api)
+    body = {'note': 'Each request was decided on its own.', 'acknowledge_uncertain_effects': True}
+    for job, decision in ((first, 'resume'), (second, 'dismiss')):
+        assert post(api, f"jobs/{job['id']}/reconcile",
+                    {**body, 'decision': decision, 'attempt_id': job['attempt_id']})['deferred'] is True
+    beside_open_work(monkeypatch)
+    [line] = stopped_issue(api)['runs']
+    assert [j['decided'] for j in line['jobs']] == ['resume', 'dismiss'] and line['decided'] == 'mixed'
 
 
 def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
@@ -1296,10 +1460,8 @@ def test_review_choice_survives_a_busy_lane_and_applies_once_idle(api, decision,
     post(api, path, body, expected=409)
 
 
-def test_a_busy_bots_stopped_run_is_judged_unless_a_live_run_is_on_the_same_task(api):
-    """Dev 488: the sweep waited while the bot had any run in the stopped run's lane, so a bot that is always busy never
-    had its stopped runs judged, and the work fenced behind them never ran. It now waits only for a live run on the same
-    task; once judged, the fenced work is queued again, and the bot's page counts it as hub pipeline does."""
+def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api):
+    """A busy task or shared lane defers recovery; once free the sweep releases fenced queued work."""
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -1327,9 +1489,11 @@ def test_a_busy_bots_stopped_run_is_judged_unless_a_live_run_is_on_the_same_task
         c.execute('UPDATE turns SET task_id=? WHERE id=?', (stopped['id'], other['id']))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
 
-    # A live run on another task does not.
+    # A different task still owns this shared main lane, so record its dependency until it ends.
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE turns SET task_id=? WHERE id=?', (busy['id'], other['id']))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Done.'}, machine['token'])
     assert [d['state'] for d in sweep(api)] == ['queued']
     queue, page = counts()
     assert (queue['uncertain'], queue['dead'], queue['queued']) == (0, 0, 2) and page == 2
@@ -1345,8 +1509,7 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
 
     The historical-attempt case also protects the same task while the uncertain job has no attempt row to join.
     A distinct task sharing a non-main session lane must wait too; a different task on another lane is covered by
-    test_a_busy_bots_stopped_run_is_judged_unless_a_live_run_is_on_the_same_task. Different tasks sharing main do
-    not wait on one another.
+    test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free. Shared main also waits.
     """
     from backend.execution import STALL_MAX
     from backend.store import H
@@ -1402,11 +1565,6 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
                       (H.shift(H.now(), seconds=-STALL_MAX-1), target_attempt['job_id']))
             c.execute('UPDATE turns SET task_id=? WHERE id=?', (target_task['id'], live_attempt['id']))
 
-    if live_match == 'different_task_same_main_lane':
-        # Main is a shared scheduling lane, not a shared task session; unrelated work must not hold this decision.
-        assert [d['state'] for d in sweep(api)] == ['queued']
-        assert job_state(api, target_attempt['job_id']) == 'queued'
-        return
     assert sweep(api) == [] and job_state(api, target_attempt['job_id']) == 'uncertain'
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), live_attempt['id']))
@@ -1420,3 +1578,251 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
     else:
         assert [d['state'] for d in sweep(api)] == ['queued']
         assert job_state(api, target_attempt['job_id']) == 'queued'
+
+
+def add_recovery_reviewer(api):
+    from backend.store import H
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES(?, 'BotOps', 'active')",
+                  (H.FLEET_MAINTAINER,))
+
+
+def test_restart_after_shell_resumes_on_next_scheduler_tick_with_cut_time(api, monkeypatch):
+    from backend.scheduler import Scheduler
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    with api.app.state.store.read() as c:
+        cut = c.execute("SELECT finished FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+    monkeypatch.setattr(H, 'now', lambda: H.shift(cut, seconds=30))
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert job_state(api, attempt['job_id']) == 'queued'
+    ready(api, machine, ['ops'])
+    resumed = claim(api, machine)
+    assert resumed['job_id'] == attempt['job_id']
+    assert resumed['recovery'] == {'resume_session': True}
+    assert f"You were interrupted at {cut[11:16]} UTC" in resumed['message']['body']
+    assert 'Check what already happened first' in resumed['message']['body']
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops'").fetchone()
+        assert not c.execute("SELECT 1 FROM events WHERE action='job.held' AND target=?", (attempt['id'],)).fetchone()
+
+
+def test_restart_with_named_merge_is_held_immediately_and_review_names_it(api):
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    with api.app.state.store.transaction() as c:
+        # The command is recorded at tool start, so a lost result cannot hide an outside effect.
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+                  ('gh pr merge 42 --squash --body private-marker-42', attempt['id']))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert 'merge pull request' in review['reason'] and review['stopped'] == 'changed'
+    assert 'private-marker-42' not in review['reason'] and '--squash' not in review['reason']
+    with api.app.state.store.read() as c:
+        tasks = c.execute("SELECT body FROM tasks WHERE owner='bot:botops'").fetchall()
+    assert len(tasks) == 1 and 'merge pull request' in tasks[0]['body']
+    assert 'private-marker-42' not in tasks[0]['body'] and '--squash' not in tasks[0]['body']
+
+
+def test_saved_dismiss_finishes_review_before_main_lane_frees_and_preserves_save_time(api, monkeypatch):
+    from backend.scheduler import Scheduler
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = interrupted(api)
+    aged(api, attempt['id'])
+    assert sweep(api) == []
+    other = rival(api, machine, attempt)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lane='main' WHERE id IN (?,?)", (attempt['id'], other['id']))
+    saved_at = H.now()
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {
+        'attempt_id': attempt['id'], 'decision': 'dismiss',
+        'note': 'The work landed already. Dismiss this stopped request.', 'acknowledge_uncertain_effects': True})
+    assert result['deferred'] is True
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM tasks WHERE owner='bot:botops'").fetchone()[0] == 'done'
+        saved = dict(c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone())
+    assert sweep(api) == []
+    monkeypatch.setattr(H, 'now', lambda: H.shift(saved_at, seconds=60))
+    post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'}, machine['token'])
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert job_state(api, attempt['job_id']) == 'cancelled'
+    with api.app.state.store.read() as c:
+        assert dict(c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()) == saved
+
+
+def test_restart_report_after_lease_expiry_still_resumes_without_waiting_for_result_grace(api):
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)], reported=False)
+    # The computer is back but another run temporarily owns its lane. Its restart report is filed on the
+    # expired attempt rather than changing that lease's historical state.
+    other = rival(api, machine, attempt)
+    with api.app.state.store.read() as c:
+        seq = c.execute("SELECT last_seq FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+    filed = post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': seq,
+                 'text': 'Runner restarted during execution'}, machine['token'])
+    assert filed['filed'] is True
+    post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'}, machine['token'])
+    assert [d['state'] for d in sweep(api)] == ['queued']
+
+
+def test_restart_with_incomplete_tool_reporting_keeps_explicit_restart_policy(api):
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], hop=True)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    resumed = claim(api, machine)
+    assert resumed['recovery'] == {'resume_session': True}
+    assert 'Check what already happened first' in resumed['message']['body']
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops'").fetchone()
+
+
+def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api):
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+                  ('hub task create --title report', attempt['id']))
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='completed'",
+                  ('The instructions mention npm publish and hub mail send', attempt['id']))
+    assert [d['state'] for d in sweep(api)] == ['queued']
+
+
+@pytest.mark.parametrize('tool,label', [
+    ('mcp__hub__hub_release_now', 'publish release'),
+    ('mcp__hub__hub_webhook_send', 'send webhook'),
+    ('mcp__hub__hub_support_send', 'send support report'),
+])
+def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):
+    """Hub publish/send tools recorded with their runner prefix hold a restarted run and name the operation."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [(tool, None)])
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert label in review['reason'] and review['stopped'] == 'changed'
+
+
+def runner_shell_cases():
+    from pathlib import Path
+    return json.loads((Path(__file__).resolve().parents[2] /
+                       'runner-rs/tests/fixtures/recovery-shell-events.json').read_text())
+
+
+@pytest.mark.parametrize('case', runner_shell_cases(), ids=lambda case: case['command'])
+@pytest.mark.parametrize('host', ['codex', 'claude'])
+def test_restart_shell_actions_use_real_runner_events(api, case, host):
+    """Rust host tests produce these exact payloads from provider start items; no full command summary exists."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'restarted'}, machine['token'])
+    payload = case[host]
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': payload}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 2,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    if payload['outside_actions']:
+        assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+        review = get(api, 'bots/ops/execution-review')['jobs'][0]
+        assert all(label in review['reason'] for label in payload['outside_actions'])
+        with api.app.state.store.read() as c:
+            body = c.execute("SELECT body FROM tasks WHERE owner='bot:botops'").fetchone()[0]
+        assert all(label in body for label in payload['outside_actions'])
+        assert 'synthetic-private-marker' not in body + review['reason']
+    else:
+        assert [d['state'] for d in sweep(api)] == ['queued']
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops'").fetchone()
+
+
+@pytest.mark.parametrize('program', ['gh', 'npm', 'docker', 'hub', 'stripe'])
+@pytest.mark.parametrize('labels', [None, ['synthetic-private-marker']])
+def test_restart_legacy_program_only_event_does_not_hide_possible_action(api, program, labels):
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+                  (program, attempt['id']))
+        if labels is not None:
+            c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.outside_actions',json(?)) "
+                      "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+                      (json.dumps(labels), attempt['id']))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert 'older computer omitted command details' in review['reason']
+    assert 'synthetic-private-marker' not in review['reason']
+
+
+def test_restart_read_only_run_ignores_another_runs_approval_and_merge(api):
+    """An approval another message consumed and a merge another run caused never hold this run."""
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
+    with api.app.state.store.transaction() as c:
+        started = c.execute("SELECT started FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        # Another lane's approval, consumed while this run was cut off, names another message.
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), 'spend', 'message-elsewhere', 'bot:ops', started, started))
+        # Another run's merge on this run's task, inside the report window.
+        task = H.task_create(c, 'human:ana', 'Something else', 'Do something else.', 'bot:ops')
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,created,pr_merged_at) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), task['id'], 'pr', 'https://example.com/acme/tico/pull/9', started, H.now()))
+        # The claim already recorded this run's turn under its attempt id; point it at the task.
+        c.execute("UPDATE turns SET task_id=? WHERE id=?", (task['id'], attempt['id']))
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops'").fetchone()
+
+
+def test_restart_run_that_consumed_its_own_approval_is_held(api):
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
+    with api.app.state.store.transaction() as c:
+        started = c.execute("SELECT started FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'changed' and 'approval' in review['reason']
+
+
+def test_restart_safe_shell_run_card_names_the_restart_not_only_read(api):
+    """A restarted shell run with no named outside action may resume, but its card never says it only read."""
+    add_recovery_reviewer(api)
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'restarted'
+    assert 'only read' not in review['reason']
+    assert [d['state'] for d in sweep(api)] == ['queued']
+
+
+def test_saved_resume_applies_when_main_lane_frees(api, monkeypatch):
+    from backend.scheduler import Scheduler
+    from backend.store import H
+    add_recovery_reviewer(api)
+    machine, message, attempt = interrupted(api)
+    aged(api, attempt['id'])
+    assert sweep(api) == []
+    other = rival(api, machine, attempt)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lane='main' WHERE id IN (?,?)", (attempt['id'], other['id']))
+    saved_at = H.now()
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {
+        'attempt_id': attempt['id'], 'decision': 'resume',
+        'note': 'The work has not landed yet. Run it again when the lane is free.',
+        'acknowledge_uncertain_effects': True})
+    assert result['deferred'] is True
+    assert sweep(api) == []
+    monkeypatch.setattr(H, 'now', lambda: H.shift(saved_at, seconds=60))
+    post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'}, machine['token'])
+    Scheduler(api.app.state.store, api.app.state.execution).tick()
+    assert job_state(api, attempt['job_id']) == 'queued'
+    with api.app.state.store.read() as c:
+        saved = dict(c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone())
+    assert saved['decision'] == 'resume'

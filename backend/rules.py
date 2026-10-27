@@ -10,8 +10,8 @@ message H._write_message is about to write to a bot, and answers with an outcome
 - `ignore`: write it quietly with no note: the room history is all that carries it.
 - `ask`: write the message quietly with its note, and raise one Needs-you item for the task's human naming the rule
   (`carry_out`, once per task and rule).
-- `action`: run the row's `params.action` (close, move_step, set_wait, relate, note) as the keeper, with the rule id in
-  the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
+- `action`: run the row's `params.action` (close, move_step, set_wait, relate, note, assign, add_tag, remove_tag) as
+  the keeper, with the rule id in the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
   bot under `fail_open`, so work is never lost to a rule.
 
 The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `turns.rule_id`
@@ -50,7 +50,7 @@ import logging
 import sqlite3
 from typing import NamedTuple, Optional
 
-from . import event_catalog as CAT, hubdb as H, templating, tico_notices
+from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,8 @@ NO_RUN = "no_run"
 BOT_TO_BOT = "bot_to_bot"
 # What a code action can do, for `action` rows (system_routines' THEN names). The task actions need a task; the event
 # actions (`wake_bot`, `send_webhook`) do not, so they also run from events without one (judge_event).
-TASK_ACTIONS = ("close", "move_step", "set_wait", "relate", "note")
+TASK_ACTIONS = ("close", "move_step", "set_wait", "relate", "note", "assign", "add_tag", "remove_tag")
+TAG_ACTIONS = ("add_tag", "remove_tag")
 EVENT_ACTIONS = ("wake_bot", "send_webhook", "create_task", "forward")
 # The two that make something new from an event judged once (judge_event) refuse a message event: its ledger is what
 # makes a repeated call do nothing.
@@ -86,10 +87,18 @@ FLOOR_EVENTS = {
     "needs_action": "a message its sender flagged needs-action",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
     "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
+    "incident_news": "news about a task marked as an incident wakes the bot at once",
+    "task_action": "a stale-check suggestion on a task it owns needs its action now",
+    "task_blocker": "a blocker or refused move on a task it owns or asked for needs action now",
+    "direct_review_request": "a review or sign-off asked of this bot needs action now",
+    "builder_handoff": "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or "
+                       "a merge",
 }
+# Structured task news that wakes at once when no row already wakes it or keeps it quiet.
+URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
-          "gate": "verdict"}
+          "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {
     "blocker_done": ("blocker_done", "a task this one waits on (blocked_by) finished"),
@@ -133,6 +142,7 @@ WAKE_EVENTS = {
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
+    "exceptions": "the type manager's exceptions list has a new entry",
 }
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
@@ -144,6 +154,13 @@ NOTE_EVENTS = {
 BATCH_EVENTS = {"completion": "a finished request", "review": "review comments", "ci": "a failing check",
                 "rule": "a notice a rule batched"}
 AWAITED_NAMES = frozenset(v[0] for v in AWAITED_EVENTS.values())
+# What a Manager-profile bot hears of as a note though it wakes every other bot: a ticket's verdicts and builder
+# hand-offs (wake_rules.always_wakes keys), its subtasks' and blockers' results (wake_rules.awaited keys) and a
+# blocker or refused move on a ticket it asked for (urgent_rule's task_blocker). Its exceptions list carries what of
+# those does not move on; a person, an approval, a needs-action flag, a reply it waits on, an incident, its own
+# wake_once, resume, watcher, milestone and worktree waits still wake it.
+MANAGER_NOTE = "profile_manager_note"
+MANAGER_QUIET = frozenset({"gate", "handoff", "subtask", "blocker_done", "task_blocker"})
 EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in AWAITED_EVENTS.values()},
           **{"batch_" + k: v for k, v in BATCH_EVENTS.items()}}
 # refs.wake spellings the writers use -> the event a rule names.
@@ -165,7 +182,7 @@ WHEN_ROLES = ("owner", "requester", "qa", "release_manager", "other")
 # rows in the table). A row naming an event is tried at the bot scope after the bot's own rows; a `*` row is the
 # profile's "everything else" and is tried last of all, after the team's rows, so a type or team rule that names an
 # event (a release waking QA) still reaches a bot whose profile makes everything else a note.
-PROFILES = ("doer", "reviewer", "lead", "responder", "monitor", "custom")
+PROFILES = ("doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
 # Time-based events a bot set for itself (its routines, due dates, snoozes): a bot that works to a clock is woken by
 # them whatever its profile says about news.
 OWN_TIMERS = (("routine", "its routine ran"), ("schedule", "a scheduled run came"), ("due", "a task's due date came"),
@@ -206,6 +223,13 @@ def _profile_rules():
     add("lead", "profile_lead_digest", "*", BATCH, "anything else Tico reports: held for the daily digest",
         {"actor": ["keeper"]})
     add("lead", "profile_lead_note", "*", NOTE, "anything else a bot says")
+    # A manager works by exception: its schedule, a person, work given to it and its exceptions list wake it; a ticket's
+    # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
+    add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
+    add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
+    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "its exceptions list has a new entry")
+    timers("manager", OWN_TIMERS + OWN_WORK)
+    add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
     add("monitor", "profile_monitor_assignment", "assignment", WAKE, "its watcher filed a task",
         {"actor": ["keeper"]})
@@ -254,7 +278,17 @@ class Decision(NamedTuple):
     rule: str
     reason: Optional[str] = None        # the held_by mark when the message is written quiet here
     params: Optional[dict] = None
-    by: Optional[str] = None            # who wrote the row: an event action acts with their rights
+    by: Optional[str] = None            # task action's effective writer; event actions retain the row's creator
+    notice_only: bool = False           # read urgent news without starting the work its dependency holds
+
+
+PARKED_NOTICE = "parked_urgent_notice"
+
+
+def notice_only(message):
+    """Only the keeper's server-stamped urgent notices run without attaching their held task."""
+    return bool(message and message.get("from_actor") == H.KEEPER and message.get("kind") == "notice"
+                and (message.get("refs") or {}).get(PARKED_NOTICE) is True)
 
 
 # Pull request checks (backend/github.py): the webhook writes no message for one check finishing (`pr_check`), and one
@@ -302,6 +336,8 @@ def _builtins():
         add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     add("ask", "ask", WAKE, FLOOR_EVENTS["ask"], "always", True)
     add("answer", "answer", WAKE, FLOOR_EVENTS["answer"], "always", True)
+    for event in URGENT_EVENTS:
+        add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     for key, (event, words) in AWAITED_EVENTS.items():
         add("awaited_" + key, event, WAKE, words, "awaited")
     add("own_write", "status_or_relation", IGNORE, "the bot's own write caused it", "filter")
@@ -337,10 +373,18 @@ CREATE TABLE IF NOT EXISTS rules(
  id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL,
  when_json TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params_json TEXT NOT NULL DEFAULT '{}',
  enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
- created_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+ created_by TEXT NOT NULL, action_by TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS rules_event ON rules(event, enabled);
 CREATE INDEX IF NOT EXISTS rules_scope ON rules(scope_kind, scope_id);
 """
+
+
+def ensure_schema(c):
+    """Keep creator attribution separate from the person responsible for a task action."""
+    H.add_column(c, "rules", "action_by", "TEXT")
+    # Only an unedited legacy rule is known to carry its creator's action. Revised legacy rules fail open on private
+    # tasks until someone saves their action again, rather than borrowing an unknown editor's creator permissions.
+    c.execute("UPDATE rules SET action_by=created_by WHERE action_by IS NULL AND revision=1")
 
 
 # ----------------------------------------------------------------------------- naming a message's event
@@ -430,7 +474,8 @@ class _Context:
         if self._chain is None:
             from . import groups, people
             roster = groups._roster(self.conn)
-            gid = people.team_of(self.slug, groups._configs(self.conn), roster)
+            gid = ((people.person(self.slug, roster) or {}).get("team") if H.is_human(self.target) else
+                   people.team_of(self.slug, groups._configs(self.conn), roster))
             self._chain = set(people.group_chain(gid, roster))
         return self._chain
 
@@ -461,6 +506,16 @@ class _Context:
                 return False
             if key == "state":
                 if task.get("status") not in wanted:
+                    return False
+            elif key in ("owner", "requester"):
+                if task.get(key) not in wanted:
+                    return False
+            elif key == "type":
+                names = {str(task.get("type_id") or "").lower()}
+                found = self.conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
+                if found:
+                    names.add(str(found[0]).lower())
+                if not names & {str(w).lower() for w in wanted}:
                     return False
             elif key == "role":
                 mine = {"owner" if task.get("owner") == self.target else
@@ -503,7 +558,10 @@ def _row_decision(row, actor):
         # else wakes, with the rule still named, rather than risk a wake nobody sees.
         return Decision(BATCH if actor == H.KEEPER else WAKE, row["id"], None, params)
     if outcome in (ASK, ACTION):
-        return Decision(outcome, row["id"], None, params, row["created_by"])
+        by = row["created_by"]
+        if outcome == ACTION and params.get("action") in TASK_ACTIONS:
+            by = dict(row).get("action_by") or (by if row["revision"] == 1 else None)
+        return Decision(outcome, row["id"], None, params, by)
     return Decision(WAKE, row["id"], None, params)
 
 
@@ -548,6 +606,37 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
     return None
 
 
+def incident_task(conn, task):
+    """The persisted marker, never a title match when judging news."""
+    if not task:
+        return False
+    if "incident" in H.task_labels(task):
+        return True
+    task_type = conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
+    return bool(task_type and task_type[0].strip().lower() in ("incident", "incidents"))
+
+
+def urgent_rule(conn, actor, target, refs, conv, event):
+    """Structured task news that wakes at once when no row already wakes it or keeps it quiet. A row that
+    wakes keeps its own rule name; an explicit ignore or quiet marker keeps the silence. Own writes stay quiet."""
+    from . import wake_rules
+    if wake_rules.CAUSE.get() == target or actor == target:
+        return None
+    ctx = _Context(conn, actor, target, refs, conv, None)
+    task = ctx.task
+    if task:
+        if incident_task(conn, task):
+            return "incident_news"
+        party = target in (task.get("owner"), task.get("requester"))
+        if refs.get("stale_check") and target == task.get("owner"):
+            return "task_action"
+        if party and (event in ("blocker", "task_blocked") or refs.get("review_gate")):
+            return "task_blocker"
+    if event in ("review_request", "review_handback"):
+        return "direct_review_request"
+    return None
+
+
 # ----------------------------------------------------------------------------- the decision
 def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
     """The decision for a message about to be written to `target`, or None when `target` is not a bot. Fail open.
@@ -555,7 +644,15 @@ def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided
     if not str(target).startswith("bot:"):
         return None
     try:
-        return _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+        found = _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+        if found.outcome == WAKE and actor == H.KEEPER and kind == "notice":
+            from . import wake_rules
+            task = _Context(conn, actor, target, refs, conv, None).task
+            if (task and not H.TS.snoozed(task) and wake_rules.parked(conn, task) == "blocked_by"
+                    and urgent_rule(conn, actor, target, refs, conv, event_of(actor, kind, refs, body))):
+                # This changes delivery only, after the decision and its silence controls. Preserve the rule id.
+                found = found._replace(notice_only=True)
+        return found
     except Exception:  # noqa: BLE001 - fail open: a message the engine cannot read starts its run as before
         return Decision(WAKE, FAIL_OPEN)
 
@@ -578,16 +675,24 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(IGNORE, NO_RUN)
     cause = wake_rules.CAUSE.get()
     floor = wake_rules.always_wakes(conn, actor, target, kind, refs, body, cause, in_reply_to)
+    if _quiet(conn, target, floor):
+        return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if floor:
         return Decision(WAKE, floor_rule(floor, kind))
     event = event_of(actor, kind, refs, body)
     row = _table_decision(conn, event, actor, target, refs, conv)
-    if row:
-        return row
-    row = _pr_decision(conn, event, target, refs, conv)
-    if row:
+    if row is None:
+        row = _pr_decision(conn, event, target, refs, conv)
+    if row is not None:
+        if row.outcome in (WAKE, IGNORE):
+            return row
+        urgent = urgent_rule(conn, actor, target, refs, conv, event)
+        if urgent and not _quiet(conn, target, urgent):
+            return Decision(WAKE, urgent)
         return row
     key = wake_rules.awaited(refs)
+    if _quiet(conn, target, key):
+        return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if key:
         return Decision(WAKE, "awaited_" + key)
     if refs.get("wake_digest"):
@@ -598,10 +703,25 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(IGNORE, "same_state", "same_state")
     if held == "own_write":
         return Decision(IGNORE, held, HOLD_IGNORED)    # the bot's own run already knows what it wrote
+    if (held == "parked" and wake_rules.parked(
+            conn, _Context(conn, actor, target, refs, conv, None).task) == "blocked_by"):
+        urgent = urgent_rule(conn, actor, target, refs, conv, event)
+        if urgent:
+            return Decision(WAKE, urgent)
     if held:
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
+    if outcome == WAKE:
+        return Decision(outcome, rule)
+    urgent = urgent_rule(conn, actor, target, refs, conv, event)
+    if urgent and not _quiet(conn, target, urgent):
+        return Decision(WAKE, urgent)
     return Decision(outcome, rule, HOLD_ROW if outcome == NOTE else None)
+
+
+def _quiet(conn, target, key):
+    """Whether this floor, awaited or urgent key is only a note for the target (MANAGER_QUIET)."""
+    return key in MANAGER_QUIET and profile_of(conn, H.actor_id(target)) == "manager"
 
 
 def decide(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
@@ -630,6 +750,14 @@ def stamp(refs, decision):
     """The message's refs with the rule that decided it. A row's `batch` stamps the hold the jobs trigger reads
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
+    out.pop(PARKED_NOTICE, None)          # callers cannot supply a notice-only dispatch capability
+    if decision.notice_only:
+        out[PARKED_NOTICE] = True
+    out.pop("wake_immediate", None)
+    if decision.outcome == WAKE and decision.rule in (*URGENT_EVENTS, "needs_action", "ask"):
+        # Urgent news and a question or flagged action for the bot skip every hold; the trigger reads this.
+        out.pop("wake_batch", None)
+        out["wake_immediate"] = True
     if decision.outcome == BATCH and not out.get("wake_batch"):
         out["wake_batch"] = "rule"
     if decision.outcome != BATCH and decision.rule not in BUILTIN_IDS and out.get("wake_batch") in BATCH_EVENTS:
@@ -672,11 +800,12 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
     try:
         tid = H.message_task_id({"refs": refs or {}}, conv)
         row = H.task(conn, tid) if tid else None
-        if decision.outcome == ASK:
-            _ask(conn, decision, row, actor, body)
-        else:
-            _act(conn, decision, row, {"actor": actor, "target": target, "kind": kind, "refs": refs or {},
-                                       "body": body})
+        with TTR.from_action(decision.rule):
+            if decision.outcome == ASK:
+                _ask(conn, decision, row, actor, body)
+            else:
+                _act(conn, decision, row, {"actor": actor, "target": target, "kind": kind, "refs": refs or {},
+                                           "body": body})
         conn.execute("RELEASE rule_carry")
         return Decision(NOTE, decision.rule, HOLD_ROW, decision.params)
     except Exception as exc:  # noqa: BLE001 - fail open: a rule that cannot run wakes the bot as before
@@ -737,10 +866,15 @@ def _act(conn, decision, row, message=None):
         raise ValueError(f"unknown action {action!r}")
     if not row:
         raise ValueError("an action rule needs a task")
+    # The keeper passes the private-task check, so the rule's writer is held to it here: a rule never changes a
+    # private task its writer could not change by hand. Failing opens the message, so the owner still hears of it.
+    if H.task_private(conn, row) and decision.by != H.KEEPER \
+            and (not decision.by or not H.task_private_readable(conn, decision.by, row)):
+        raise ValueError("the rule's writer cannot read this private task")
     note = str(params.get("note") or params.get("text") or "")[:1000]
     said = f"Rule {decision.rule}: {note}" if note else f"Rule {decision.rule}"
-    runner(conn, row["id"], params, said)
-    H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action})
+    done = runner(conn, row["id"], params, said) or {}
+    H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
 
 
 def _close(conn, tid, params, said):
@@ -769,7 +903,29 @@ def _note(conn, tid, params, said):
     H.task_update(conn, H.KEEPER, tid, note=said)
 
 
-TASK_RUNNERS = {"close": _close, "move_step": _move_step, "set_wait": _set_wait, "relate": _relate, "note": _note}
+def _assign(conn, tid, params, said):
+    # The same write a person's reassignment makes, so the new owner is woken and the old one told as usual. The keeper
+    # passes the private-task check, so it is made here: a rule never hands a private task to someone who may not read
+    # it. Failing opens the message, so the current owner is still woken.
+    owner, task = str(params["owner"]), H.task(conn, tid)
+    if H.task_private(conn, task) and not H.task_private_readable(conn, owner, task):
+        raise ValueError("the new owner cannot read this private task")
+    H.task_update(conn, H.KEEPER, tid, owner=owner, note=said)
+    return {"owner": owner}
+
+
+def _retag(add):
+    def run(conn, tid, params, said):
+        have, named = H.task_labels(H.task(conn, tid)), list(params["tag"])
+        keys = have + [k for k in named if k not in have] if add else [k for k in have if k not in named]
+        if keys != have:                # a tag already on (or already off) writes nothing and mirrors no note
+            H.task_update(conn, H.KEEPER, tid, labels=keys, note=said)
+        return {"tag": named, "changed": keys != have}
+    return run
+
+
+TASK_RUNNERS = {"close": _close, "move_step": _move_step, "set_wait": _set_wait, "relate": _relate, "note": _note,
+                "assign": _assign, "add_tag": _retag(True), "remove_tag": _retag(False)}
 
 
 # ----------------------------------------------------------------------------- events without a task
@@ -957,7 +1113,16 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     body = _wake_text({"text": params.get("body")}, values, ctx, _default_text(event, values))
     conn.execute("SAVEPOINT rule_task")
     try:
-        row = H.task_create(conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False)
+        options = {}
+        if event in TTR.TRIGGERS and task:
+            options = {"private": True if H.task_private(conn, task) else None,
+                       "type": params.get("type"), "step": params.get("step")}
+        row = H.task_create(conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False,
+                            deduplicate=False, **options)
+        if event in TTR.TRIGGERS and task:
+            from . import task_relations as TR
+            TR.relate(conn, H.KEEPER, row["id"], task["id"], mover=True,
+                      note=f"Trigger: {event}. Action: create task. Rule {rule_id}")
         conn.execute("RELEASE rule_task")
     except Exception as exc:  # noqa: BLE001 - the rule's other rows still run
         conn.execute("ROLLBACK TO rule_task")
@@ -1086,9 +1251,10 @@ def _judge_event(conn, event, ctx, actor):
         elif outcome == ASK:
             ok, detail = _event_ask(conn, row, name, params, values, ctx)
         elif outcome == ACTION and params.get("action") in EVENT_RUNNERS:
-            found = EVENT_RUNNERS[params["action"]](
-                conn, row["id"], row["created_by"], params, values, event=name,
-                subject=delivery or name, revision=f"{row['id']}:{name}:{trigger}", ctx=ctx)   # one send per rule, event, trigger and call
+            with TTR.from_action(row["id"]):
+                found = EVENT_RUNNERS[params["action"]](
+                    conn, row["id"], row["created_by"], params, values, event=name,
+                    subject=delivery or name, revision=f"{row['id']}:{name}:{trigger}", ctx=ctx)   # one send per rule, event, trigger and call
             done.append({"rule_id": row["id"], "outcome": found["outcome"], "target": found["target"],
                          "ok": found["ok"], "detail": found["detail"]})
             continue
@@ -1118,6 +1284,28 @@ DEV_ROWS = (
     ("In QA entered: wake QA only", {"step": "In QA", "role": "qa"}, WAKE),
 )
 SEEDED = "rules.seeded"
+
+
+def steps_renamed(conn, type_id, renamed):
+    """A type's steps were renamed ({old name: new name}): its own rows that name a step by its old name name the new
+    one, so a rule set on a step (QA wakes on In QA, ...) stays on that step. Quietly does nothing before the rules
+    table exists."""
+    lower = {str(k).lower(): v for k, v in renamed.items()}
+    try:
+        rows = conn.execute("SELECT id, when_json FROM rules WHERE scope_kind='type' AND scope_id=?", (type_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return
+    for ident, raw in rows:
+        when = H._json(raw, {}) or {}
+        step = when.get("step") if isinstance(when, dict) else None
+        if step is None:
+            continue
+        names = step if isinstance(step, list) else [step]
+        moved = [lower.get(str(n).lower(), n) for n in names]
+        if moved != names:
+            when["step"] = moved if isinstance(step, list) else moved[0]
+            conn.execute("UPDATE rules SET when_json=?, updated=?, revision=revision+1 WHERE id=?",
+                         (json.dumps(when, sort_keys=True), H.now(), ident))
 
 
 def seed_dev(conn):
@@ -1167,11 +1355,12 @@ def drop_step_noise(conn):
 
 def step_entered(conn, actor, row, *, skip=()):
     """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
-    else hears nothing. Only rows that name `step_entered` start this, so a team without them writes no message on a
-    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
+    else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
+    Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
     Callers can skip recipients already notified by the event that moved the task."""
     try:
-        if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
+        incident = incident_task(conn, row)
+        if not incident and not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
             return
         step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
         flow = _release_flow()
@@ -1181,9 +1370,10 @@ def step_entered(conn, actor, row, *, skip=()):
         conv = H.conversation(conn, row.get("conversation_id"))
         for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
-            if _table_decision(conn, "step_entered", actor, target, refs, conv, row):
+            if (incident and target in (row.get("owner"), row.get("requester"))) or \
+                    _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
-                        {"news": "step_entered"})
+                        {"news": "step_entered", **({"at_step": row["step_id"]} if row.get("step_id") else {})})
     except Exception:  # noqa: BLE001 - a step move never fails for the news about it
         return
 
@@ -1200,6 +1390,12 @@ def usage(conn, actor, days=7):
             "SELECT 1 FROM tasks k WHERE k.id=t.task_id AND (k.private=0 OR k.owner=? OR k.requester=?))) "
             "GROUP BY t.rule_id", (since, actor, actor)):
         out[row["rule"]] = {"runs": row["runs"], "no_op": row["idle"] or 0}
+    for row in conn.execute(
+            "SELECT r.rule_id, count(*) AS runs FROM rule_task_runs r JOIN tasks t ON t.id=r.task_id "
+            "WHERE r.at>=? AND r.fired=1 AND (t.private=0 OR t.owner=? OR t.requester=?) GROUP BY r.rule_id",
+            (since, actor, actor)):
+        counts = out.setdefault(row["rule_id"], {"runs": 0, "no_op": 0})
+        counts["runs"] += row["runs"]
     return out
 
 
@@ -1209,15 +1405,17 @@ def _with_usage(item, counts):
             "no_op_rate_7d": round(seen["no_op"] / seen["runs"], 3) if seen["runs"] else None}
 
 
-def view(row):
+def view(row, conn=None):
     """A table row as the API shows it."""
     return {"id": row["id"], "scope_kind": row["scope_kind"], "scope_id": row["scope_id"], "event": row["event"],
             "when": H._json(row["when_json"], {}) or {}, "then": row["then_outcome"],
             "params": H._json(row["params_json"], {}) or {}, "enabled": bool(row["enabled"]),
             "position": row["position"], "note": row["note"], "built_in": False,
             "protected": row["id"] in tico_notices.RULE_IDS,       # Tico Team's notice rules: editable, never deleted
-            "created_by": row["created_by"], "created": row["created"], "updated": row["updated"],
-            "revision": row["revision"]}
+            "created_by": row["created_by"], "action_by": row["action_by"],
+            "created": row["created"], "updated": row["updated"],
+            "revision": row["revision"],
+            **(TTR.state(conn, row["id"]) if conn is not None and row["event"] in TTR.TRIGGERS else {})}
 
 
 def validate(c, settings, scope_kind, scope_id, event, then, when, params):
@@ -1241,7 +1439,17 @@ def validate(c, settings, scope_kind, scope_id, event, then, when, params):
         if scope_id not in {d["id"] for d in task_rules.departments(settings)}:
             raise Problem("invalid", "Choose a department from the org chart's department list", 422)
     sourceless = event_is_sourceless(event)
-    if event != "*" and event not in EVENTS and not sourceless:
+    task_trigger = event in TTR.TRIGGERS
+    if task_trigger:
+        if not isinstance(params, dict) or not isinstance(when if when is not None else {}, dict):
+            raise Problem("invalid", "Trigger conditions and Action parameters are objects", 422)
+        if scope_kind not in ("team", "type", "department", "bot"):
+            raise Problem("invalid", "Trigger: choose the team, a type, a department or the owner's bot", 422)
+        if then != ACTION or (params or {}).get("action") not in TTR.ACTIONS:
+            raise Problem("invalid", "Action: choose a task Action, wake a bot, create a task or send a webhook", 422)
+        if event == "task.step_changed" and not (when or {}).get("step"):
+            raise Problem("invalid", "Trigger: entering a step needs a step condition", 422)
+    if event != "*" and event not in EVENTS and not sourceless and not task_trigger:
         raise Problem("invalid", "event is * or one of: " + ", ".join(EVENTS) + "; or, with no task: "
                       + ", ".join(sorted(SOURCELESS)), 422)
     if then not in OUTCOMES:
@@ -1255,7 +1463,8 @@ def validate(c, settings, scope_kind, scope_id, event, then, when, params):
     if event in FLOOR_EVENTS and then in (IGNORE, NOTE, BATCH):
         raise Problem("invalid", f"{event} always wakes the bot: a rule cannot make it wait", 422)
     when = when if when is not None else {}
-    allowed = EVENT_WHEN_KEYS if sourceless else tuple(k for k in WHEN_KEYS if k not in EVENT_WHEN_KEYS)
+    allowed = TTR.CONDITIONS if task_trigger else EVENT_WHEN_KEYS if sourceless else tuple(
+        k for k in WHEN_KEYS if k not in (*EVENT_WHEN_KEYS, "owner", "requester"))
     if not isinstance(when, dict) or set(when) - set(allowed):
         raise Problem("invalid", f"when holds only {', '.join(allowed)}", 422)
     if len(json.dumps(when)) > 1000:            # every row is read per message and listed in pages: keep each small
@@ -1270,7 +1479,12 @@ def validate(c, settings, scope_kind, scope_id, event, then, when, params):
             raise Problem("invalid", f"when.role is {', '.join(WHEN_ROLES)}", 422)
         if key == "state" and set(wanted) - set(H.TASK_STATUSES if hasattr(H, "TASK_STATUSES") else wanted):
             raise Problem("invalid", "when.state is a task status", 422)
-        if key == "type" and any("*" in w[:-1] for w in wanted):
+        if key in ("owner", "requester"):
+            normalized = [H.resolve_actor(c, w) for w in wanted]
+            if not all(normalized):
+                raise Problem("invalid", f"Trigger: {key} names a bot or person", 422)
+            when = {**when, key: normalized if isinstance(want, list) else normalized[0]}
+        if key == "type" and not task_trigger and any("*" in w[:-1] for w in wanted):
             raise Problem("invalid", "when.type may end with * (order.*), nowhere else", 422)
     params = params if params is not None else {}
     if not isinstance(params, dict) or len(json.dumps(params)) > 2000:
@@ -1290,7 +1504,7 @@ def _check_params(c, scope_kind, scope_id, sourceless, then, params, event=""):
     action = params.get("action") if then == ACTION else None
     if sourceless and then == ACTION and action not in EVENT_ACTIONS:
         raise Problem("invalid", f"a rule for an event with no task acts with: {', '.join(EVENT_ACTIONS)}", 422)
-    if action in ONCE_ACTIONS and not sourceless:
+    if action in ONCE_ACTIONS and not sourceless and event not in TTR.TRIGGERS:
         raise Problem("invalid", f"{action} runs on an event with no task, like webhook.received", 422)
     names_bot = action == "wake_bot" or (sourceless and then in (WAKE, NOTE) and scope_kind != "bot")
     if sourceless and scope_kind == "bot" and then in (WAKE, NOTE):
@@ -1328,6 +1542,39 @@ def _check_params(c, scope_kind, scope_id, sourceless, then, params, event=""):
             raise Problem("invalid", "create_task names params.title (300 characters) and may name params.body; "
                                      "{{path}} in them is filled in", 422)
         params["owner"] = slug
+        if event in TTR.TRIGGERS:
+            for key in ("type", "step"):
+                if key in params and not (isinstance(params[key], str) and params[key] and len(params[key]) <= 80):
+                    raise Problem("invalid", f"Action: {key} is a task type or step", 422)
+            if params.get("type") and not any(params["type"].lower() in (r["id"].lower(), r["name"].lower())
+                                               for r in c.execute("SELECT id,name FROM task_types")):
+                raise Problem("invalid", "Action: choose an existing task type", 422)
+    if event in TTR.TRIGGERS and action in ("move_step", "relate", "set_wait", "note"):
+        needs = {"move_step": ("step",), "relate": ("task",), "set_wait": ("waiting_on", "blocked_by"),
+                 "note": ("note", "text")}[action]
+        if not any(isinstance(params.get(k), str) and params[k].strip() for k in needs):
+            raise Problem("invalid", f"Action: {action} needs {' or '.join(needs)}", 422)
+    if action == "assign":
+        owner = params.get("owner")
+        if not (isinstance(owner, str) and owner.strip()) or "{{" in owner:
+            raise Problem("invalid", "assign names params.owner, the bot or person who gets the task", 422)
+        found = H.resolve_actor(c, owner)
+        if not found or found == H.KEEPER:
+            raise Problem("not_found", f"No bot or person {owner}", 404)
+        params["owner"] = found
+    if action in TAG_ACTIONS:
+        raw = params.get("tag")
+        named = raw if isinstance(raw, list) else [raw]
+        if not 1 <= len(named) <= 20 or not all(isinstance(t, str) and t.strip() for t in named):
+            raise Problem("invalid", f"{action} names params.tag: a tag or a list of tags", 422)
+        keys = H._labels(named)
+        for key in keys:
+            found = H.tag_by_key(c, key)
+            if not found:
+                raise Problem("not_found", f"No tag {key}", 404)
+            if found["is_template"]:
+                raise Problem("invalid", f"{key} is a template tag; name a tag a task can carry", 422)
+        params["tag"] = keys
     return params
 
 
@@ -1396,6 +1643,12 @@ def _action_writer(c, auth, who, then, params):
     if not (who.role == "owner" or auth.bot_admin(who) or who.role == "human" and H.can_move(c, who.actor)):
         raise Problem("forbidden", "An action rule acts as Tico: only the owner, an admin or a task mover writes one",
                       403)
+    if action == "assign":
+        try:
+            auth.target(c, who, str(params.get("owner") or ""), need="write")
+        except Problem as exc:
+            raise Problem("forbidden", f"You may not give tasks to {H.actor_id(params.get('owner'))}, so a rule of "
+                                       "yours cannot either", 403) from exc
     for key in ("task", "blocked_by"):
         named = H.task(c, str(params.get(key) or "")) if params.get(key) else None
         if params.get(key) and not (named and H.task_private_readable(c, who.actor, named)):
@@ -1436,14 +1689,17 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
     """Built-ins first (on the first page of an unfiltered or built-in listing), then the table rows the viewer may
     see, each with its 7-day run count and no-op rate and whether the viewer may change it. Paged and byte-capped:
     `more` says another page waits, at `next_offset`."""
+    from . import task_settings
     limit = max(1, min(int(limit or 200), MAX_ROWS))
     counts = usage(c, who.actor)
     items = []
     if scope_kind in (None, "builtin") and not offset and not scope_id:
-        items = [_with_usage({**r, "can_change": False}, counts) for r in BUILTINS if event in (None, r["event"])]
+        items = [task_settings.describe_rule(_with_usage({**r, "can_change": False}, counts))
+                 for r in BUILTINS if event in (None, r["event"])]
     more = False
     if scope_kind == "bot" and scope_id and not offset:
-        items += [_with_usage(r, counts) for r in profile_listing(c, scope_id) if event in (None, r["event"])]
+        items += [task_settings.describe_rule(_with_usage(r, counts))
+                  for r in profile_listing(c, scope_id) if event in (None, r["event"])]
     if scope_kind != "builtin":
         sql, args = "SELECT * FROM rules WHERE 1=1", []
         for column, value in (("scope_kind", scope_kind), ("scope_id", scope_id), ("event", event)):
@@ -1459,14 +1715,15 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
                 more, next_offset = True, offset + n
                 break
             if _visible(c, who, row):
-                item = _with_usage({**view(row), "can_change": can_change(
-                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts)
+                item = task_settings.describe_rule(_with_usage({**view(row, c), "can_change": can_change(
+                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts))
                 items.append(item)
                 spent += len(json.dumps(item))
         else:
             next_offset = offset + min(len(rows), limit)
-    out = {"rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
-           "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS)}
+    out = {"task_builtins": task_settings.builtins(c), "rules": items, "events": [*EVENTS, *TTR.TRIGGERS], "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
+           "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS),
+           "task_triggers": list(TTR.TRIGGERS), "task_when_keys": list(TTR.CONDITIONS), "task_actions": list(TTR.ACTIONS)}
     if more:
         out["next_offset"] = next_offset
     return out
@@ -1498,12 +1755,12 @@ def create(c, settings, auth, who, body):
                               (body.scope_kind, scope_id, tico_notices.RULE_POSITION)).fetchone()[0] or 0) + 1
     rule_id, at = "rule-" + H.new_id(), H.now()
     c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-              "note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+              "note,created_by,action_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
               (rule_id, body.scope_kind, scope_id, body.event, json.dumps(when, sort_keys=True), body.then,
                json.dumps(params, sort_keys=True), int(body.on is not False), position, body.note or "",
-               who.actor, at, at))
+               who.actor, who.actor, at, at))
     H.event(c, who.actor, "rule.created", rule_id, {"after": view(get(c, rule_id))})
-    return {"rule": view(get(c, rule_id))}
+    return {"rule": view(get(c, rule_id), c)}
 
 
 def update(c, settings, auth, who, rule_id, body):
@@ -1517,17 +1774,21 @@ def update(c, settings, auth, who, rule_id, body):
     when = body.when if body.when is not None else H._json(before["when_json"], {})
     params = body.params if body.params is not None else H._json(before["params_json"], {})
     _, when, params = validate(c, settings, before["scope_kind"], before["scope_id"], event, then, when, params)
-    if body.on is True or any(v is not None for v in (body.then, body.event, body.when, body.params)):
+    authored = body.on is True or any(v is not None for v in (body.then, body.event, body.when, body.params))
+    if authored:
         _action_writer(c, auth, who, then, params)       # turning one off, moving or deleting it needs only the scope
         _wake_writer(c, settings, auth, who, before["scope_kind"], before["scope_id"], event, then, params)
-    c.execute("UPDATE rules SET event=?,when_json=?,then_outcome=?,params_json=?,enabled=?,position=?,note=?,"
+    if body.on is True:
+        c.execute("UPDATE rule_task_state SET paused_at=NULL,pause_reason=NULL WHERE rule_id=?", (rule_id,))
+    c.execute("UPDATE rules SET event=?,when_json=?,then_outcome=?,params_json=?,enabled=?,position=?,note=?,action_by=?,"
               "updated=?,revision=revision+1 WHERE id=?",
               (event, json.dumps(when, sort_keys=True), then, json.dumps(params, sort_keys=True),
                int(body.on) if body.on is not None else before["enabled"],
                body.position if body.position is not None else before["position"],
-               body.note if body.note is not None else before["note"], H.now(), rule_id))
+               body.note if body.note is not None else before["note"],
+               who.actor if authored else before["action_by"], H.now(), rule_id))
     H.event(c, who.actor, "rule.updated", rule_id, {"before": view(before), "after": view(get(c, rule_id))})
-    return {"rule": view(get(c, rule_id))}
+    return {"rule": view(get(c, rule_id), c)}
 
 
 def delete(c, settings, auth, who, rule_id, expected_revision=None):
@@ -1578,7 +1839,7 @@ def install(app, store, auth, mutate):
             row = get(c, rule_id)
             if not _visible(c, who, row):
                 raise Problem("not_found", "No such rule", 404)
-            return {"rule": _with_usage({**view(row), "can_change": can_change(
+            return {"rule": _with_usage({**view(row, c), "can_change": can_change(
                 c, store.settings, auth, who, row["scope_kind"], row["scope_id"])}, counts)}
 
     @app.post("/api/v2/rules")

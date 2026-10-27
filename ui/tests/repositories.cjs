@@ -42,9 +42,33 @@ function fixtures() {
 const effective = (data) => {
   const own = [{full_name: 'acme/bot-release-captain', access: 'write'}];
   const b = data.bot;
-  if (b.mode === 'all') return own.concat(data.repositories.filter(r => r.enabled && !r.bot_repo).map(r => ({full_name: r.full_name, access: b.all_access})));
+  const ticks = name => b.all_access !== 'write' ? {} : Object.fromEntries(['run_workflows', 'edit_workflows']
+    .filter(flag => (b.all_repos || []).some(t => t.full_name === name && t[flag])).map(flag => [flag, true]));
+  if (b.mode === 'all') return own.concat(data.repositories.filter(r => r.enabled && !r.bot_repo).map(r => ({full_name: r.full_name, access: b.all_access, ...ticks(r.full_name)})));
   if (b.mode === 'chosen') return own.concat(b.chosen);
   return own;
+};
+
+// A save as the server reads it (backend set_access): an option left out of a write grant or a ticked repository keeps
+// what is stored, an explicit true or false sets it, and Read for all ticked repos clears their ticks.
+const FLAGS = ['run_workflows', 'edit_workflows'];
+const kept = (bot, body) => {
+  const out = {};
+  if (body.chosen) out.chosen = body.chosen.map(c => {
+    const was = (bot.chosen || []).find(o => o.full_name === c.full_name) || {};
+    return {full_name: c.full_name, access: c.access, ...Object.fromEntries(FLAGS
+      .filter(f => c.access === 'write' && (c[f] === undefined ? was[f] : c[f])).map(f => [f, true]))};
+  });
+  const ticks = new Map((bot.all_repos || []).map(r => [r.full_name, {...r}]));
+  for (const r of body.all_repos || []) {
+    const row = ticks.get(r.full_name) || {full_name: r.full_name};
+    for (const f of FLAGS) if (r[f] !== undefined) row[f] = r[f];
+    ticks.set(r.full_name, row);
+  }
+  out.all_repos = (body.all_access || bot.all_access) !== 'write' ? [] : [...ticks.values()]
+    .map(r => ({full_name: r.full_name, ...Object.fromEntries(FLAGS.filter(f => r[f]).map(f => [f, true]))}))
+    .filter(r => FLAGS.some(f => r[f]));
+  return out;
 };
 
 async function open(browser, {role = 'owner', admin = false, connected = true, viewport = {width: 1440, height: 900}, theme = 'dark', bot: botMore = {}} = {}) {
@@ -108,7 +132,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
         data.inflight = (data.inflight || 0) + 1; data.maxInflight = Math.max(data.maxInflight || 0, data.inflight);
         if (data.hold) { const gate = data.hold; data.hold = null; await gate; }        // held until the test releases it
         data.inflight -= 1;
-        data.bot = {...data.bot, ...body};
+        data.bot = {...data.bot, ...body, ...kept(data.bot, body)};
       }
       if (method === 'GET' && data.holdGet) { const gate = data.holdGet; data.holdGet = null; data.getHeld = true; await gate; }
       return json({...data.bot, effective: effective(data)});         // GET and PUT both answer the whole access (backend access())
@@ -213,6 +237,17 @@ async function owner(browser) {
   await page.waitForFunction(() => !/workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
     {full_name: 'acme/mobile', access: 'write', run_workflows: false});
+  // Edit workflow files is its own option on the same terms, sent beside Run workflows.
+  const edits = name => box.locator(`[data-brepo="${name}"] [data-brepo-edit]`);
+  assert.equal(await edits('acme/api').isDisabled(), true, 'a read grant cannot edit workflow files');
+  await edits('acme/mobile').check();
+  await page.waitForFunction(() => /acme\/mobile write \+ workflow edits/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
+    {full_name: 'acme/mobile', access: 'write', edit_workflows: true});
+  assert.equal(await runs('acme/mobile').isChecked(), false, 'editing workflow files leaves Run workflows as it was');
+  await edits('acme/mobile').uncheck();
+  await page.waitForFunction(() => !/workflow edits/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile').edit_workflows, false);
   await box.locator('[data-brepo="acme/api"] label:has(input[value=write])').click();
   await page.waitForFunction(() => /acme\/api write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/api'), {full_name: 'acme/api', access: 'write'});
@@ -222,12 +257,35 @@ async function owner(browser) {
   // All ticked repos carries Read or Write; Own repo only leaves just the bot's own.
   await box.locator('label:has(input[type=radio][value=all])').first().click();
   await box.locator('.brepo-all').waitFor();
-  assert.equal(await box.locator('.brepo-list').count(), 0);
   await page.waitForFunction(() => /acme\/sdk-js write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode, 'all');
+  // Dev 641: All ticked repos lists its repositories, each with Run workflows and Edit workflow files of its own,
+  // kept apart from Chosen repos' ticks (acme/mobile's Run workflows there was turned off above).
+  const allRuns = name => box.locator(`[data-brepo-all="${name}"] [data-brepo-run]`);
+  assert.deepEqual(await box.locator('[data-brepo-all]').evaluateAll(els => els.map(el => el.dataset.brepoAll)),
+    ['acme/api', 'acme/data-pipeline', 'acme/design-system', 'acme/infra', 'acme/mobile', 'acme/sdk-js', 'acme/web']);
+  assert.equal(await box.locator('[data-brepo-all] input:disabled').count(), 0, 'Write: every option can be ticked');
+  assert.equal(await box.locator('[data-brepo-why]').count(), 0);
+  await allRuns('acme/web').check();
+  await page.waitForFunction(() => /acme\/web write \+ workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').all_repos, [{full_name: 'acme/web', run_workflows: true}]);
+  assert.equal(await allRuns('acme/web').evaluate(el => el === document.activeElement), true, 'the keyboard stays on the tick');
+  assert.equal(await allRuns('acme/sdk-js').isChecked(), false, 'one repository only');
+  assert.equal(await box.locator('[data-brepo-all="acme/web"] [data-brepo-edit]').isChecked(), false);
+  await settled(page);
+  await shot(page, 'bot-repositories-all-desktop-dark.png');
+  // Read for all ticked repos: the options stay, greyed, with the reason; the tick goes.
   await box.locator('.brepo-all label:has(input[value=read])').click();
   await page.waitForFunction(() => /acme\/sdk-js read/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
-  assert.deepEqual((({mode, all_access}) => ({mode, all_access}))(lastWrite(writes, '/api/v2/bots/release-captain/repositories')), {mode: 'all', all_access: 'read'});
+  assert.deepEqual((({mode, all_access, all_repos}) => ({mode, all_access, all_repos}))(lastWrite(writes, '/api/v2/bots/release-captain/repositories')),
+    {mode: 'all', all_access: 'read', all_repos: [{full_name: 'acme/web', run_workflows: false}]});
+  assert.equal(await box.locator('[data-brepo-all]').count(), 7, 'greyed, not removed');
+  assert.equal(await box.locator('[data-brepo-all] input:not(:disabled)').count(), 0);
+  assert.equal(await allRuns('acme/web').isChecked(), false);
+  assert.match(await box.locator('[data-brepo-why]').innerText(), /need Write/);
+  assert.match(await box.locator('[data-brepo-all="acme/web"] label:has([data-brepo-run])').getAttribute('title'), /Needs Write for all ticked repos/);
+  await settled(page);
+  await shot(page, 'bot-repositories-all-read-desktop-dark.png');
   await box.locator('label:has(input[type=radio][value=own])').click();
   await page.waitForFunction(() => document.querySelector('#bot-editor .brepo-eff')?.innerText.trim() === 'Effective\nacme/bot-release-captain write'
     || /^Effective\s+acme\/bot-release-captain write$/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText.trim() || ''));
@@ -294,9 +352,13 @@ async function productCreate(browser) {
 async function saves(browser) {
   const {page, errors, writes, data} = await open(browser);
   data.bot = {mode: 'all', all_access: 'write', chosen: []};
+  // Ticked, not marked as a bot's, but named like one: All ticked repos does not reach it, so it has no row.
+  data.repositories.push(repo('acme/bot-notes', {enabled: true}));
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
   await box.locator('.brepo-all').waitFor();
+  assert.equal(await box.locator('[data-brepo-all="acme/bot-notes"]').count(), 0);
+  assert.equal(await box.locator('[data-brepo-all="acme/web"]').count(), 1);
   const status = () => box.locator('[data-brepo-status]').innerText();
   // A refused mode change: back to All ticked repos, the reason kept.
   data.refuse = 'Only owners and admins change this';
@@ -362,6 +424,39 @@ async function saves(browser) {
   assert.deepEqual(writes.slice(from).map(w => w.body.mode), ['own', 'all']);
   assert.equal(data.bot.mode, 'all', 'the newer choice is saved');
   assert.equal(await box.locator('input[type=radio][value=all]').isChecked(), true);
+  // An option ticked, then unticked while that save is on its way: the next save sends the untick, and it stays off.
+  const quickUntick = async (option, attr, name) => {
+    const control = box.locator(`${name} [${attr}]`);
+    const hold = gate(); data.hold = hold.held;
+    const start = writes.length;
+    await control.check();
+    await until(() => writes.length === start + 1, 'the tick is on its way');
+    await control.uncheck();
+    hold.release();
+    await until(() => writes.length === start + 2, 'the untick is sent');
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved', null, {timeout: t(5000)});
+    return {control, sent: writes.slice(start).map(w => w.body)};
+  };
+  await box.locator('.brepo-all label:has(input[value=write])').click();
+  await until(() => data.bot.all_access === 'write' && data.bot.mode === 'all', 'Write for all ticked repos');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  for (const [option, attr] of [['run_workflows', 'data-brepo-run'], ['edit_workflows', 'data-brepo-edit']]) {
+    const {control, sent} = await quickUntick(option, attr, '[data-brepo-all="acme/web"]');
+    assert.deepEqual(sent.map(b => b.all_repos), [[{full_name: 'acme/web', [option]: true}], [{full_name: 'acme/web', [option]: false}]]);
+    assert.deepEqual(data.bot.all_repos, [], 'nothing ticked on the server');
+    assert.equal(effective(data).some(r => r[option]), false);
+    assert.equal(await control.isChecked(), false, option + ' stays unticked after Saved');
+  }
+  // The same under Chosen repos.
+  await box.locator('label:has(input[type=radio][value=chosen])').click();
+  await until(() => data.bot.mode === 'chosen', 'Chosen repos');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  {
+    const {control, sent} = await quickUntick('run_workflows', 'data-brepo-run', '[data-brepo="acme/web"]');
+    assert.deepEqual(sent.map(b => b.chosen.find(c => c.full_name === 'acme/web').run_workflows), [true, false]);
+    assert.equal(data.bot.chosen.find(c => c.full_name === 'acme/web').run_workflows, undefined);
+    assert.equal(await control.isChecked(), false);
+  }
   assert.deepEqual(errors, []);
   console.log('saves: ok');
   await page.close();

@@ -65,6 +65,8 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     assert current['step']['name'] == 'Blocked'
     assert current['status'] == 'waiting'
     assert 'receipt' in current['blocked_reason']
+    # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.js taskBotWait).
+    assert current['blocked_kind'] == 'gate'
     assert current['version'] > task['version']
     with api.app.state.store.transaction() as c:
         from backend import task_blocked
@@ -185,6 +187,83 @@ def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, ki
         after = H.task(c, task['id'])
         assert (after['status'], after['note'], after['blocked_kind'], after['blocked_since']) == (
             'waiting', held['note'], kind, held['blocked_since'])
+    assert get(api, 'tasks/' + task['id'])['task']['blocked_kind'] == kind
+
+
+def test_stranded_sweep_preserves_general_worktree_hold(api):
+    """Unlinked pushes stay outstanding on General even without a remembered move."""
+    from backend import move_retry, review_gate
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:ana', 'Prepare the offsite plan', 'Write the plan.', 'bot:cpo')
+        assert task['type_id'] == H.GENERAL_TYPE
+        assert not review_gate.engineering(c, task)
+        # Worktree holds can remain after a ticket moves onto another board.
+        H.task_update(c, task['owner'], task['id'], status='waiting', note='Waiting for unlinked pushes')
+        c.execute("UPDATE tasks SET blocked_kind='worktree',blocked_reason=? WHERE id=?",
+                  ('Waiting for unlinked pushes', task['id']))
+        held = H.task(c, task['id'])
+        assert held['blocked_since']
+        assert move_retry.remembered(c, held) is None
+        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
+        after = H.task(c, task['id'])
+        for field in ('status', 'note', 'blocked_kind', 'blocked_reason', 'blocked_since', 'version'):
+            assert after[field] == held[field], field
+
+
+@pytest.mark.parametrize('with_dependency', [False, True])
+def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, with_dependency):
+    from backend import review_gate, task_blocked, task_relations as TR
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        branch = f"tico/{task['id'][:8]}-offsite-plan"
+        tree = H.new_id()
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,detail_json) "
+                  "VALUES(?,?,'worktree',?,'present',?,?,'Acme/product',?,?)",
+                  (tree, task['id'], 'worktree:' + tree, task['owner'], H.now(), branch,
+                   json.dumps({'pushed': 'd' * 40, 'expected_head': 'b' * 40})))
+        assert H.unlinked_pushes(c, task['id'])
+        task_blocked.hold(c, task['id'], 'Waiting for unlinked pushes', 'worktree')
+        held = H.task(c, task['id'])
+        if with_dependency:
+            dependency = H.task_create(c, 'human:ana', 'Choose the venue', 'Choose one.', 'human:ana')
+            TR.add_blocker(c, 'human:ana', task['id'], dependency['id'])
+        H.task_update(c, 'human:ana', task['id'], type=H.GENERAL_TYPE)
+        moved = H.task(c, task['id'])
+        assert moved['status'] == 'waiting' and moved['blocked_kind'] == 'worktree'
+        assert moved['blocked_from_step'] == held['blocked_from_step']
+        assert not review_gate.engineering(c, moved)
+        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
+        task_blocked.sweep(c, H.now())
+        assert H.task(c, task['id'])['version'] == moved['version']
+        assert H.task(c, task['id'])['note'] == moved['note']
+        link = H.task_link(c, 'human:ana', task['id'], 'https://github.com/Acme/product/pull/88')
+        assert link['kind'] == 'pr'
+        assert H.unlinked_pushes(c, task['id']) == []
+        if with_dependency:
+            task_blocked.sweep(c, H.now())
+            assert H.task(c, task['id'])['status'] == 'waiting'
+            assert H.task(c, task['id'])['version'] == moved['version']
+            # Isolate the scheduled recovery from the dependency-completion path's own wake.
+            c.execute("UPDATE tasks SET status='done' WHERE id=?", (dependency['id'],))
+        candidates = task_blocked.candidates(c, H.now())
+        assert task['id'] in candidates
+        task_blocked.sweep(c, H.now(), candidates)
+        resumed = H.task(c, task['id'])
+        assert resumed['status'] == held['blocked_from_status'] == 'doing'
+        assert resumed['step_id'] != held['blocked_from_step']
+        if resumed['step_id']:
+            assert H._one(c, 'SELECT type_id FROM task_steps WHERE id=?',
+                          (resumed['step_id'],))['type_id'] == H.GENERAL_TYPE
+        for field in ('blocked_since', 'blocked_kind', 'blocked_reason', 'blocked_from_step', 'blocked_from_status'):
+            assert resumed[field] is None, field
+        assert resumed['version'] > moved['version']
+        task_blocked.sweep(c, H.now())
+        assert H.task(c, task['id'])['version'] == resumed['version']
+        wakes = H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? "
+                                  "AND json_extract(refs_json,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
+                                  (task['owner'], task['id'])))
+        assert len(wakes) == 1
+        assert json.loads(wakes[0]['refs_json'])['news'] == 'assignment'
 
 
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
@@ -193,9 +272,9 @@ def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
     at = '2026-10-26T01:00:00.000000Z'
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('fixes',?,'Review 1 Fixes',3,'doing')", (task['type_id'],))
+        fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)).fetchone()[0]
         c.execute('UPDATE tasks SET building_started_at=NULL,building_seconds=0 WHERE id=?', (task['id'],))
-        H.task_update(c, task['owner'], task['id'], step='fixes')
+        H.task_update(c, task['owner'], task['id'], step=fixes)
         at = '2026-10-26T02:00:00.000000Z'
         H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for a machine')
         at = '2026-10-26T07:00:00.000000Z'
@@ -356,7 +435,7 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
     store = api.app.state.store
     with store.transaction() as c:
         child = H.task_create(c, task['owner'], title, 'Check the current candidate.', 'bot:cmo', parent_id=task['id'])
-        c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('fixes',?,'Review 1 Fixes',3,'doing')", (task['type_id'],))
+        fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)).fetchone()[0]
         review_step = H.task(c, task['id'])['step_id']
     Scheduler(store, api.app.state.execution).tick(datetime.now(timezone.utc))
     with store.transaction() as c:
@@ -366,8 +445,8 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
         task_blocked.hold(c, task['id'], 'Waiting on an open child task')
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['step_id'] == review_step
-        H.task_update(c, task['owner'], task['id'], step='fixes')
-        assert H.task(c, task['id'])['step_id'] == 'fixes'
+        H.task_update(c, task['owner'], task['id'], step=fixes)
+        assert H.task(c, task['id'])['step_id'] == fixes
         person = H.task_create(c, 'human:ana', 'Security: confirm the vendor contract', 'Choose one.', 'human:ana', parent_id=task['id'])
         task_blocked.sweep(c, H.now(), task_ids=[task['id']])
         assert H.task(c, task['id'])['status'] == 'waiting', 'a check child must not hide another child wait'
@@ -407,3 +486,17 @@ def test_scheduler_does_not_write_check_an_unheld_engineering_task(api, monkeypa
     monkeypatch.setattr(task_blocked, 'sweep', record)
     Scheduler(api.app.state.store, api.app.state.execution).tick(datetime.now(timezone.utc))
     assert task['id'] not in called
+
+
+def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
+    """A step whose flow says can_hold false (Pending Release on a Dev board) is never held: a merged change is
+    reverted or fixed forward, not Blocked."""
+    from backend import step_flow, task_relations as TR
+    task = ticket(api)
+    old = post(api, 'tasks', {'owner': 'cmo', 'title': 'Restore an old check', 'body': 'Old.'})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
+        TR.add_blocker(c, H.KEEPER, task['id'], old['id'])
+        row = H.task(c, task['id'])
+        assert (row['step_id'], row['blocked_since']) == (task['step_id'], None)
+        assert step_flow.can_hold(c, H.type_get(c, task['type_id'])['steps'][0]['id']), "other steps still hold"

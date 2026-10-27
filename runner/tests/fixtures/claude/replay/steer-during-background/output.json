@@ -10,6 +10,7 @@
         "kind": "tool",
         "background": true,
         "parent_id": null,
+        "outside_actions": [],
         "tool": "Bash",
         "status": "started",
         "item_id": "toolu_01Gaxv7C64rT5ysWBHedPZtF",

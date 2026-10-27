@@ -31,6 +31,7 @@ from fastapi import Request
 from . import ceo_bot
 from . import models as M
 from . import visuals
+from .media import upload_contract
 from . import rooms
 from .store import H, Problem, digest
 
@@ -84,6 +85,11 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Saving what the person taught it (backend/learned.py checks the layer: theirs, or the company's for the owner).
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
                 "/api/v2/assistant/read-back", "/api/v2/assistant/learned"):
+        return True
+    # Asking the settings catalogue for a change's plan changes no setting: it answers with the request, a refusal or a
+    # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
+    # checks below.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
     try:
         fields = json.loads(body or b"{}")
@@ -171,6 +177,37 @@ def _fields(body):
         except ValueError:
             return {}
     return body if isinstance(body, dict) else {}
+
+
+def instructed_setting(method, path, body=None):
+    """Whether this write is one direct setting from the catalogue, exactly as `hub settings set` makes it, so it may run
+    on the person's cited words like a task action (backend/settings_catalog.py). Two settings at once, a confirm or
+    person-only one, or anything the catalogue does not list stays a card."""
+    from . import settings_catalog
+    path = normalize_path(path)
+    if isinstance(body, (bytes, str)):
+        try:
+            body = json.loads(body or b"{}")
+        except ValueError:
+            return False
+    if not isinstance(body, dict):
+        return False           # a list or a bare value is no catalogue entry's body: never read as an empty one
+    found = path and settings_catalog.matched(method, path, body)
+    return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
+
+
+def require_direct_setting(c, method, path, body, trial=None, base=""):
+    """403 unless the setting this cited write changes is direct once read against what is stored (a wake-rule update
+    keeps the stored rule's action; a repository change is tried as the person's own click, `trial`): the same class
+    `plan` gave it, with the same full link (`base`, the public URL)."""
+    from . import settings_catalog
+    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
+    if not found or found[2] != "direct":
+        e = found[0] if found else None
+        link = e and ((base.rstrip("/") + "/" + e.card) if base else e.card)
+        raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
+                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + link
+                      if e else "That setting needs the person's own yes", 403)
 
 
 def instructed_route(method, path, body=None, decides=False):
@@ -412,6 +449,8 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/directory"), ("POST", r"/api/v2/directory/(sync|preview)"),
     ("POST", r"/api/v2/(slack|github/app)/disconnect"),
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
+    # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
+    ("POST", r"/api/v2/webhooks/[^/]+/update"),
 )]
 _SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
 
@@ -428,12 +467,22 @@ def normalize_path(path):
     return path
 
 
+def catalogue_card(method, path):
+    """Whether the Assistant may put this route on a card as a setting: a catalogue entry that is not person-only writes
+    it, and BotOps may card it (the Assistant changes settings with the same rules as BotOps)."""
+    from . import settings_catalog
+    return (any(e.kind != "person" for e, _ in settings_catalog.routed(method, path))
+            and valid_operation(method, path, None, "botops"))
+
+
 def valid_operation(method, path, settings=None, proposer="assistant"):
     path = normalize_path(path)
     if not path or (settings is not None and path == "/api/v2/chat/" + settings.assistant_bot):
         return False
     routes = _PROPOSABLE + (_PROPOSABLE_BOTOPS if proposer == "botops" else [])
     if any(m == method and p.fullmatch(path) for m, p in routes):
+        return True
+    if proposer == "assistant" and catalogue_card(method, path):
         return True
     # BotOps also puts to a person, as a card, any change it makes for a person directly (a bot's hand-off that
     # lends nothing: app.py `confirm_for_carried`). It runs only on their click, as them.
@@ -747,18 +796,27 @@ def refuse_unrunnable(routes, method, path, body):
                                               for e in errors), 422)
 
 
-def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None):
+def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None,
+                    shown=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
     The Assistant proposes what its turn may not do on its own; BotOps proposes what a person asked it for
     that always needs their own click (adding people, roles, shared credentials, a computer that does not
-    take members' bots). Either way only the person's own confirm runs it, as them."""
+    take members' bots). Either way only the person's own confirm runs it, as them. `shown`: the card's lines, when the
+    route that asks says what changes in safer words than the body (a destination by scheme, host and port only)."""
     path = normalize_path(path)
     if not valid_operation(method, path, settings, proposer):
         raise Problem("operation", "That is not something that can be proposed: it is not on the list of routes "
                       "a person confirms", 422)
     if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
         raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
+    if proposer == "assistant" and not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE):
+        # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
+        from . import settings_catalog
+        found = settings_catalog.stored_class(c, method, path, body if isinstance(body, dict) else None)
+        if not found or found[2] == "person":
+            raise Problem("operation", "A setting on a card is one setting from the catalogue (`hub settings find`) "
+                          "that is not the person's own to change in Settings", 422)
     if path == "/api/v2/support/tickets":
         # The person approves the exact text, so it must be one the ticket will take: no card for a message that
         # would fail (too long, control characters) only after the click.
@@ -804,6 +862,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # The card lists every field the request carries, so nothing that runs is missing from what is confirmed.
         # (A task update lists what changes: its old and new values.)
         diff = [{"field": k, "new": v} for k, v in body.items()]
+    if shown is not None:
+        diff = shown
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
            "method": method, "path": path, "body_json": json.dumps(body),
            "status": "pending", "proposed_via": proposer, "created": H.now(),
@@ -1450,21 +1510,29 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
-    def post_message_sync(request, body, who, intent, reply, links):
+    def chat_bot_for(c, who, files):
+        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+        info = availability(c, settings, who)
+        if not info["available"]:
+            raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+        if files and info["bot"] != ceo_bot.SLUG:
+            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
+        auth.require_write(c, who, info["bot"])
+        return info["bot"]
+
+    def post_message_sync(request, body, who, intent, reply, links, uploads=None):
         def work(c):
-            info = availability(c, settings, who)
-            if not info["available"]:
-                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-            bot = info["bot"]
-            auth.require_write(c, who, bot)
+            bot = chat_bot_for(c, who, uploads is not None)
             room = chat_room(c, settings, who)
             refs = {"assistant": True}
-            if body.place == "updates":
+            if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
             if reply is not None:
                 refs["quiet"] = True
             message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
                             kind="say", refs=refs)
+            if uploads is not None:
+                message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
             out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
             if reply is not None:
                 out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
@@ -1472,6 +1540,8 @@ def install(app, store, auth, mutate, onboarding):
                                                 message["id"], None, delivered_at=H.now())
                 H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
             return out
+        if uploads is not None:
+            return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
 
     @app.post("/api/v2/assistant/messages")
@@ -1488,6 +1558,19 @@ def install(app, store, auth, mutate, onboarding):
         intent, reply, links = (None, None, []) if body.place == "updates" else \
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
+
+    # The owner's CEO Bot chat takes pictures and files like any bot chat (a pasted screenshot attaches); an Assistant
+    # room stays text only. Files skip the quick answers, which read words only.
+    @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
+    async def assistant_upload(request: Request):
+        who = own(request)
+
+        def admit(body):
+            # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
+            with store.read() as c:
+                chat_bot_for(c, who, True)
+        body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
@@ -1608,6 +1691,15 @@ def install(app, store, auth, mutate, onboarding):
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
         return mutate(request, body, work)
+
+    def propose_setting(c, who, method, path, data, summary, asked=None, what=None):
+        """A setting the person asked their Assistant for that needs their own click: a Confirm card in their chat
+        (backend/settings_catalog.py plan), and what the Assistant tells them. `what`: the card's title, as BotOps'."""
+        card = create_proposal(c, settings, who, chat_room(c, settings, who), "assistant", summary[:300], method, path,
+                               data, asked, what=what, routes=app.routes)
+        return {"proposed": True, "needs_confirm": True, **card,
+                "detail": "This needs the person's own OK: a Confirm card is in their chat; nothing has changed yet."}
+    app.state.assistant_propose = propose_setting
 
     def expiring(c):
         return c.execute("SELECT 1 FROM assistant_actions WHERE status='running' AND running_since<? LIMIT 1",

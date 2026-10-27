@@ -216,10 +216,15 @@ STABLE = [
      "full. A full read has an ETag: If-None-Match answers 304 when nothing changed", "TaskList"),
     ("/api/v2/tasks", "post", "Tasks", "createTask", "Create a task", "TaskResult"),
     ("/api/v2/tasks/dry-run", "post", "Tasks", "checkTask", "The checks a create would fail; writes nothing", None),
+    ("/api/v2/task-bulk", "post", "Tasks", "bulkChangeTasks",
+     "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, "
+     "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
+     "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
+     "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones", "TaskBulkResult"),
     ("/api/v2/tasks/labels", "get", "Tasks", "listTaskLabels", "Labels in use (ETag: If-None-Match answers 304 when unchanged)", None),
     ("/api/v2/tasks/{tid}", "get", "Tasks", "getTask", "A task with its history, comments and messages", "TaskDetail"),
     ("/api/v2/tasks/{tid}", "post", "Tasks", "updateTask",
-     "Change a task; send the version you read (409 version_conflict otherwise)", "TaskResult"),
+     "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations", "TaskResult"),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     ("/api/v2/tasks/{tid}/files", "post", "Tasks", "attachTaskFile", "Attach a file; the same name adds a version", "TaskFileResult"),
     ("/api/v2/tasks/{tid}/comments", "get", "Tasks", "listTaskComments", "Comments and questions with their answers", "TaskComments"),
@@ -649,7 +654,8 @@ SCHEMAS = {
                                         "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
                          "created": "s", "last_message_at": "s", "closed_at": "n"}),
-    "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s"}, required=["id", "type_id", "name", "position", "status"]),
+    "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",
+                     "check_pool": "a", "check_limit": "i"}, required=["id", "type_id", "name", "position", "status"]),
     "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created": "s", "updated": "s", "steps": items(ref("TaskStep"))},
                     bots={"type": ["string", "null"], "enum": ["read", "work", None],
                           "description": "What every bot may do with the type's tasks beyond its own: read "
@@ -828,6 +834,11 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
+    "TaskBulkResult": obj({"dry_run": "b", "matched": "i", "cap": "i", "changed": "i", "unchanged": "i", "skipped": "i",
+                           "tasks": obj({"changed": items(obj({"id": "s", "number": {"type": ["integer", "null"]}, "title": "s"})),
+                                         "skipped": items(obj({"id": "s", "number": {"type": ["integer", "null"]}, "title": "s",
+                                                               "code": "s", "reason": "s"}))},
+                                        )}),
     "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "effort": "n",
                                          "family": "n"})),
                   "task_model": {"type": ["object", "null"], "description": "For a turn in a task's own session on a bot "
@@ -1030,7 +1041,7 @@ SCHEMAS = {
                                  required=["action"]),
     # Goals and KPIs
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
-                 "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"},
+                 "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"},
                  "status_note": "s", "status_by": "n", "status_at": "n",
                  "status_source": {"type": ["string", "null"], "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"},
                  "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"},
@@ -1056,9 +1067,9 @@ SCHEMAS = {
                 "created": "n", "created_by": "n", "updated": "n",
                 "archived_at": {"type": ["string", "null"]}, "archived_by": {"type": ["string", "null"]}, "auto": "b",
                 "latest": {"oneOf": [ref("KpiReadingView"), {"type": "null"}]}, "readings": "i",
-                "freshness": {"enum": ["fresh", "stale", "missing"], "description": "stale: one period missed; missing: never read or two missed. Never zero"},
+                "freshness": {"enum": ["fresh", "stale", "missing", "archived"], "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"},
                 "spark": {"type": "array", "items": {"type": "number"}, "description": "The last values, oldest first"},
-                "status": {"enum": ["green", "yellow", "red", "gray", "none"], "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target"},
+                "status": {"enum": ["green", "yellow", "red", "gray", "none", None], "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target; null is an archived goal link with no colour"},
                 "reason": "s"},
                required=["id", "name", "unit", "direction", "cadence", "owner", "definition_version", "auto", "latest", "readings",
                          "freshness", "spark", "status", "reason"],
@@ -1276,7 +1287,7 @@ STABLE.extend([
     ("/api/v2/bots/{bot}/profile", "get", "Bots", "getBotProfile",
      "A bot's profile and the values it runs on", "BotProfileState"),
     ("/api/v2/bots/{bot}/profile", "post", "Bots", "setBotProfile",
-     "Set the bot's profile (doer, reviewer, lead, responder, monitor, custom); leaving custom deletes the wake rules it "
+     "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it "
      "copied and needs confirm_drop_rules", "BotProfileState"),
 ])
 SCHEMAS.update({
@@ -1299,9 +1310,14 @@ SCHEMAS.update({
                                      "note": "s"}),
     "RepositoryList": obj({"repositories": items(ref("Repository")), "new_bot_default": {"enum": ["own", "all"]},
                            "github_connected": "b"}),
-    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}}),
+    # The workflow options are present only when on; a request's access defaults to write.
+    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}, "run_workflows": "b",
+                            "edit_workflows": "b"}, required=["full_name"]),
     "BotRepositories": obj({"mode": {"enum": ["own", "all", "chosen"]}, "all_access": {"enum": ["read", "write"]},
-                            "chosen": items(ref("RepositoryGrant")), "effective": items(ref("RepositoryGrant"))}),
+                            "chosen": items(ref("RepositoryGrant")), "all_repos": items(ref("TickedRepository")),
+                            "effective": items(ref("RepositoryGrant"))}),
+    # Only the options that are on are present.
+    "TickedRepository": obj({"full_name": "s", "run_workflows": "b", "edit_workflows": "b"}, required=["full_name"]),
 })
 TAGS['Roadmaps'] = "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
 STABLE.extend([

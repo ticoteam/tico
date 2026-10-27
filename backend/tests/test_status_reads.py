@@ -194,3 +194,74 @@ def test_primed_status_pages_show_each_person_exactly_what_they_showed_before(ap
         assert lines["busy-0"]["state"] == "running" and lines["busy-2"]["last_stop"]
         assert any(line["needs_human"] for line in lines.values())
     assert "inbox" not in {line["bot"] for line in page(api, monkeypatch, "/api/v2/status", "ben-test")[0]["bots"]}
+
+
+def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monkeypatch):
+    # Dev 509: OR-ing owner and requester read every task the bots ever had; on a long-lived team that was most of
+    # a second of each status page. Finished company tasks now cost nothing: the work done stays the same.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 6)
+    slugs = [f"busy-{n}" for n in range(6)]
+    store = api.app.state.store
+    finished = finish_private(store, "busy-1")
+
+    def read():
+        steps = [0]
+        with store.read_transaction() as c:
+            inputs = privacy.status_inputs(c, slugs)
+            actors = ["bot:" + slug for slug in slugs]
+            marks = " IN (" + ",".join("?" * len(actors)) + ")"
+            # Only the task read is counted: each new task also gets a room under a random id, and where those ids
+            # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
+            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.set_progress_handler(None, 1)
+            # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
+            wanted = {tuple(t) for t in c.execute(
+                f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) "
+                f"AND {privacy.STATUS_TASKS_SQL}", actors * 2)}
+        got = {slug: sorted(tuple(t[k] for k in t) for t in kinds["tasks"]) for slug, kinds in inputs.items()}
+        assert {t for rows in got.values() for t in rows} == wanted
+        return got, steps[0]
+
+    before, steps = read()
+    # Finished private tasks still come back, one the bot owns and one it asked for: they decide whose eyes its focus
+    # is kept from, and only the private part of the read finds them.
+    assert {t[0] for t in before["busy-1"] if t[4] and t[3] not in H.ACTIVE_STATUSES} == finished
+    with store.transaction() as c:
+        for n in range(40):
+            task = H.task_create(c, "bot:" + slugs[n % 6], f"Old {n}", "Done long ago. " * 200,
+                                 "bot:" + slugs[(n + 1) % 6], private=False)
+            c.execute("UPDATE tasks SET status=? WHERE id=?", ("done" if n % 2 else "closed", task["id"]))
+    after, more = read()
+    assert after == before and more == steps and steps
+
+
+def finish_private(store, slug):
+    """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
+    with store.transaction() as c:
+        ids = {row[0] for row in c.execute(
+            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner,requester)", ("bot:" + slug,))}
+        assert {row[0] for row in c.execute(f"SELECT owner='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
+                                            tuple(ids))} == {0, 1}
+        c.execute(f"UPDATE tasks SET status=CASE WHEN owner=? THEN 'done' ELSE 'closed' END "
+                  f"WHERE id IN ({','.join('?' * len(ids))})", ("bot:" + slug, *ids))
+    return ids
+
+
+def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read_it(api, monkeypatch):
+    # A status line with no task id hides its focus when any private task of the bot is unreadable to the viewer:
+    # once that task is finished only the private part of the status task read finds it.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 2)
+    store = api.app.state.store
+    finish_private(store, "busy-1")
+    with store.transaction() as c:
+        c.execute("UPDATE bot_status SET task_id=NULL, focus='Drafting the offer letter' WHERE bot='busy-1'")
+    for token, focus in (("ana-test", "Drafting the offer letter"), ("ben-test", "")):
+        who = store.settings.test_identities[token]
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM bot_status WHERE bot='busy-1'").fetchone()
+            batched = privacy.status(c, who, row, **privacy.status_inputs(c, ["busy-1"])["busy-1"])
+            alone = privacy.status(c, who, row)
+        assert batched["focus"] == alone["focus"] == focus
