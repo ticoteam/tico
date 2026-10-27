@@ -194,7 +194,7 @@ def reason(c, row, settings):
     if why:
         return why
     followed = follow(c, bot, declared)
-    busy = {(r[0], r[1]) for r in c.execute("SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")} | held_lanes
+    busy = set(E.live_lanes(c)) | held_lanes
     jobs = c.execute(f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
                      "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                      f"WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created,j.id",
