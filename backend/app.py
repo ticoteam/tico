@@ -687,9 +687,6 @@ def create_app(settings=None):
                         with store.read() as c:
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
-                            if setting:
-                                assistant_mod.require_setting(c, auth, request.state.identity, request.method,
-                                                              request.url.path, raw)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.

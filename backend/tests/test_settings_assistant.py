@@ -117,7 +117,7 @@ def test_a_member_asking_for_an_admin_setting_changes_nothing_and_is_told_who_ca
     err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"},
                        token)
     assert err and "owner or an admin" in str(refused), refused
-    # The same write sent without asking for its plan meets the same check.
+    # The same write sent without asking for its plan: the route's own check, as the person, refuses it.
     raw = api.patch("/api/v2/release-schedule", json={"times": ["09:30"]},
                     headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
     assert raw.status_code == 403 and "owner or an admin" in raw.json()["error"]["detail"], raw.text

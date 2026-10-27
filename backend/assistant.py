@@ -188,15 +188,6 @@ def instructed_setting(method, path, body=None):
     return bool(found) and found[2] == "direct"
 
 
-def require_setting(c, auth, who, method, path, body):
-    """403, naming who may, unless the person passes the catalogue's own check for the setting their words change: the
-    one `plan` makes, so a write sent without asking for its plan first meets it too."""
-    from . import settings_catalog
-    found = settings_catalog.matched(method, normalize_path(path) or "", _fields(body))
-    if found and not settings_catalog.may(c, auth, who, found[0], found[1]):
-        raise settings_catalog.refusal(found[0])
-
-
 def instructed_route(method, path, body=None, decides=False):
     """Whether this write may run on the person's cited words. `decides`: their Assistant may decide approvals."""
     path = normalize_path(path)
