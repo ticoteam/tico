@@ -1683,11 +1683,11 @@ def install(app, store, auth, mutate, onboarding):
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
         return mutate(request, body, work)
 
-    def propose_setting(c, who, method, path, data, summary, asked=None):
+    def propose_setting(c, who, method, path, data, summary, asked=None, what=None):
         """A setting the person asked their Assistant for that needs their own click: a Confirm card in their chat
-        (backend/settings_catalog.py plan), and what the Assistant tells them."""
+        (backend/settings_catalog.py plan), and what the Assistant tells them. `what`: the card's title, as BotOps'."""
         card = create_proposal(c, settings, who, chat_room(c, settings, who), "assistant", summary[:300], method, path,
-                               data, asked, routes=app.routes)
+                               data, asked, what=what, routes=app.routes)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs the person's own OK: a Confirm card is in their chat; nothing has changed yet."}
     app.state.assistant_propose = propose_setting

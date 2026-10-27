@@ -210,18 +210,20 @@ def path_for(e, target, template=None):
 
 
 def _held(body, dotted):
+    """The values at `dotted` in `body`; a list on the way is read item by item (`chosen.run_workflows`)."""
+    found = [body]
     for part in dotted.split("."):
-        if not isinstance(body, dict):
-            return None
-        body = body.get(part)
-    return body
+        found = [item for value in found for item in (value if isinstance(value, list) else [value])]
+        found = [value.get(part) for value in found if isinstance(value, dict)]
+    return found
 
 
 def kind_for(e, body):
     """The entry's class for this body: a direct entry is `when_held` when the body holds one of its `confirm_when`
     values."""
     if (e.kind == "direct" and (e.key != "rules.wake" or body.get("then") == "action")
-            and any(_held(body, place) in values for place, values in e.confirm_when)):
+            and any(value is not None and value in values
+                    for place, values in e.confirm_when for value in _held(body, place))):
         return e.when_held
     return e.kind
 
@@ -271,12 +273,13 @@ def refusal(e, base=""):
 
 
 def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_direct=False,
-         can_card=None):
+         can_card=None, card_words=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
     (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
     when the owner's rule is off or the turn cites no words of the person's). `can_card(method, path)`: whether that
-    card can carry the route."""
+    card can carry the route. `card_words(c, auth, who, e, body, target)`: the card's plain words, or the refusal the
+    person's own click would get (then no card is made); None when the entry has no words of its own."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via in ACTING_FOR
 
@@ -317,6 +320,9 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
         if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
+        words = card_words(c, auth, who, e, body, target) if card_words else None
+        if words:
+            return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
                        f"Change {e.name} ({e.where}) to {json.dumps(parsed)}")
     return {"run": request, "setting": public(e, base), "value": parsed}
@@ -440,11 +446,12 @@ def install(app, store, auth, settings):
         asked = request.headers.get("x-tico-on-behalf-of")
         if assistant:
             made = getattr(app.state, "assistant_propose", None)
-            propose = made and (lambda c, who, method, path, data, summary: made(c, who, method, path, data, summary, asked))
+            propose = made and (lambda c, who, method, path, data, summary, what=None:
+                                made(c, who, method, path, data, summary[:300], asked, what=what))
         else:
-            propose = getattr(app.state, "botops_propose", None)
-            propose = propose and (lambda c, who, method, path, data, summary, made=propose:
-                                   made(c, who, method, path, data, summary[:300]))
+            made = getattr(app.state, "botops_propose", None)
+            propose = made and (lambda c, who, method, path, data, summary, what=None:
+                                made(c, who, method, path, data, summary[:300], what=what))
         with store.transaction() as c:
             def effective_wake_update(c, auth, who, rule_id, update):
                 from . import rules
@@ -463,7 +470,15 @@ def install(app, store, auth, settings):
                 except Problem:
                     cited = False
                 card_direct = not (cited and team_rules.load(c)["assistant_direct"])
+
+            def words(c, auth, who, e, body, target):
+                if e.key == "bot.repositories":
+                    from . import repositories
+                    return repositories.card_words(c, settings, auth, who, target["bot"], body)
+                return None
+
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
                         effective_update=effective_wake_update, card_direct=card_direct,
                         can_card=lambda method, path: valid_operation(method, path, settings,
-                                                                      "assistant" if assistant else "botops"))
+                                                                      "assistant" if assistant else "botops"),
+                        card_words=words)
