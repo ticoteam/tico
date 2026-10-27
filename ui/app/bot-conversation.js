@@ -33,7 +33,8 @@ async function loadConversation(slug, keep) {
 function convSchedule(state) {
   clearInterval(state.tail); clearInterval(state.poll);
   if (state.active) state.tail = setInterval(() => { if (!document.hidden) convTail(state); }, 3000);
-  else state.poll = setInterval(() => loadConversation(state.slug, state), 30000);
+  // Idle replay used to reload every 30 s even from a background tab; the live tail already skips when hidden.
+  else state.poll = setInterval(() => { if (!document.hidden) loadConversation(state.slug, state); }, 30000);
 }
 async function convTail(state) {
   if (CONV !== state || state.busy || !state.active) return;
