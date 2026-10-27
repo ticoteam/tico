@@ -75,7 +75,8 @@ function orgTreeByParent() {
   // "Only bots I can read or write": a bot the caller may merely see leaves the chart, and the
   // bots under it hang from the next thing that is left.
   // Built-in and message bots sit apart, as on Goals; a bot that reports to one hangs where it would have.
-  const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
+  // A CEO Bot this person hid from their chart (`chart_hidden`) is left off; nothing was moved under it.
+  const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e) && !e.chart_hidden);
   const empIds = new Set(bots.map(e => e.name));
   const seats = S.seats || [];
   const groupOf = orgGroupOf(people, bots, seats);
@@ -322,6 +323,15 @@ function orgMoveStep(key, parent, step) {
   return orgOrderSave(parent, keys, key);
 }
 let ORG_MENU = null;                       // the key whose Move menu is open
+// Hide from my chart, from the CEO Bot's menu: the toast names it by its current name and offers it back at once.
+async function ceoChartHideFromTree() {
+  const name = ceoBotName();
+  try {
+    await ceoChartSet(true);
+    toast(`${name} is hidden from your chart. Settings > Bots > ${name} shows it again.`, false,
+      {label: 'Show on my chart', run: () => ceoChartSet(false)});
+  } catch (e) { toast(e.message, true); renderTree(); }
+}
 async function orgDrop(from, to) {
   const isGroup = to.startsWith('g:');
   if (from.startsWith('g:')) {
@@ -655,13 +665,17 @@ function renderTree() {
     const at = n => { const manager = orgReportsTo(n), list = lists[manager] || []; return {parent: manager, order: list.length > 1 ? list : []}; };
     return sorted.map(node => row(node, depth, false, at(node))).join('');
   };
-  // A report's place among its manager's reports: its drop zones and its Move menu.
+  // A report's place among its manager's reports: its drop zones and its Move menu. The CEO Bot's row always has the
+  // menu, with Hide from my chart (one person's view; Settings > Bots > CEO Bot shows it again).
   const placeAttrs = (key, at) => at.order.includes(key) ? ` data-org-in="${esc(at.parent)}" data-org-place` : '';
   const moveMenu = (key, name, at) => {
-    const i = at.order.indexOf(key); if (i < 0) return '';
-    const open = ORG_MENU === key;
-    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="Move" aria-label="Move ${esc(name)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
-      + (open ? `<span class="org-order-menu" role="menu" aria-label="Move ${esc(name)}"><button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button></span>` : '')
+    const i = at.order.indexOf(key), ceo = key === 'b:goal-manager';
+    if (i < 0 && !ceo) return '';
+    const open = ORG_MENU === key, label = (ceo ? 'More for ' : 'Move ') + name;
+    const moves = i < 0 ? '' : `<button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button>`;
+    const hide = ceo ? '<button type="button" role="menuitem" data-org-hide-ceo>Hide from my chart</button>' : '';
+    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="${ceo ? 'More' : 'Move'}" aria-label="${esc(label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
+      + (open ? `<span class="org-order-menu" role="menu" aria-label="${esc(label)}">${moves}${hide}</span>` : '')
       + '</span>';
   };
   // flat: the history list, one row per bot and person, no children and nothing to drag
@@ -762,6 +776,12 @@ function renderTree() {
     const seat = ev.target.closest('[data-seat-open]');
     if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
     const opener = ev.target.closest('[data-org-menu]'), step = ev.target.closest('[data-org-step]');
+    if (ev.target.closest('[data-org-hide-ceo]')) {
+      ev.preventDefault();
+      ORG_MENU = null;
+      void ceoChartHideFromTree();
+      return;
+    }
     if (step) {
       ev.preventDefault();
       const btn = step.closest('.org-order').querySelector('[data-org-menu]');

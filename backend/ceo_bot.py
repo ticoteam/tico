@@ -12,6 +12,9 @@ its KPI readings, goal events and old messages stay attached. It is named "CEO B
   bots, helpers and message bots stay where they are. The chart is the only thing that moves: `bot_config.reports_to`
   is never written, so who manages whom (the access chain in backend/auth.py, goal rights in backend/goals.py,
   `bot_contact`) is exactly what it was.
+- "Hide from my chart" (`hidden_for`, preference `chart.hide_ceo_bot` in the caller's own `preferences` row) is one
+  person's view: on their chart the CEO Bot is not drawn and nothing moves under it. Everyone else's chart, and the bot
+  itself (its config, `reports_to`, access, level, Goals, chat), are as they were.
 - "Regular checks" (`checks`, default on) are the KPI pass routine and the automatic goal colours. Off, neither runs
   until the owner turns them back on; the owner's chat still works.
 - "How much your CEO Bot does" (`level`): Passive (1, the default), Suggests actions (2), Acts on its own (3). At
@@ -196,14 +199,34 @@ def _outside(slug, entry, assistant, helpers):
         or str((entry or {}).get("template") or "") in helpers
 
 
-def chart_entries(c, settings, roster, entries, archived=()):
+# "Hide from my chart" on the CEO Bot (its menu on the Team sidebar, Settings > Bots > CEO Bot): one person's own
+# preference, kept like their other view settings in `preferences` (actor, key). True hides it; anything else shows it.
+HIDE_PREF = "chart.hide_ceo_bot"
+
+
+def hidden_for(c, who):
+    """Whether the caller, a person, chose Hide from my chart on the CEO Bot. A bot's or a token's view is never hidden.
+    Only the chart reads it (`chart_entries`, `chart_groups`, `chart_hidden_row`)."""
+    if getattr(who, "role", "") not in ("owner", "human"):
+        return False
+    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (who.actor, HIDE_PREF)).fetchone()
+    return bool(row) and json.loads(row[0]) is True
+
+
+def chart_hidden_row(slug, hidden):
+    """What a bot's row says on a chart the caller hid the CEO Bot from: the CEO Bot's row carries `chart_hidden`, so
+    the Team sidebar leaves it off while Goals, its chat and Settings > Bots still list it."""
+    return {"chart_hidden": True} if hidden and slug == SLUG else {}
+
+
+def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
     """`entries` as the org chart draws them. The CEO Bot reports to the owner, and so do on the chart the bots that
     hang straight under the owner and are a Head (a `lead: true` card) or have no manager at all. Built-in bots,
     helpers and message bots stay where they are, and so does anyone under a group or another person. A copy; with no
-    CEO Bot (or no owner on the roster) yet, `entries` itself. Only for drawing the chart: permission checks read the
-    stored `reports_to`."""
+    CEO Bot (or no owner on the roster) yet, or on the chart of a person who hid it (`hidden`, from `hidden_for`),
+    `entries` itself. Only for drawing the chart: permission checks read the stored `reports_to`."""
     archived = set(archived or ())
-    if SLUG not in (entries or {}) or SLUG in archived:
+    if hidden or SLUG not in (entries or {}) or SLUG in archived:
         return entries
     owner = P.person((roster or {}).get("default_user"), roster)
     if not owner or owner.get("hidden"):
@@ -225,12 +248,13 @@ def chart_entries(c, settings, roster, entries, archived=()):
     return out
 
 
-def chart_groups(roster, entries, chart, groups, archived=()):
+def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
     """`groups` (`org_view` rows) as the chart draws them. A Head is usually in a group of its own department, which
     sits at the top of the chart: a top-level group that holds a bot the CEO Bot heads on the
     chart (`chart`, from `chart_entries`) hangs under the CEO Bot, so the department sits in its subtree. Never the
-    group the owner is in, since the CEO Bot hangs under the owner. With nothing moved, `groups` itself."""
-    if chart is entries:
+    group the owner is in, since the CEO Bot hangs under the owner. With nothing moved, or on the chart of a person who
+    hid the CEO Bot (`hidden`), `groups` itself."""
+    if hidden or chart is entries:
         return groups
     archived = set(archived or ())
     owner = P.person((roster or {}).get("default_user"), roster) or {}

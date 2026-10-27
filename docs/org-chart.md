@@ -16,6 +16,7 @@ chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
 The built-in **CEO Bot** ([Your CEO Bot](ceo-bot.md)) is on every install, at the top of the chart under the owner. The Heads, each in its department's group, and the bots that report to no one sit under it.
+Anyone can take it off their own chart: **Hide from my chart** in its row's menu (**More**), or on its row in Settings > Bots and in its settings there, each by its current name. On that person's chart the CEO Bot is not shown and the Heads and other bots sit where their own reporting lines and groups put them; everyone else's chart is unchanged. It is a view setting only, kept per person (the `chart.hide_ceo_bot` preference): Goals, Needs you, its chat, Strategy proposals and Settings > Bots still show it and it works as before, and its reporting line, access and level don't change. **Show on my chart** in Settings > Bots brings it back.
 The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and

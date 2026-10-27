@@ -267,7 +267,7 @@ def seat_parents(c, settings, auth, who):
     from . import ceo_bot
     r, configs = roster(c), entries(c)
     archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-    chart = ceo_bot.chart_entries(c, settings, r, configs, archived)
+    chart = ceo_bot.chart_entries(c, settings, r, configs, archived, hidden=ceo_bot.hidden_for(c, who))
     access = auth.bot_accesses(c, who)
     return {seat["id"]: seat["org_parent"] for seat in lifecycle.chart_seats(
         c, r, chart, archived, lambda slug: access.get(slug, auth.FULL)["see"])}
@@ -1944,8 +1944,10 @@ def install_views(app, store, auth, mutate, task_view):
         from .onboarding import helper_templates, template_icons
         icons, helpers = template_icons(store.settings), helper_templates(store.settings)
         # Where each bot hangs on the chart; the CEO Bot switch moves it there and nowhere else (backend/ceo_bot.py).
+        # A person who hid the CEO Bot from their chart sees nothing moved, and its row says so (`chart_hidden`).
         from . import ceo_bot
-        chart = ceo_bot.chart_entries(c, store.settings, people, configs, archived)
+        hide_ceo = ceo_bot.hidden_for(c, who)
+        chart = ceo_bot.chart_entries(c, store.settings, people, configs, archived, hidden=hide_ceo)
 
         def icon_of(config):
             return str(config.get("icon") or "") or icons.get(str(config.get("template") or ""), "")
@@ -1983,6 +1985,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                             **ceo_bot.chart_hidden_row(slug, hide_ceo),
                              "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
@@ -2025,6 +2028,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "team": P.team_of(slug, configs, people),
                          "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived),
+                         **ceo_bot.chart_hidden_row(slug, hide_ceo),
                          "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
@@ -2106,8 +2110,9 @@ def install_views(app, store, auth, mutate, task_view):
             view = P.org_view(r, configs, archived)
             # The CEO Bot switch hangs the Heads' groups under it on the chart (backend/ceo_bot.py).
             from . import ceo_bot
-            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived)
-            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived)
+            hide_ceo = ceo_bot.hidden_for(c, who)          # this person hid it from their chart: nothing moves
+            chart = ceo_bot.chart_entries(c, store.settings, r, configs, archived, hidden=hide_ceo)
+            view["org_groups"] = ceo_bot.chart_groups(r, configs, chart, view["org_groups"], archived, hidden=hide_ceo)
             access = auth.bot_accesses(c, who)
             from .report_order import positions
             places = positions(c)

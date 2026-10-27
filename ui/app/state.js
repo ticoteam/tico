@@ -56,6 +56,14 @@ const ceoBotName = () => {
   const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
   return name && name !== 'Goal Manager' ? name : 'CEO Bot';
 };
+// "Hide from my chart" on the CEO Bot: one person's view (preference chart.hide_ceo_bot, backend/ceo_bot.py `hidden_for`).
+// The server leaves the chart unmoved for them and marks the CEO Bot's row `chart_hidden`; Goals, its chat and Settings >
+// Bots still list it. Set from its menu on the Team sidebar and from Settings > Bots > CEO Bot, both by this one call.
+const ceoChartHidden = () => !!(S.emps || []).find(e => e.name === 'goal-manager')?.chart_hidden;
+async function ceoChartSet(hide) {
+  await post('/v2/preferences/chart.hide_ceo_bot', {value: !!hide});
+  await refresh(true);
+}
 // The owner talks to the CEO Bot in place of an Assistant (backend/assistant.py): their menu tab and #/assistant are the
 // CEO Bot, by its name. Everyone else, admins included, keeps their Assistant.
 const meCeo = () => S.me?.role === 'owner'

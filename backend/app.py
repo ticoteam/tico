@@ -2356,19 +2356,26 @@ def create_app(settings=None):
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             # The CEO Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
+            # A person who hid the CEO Bot from their chart gets it without the CEO Bot, and with nothing moved under it.
             from . import ceo_bot
-            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived)
+            hide_ceo = ceo_bot.hidden_for(c, who)
+            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived, hidden=hide_ceo)
             view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
-            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived)
+            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived,
+                                                      hidden=hide_ceo)
             for row in view["bots"]:
                 row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}
             bots = []
             by_id = {row["id"]: row for row in view["bots"]}
             departments = P.bot_departments(configs, roster, archived)
+            # On the chart: what the caller may see, less the CEO Bot when they hid it (those under it hang from the
+            # next thing up, as under a bot they may not see; their `reports_to` stays the stored one).
+            def drawn(slug):
+                return access.get(slug, auth.FULL)["see"] and not (hide_ceo and slug == ceo_bot.SLUG)
             for row in view["bots"]:
                 level = access.get(row["id"], auth.FULL)
-                if not level["see"] or (can and not level[can]):
+                if not drawn(row["id"]) or (can and not level[can]):
                     continue
                 bot = live.get(row["id"]) or {}
                 shown = {**row, "display_name": bot.get("display_name") or row["display_name"],
@@ -2379,8 +2386,7 @@ def create_app(settings=None):
                 # A bot the caller may not see is not in the chart, so those under it hang from
                 # the nearest thing above it that is: another bot, else its person or department.
                 parent, seen = row["org_parent"], set()
-                while parent.startswith("b:") and parent[2:] in by_id and parent not in seen \
-                        and not access.get(parent[2:], auth.FULL)["see"]:
+                while parent.startswith("b:") and parent[2:] in by_id and parent not in seen and not drawn(parent[2:]):
                     seen.add(parent)
                     parent = by_id[parent[2:]]["org_parent"]
                 shown["org_parent"] = parent
@@ -2397,8 +2403,7 @@ def create_app(settings=None):
             parents = {}
             for seat in c.execute("SELECT * FROM seats WHERE closed_at IS NULL ORDER BY created,id").fetchall():
                 parent, seen = lifecycle.org_parent(seat, roster, chart, archived, every), set()
-                while parent.startswith("b:") and parent[2:] in by_id and parent not in seen \
-                        and not access.get(parent[2:], auth.FULL)["see"]:
+                while parent.startswith("b:") and parent[2:] in by_id and parent not in seen and not drawn(parent[2:]):
                     seen.add(parent)
                     parent = by_id[parent[2:]]["org_parent"]
                 parents[seat["id"]] = parent
@@ -4486,6 +4491,10 @@ def create_app(settings=None):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
+        if key == ceo_bot.HIDE_PREF:                        # Hide from my chart on the CEO Bot: a person's own view
+            views.human_only(who)
+            if not isinstance(body.value, bool):
+                raise Problem("validation", ceo_bot.HIDE_PREF + " is a boolean", 422)
         if not re.fullmatch(r"[a-z0-9_.-]{1,64}", key):
             raise Problem("kind", "A preference key is lower-case letters, digits, dots, dashes", 422)
         if not request.headers.get("idempotency-key"):
