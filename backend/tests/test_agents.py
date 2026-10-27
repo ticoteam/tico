@@ -106,3 +106,35 @@ def test_the_mcp_door_lists_ack_and_the_agent_cannot_act_as_a_runner(api):
     # And a runner credential cannot heartbeat as an agent.
     machine = runner(api)
     assert api.post("/api/v2/agents/heartbeat", json={}, headers=headers(machine["token"])).status_code == 403
+
+
+def test_agent_listing_reads_access_and_config_once(api, monkeypatch):
+    """Operations embeds agents.listing; per-agent bot_access + bot_config reads used to scale with agents."""
+    from backend import agents, read_cache
+    from backend.auth import Auth
+
+    hermes_bot(api, slug="scout")
+    credential(api, "scout")
+    hermes_bot(api, slug="ranger", display_name="Ranger")
+    post(api, "bots/ranger/agent-credential", {})
+    access_calls, config_calls = [], []
+    real_accesses = Auth.bot_accesses
+    real_configs = read_cache.configs
+
+    def accesses(self, c, who, slugs=None):
+        access_calls.append(list(slugs) if slugs is not None else None)
+        return real_accesses(self, c, who, slugs)
+
+    def configs(c, slugs=None):
+        config_calls.append(list(slugs) if slugs is not None else None)
+        return real_configs(c, slugs)
+
+    monkeypatch.setattr(Auth, "bot_accesses", accesses)
+    monkeypatch.setattr(read_cache, "configs", configs)
+    store, auth = api.app.state.store, api.app.state.auth
+    who = store.settings.test_identities["ana-test"]
+    with store.read() as c:
+        rows = agents.listing(c, who, auth)
+    assert {r["bot"] for r in rows} >= {"scout", "ranger"}
+    assert len(access_calls) == 1 and set(access_calls[0]) >= {"scout", "ranger"}
+    assert any(calls and set(calls) >= {"scout", "ranger"} for calls in config_calls)
