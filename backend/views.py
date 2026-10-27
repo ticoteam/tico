@@ -2072,6 +2072,9 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from .repositories import computer_repositories
+            # One pass for every computer's repository status (not one registry_metadata lookup per runner).
+            repo_status = computer_repositories(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2098,8 +2101,7 @@ def install_views(app, store, auth, mutate, task_view):
                 value.update(performance_listing(value))
                 value.pop("capabilities_json")
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
-                from .repositories import metadata
-                value["repositories"] = metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown")
+                value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = {a[0] for a in c.execute(
                     "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
                     "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
