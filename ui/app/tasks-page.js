@@ -350,7 +350,8 @@ async function tasksLoad(state, opts = {}) {
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/routines'), v2Get('/v2/tasks/labels'),
     taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
-  let changed = null, active = null, rec, lab;
+  let changed = null, active = null, rec, lab, held = null;
+  const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
     [changed, rec, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
@@ -366,11 +367,12 @@ async function tasksLoad(state, opts = {}) {
     state.tasks = mergeTaskRows((state.tasks || []).filter(t => !gone.has(String(t.id))), changed.tasks || []);
     state.since = changed.cursor;
   } else if (active) {
-    // Read in full: the clock for the next full read starts again (refresh.js tasksFreshen).
-    state.fullAt = Date.now(); state.stale = false;
-    const activeIds = new Set((active.tasks || []).map(t => String(t.id)));
-    const finished = (state.tasks || []).filter(t => ['done', 'closed'].includes(String(t.status)) && !activeIds.has(String(t.id)));   // reopened ones are active again
-    state.tasks = mergeTaskRows(finished, active.tasks || []);
+    // Read in full. The open tasks already held stay until every page has come, so a later page that fails leaves the
+    // list as long as it was; only a list read to its end drops the ones the server no longer lists as open (below).
+    // A finished copy held is replaced when the task is open again.
+    held = new Set((state.tasks || []).filter(t => !isFinished(t)).map(t => String(t.id)));
+    (active.tasks || []).forEach(t => seen.add(String(t.id)));
+    state.tasks = mergeTaskRows(state.tasks || [], active.tasks || []);
   }
   // A read that failed (offline, the server away) leaves the list as it was rather than empty; the next poll reads again.
   state.routines = rec?.routines || null;
@@ -398,17 +400,24 @@ async function tasksLoad(state, opts = {}) {
       const page = await v2Get(activeTasksPath(next));
       if (!page || TASKS_ST !== state || state.loadSeq !== seq) return false;
       state.tasks = mergeTaskRows(state.tasks, page.tasks || []);
+      (page.tasks || []).forEach(t => seen.add(String(t.id)));
       next = page.next_offset;
       tasksTools(state); tasksRender(state);
     }
     return next == null;
   };
+  let complete = true;
   if (active) {
-    const complete = await drain(active.next_offset);
-    // Only a list read to its end can be caught up from its cursor.
-    if (TASKS_ST === state && state.loadSeq === seq) {
-      state.activeComplete = complete;
-      state.since = complete ? active.cursor || null : null;
+    complete = await drain(active.next_offset);
+    if (TASKS_ST !== state || state.loadSeq !== seq) return;      // a newer read took over
+    // Only a list read to its end can be caught up from its cursor, drops what left it, and starts the clock for the
+    // next full read again (refresh.js tasksFreshen).
+    state.activeComplete = complete;
+    state.since = complete ? active.cursor || null : null;
+    if (complete) {
+      state.tasks = state.tasks.filter(t => !held.has(String(t.id)) || seen.has(String(t.id)) || isFinished(t));
+      state.fullAt = Date.now(); state.stale = false;
+      tasksTools(state); tasksRender(state);
     }
   }
   // Done and Closed keep their own paging. A reload after a change folds in the newest page; the poll does that too, but
@@ -417,7 +426,7 @@ async function tasksLoad(state, opts = {}) {
   const doneShown = tasksFinishedShown(state);
   const reloadDone = opts.poll ? doneShown && state.doneLoaded : (state.doneLoaded || doneShown);
   if (reloadDone && TASKS_ST === state && state.loadSeq === seq) await (state.doneLoaded ? tasksDoneMerge(state) : tasksLoadDone(state, true));
-  return !!(changed || active);
+  return changed ? true : active ? complete : false;
 }
 // The whole list read again, as on opening the page: the cursor is dropped and the kept copies of the task paths are
 // forgotten, so the server reads every row afresh rather than answering 304. A delta read and the live stream carry

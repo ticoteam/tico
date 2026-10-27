@@ -7,7 +7,8 @@
 //    hours: its answer form counted as someone typing);
 //  - pulling down at the top on a phone shows a spinner, holds the page still, and on release reads the list in full
 //    with no tag, bringing in the change the delta read missed; a pull mid-list only scrolls;
-//  - a full read that fails leaves the list as it was;
+//  - a full read that fails leaves the list as it was, also when its first page came and a later one failed: the
+//    rows past the first page stay, the failure shows, and a retry read to the end drops only what left the list;
 //  - coming back after more than 10 minutes away (hidden, or asleep with the timers stopped) reads in full and
 //    reconnects the live stream; a short time away reads only the delta;
 //  - a list read in full 15 minutes ago is read in full again, but not while an answer is being written in it.
@@ -30,7 +31,8 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, serviceWorkers: 'block'});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  const server = {title: 'Draft the release notes', fail: false};
+  // `second`: the open tasks past the first page (null: one page); `failSecond` fails the read of that page.
+  const server = {title: 'Draft the release notes', fail: false, second: null, failSecond: false};
   const reads = {full: [], delta: 0};
   await page.addInitScript(() => {
     window.__streams = 0;
@@ -61,10 +63,12 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     if (p === '/api/v2/tasks' && (url.searchParams.get('status') || '').includes('open')) {
       const tag = route.request().headers()['if-none-match'] || '';
       reads.full.push(tag);
-      if (server.fail) return route.fulfill({status: 503, contentType: 'application/json', body: '{"error":"away"}'});
+      const later = url.searchParams.get('offset') !== '0';
+      if (server.fail || later && server.failSecond) return route.fulfill({status: 503, contentType: 'application/json', body: '{"error":"away"}'});
       if (tag) return route.fulfill({status: 304, headers: {ETag: tag}, body: ''});
-      const rows = [task('t1', server.title), ...Array.from({length: 40}, (_, i) => task(`r${i}`, `Check release link ${i}`))];
-      return route.fulfill({contentType: 'application/json', headers: {ETag: 'W/"v12.rows"'}, body: JSON.stringify({tasks: rows, next_offset: null, cursor: '12.a'})});
+      const rows = later ? server.second || [] : [task('t1', server.title), ...Array.from({length: 40}, (_, i) => task(`r${i}`, `Check release link ${i}`))];
+      const next = later || !server.second ? null : 100;
+      return route.fulfill({contentType: 'application/json', headers: {ETag: `W/"v12.${later ? 'p2' : 'p1'}"`}, body: JSON.stringify({tasks: rows, next_offset: next, cursor: '12.a'})});
     }
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
@@ -163,6 +167,41 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   assert.ok(await page.locator('#task-body', {hasText: 'Draft the final release notes'}).count(), 'a failed read leaves the list as it was');
   server.fail = false;
   await page.evaluate(() => tasksReadFull(TASKS_ST));      // back: the list has its cursor again
+  await settled();
+
+  // A list of two pages: the second page failing on a refresh keeps its rows, says so, and leaves no cursor; a retry
+  // read to the end brings the cursor back and drops only the task that left the list.
+  const pull = async () => {
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(el => el.remove()));
+    await touch('touchStart', 220);
+    for (let y = 240; y <= 420; y += 30) await touch('touchMove', y);
+    await page.locator('.pull-spin.armed').waitFor({timeout: t(3000)});
+    await touch('touchEnd');
+    await page.waitForFunction(() => !document.querySelector('.pull-spin'), null, {timeout: t(8000)});
+    await settled();
+  };
+  const ids = () => page.evaluate(() => TASKS_ST.tasks.map(x => x.id));
+  server.second = [task('p1', 'Renew the domain'), task('p2', 'Archive the old board')];
+  await page.evaluate(() => tasksReadFull(TASKS_ST));
+  await settled();
+  assert.ok((await ids()).includes('p2'), 'the second page is read');
+  server.title = 'Draft the final release notes, again';
+  server.failSecond = true;
+  await pull();
+  await page.locator('.toast', {hasText: 'Could not refresh the tasks'}).first().waitFor({timeout: t(5000)});
+  await shows('Draft the final release notes, again');
+  const kept = await ids();
+  assert.ok(kept.includes('p1') && kept.includes('p2'), 'the rows past the failed page stay');
+  assert.deepEqual(await page.evaluate(() => [TASKS_ST.since, TASKS_ST.activeComplete]), [null, false], 'a part-read list keeps no cursor');
+  server.failSecond = false;
+  server.second = [task('p1', 'Renew the domain')];
+  await pull();
+  assert.equal(await page.locator('.toast', {hasText: 'Could not refresh the tasks'}).count(), 0, 'a retry that reads every page says nothing');
+  assert.equal(await page.evaluate(() => TASKS_ST.since), '12.a', 'a list read to its end has its cursor again');
+  const after = await ids();
+  assert.ok(after.includes('p1') && !after.includes('p2') && after.includes('r39'), 'only the task that left the list goes');
+  server.second = null;
+  await page.evaluate(() => tasksReadFull(TASKS_ST));
   await settled();
 
   const away = async ms => {
