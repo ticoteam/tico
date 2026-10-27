@@ -139,7 +139,7 @@ Administration: write ([GitHub App](github-app.md#when-the-app-cannot-create-rep
 | Switch | Lets the bot create | Who turns it on | Who turns it off | Built in |
 | --- | --- | --- | --- | --- |
 | **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | BotOps, always |
-| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click | the Owner or an admin | every bot, until switched off |
+| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click (asked through BotOps, a Confirm card they tap) | the Owner or an admin | every bot, until switched off |
 
 Create product repositories is a wider reach than bot repositories, so:
 - **Every bot has it by default** (Chris, Oct 17), BotOps and bots made later included. The Owner or an admin switches it

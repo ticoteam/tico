@@ -48,6 +48,38 @@ def test_stalled_health_does_not_disclose_another_persons_private_task(environme
     assert 'stalled_tasks' not in health_of(api)[1]
 
 
+@pytest.mark.parametrize('hidden', [False, 'private', 'activity'])
+def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
+    api = environment()
+    add_bot(api, 'helper')
+    add_bot(api, 'holder')
+    with api.app.state.store.transaction() as c:
+        window = H.task_create(c, 'bot:helper', 'Open the deploy window', '', 'bot:helper')
+        hold = H.task_create(c, 'bot:helper', 'Hold merges until RELEASED', '', 'bot:holder', parent_id=window['id'])
+        H.TR.relate(c, 'bot:helper', window['id'], hold['id'], 'blocked_by')
+        H.task_update(c, 'bot:helper', window['id'], status='waiting', note="Waiting on the hold's ack.")
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET private=0, updated=? WHERE id IN (?,?)",
+                  (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
+        H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
+        if hidden == 'private':
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (hold['id'],))
+        elif hidden == 'activity':
+            from backend import bot_access as A
+            only_ana = A.audience({'people': ['ana']})
+            c.execute("INSERT INTO bot_config(bot,config_json,operator,access_json) VALUES('holder','{}','ana',?) "
+                      "ON CONFLICT(bot) DO UPDATE SET access_json=excluded.access_json",
+                      (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),))
+    for status in ('open', 'review'):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET status=? WHERE id=?", (status, hold['id']))
+        check = health_of(api, as_person(api, 'quinn') if hidden == 'activity' else None)[1].get('stalled_tasks')
+        if hidden or status == 'review':
+            assert check is None
+        else:
+            assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [window['id']]
+
+
 def test_an_offline_computer_holds_its_bots(environment):
     api = environment()
     runner = enrolled(api)
