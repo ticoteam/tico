@@ -159,11 +159,12 @@ function tasksFreshen() {
   if (!state || !isTasksRoute(S.route) || document.hidden || state.fullRead) return;
   if (!state.stale && Date.now() - (state.fullAt || 0) < TASKS_FULL_MS) return;
   if (formBusy($('#task-body'))) return;     // someone writing in the list: the next tick looks again
-  if (state.stale) liveResume();
   void tasksReadFull(state, {poll: true});
 }
+// The stream is reconnected once per return, not on each tick a failing full read leaves the list stale: that would
+// undo the stream's own backoff while the server is down.
 function tasksBack(away) {
-  if (away > TASKS_AWAY_MS) { if (TASKS_ST) TASKS_ST.stale = true; tasksFreshen(); }
+  if (away > TASKS_AWAY_MS) { liveResume(); if (TASKS_ST) TASKS_ST.stale = true; tasksFreshen(); }
   else if (away > 30000) tasksCatchUp();
 }
 function tasksTick() {

@@ -226,6 +226,23 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   assert.ok(await page.evaluate(() => window.__streams) > streams, 'the live stream reconnects');
   await settled();
 
+  // Back while the server is down: the stream reconnects once, and the ticks that retry the full read leave it to its
+  // own backoff.
+  server.fail = true;
+  let tries = reads.full.length;
+  await away(11 * 60e3);
+  await until(() => reads.full.length > tries, 'the full read on return');
+  await settled();
+  const resumed = await page.evaluate(() => window.__streams);
+  tries = reads.full.length;
+  for (let i = 0; i < 2; i++) { await page.evaluate(() => tasksTick()); await settled(); }
+  assert.ok(reads.full.length > tries, 'each tick retries the full read while the list is stale');
+  assert.equal(await page.evaluate(() => window.__streams), resumed, 'the retries leave the stream alone');
+  server.fail = false;
+  await page.evaluate(() => tasksTick());
+  await settled();
+  assert.equal(await page.evaluate(() => TASKS_ST.stale), false, 'a read that lands clears the stale mark');
+
   // Asleep with the timers stopped and the page never hidden: the gap between two ticks counts as time away.
   server.title = 'Draft the release notes, fourth pass';
   await page.evaluate(() => { tasksTickAt = Date.now() - 11 * 60e3; tasksTick(); });
