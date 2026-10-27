@@ -171,8 +171,10 @@ def test_already_on_changes_nothing_and_off_takes_only_that_repository(api, boto
         post(api, ROUTE, {"repository": name, "on": True}, token="ana-test")
     assert ticks(api) == ["Acme/docs", "Acme/product"]
     entries = len(history(api))
-    # Test 8: already on, nothing changes, no entry, the reply says so (no read-back needed for that).
+    # Test 8: already on, nothing changes, no entry, the reply says so; no question is put to the person.
     ana = turn(api, botops, person="ana-test", text="Turn on Run workflows for ops on product")
+    asked_again = act(api, ana, "POST", ROUTE + "/read-back", {"repository": "Acme/product", "on": True}).json()
+    assert asked_again["already"] is True and "message_id" not in asked_again
     same = act(api, ana, "POST", ROUTE, {"repository": "Acme/product", "on": True})
     assert same.json()["already"] is True and "already on" in same.json()["reply"]
     assert len(history(api)) == entries
@@ -238,3 +240,53 @@ def test_the_assistant_carries_it_the_same_way(api):
     assert done.status_code == 200 and done.json()["changed"] is True, done.text
     row = history(api)[-1]
     assert (row["actor"], row["via"], json.loads(row["after_json"])["carrier"]) == ("human:ana", "assistant", "assistant")
+
+
+def test_a_word_from_the_person_between_the_read_back_and_the_yes_voids_it(api, botops, repos):
+    first = turn(api, botops, person="ana-test", text="Turn on Run workflows for ops on product")
+    back = act(api, first, "POST", ROUTE + "/read-back", {"repository": "Acme/product", "on": True}).json()["message_id"]
+    finish(api, botops, first)
+    post(api, "chat/botops", {"text": "Hmm, which bot was that?"}, token="ana-test")
+    then = turn(api, botops, person="ana-test", text="yes")
+    got = change(api, then, back, last_from(api, "human:ana")["id"])
+    assert got.json().get("needs_confirm") is True and "not a plain yes" in got.json()["no_yes"], got.text
+    assert ticks(api) == []
+
+
+def test_a_word_from_the_person_after_the_yes_takes_it_back(api, botops, repos):
+    then, back, yes = asked(api, botops, "ana-test")
+    post(api, "chat/botops", {"text": "wait, no"}, token="ana-test")
+    got = change(api, then, back, yes)
+    assert got.json().get("needs_confirm") is True and "not a plain yes" in got.json()["no_yes"], got.text
+    assert ticks(api) == []
+
+
+def test_a_second_read_back_before_the_yes_leaves_the_first_unanswered(api, botops, repos):
+    first = turn(api, botops, person="ana-test", text="Turn on Run workflows for ops on product and docs")
+    back = act(api, first, "POST", ROUTE + "/read-back", {"repository": "Acme/product", "on": True}).json()["message_id"]
+    assert act(api, first, "POST", ROUTE + "/read-back", {"repository": "Acme/docs", "on": True}).status_code == 200
+    finish(api, botops, first)
+    then = turn(api, botops, person="ana-test", text="yes")
+    got = change(api, then, back, last_from(api, "human:ana")["id"])
+    assert got.json().get("needs_confirm") is True and "not a plain yes" in got.json()["no_yes"], got.text
+    assert ticks(api) == []
+
+
+def test_the_settings_plan_is_the_card_without_a_yes_and_the_change_with_one(api, botops, repos):
+    plan = "settings/catalog/bot.run_workflows/plan"
+    then, back, yes = asked(api, botops, "ana-test")
+    card = act(api, then, "POST", plan, {"value": {"repository": "Acme/product", "on": True}, "bot": "ops"})
+    assert card.status_code == 200 and card.json().get("needs_confirm") is True and "run" not in card.json(), card.text
+    assert ticks(api) == []
+    run = act(api, then, "POST", plan, {"value": {"repository": "Acme/product", "on": True, "read_back": back,
+                                                  "yes": yes}, "bot": "ops"}).json()["run"]
+    assert act(api, then, run["method"], run["path"], run["body"]).json()["changed"] is True
+    assert ticks(api) == ["Acme/product"]
+
+
+def test_the_assistants_settings_plan_is_the_card_without_a_yes(api, repos):
+    _, attempt = assistant_turn(api, "ana-test", "Turn on Run workflows for ops on product")
+    got = api.post("/api/v2/settings/catalog/bot.run_workflows/plan", headers=headers(attempt["token"]),
+                   json={"value": {"repository": "Acme/product", "on": True}, "bot": "ops"})
+    assert got.status_code == 200 and got.json().get("needs_confirm") is True and "run" not in got.json(), got.text
+    assert ticks(api) == []

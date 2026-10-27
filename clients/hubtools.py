@@ -3228,11 +3228,14 @@ def settings_set(api, args):
     if "run" not in planned:
         return planned                      # the Confirm card
     run = planned["run"]
-    who.call(run["method"], run["path"], run["body"], _key(args))
+    done = who.call(run["method"], run["path"], run["body"], _key(args))
+    if isinstance(done, dict) and done.get("needs_confirm"):
+        return done                         # the route made the person's Confirm card: nothing changed yet
     # The value read back after the change, where Settings shows one; else the value sent.
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {"key": args["key"], "name": planned["setting"]["name"], "where": planned["setting"]["where"],
-            "value": shown["value"] if "value" in shown else planned["value"]}
+            "value": shown["value"] if "value" in shown else planned["value"],
+            **({"reply": done["reply"]} if isinstance(done, dict) and done.get("reply") else {})}
 
 
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "

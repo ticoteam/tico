@@ -332,7 +332,15 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
         kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
+    # A yes entry runs on the person's yes the request cites (the route checks it); without one it is their card.
+    if kind == "yes":
+        if isinstance(body, dict) and body.get("read_back") and body.get("yes"):
+            kind = "direct" if acting_for else kind
+        else:
+            body = {k: v for k, v in body.items() if k not in ("read_back", "yes")}
+            request["body"] = body
+            kind = "confirm"
+    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct and e.kind != "yes")):
         if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})

@@ -42,12 +42,9 @@ def require_bot(c, bot):
 
 
 def require_rights(c, auth, who):
-    """The person's rights now, read again from the roster (an admin since removed is refused)."""
-    if who.role == "owner":
-        live = auth.identity_for_actor(c, who.actor) if hasattr(auth, "identity_for_actor") else who
-    else:
-        live = auth.identity_for_actor(c, who.actor) if hasattr(auth, "identity_for_actor") else None
-    if not live or not (live.role == "owner" or auth.bot_admin(live)):
+    """The person's rights now, read again from the roster (an admin since removed, or a person gone, is refused)."""
+    live = auth.identity_for_actor(c, who.actor)
+    if not (live.role == "owner" or auth.bot_admin(live)):
         raise Problem("forbidden", MAY, 403)
     return live
 
@@ -114,6 +111,10 @@ def read_back(c, auth, who, bot, org, repository, on):
     require_bot(c, bot)
     require_rights(c, auth, who)
     repo = resolve(c, bot, org, repository)
+    if repo["on"] == bool(on):
+        # Nothing to ask: the reply says so, and no question waits in the conversation for a yes that does nothing.
+        return {"already": True, "reply": f"Run workflows is already {'on' if on else 'off'} for "
+                f"{bot_name(c, bot)} on {repo['full_name']}; nothing to change."}
     room, asked = turn_conversation(c, who.attempt_id)
     if not room:
         raise Problem("forbidden", "This turn has no conversation to ask the person in", 403)
@@ -122,7 +123,7 @@ def read_back(c, auth, who, bot, org, repository, on):
                            asked, None, delivered_at=H.now())
     H.event(c, who.actor, READ_BACK, msg["id"], {"bot": bot, "repository": repo["full_name"], "on": bool(on),
                                                   "carrier": carrier})
-    return {"message_id": msg["id"], "text": text, "already": repo["on"] == bool(on)}
+    return {"message_id": msg["id"], "text": text, "already": False}
 
 
 def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
@@ -135,7 +136,7 @@ def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
     named = json.loads(named["detail_json"]) if named else {}
     if not back or back.get("from_actor") != who.task_actor or back.get("to_actor") != who.actor or not named:
         raise Problem("no_yes", "That is not a read-back you wrote for this person: read the change back first "
-                      "(`hub settings run-workflows --read-back`)", 403)
+                      "(POST /api/v2/bots/{bot}/repositories/run-workflows/read-back)", 403)
     if (named.get("bot"), str(named.get("repository") or "").lower(), named.get("on")) != (
             bot, repository.lower(), bool(on)):
         raise Problem("no_yes", f"That read-back asked about Run workflows {'on' if named.get('on') else 'off'} for "

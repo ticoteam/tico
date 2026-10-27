@@ -421,11 +421,12 @@ def stopped(before, after):
 
 
 def started(before, after):
-    """What a change gives that only a person's own click may: `workflows_started`, the repositories the bot may now run
+    """What a change gives that only a person's own click (or yes) may: `workflows_started`, the repositories the bot may now run
     workflows in (a tick, or a kept tick coming back into effect) or may once its grant applies (a tick kept on a grant
     not in effect yet), `workflow_edits_started` the same for editing workflow files, and `product_creation_started`
     when Create product repositories turns back on. BotOps acting for a person puts these on a Confirm card
-    (`bot_set`)."""
+    (`bot_set`). Run workflows for one repository also comes on a person's yes in conversation, through its own route
+    (backend/run_workflows_yes.py), never through this one."""
     out = {}
     for flag, *_ in FLAGS:
         names = []
