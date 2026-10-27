@@ -136,8 +136,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     // ---- Settings: one read-only line, no switch, for each setup
     for (const [mode, words] of [['media', 'Visuals: pictures, video and audio only (no separate visual address)'], ['full', 'Visuals: full']]) {
       config = {company_name: 'Acme', visuals: mode, visual_origin: mode === 'full' ? 'https://files.acme.example' : ''};
-      await page.goto(ORIGIN + '/?setup=' + mode + '#/settings');
-      await page.locator('[data-settings-tab="policies"]').click();
+      await page.goto(ORIGIN + '/?setup=' + mode + '#/settings/policies');   // the list on a desktop, the picker on a phone
       const line = page.locator('#settings-visuals');
       await line.waitFor();
       assert.equal((await line.innerText()).replace(/\s+/g, ' ').trim(), words + ' How visuals show', `${label}: settings line for ${mode}`);
