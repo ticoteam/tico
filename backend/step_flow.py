@@ -192,8 +192,10 @@ def label(s):
 
 
 def _starts(title, prefix):
+    """A request is titled for a step by the step's name (or label) alone or followed by a colon, as Tico files them
+    (`First look: PR #12`): a renamed `Review` step never makes "Review the docs" a check."""
     t, p = title.lower(), prefix.strip().lower()
-    return bool(p) and (t == p or t.startswith(p + ":") or t.startswith(p + " "))
+    return bool(p) and (t == p or t.startswith(p + ":"))
 
 
 def titled(c, type_id, title):
@@ -318,14 +320,17 @@ def seed(c):
     seed_checks(c)
 
 
-def _inferred(s):
+def _inferred(s, merged_at=None):
     """The check kind a step's flow already implies, for a board flowed before steps had one: a gated step is a
-    review, a check whose pass leads to the merge is QA."""
+    review, a check whose pass leads to the merge is QA, and a step with a check pool after the step merged tickets
+    go to is the check after the release."""
     flow = of(s)
     if flow.get("gate"):
         return "review"
     if flow.get("on_pass") == MERGE:
         return "qa"
+    if merged_at is not None and s["position"] > merged_at and s.get("check_pool") not in (None, "", "[]"):
+        return "release_qa"
     return None
 
 
@@ -340,11 +345,12 @@ def seed_checks(c):
         if not has_flow(c, ident):
             continue        # a board Tico does not move keeps no flow; its checks are known by their titles
         given = {}
+        merged = merge_step(c, ident)
         for s in steps(c, ident):
             flow = of(s)
             if "check" in flow:
                 continue
-            kind = (DEV.get(s["name"]) or {}).get("check") or _inferred(s)
+            kind = (DEV.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
             if not kind:
                 continue
             c.execute("UPDATE task_steps SET flow_json=? WHERE id=?",

@@ -1264,6 +1264,28 @@ DEV_ROWS = (
 SEEDED = "rules.seeded"
 
 
+def steps_renamed(conn, type_id, renamed):
+    """A type's steps were renamed ({old name: new name}): its own rows that name a step by its old name name the new
+    one, so a rule set on a step (QA wakes on In QA, ...) stays on that step. Quietly does nothing before the rules
+    table exists."""
+    lower = {str(k).lower(): v for k, v in renamed.items()}
+    try:
+        rows = conn.execute("SELECT id, when_json FROM rules WHERE scope_kind='type' AND scope_id=?", (type_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return
+    for ident, raw in rows:
+        when = H._json(raw, {}) or {}
+        step = when.get("step") if isinstance(when, dict) else None
+        if step is None:
+            continue
+        names = step if isinstance(step, list) else [step]
+        moved = [lower.get(str(n).lower(), n) for n in names]
+        if moved != names:
+            when["step"] = moved if isinstance(step, list) else moved[0]
+            conn.execute("UPDATE rules SET when_json=?, updated=?, revision=revision+1 WHERE id=?",
+                         (json.dumps(when, sort_keys=True), H.now(), ident))
+
+
 def seed_dev(conn):
     """Give every Dev tickets type its hand-off rows once. A type that already has them recorded keeps what a person
     made of them. Quietly does nothing before the rules table or the events table exists."""

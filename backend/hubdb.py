@@ -3521,6 +3521,11 @@ def _type_steps(conn, actor, type_id, steps):
         if flows:
             conn.execute("UPDATE task_steps SET flow_json=? WHERE id=?",
                          (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]))
+    renamed = {existing[r["id"]]["name"]: r["name"] for r in clean
+               if r["id"] in existing and existing[r["id"]]["name"] != r["name"]}
+    if renamed:
+        from .rules import steps_renamed
+        steps_renamed(conn, type_id, renamed)       # the board's rules follow its steps' new names
 
 
 def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=False, steps_only=False, default_visibility='private'):

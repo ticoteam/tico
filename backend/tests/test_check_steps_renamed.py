@@ -101,3 +101,85 @@ def test_a_board_flowed_before_check_kinds_gets_them_once_even_when_renamed(api)
         c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps({"gate": True, "check": "qa"}), first["id"]))
         step_flow.seed_checks(c)
         assert step_flow.check_kind(step_flow.step(c, first["id"])) == "qa", "a step's kind, once set, is a person's"
+
+
+def _renamed(api, task, names):
+    kind = get(api, "task-types/" + task["type_id"])["type"]
+    r = api.post("/api/v2/task-types/" + task["type_id"], headers=headers(), json={"steps": [
+        {"id": s["id"], "name": names.get(s["name"], s["name"]), "status": s["status"]} for s in kind["steps"]]})
+    assert r.status_code == 200, r.text
+
+
+def test_a_step_renamed_to_a_plain_word_makes_only_its_own_requests_checks(api):
+    """A review step renamed `Review`: "Review the docs" is ordinary work (both file), while `Review: PR #412`
+    is that step's request and meets the review gate."""
+    pools.team(api)
+    task = pools.ticket(api, None)
+    _renamed(api, task, {"Review 1": "Review"})
+    with api.app.state.store.transaction() as c:
+        for title in ("Review the copy", "Review the docs"):
+            H.task_create(c, "bot:cpo", title, "Look it over.", "bot:cmo", parent_id=task["id"])
+        with pytest.raises(H.Refused) as refused:
+            H.task_create(c, "bot:cpo", "Review: PR #412", "Check it.", "bot:cmo", parent_id=task["id"])
+    assert refused.value.rule == "review_gate", refused.value.detail
+
+
+def test_the_generic_review_titles_name_the_renamed_steps_in_board_order(api):
+    task = pools.ticket(api, None)
+    _renamed(api, task, {"Review 1": "First look", "Review 2": "Second look"})
+    with api.app.state.store.read() as c:
+        assert step_flow.titled(c, task["type_id"], "Review 1: PR #412")["name"] == "First look"
+        assert step_flow.titled(c, task["type_id"], "Review 2: PR #412")["name"] == "Second look"
+        assert step_flow.titled(c, task["type_id"], "First look the other way") is None
+
+
+def test_a_receipt_in_a_keeper_notice_naming_a_renamed_review_step_counts(api):
+    """The review gate names the board's review steps, so a keeper notice about the renamed step is read for a
+    receipt as one about Review 1 was."""
+    from backend import test_receipts
+    sha = "d" * 40
+    notice = {"id": "m1", "from_actor": "keeper", "created": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
+    task = {"id": "t", "owner": "bot:cpo", "note": "", "messages": [notice], "children": []}
+    assert test_receipts.at_head({**task, "review_steps": ["First look"]}, sha)[0] == "passed"
+    assert test_receipts.at_head(task, sha)[0] != "passed", "a keeper line that names no review step is not evidence"
+
+
+def test_the_task_manager_finds_a_second_open_request_for_a_renamed_step(api):
+    from backend import task_manager
+    task = pools.ticket(api, pools.RECEIPT)
+    _renamed(api, task, {"Review 1": "First look"})
+    with api.app.state.store.transaction() as c:
+        made = [H.task_create(c, "bot:cpo", f"Look {i}", "Check it.", "bot:cmo", parent_id=task["id"]) for i in (1, 2)]
+        for row in made:
+            c.execute("UPDATE tasks SET title='First look: PR #412' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET private=0 WHERE id IN (?,?,?)", (task["id"], *(m["id"] for m in made)))
+        found = [i for i in task_manager._reviews(c) if i["kind"] == "review_duplicate"]
+    assert [i["task"] for i in found] == [made[1]["id"]], found
+
+
+def test_renaming_a_step_keeps_the_boards_rules_on_it(api):
+    """The Dev board's "wake QA on In QA" row follows In QA to its new name."""
+    task = pools.ticket(api, None)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
+                  "note,created_by,created,updated,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
+                  "'QA',?,?,?,1)", (task["type_id"], json.dumps({"step": ["Review 2", "Done"], "role": "qa"}),
+                                     H.KEEPER, H.now(), H.now()))
+    _renamed(api, task, {"Review 2": "Second look"})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT when_json, revision FROM rules WHERE id='r-qa'").fetchone()
+    assert json.loads(row[0]) == {"step": ["Second look", "Done"], "role": "qa"} and row[1] == 2
+
+
+def test_the_upgrade_finds_a_renamed_release_check_by_its_pool_after_the_merge_step(api):
+    task = pools.ticket(api, None)
+    with api.app.state.store.transaction() as c:
+        for ident, name, position, flow, pool in (("pr", "Shipped", 10, {"on_merge": True}, None),
+                                                  ("after", "Live check", 11, {"can_hold": False}, '["qa"]'),
+                                                  ("before", "Pairing", 3, {"can_hold": False}, '["qa"]')):
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json,check_pool) VALUES(?,?,?,?,?,?,?)",
+                      (ident, task["type_id"], name, position, "review", json.dumps(flow), pool))
+        c.execute("DELETE FROM events WHERE action=? AND target=?", (step_flow.CHECKS_SEEDED, task["type_id"]))
+        step_flow.seed_checks(c)
+        assert step_flow.check_kind(step_flow.step(c, "after")) == "release_qa"
+        assert step_flow.check_kind(step_flow.step(c, "before")) is None, "a pool before the merge step is no release check"
