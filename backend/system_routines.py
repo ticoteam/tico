@@ -101,6 +101,10 @@ ACTIONS = {
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
                           ("tasks", "wake", "task manager")),
     "wake_health_monitor": ("wake the Health Monitor for a new finding", ("health", "wake")),
+    "list_exceptions": ("list each engineering board's stuck tickets, failed runs, waiting checks, full builders, "
+                        "outages, refused moves and failed merges", ("engineering", "exceptions", "stuck", "tickets")),
+    "wake_type_manager": ("wake the board's manager only for an entry its last list did not have",
+                          ("engineering", "exceptions", "wake", "manager")),
     "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
                       ("learnings", "chat", "slack", "mail", "meetings")),
     "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
@@ -175,6 +179,10 @@ JOBS = [
         "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
         "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
         CHECKS, "Hourly on weekdays, 08:00 to 18:00", 3600, control=True, then=("report_tasks", "wake_task_manager")),
+    Job("engineering_exceptions", "Engineering exceptions",
+        "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
+        "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
+        CHECKS, "Hourly", 3600, control=True, then=("list_exceptions", "wake_type_manager")),
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
@@ -287,12 +295,14 @@ CONTROLS = {
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
     "propose_demotions": Control(presets=(WEEKLY,), preset=WEEKLY),
+    "engineering_exceptions": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
     "stall_triage": Control(rule="stall_triage"),
 }
 
 
-QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report", "propose_demotions")   # run by backend/scheduler.py QUICK
+QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report", "propose_demotions",
+              "engineering_exceptions")   # run by backend/scheduler.py QUICK
 
 
 def zone():

@@ -1,21 +1,17 @@
 """A person's recorded waiver of a Dev ticket's QA step for one exact pull request head (Dev 563, task 558).
 
 A waiver is not a QA verdict. It never sets a verdict on the QA subtask or anywhere else; it is a `qa_waiver` task
-event on the Dev ticket, so task history shows who waived QA, why, at which head and step, and when. Only the In QA
-step can be waived. CI, Review 1, Review 2 and release approval stay mandatory: a waiver needs every hosted check
-green on that head, read from GitHub at the time, and the ticket's reviews finished, with Review 1 and Review 2
-each approving that exact head. A waiver does not override QA: a QA `fail` at that head refuses it. A push gives a
+event on the Dev ticket, so task history shows who waived QA, why, at which head and step, and when. Only a QA step
+(a step whose flow's `check` is `qa`: In QA on the Dev board) can be waived. CI, the reviews and release approval
+stay mandatory: a waiver needs every hosted check green on that head, read from GitHub at the time, and the
+ticket's reviews finished, with each of its board's review steps approving that exact head. A waiver does not override QA: a QA `fail` at that head refuses it. A push gives a
 new head, and a waiver for the old head does not cover it (`current`).
 """
 import json
 import re
 
-QA_STEP = "In QA"
 FIELD = "qa_waiver"
 SHA = re.compile(r"^[0-9a-f]{40}$")
-REVIEW_KINDS = ("Review 1", "Review 2")
-KIND = re.compile(r"^(Review [12])(?:\b|:)", re.I)
-QA_KIND = re.compile(r"^QA\b", re.I)
 # Steps that look waivable but never are in this scope (Chris's open question on reviews, task 558).
 MANDATORY = re.compile(r"\b(review|ci|checks?|approval)\b", re.I)
 
@@ -26,23 +22,27 @@ def _refuse(c, actor, row, text, rule="qa_waiver"):
 
 
 def _reviews(c, row, head):
-    """What stops the ticket's reviews from covering `head`, or None. Every ticket has Review 1 and Review 2
-    (docs/software-factory.md), and each slot's latest review must approve this exact head: a `changes` verdict
-    is cleared only by that reviewer's approve at the fixed head."""
+    """What stops the ticket's reviews from covering `head`, or None. Every review step of the ticket's board (Review 1
+    and Review 2 on the Dev board, docs/software-factory.md) has a slot, and each slot's latest review must approve
+    this exact head: a `changes` verdict is cleared only by that reviewer's approve at the fixed head."""
     from . import hubdb as H
+    from . import step_flow
     from . import task_relations as TR
+    slots = step_flow.checks(c, row.get("type_id"), "review")
     latest = {}
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
-        kind = KIND.match(str((child or {}).get("title") or "").strip())
-        if not kind:
+        found = step_flow.child_check(c, child, row) if child else None
+        if not found or step_flow.check_kind(found) != "review":
             continue
-        name = kind[1].title()
+        name = found["name"]
         if child["status"] in H.ACTIVE_STATUSES:
-            return f"{name} is still open (task {child['id']}); a waiver comes after both reviews"
+            return f"{name} is still open (task {child['id']}); a waiver comes after the reviews"
         if name not in latest or (child.get("created") or "") >= (latest[name].get("created") or ""):
             latest[name] = child
-    for name in REVIEW_KINDS:
+    if not slots:
+        return "the ticket's board has no review step, so no review can cover this head"
+    for name in [s["name"] for s in slots]:
         child = latest.get(name)
         if not child or not child.get("verdict"):
             return f"{name} has no recorded verdict on this ticket"
@@ -59,11 +59,13 @@ def _qa_failed(c, row, head):
     """The QA subtask that failed this exact head, or one with no named head, or None: a waiver stands in for a
     missing QA result, never for a failed one, and a fail that names no head may be this one's."""
     from . import hubdb as H
+    from . import step_flow
     from . import task_relations as TR
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id) or {}
         judged = str(child.get("verdict_head") or "").lower()
-        if (QA_KIND.match(str(child.get("title") or "").strip()) and child.get("verdict") in ("fail", "changes")
+        if (step_flow.is_kind(c, row, str(child.get("title") or "").strip(), "qa")
+                and child.get("verdict") in ("fail", "changes")
                 and (not judged or head.startswith(judged))):
             return child
     return None
@@ -102,14 +104,20 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
         _refuse(c, actor, row, "Only the ticket's owner or a manager may waive its QA step.", "identity")
     if not review_gate.engineering(c, row):
         _refuse(c, actor, row, "Only a Dev ticket's QA step can be waived.")
-    current = (H._one(c, "SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)) or {}).get("name")
+    from . import step_flow
+    here = step_flow.step(c, row.get("step_id"))
+    current = (here or {}).get("name")
+    qa_steps = step_flow.checks(c, row.get("type_id"), "qa")
+    qa_name = qa_steps[0]["name"] if qa_steps else "QA"
     asked = str(step or "").strip()
-    if asked and asked.lower() != QA_STEP.lower():
-        why = (f"{asked} is mandatory: CI, Review 1, Review 2 and release approval cannot be waived"
-               if MANDATORY.search(asked) else f"Only the {QA_STEP} step can be waived, not {asked}")
+    if asked and not any(asked.lower() in (s["name"].lower(), step_flow.label(s).lower()) for s in qa_steps):
+        reviews = ", ".join(s["name"] for s in step_flow.checks(c, row.get("type_id"), "review")) or "the reviews"
+        why = (f"{asked} is mandatory: CI, {reviews} and release approval cannot be waived"
+               if MANDATORY.search(asked)
+               else f"Only the {qa_name} step can be waived, not {asked}")
         _refuse(c, actor, row, why + ".")
-    if current != QA_STEP:
-        _refuse(c, actor, row, f"The ticket is at {current or 'no step'}, not {QA_STEP}: only the current QA step "
+    if step_flow.check_kind(here) != "qa":
+        _refuse(c, actor, row, f"The ticket is at {current or 'no step'}, not {qa_name}: only the current QA step "
                                "can be waived.")
     reason = " ".join(str(reason or "").split())
     if not reason:
@@ -155,9 +163,9 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
                                f"{failed['id']}). A waiver stands in for a missing QA result, not a failed one: fix "
                                "it and push, then ask QA again.")
     pr = matched
-    if any(w["head"] == head and w["step"] == QA_STEP for w in waivers(c, row)):
+    if any(w["head"] == head and w["step"] in (current, *(s["name"] for s in qa_steps)) for w in waivers(c, row)):
         _refuse(c, actor, row, f"QA is already waived for {head[:12]} on this ticket.", "duplicate")
-    record = {"head": head, "step": QA_STEP, "pr": pr["url"]}
+    record = {"head": head, "step": current, "pr": pr["url"]}
     H._task_event(c, row["id"], actor, FIELD, None, json.dumps(record, sort_keys=True), reason)
     if row["owner"] != actor:
         H._wake(c, row, row["owner"], f"{H.actor_id(actor)} waived QA for {pr['url']} at head {head}: {reason}\n\n"

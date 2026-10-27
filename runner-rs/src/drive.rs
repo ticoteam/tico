@@ -119,6 +119,7 @@ impl Runner {
         let (mut limited, mut capacity, mut retryable, mut acted, mut complete) = (false, false, false, false, false);
         let mut last_text = String::new();
         let mut in_text_delta = false;
+        let mut continues = false;
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -179,17 +180,17 @@ impl Runner {
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: false });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: false });
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
             }
             if yielding.is_some_and(|by| Instant::now() >= by) {
                 // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -211,7 +212,7 @@ impl Runner {
                     let text = answer(&earlier, &last_text);
                     goal.cut = Some(Drove { outcome: "interrupted".into(),
                         reply: if text.is_empty() { "Run time limit reached before a final answer. Check the task for its hand-off note and the worktree for unfinished work.".into() } else { text },
-                        tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn: turn.clone(), yielded: false });
+                        tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn: turn.clone(), yielded: false });
                 }
                 return Err(Fail::runtime(why));
             }
@@ -358,8 +359,9 @@ impl Runner {
                     capacity = limited && hosts::is_capacity(&error);
                     if capacity && acted {
                         // A busy model after the bot acted is not a turn that never ran: no fallback or replay may
-                        // repeat what it did, so it ends as a failed run saved for review.
-                        (limited, capacity) = (false, false);
+                        // repeat what it did. Only this same thread, which knows what it did, may take the rest
+                        // (`continues`); without it the run ends as a failed run saved for review.
+                        (limited, capacity, continues) = (false, false, true);
                     }
                     // A sign-in the runtime could not renew refuses the turn before it starts, so the job can go
                     // back in the queue; `acted` guards a token that died after the bot had done something.
@@ -497,7 +499,7 @@ impl Runner {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
         let yielded = yielding.is_some() && outcome != "failed";
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, capacity, retryable, turn, yielded })
+        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, acted, capacity, continues, retryable, turn, yielded })
     }
 }
 
@@ -623,6 +625,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_model_at_capacity_is_a_limit_before_the_bot_acts_and_a_continuation_after() {
+        for acted in [false, true] {
+            let (url, _seen) = lapsed_hub().await;
+            let (runner, dir) = runner_at(&url);
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
+            if acted {
+                tx.send(json!({"kind": "message", "thread_id": "th-cap", "turn_id": "turn-1", "text": "Sent the Acme invoice", "final": false})).unwrap();
+            }
+            tx.send(json!({"kind": "turn_failed", "thread_id": "th-cap", "turn_id": "turn-1", "limit": true,
+                           "error": "Selected model is at capacity. Please try a different model."})).unwrap();
+            let f = flags(false);
+            let drove = drive_turn(&runner, &host, &mut rx, &f, "th-cap").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+            assert_eq!(drove.outcome, "failed");
+            // Before it acted the short capacity hold and a fresh retry or fallback are safe; after, only its thread.
+            assert_eq!((drove.limited, drove.capacity, drove.continues), (!acted, !acted, acted), "acted: {acted}");
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
     async fn only_an_acknowledged_interruption_records_the_terminal_recovery_receipt() {
         for status in ["interrupted", "completed"] {
             let (url, sent) = lapsed_hub().await;
@@ -705,6 +728,8 @@ mod tests {
         let cut = goal.cut.unwrap();
         assert_eq!(cut.reply, format!("Saved {}", redactor.scrub_text("synthetic-secret")));
         assert_eq!(cut.tokens["input"], 4);
+        assert!(cut.acted, "timeout settlement preserves the model activity fence");
+        assert!(!cut.continues, "a time limit is not a model-capacity continuation");
         assert!(!cut.reply.contains("Old progress") && !cut.reply.contains("private reasoning"));
         std::fs::remove_dir_all(dir).ok();
     }

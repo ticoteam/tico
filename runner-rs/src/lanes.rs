@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::util::text_of;
 
-pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY];
+pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
@@ -103,7 +103,14 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
     if detail.contains("capabilities") {
-        for name in [crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
+        // Pydantic names the rejected element: preserve every other negotiated capability on rollback.
+        if let Some(index) = regex::Regex::new(r"capabilities[.\[]([0-9]+)").ok()?.captures(detail)
+            .and_then(|m| m[1].parse::<usize>().ok()) {
+            if let Some(name) = caps.get(index) {
+                if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
+            }
+        }
+        for name in ["capacity_continue_v1", "source_continue_v1", crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
             if caps.iter().any(|c| c == name) {
                 return Some(name.into());
             }
@@ -171,6 +178,10 @@ mod tests {
         let both = json!({"capabilities": ["task_lanes_v2", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY]});
         assert!(CAPABILITIES.contains(&crate::login::KEYS_CAPABILITY));
         assert_eq!(refused_field("body.capabilities.2: Input should be 'task_lanes_v2'", &both).as_deref(), Some(crate::login::KEYS_CAPABILITY));
+        // A server from before capacity continuation refuses that capability first, not an older one it accepts.
+        let all = json!({"capabilities": CAPABILITIES});
+        assert_eq!(refused_field("body.capabilities.3: Input should be 'task_lanes_v2'", &all).as_deref(), Some("capacity_continue_v1"));
+        assert_eq!(refused_field("body.capabilities.4: Input should be 'capacity_continue_v1'", &all).as_deref(), Some("source_continue_v1"));
     }
 
     #[test]

@@ -230,7 +230,26 @@ def party_sql(column, value, bot, viewer):
     return f"{column}=?", [value]
 
 
-def tab_sql(tab, bot, viewer):
+def bot_wait_sql(visible_sql):
+    """A bot wait uses the same readable, ordered blockers as the task's displayed wait line.
+
+    Person waits/questions and gate/worktree holds keep their own meaning, even with a bot blocker.
+    Never infer a bot from waiting_on: that column stores people only.
+    """
+    blockers = ("SELECT b.owner FROM task_relations r JOIN tasks b ON b.id=r.from_task "
+                "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
+                f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
+    return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
+            "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
+            f"AND ({blockers} ORDER BY r.created,r.rowid LIMIT 1) LIKE 'bot:%' "
+            f"AND NOT EXISTS ({blockers} AND b.owner LIKE 'human:%') "
+            "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE m.conversation_id=tasks.conversation_id AND {H.MESSAGE_TASK_SQL}=tasks.id "
+            f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
+            "AND m.to_actor LIKE 'human:%' AND coalesce(m.body,'')!='')")
+
+
+def tab_sql(tab, bot, viewer, visible_sql="1"):
     """A filter's WHERE over the bot's tasks: every row, then finished tasks only for the window it names (two weeks
     when it names none) and never a routine's finished runs."""
     where, args, window = ["id IN (SELECT id FROM tasks WHERE owner=? UNION SELECT id FROM tasks WHERE requester=?)"], \
@@ -253,7 +272,7 @@ def tab_sql(tab, bot, viewer):
         elif field == "waiting_on":
             part = {"any": ("status='waiting'", []),
                     "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),
-                    "bot": ("status='waiting' AND waiting_on LIKE 'bot:%'", []),
+                    "bot": (bot_wait_sql(visible_sql), []),
                     "me": ("status='waiting' AND waiting_on=?", [viewer]),
                     "not_me": ("status='waiting' AND coalesce(waiting_on,'')!=?", [viewer])}[value]
         elif field == "created_within":
@@ -323,7 +342,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
                 key = layout_tab.get("builtin") or "c" + str(at)
                 if key == "done" or tab and tab != key:
                     continue
-                where, args = tab_sql(layout_tab, bot, who.actor)
+                where, args = tab_sql(layout_tab, bot, who.actor, visible)
                 where = f"({visible}) AND {where}"
                 count = c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
                 page, page_args = where, list(args)

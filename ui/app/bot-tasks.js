@@ -342,7 +342,7 @@ document.addEventListener('click', async ev => {
 });
 // What a blocked task waits on: the person or bot it names, else the first line of its note.
 function botTaskWaitsOn(t) {
-  if (t.blocked_since) return taskBlockedLine(t);
+  if (taskBotWait(t) || t.blocked_since) return taskWaitLine(t);
   if (t.waiting_on) return `Waits on ${actorPerson(t.waiting_on) === S.me?.id ? 'you' : actorLabel(t.waiting_on)}`;
   const line = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean);
   return line ? (line.length > 140 ? line.slice(0, 139) + '…' : line) : 'Waits on: not said';

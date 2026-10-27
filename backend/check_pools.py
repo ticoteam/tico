@@ -1,11 +1,14 @@
-"""Check pools: the bots that may do a check step (Review 1, Review 2, In QA, Post Release QA), set on the step in
-Settings > Tasks, and how Tico gives a ticket's check to one of them (Dev 534 A).
+"""Check pools: the bots that may do a check step (a step whose flow names its `check` kind: Review 1, Review 2, In QA
+and Post Release QA on the Dev board), set on the step in Settings > Tasks, and how Tico gives a ticket's check to
+one of them (Dev 534 A).
 
 When a ticket enters a step with a pool and has no open check there for its pull request head, Tico files the check
 (`Review 1: PR #n`, the head recorded as any check's is: review_gate.remember_heads) and gives it to the least busy
 eligible member: other model company first, then fewest open checks, then longest idle. Eligible means active and
-online, not paused or held, under the step's limit of open checks, and on Review 2 not Review 1's bot. Model company
-is a preference, never a requirement. The
+online, not paused or held, under the step's limit of open checks, and on a later review step not the bot of an
+earlier one (Review 2 is never Review 1's bot). For a review, model company
+is a preference, never a requirement. A QA bot known to run on a model company the builder builds on is never given
+the ticket's QA: it declines the build, so the check waits for a QA bot of another company (Dev 646). The
 check is filed as the ticket's owner would file it, so the gate, the one-check-per-head rule, the reviewer's wake and
 the verdict's way back to the builder are the ones a builder's own request gets.
 
@@ -25,9 +28,6 @@ DEFAULT_LIMIT = 2
 MAX_LIMIT = 20
 ONLINE_MINUTES = 5          # a computer that has not been seen for this long is offline
 HELD = ("paused", "quarantined", "limited", "crashed")     # bot_status states that take no new check
-REVIEW_TWO = "Review 2"
-# The title a check step's request starts with; any other step with a pool uses its own name.
-TITLE = {"In QA": "QA"}
 # The pools Head of Engineering proposed (spec dev-ticket-flow.md, question 3), given once to each Dev tickets type,
 # with only the bots the company has. A person changes them on the step.
 SEED = {
@@ -37,8 +37,18 @@ SEED = {
     "Post Release QA": ("qa-engineer-copy",),
 }
 SEEDED = "check_pools.seeded"
-# Any check request under a ticket, whichever step filed it: what counts toward a checker's limit.
-CHECK_TITLE = re.compile(r"^(?:Review [12]|QA|Post Release QA|Security)(?:\b|:)", re.I)
+# A Security check is asked for by title; it is no step of a board.
+SECURITY = re.compile(r"^Security(?:\b|:)", re.I)
+
+
+def is_security(title):
+    return bool(SECURITY.match(str(title or "").strip()))
+
+
+def is_check_title(c, ticket, title):
+    """Any check request under a ticket, whichever step filed it: what counts toward a checker's limit."""
+    from . import step_flow
+    return is_security(title) or step_flow.is_kind(c, ticket, str(title or "").strip())
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS check_waits(
@@ -66,13 +76,12 @@ def capture_attempt(c, turn_id):
     turn = c.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
     check = H.task(c, turn["task_id"]) if turn and turn["task_id"] else None
     from . import step_flow
-    if not check or not (CHECK_TITLE.match(str(check.get("title") or "").strip()) or step_flow.check_step(c, check)):
+    from . import task_relations as TR
+    ticket_id = TR.parent_of(c, check["id"]) if check else None
+    if not check or not ticket_id or not (is_check_title(c, H.task(c, ticket_id), check.get("title"))
+                                          or step_flow.check_step(c, check)):
         return None
     finished_owner = check.get("owner")
-    from . import task_relations as TR
-    ticket_id = TR.parent_of(c, check["id"])
-    if not ticket_id:
-        return None
     head = str(check.get("verdict_head") or "").lower()
     if not head:
         event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
@@ -179,17 +188,20 @@ def pool(c, step_id):
     return dict(step), found, int(step["check_limit"] or DEFAULT_LIMIT)
 
 
-def kind(step_name):
-    return TITLE.get(step_name, step_name)
+def kind(step):
+    """The title a check step's requests start with (backend/step_flow.label)."""
+    from . import step_flow
+    return step_flow.label(step)
 
 
 # ----------------------------------------------------------------------------------------------- who may take it
 def open_checks(c, slug):
     """The check requests this bot holds open: subtasks titled as a check, on any ticket."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    rows = c.execute(f"SELECT t.title FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+    rows = c.execute(f"SELECT t.title, p.type_id FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+                     f"JOIN tasks p ON p.id=r.to_task "
                      f"WHERE t.owner=? AND t.status IN ({marks})", ("bot:" + slug, *H.ACTIVE_STATUSES)).fetchall()
-    return sum(1 for (title,) in rows if CHECK_TITLE.match(str(title or "").strip()))
+    return sum(1 for title, type_id in rows if is_check_title(c, {"type_id": type_id}, title))
 
 
 def online(c, slug):
@@ -220,9 +232,10 @@ def maker(c, slug):
 RECENT_TURNS = 3
 
 
-def makers(c, slug):
+def makers(c, slug, known_only=False):
     """Every model company a checker may run on: its own model, and what its last few runs actually ran on (a bot whose
-    model is not signed in runs on its fallback, which is the company that would do the check)."""
+    model is not signed in runs on its fallback, which is the company that would do the check). A run with an unknown
+    segment makes the answer empty, or with `known_only` adds nothing, leaving what is known."""
     from .usage_records import ran_on
     turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
                                      (slug, RECENT_TURNS))]
@@ -230,10 +243,19 @@ def makers(c, slug):
     found = set()
     for run in recent:
         segments = run["segments"]
-        if not segments or any(not segment.get("family") for segment in segments):
+        if not known_only and (not segments or any(not segment.get("family") for segment in segments)):
             return set()
-        found.update(segment["family"] for segment in segments)
+        found.update(segment["family"] for segment in segments if segment.get("family"))
     return (found | {maker(c, slug)}) - {""}
+
+
+def builder_makers(c, ticket):
+    """The model companies the ticket's builder is known to build on: what its runs on the ticket ran on, and its
+    configured model's, so a run with no usage record leaves the rest known."""
+    from .check_independence import _executed
+    built, _ = _executed(c, ticket["id"])
+    owner = ticket.get("owner") or ""
+    return (set(built) | ({maker(c, H.actor_id(owner))} if H.is_bot(owner) else set())) - {""}
 
 
 def candidate_details(c, slugs):
@@ -274,24 +296,34 @@ def candidate_details(c, slugs):
     return out
 
 
-def _first_reviewers(c, ticket):
+def _earlier_reviewers(c, ticket, step):
+    """The bots that did a review step of the ticket's board ahead of `step` (Review 1's bot for Review 2)."""
+    from . import step_flow
     from . import task_relations as TR
+    before = {s["id"] for s in step_flow.reviews_before(c, step)} if step_flow.check_kind(step) == "review" else set()
     out = set()
-    for child_id in TR.child_ids(c, ticket["id"]):
+    for child_id in TR.child_ids(c, ticket["id"]) if before else ():
         child = H.task(c, child_id)
-        if child and re.match(r"^Review 1(?:\b|:)", str(child.get("title") or "").strip(), re.I) and H.is_bot(child["owner"]):
+        found = step_flow.child_check(c, child, ticket) if child else None
+        if found and found["id"] in before and H.is_bot(child["owner"]):
             out.add(H.actor_id(child["owner"]))
     return out
 
 
 def ranked(c, ticket, step, slugs, limit, exclude=()):
     """(free members best first, why none is) for this ticket's check at `step`. Best is fewest open checks, then the
-    longest idle (no turn yet counts as longest), then by name."""
+    longest idle (no turn yet counts as longest), then by name. A QA bot known to run on a model company the builder
+    builds on is never free for that ticket: it declines the build (Dev 646), so the check waits for another QA bot."""
+    from . import step_flow
     from .check_independence import assess
-    excluded = set(exclude) | (_first_reviewers(c, ticket) if step["name"] == REVIEW_TWO else set())
+    excluded = set(exclude) | _earlier_reviewers(c, ticket, step)
+    builder = builder_makers(c, ticket) if step_flow.check_kind(step) == "qa" else set()
     free, why = [], set()
     for slug in slugs:
         if slug in excluded or "bot:" + slug == ticket["owner"]:
+            continue
+        if builder and makers(c, slug, known_only=True) & builder:
+            why.add("family")
             continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
@@ -311,10 +343,14 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         reason = "every reviewer in the pool is at its limit of open checks"
     elif "offline" in why:
         reason = "no reviewer in the pool is online"
+    elif "family" in why:
+        reason = "every QA bot in the pool runs on the builder's model company"
     elif slugs:
         reason = "no reviewer in the pool is eligible for this check"
     else:
         reason = "the step's pool has no reviewers"
+    if "family" in why and ("busy" in why or "offline" in why):
+        reason += "; the rest run on the builder's model company"
     return [], reason
 
 
@@ -322,8 +358,8 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
 def _prs(c, ticket, step):
     """The pull requests a check at this step judges: the open ones, and after the merge (Post Release QA) the
     merged ones too."""
-    from . import review_gate
-    if step["status"] in ("done", "closed") or step["name"] == "Post Release QA":
+    from . import review_gate, step_flow
+    if step["status"] in ("done", "closed") or step_flow.check_kind(step) == "release_qa":
         return [p for p in H.task_links(c, ticket["id"]) if p["kind"] == "pr" and p.get("state") != "closed"]
     return review_gate.links(c, ticket)
 
@@ -341,19 +377,19 @@ def _heads(prs, snapshots):
 
 def _title(step, prs):
     numbers = [f"#{p['number']}" for p in prs if p.get("number")]
-    return f"{kind(step['name'])}: PR {', '.join(numbers)}" if numbers else f"{kind(step['name'])}: {step['name']}"
+    return f"{kind(step)}: PR {', '.join(numbers)}" if numbers else f"{kind(step)}: {step['name']}"
 
 
 def has_open_check(c, ticket, step, heads):
     """The open check request on this ticket for this step's kind and head (or an unknown head), else None."""
+    from . import step_flow
     from . import task_relations as TR
-    want = kind(step["name"]).lower()
     for child_id in TR.child_ids(c, ticket["id"]):
         child = H.task(c, child_id)
         if not child or child["status"] not in H.ACTIVE_STATUSES:
             continue
-        title = str(child.get("title") or "").strip().lower()
-        if not (title == want or title.startswith(want + ":") or title.startswith(want + " ")):
+        found = step_flow.child_check(c, child, ticket)
+        if not found or found["id"] != step["id"]:
             continue
         seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
                          "ORDER BY ts DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
@@ -364,24 +400,26 @@ def has_open_check(c, ticket, step, heads):
     return None
 
 
-def waiting(c, ticket_id, title=None):
-    """The ticket's open check waits (for one kind of check when `title` is given), oldest first."""
+def waiting(c, ticket_id, step_id=None):
+    """The ticket's open check waits (for one check step when `step_id` is given), oldest first."""
     if not _ready(c) or not c.execute("SELECT 1 FROM sqlite_master WHERE name='check_waits'").fetchone():
         return []
     rows = [dict(r) for r in c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting' "
                                        "ORDER BY created,id", (ticket_id,))]
-    if title is not None:
-        rows = [r for r in rows if r["title"].split(":")[0].strip().lower() == str(title).split(":")[0].strip().lower()]
+    if step_id is not None:
+        rows = [r for r in rows if r["step_id"] == step_id]
     return rows
 
 
 def for_task(c, ticket_id):
     """A ticket's waiting checks, for its page."""
     out = []
+    from . import step_flow
     for r in waiting(c, ticket_id):
-        step = c.execute("SELECT name FROM task_steps WHERE id=?", (r["step_id"],)).fetchone()
-        name = step[0] if step else ""
-        label = "Waiting for QA" if "QA" in kind(name) else "Waiting for a reviewer"
+        step = step_flow.step(c, r["step_id"])
+        name = step["name"] if step else ""
+        qa = step_flow.check_kind(step) in ("qa", "release_qa") if step else False
+        label = "Waiting for QA" if qa else "Waiting for a reviewer"
         out.append({"id": r["id"], "step": name, "title": r["title"], "label": label, "reason": r["reason"],
                     "since": r["created"], "heads": [h for h in r["heads"].split(",") if h]})
     return out
@@ -396,7 +434,7 @@ def _drop(c, ticket_id, keep_step=None, why="the ticket moved on"):
 def _file(c, ticket, step, slug, title, heads, snapshots, why):
     """File the check to `slug` as the ticket's owner would; the child, or None when a rule refused it (the refusal is
     rolled back and the check keeps waiting)."""
-    body = (f"{kind(step['name'])} of {title.split(':', 1)[-1].strip()}"
+    body = (f"{kind(step)} of {title.split(':', 1)[-1].strip()}"
             + (f" at head {', '.join(heads)}" if heads else "")
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
     c.execute("SAVEPOINT check_pool_file")
@@ -532,9 +570,8 @@ def _all_waiting(c):
 
 def freed(c, row):
     """A check request left the board (done, declined or closed): its bot takes the oldest waiting check it may."""
-    if not H.is_bot(row.get("owner")) or not CHECK_TITLE.match(str(row.get("title") or "").strip()):
-        return None
-    if not H.TR.parent_of(c, row["id"]):
+    parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner")) else None
+    if not parent or not is_check_title(c, H.task(c, parent), row.get("title")):
         return None
     if c.execute("SELECT 1 FROM turns WHERE task_id=? AND finished IS NULL LIMIT 1", (row["id"],)).fetchone():
         return None

@@ -61,6 +61,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on PERSON]          with --status waiting: the person it waits on (their Needs you);
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
+                    [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
+                                           blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
     hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
                                            wait on a task, a PR merging or a release; one wake when it happens
@@ -117,7 +119,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
-                                           set a goal; a parent is optional. With one, whoever owns the parent gives its first colour
+                                           set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
     hub goal status <id> auto              let the CEO Bot set the colour again (ends a colour set by hand)
@@ -257,9 +259,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
     hub settings show <key> [--bot B|--computer C|--person P|--id I]
                                            its value, who may change it and the link to its card
-    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I]
-                                           change it as yourself (BotOps: as the person who asked; a confirm one is
-                                           their Confirm card, a person-only one says why and links the card)
+    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I] [--on-behalf-of turn]
+                                           change it as yourself (BotOps, the Assistant: as the person who asked; a
+                                           confirm one is their Confirm card, a person-only one says why and links the
+                                           card; the Assistant cites their words for a direct one)
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -357,7 +360,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            read or set a bot's runs per hour and per day (0 no limit, default follows the
                                            team), or release it after Tico stopped it
     hub bot release <bot>                  release a bot Tico stopped for failed runs or too many runs
-    hub bot profile <bot> [doer|reviewer|lead|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
+    hub bot profile <bot> [doer|reviewer|lead|manager|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
                                            read or set what wakes a bot and which tasks it takes (--sweeps/--pulls/--takes
                                            are for custom; --confirm-drop-rules when leaving custom deletes its own rules)
     hub bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
@@ -941,6 +944,9 @@ def parser():
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
     s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
     s.add_argument("--private", action="store_true", default=None, help="only requester and assignee may read")
+    s.add_argument("--from-private", dest="from_private", action="store_true",
+                   help="from a run on your private task: a company-visible task for a bot, in your own words (no "
+                        "12 words copied from the private work, no secret-shaped value, no file or link of it)")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
@@ -1047,7 +1053,9 @@ def parser():
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it. "
                         "--note is then your ask to them: one or two plain sentences saying what you need and what "
-                        "happens after, with no ids, hashes, file paths or tool names")
+                        "happens after, at most 40 words, with no ids, hashes, file paths or tool names (\"PR #1555\" is "
+                        "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
+                        "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")
@@ -1289,7 +1297,7 @@ def parser():
     s = goal.add_parser("show")
     s.add_argument("id")
     s.set_defaults(fn="goal show")
-    s = goal.add_parser("create", help="set a goal; a parent is optional, and whoever owns it gives the first colour")
+    s = goal.add_parser("create", help="set a goal; a parent is optional, and it starts with no colour")
     s.add_argument("--owner", required=True, help="me, a bot slug, or a person id (company: a company goal, the owner only)")
     s.add_argument("--title", required=True)
     s.add_argument("--parent", help="the goal this one supports, if any; not needed")
@@ -1897,11 +1905,12 @@ def parser():
     s.add_argument("words")
     s.set_defaults(fn="settings find")
     for leaf, text in (("show", "one setting: its value, who may change it and its card"),
-                       ("set", "change one setting as yourself, or BotOps as the person who asked")):
+                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked")):
         s = catalogue.add_parser(leaf, help=text)
         s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
         if leaf == "set":
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
+            s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
         target = s.add_mutually_exclusive_group()
         target.add_argument("--bot", help="the bot, for a setting set per bot")
         target.add_argument("--computer", help="the computer, for a setting set per computer")
@@ -1980,7 +1989,9 @@ def parser():
     s.add_argument("--events", nargs="+")
     s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int)
     s.add_argument("--allow-http", dest="allow_http", action=argparse.BooleanOptionalAction, default=None)
-    s.add_argument("--expected-revision", dest="expected_revision", type=int)
+    s.add_argument("--expected-revision", dest="expected_revision", type=int, help="the revision you read; needed with --url")
+    s.add_argument("--credentials", choices=("keep", "clear"),
+                   help="a new address for another destination: keep sends the saved secret headers there, clear removes them")
     s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
     s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
     s.add_argument("--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)")
@@ -2038,7 +2049,7 @@ def parser():
     s.set_defaults(fn="webhook example")
 
     s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
-                       "running, queued, held and dead jobs, and failed runs by cause")
+                       "running, queued, held and dead jobs, failed runs by cause, and the engineering manager's exceptions")
     s.add_argument("--type", help="task type id or name; default the engineering board")
     s.add_argument("--owner")
     s.add_argument("--label")
@@ -2393,7 +2404,7 @@ def parser():
     s.set_defaults(fn="bot budget")
     s = bot.add_parser("profile", help="read or set a bot's profile: what wakes it and which tasks it takes")
     s.add_argument("bot")
-    s.add_argument("profile", nargs="?", choices=["doer", "reviewer", "lead", "responder", "monitor", "custom"],
+    s.add_argument("profile", nargs="?", choices=["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"],
                    help="the profile to set; leave out to read the bot's and the choices")
     s.add_argument("--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)")
     s.add_argument("--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep")
@@ -2448,8 +2459,8 @@ def parser():
     modes = s.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true")
     modes.add_argument("--own", action="store_true")
-    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write|:write+actions|:write-actions]",
-                       help="+actions lets the bot run workflows there (Owner or admin)")
+    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
+                       help="+actions lets the bot run workflows there, +edit edit workflow files (Owner or admin)")
     s.set_defaults(fn="bot repos")
     repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
     s = repos.add_parser("list")

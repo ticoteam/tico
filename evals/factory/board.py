@@ -17,6 +17,7 @@ class Check:
     timeout_hours: float = 1.0      # an unanswered check is skipped after this long
     skip_tag: str | None = None     # a ticket with this tag skips the step (the skip is recorded)
     gate: bool = False              # entering needs green CI and a test receipt at the head
+    kind: str | None = None         # what the server's rules know the check as: "review", "qa" or "release_qa"
 
 
 @dataclass
@@ -79,15 +80,16 @@ def dev_board(qa=True, review_timeout=1.0):
         Step("On Deck", "open", assign="builder", backlog={"over": 10, "per": "step", "notify": ["manager"]}),
         Step("In Progress", "doing", work=True, next="Review 1"),
         Step("Review 1", "review", check=Check("reviewer", "Review 1 Fixes", "Review 1 Fixes",
-                                               timeout_hours=review_timeout, gate=True)),
+                                               timeout_hours=review_timeout, gate=True, kind="review")),
         Step("Review 1 Fixes", "doing", work=True, next="Review 2", wake_after_hours=2),
         Step("Review 2", "review", check=Check("reviewer", "Review 2 Fixes", "Review 2 Fixes",
                                                different_checker_from=("Review 1",), timeout_hours=review_timeout,
-                                               gate=True)),
+                                               gate=True, kind="review")),
         Step("Review 2 Fixes", "doing", work=True, next="In QA" if qa else MERGE, wake_after_hours=2),
     ]
     if qa:
-        steps += [Step("In QA", "review", check=Check("qa", MERGE, "QA Fixes", timeout_hours=2, skip_tag="skip-qa")),
+        steps += [Step("In QA", "review", check=Check("qa", MERGE, "QA Fixes", timeout_hours=2, skip_tag="skip-qa",
+                                                            kind="qa")),
                   Step("QA Fixes", "doing", work=True, next="In QA", wake_after_hours=2)]
     steps += [Step("Pending Release", "review", can_hold=False, merged=True, release=True),
               Step("Post Release QA", "review", can_hold=False, merged=True, release=True),
@@ -102,7 +104,8 @@ def design_board():
         Step("Inbox", "open", assign="builder"),
         Step("Design", "doing", work=True, next="Build"),
         Step("Build", "doing", work=True, next="Peer Check"),
-        Step("Peer Check", "review", check=Check("reviewer", MERGE, "Rework", timeout_hours=1.5)),
+        Step("Peer Check", "review", check=Check("reviewer", MERGE, "Rework", timeout_hours=1.5,
+                                                   kind="review")),
         Step("Rework", "doing", work=True, after_green="Peer Check", wake_after_hours=3),
         Step("Shipping", "review", can_hold=False, merged=True, release=True),
         Step("Live", "done", can_hold=False, merged=True),
@@ -122,6 +125,8 @@ def flows(board, bots):
                         on_fail=s.check.other, timeout_hours=s.check.timeout_hours, gate=s.check.gate)
             if s.check.skip_tag:
                 flow["skip_tag"] = s.check.skip_tag
+            if s.check.kind:
+                flow["check"] = s.check.kind     # a step's flow is replaced when saved: without it the step is no check
         if s.after_green:
             flow["after_green"] = "merge" if s.after_green == MERGE else s.after_green
         if s.name == board.on_merge:

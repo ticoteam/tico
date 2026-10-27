@@ -10,6 +10,7 @@ import secrets
 import re
 from email.parser import BytesParser
 from email.policy import HTTP
+from types import SimpleNamespace
 
 from fastapi import Request
 
@@ -155,7 +156,9 @@ def guessed_type(name):
     return visuals.stored_type(mimetypes.guess_type(name)[0])
 
 
-async def form(request, model, blobs, store):
+async def form(request, model, blobs, store, admit=None):
+    """The request's fields and its files, the bytes stored unless this key's receipt replays. `admit(body)`, when
+    given, runs before any byte is stored: a request it refuses keeps nothing, in the database or in storage."""
     upload_key(request)
     raw = await request.body()
     content_type = request.headers.get("content-type", "application/json")
@@ -200,6 +203,8 @@ async def form(request, model, blobs, store):
         return body, uploads, prepared
     body, uploads, prepared = await asyncio.to_thread(decode)
     if await asyncio.to_thread(replay_upload, store, request, {**body.model_dump(), "uploads": prepared}) is None:
+        if admit is not None:
+            await asyncio.to_thread(admit, body)
         # Binary bytes become durable before the transaction publishes references to them.
         for upload in uploads:
             await asyncio.to_thread(blobs.put, upload["data"], upload["content_type"])
@@ -454,6 +459,32 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         human_only(request.state.identity)
         return write_upload(store, request, body, uploads, fn)
 
+    def chat_uploads(c, who, bot, message, uploads, titles):
+        """Store a person's uploads on their message to `bot`: blobs linked to it, and each one also a versioned file in
+        its conversation, so a picture, video or audio a person sends is a visual like a bot's (backend/visuals.py);
+        `id` and `url` stay the blob's for older clients. Returns the message as `who` reads it."""
+        items = [register(c, who, **upload) for upload in uploads]
+        for item in items:
+            c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+        for index, (item, upload) in enumerate(zip(items, uploads)):
+            cid = message["conversation_id"]
+            row, _, _ = files.add_version(
+                c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
+                identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
+                mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
+            title = titles[index] if index < len(titles) else ""
+            item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
+                        kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
+        if items:
+            refs = {**message["refs"], "attachments": items}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+        return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
+
+    # The owner's CEO Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
+    app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
+                                        attach=chat_uploads,
+                                        write=write)
+
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
         who = request.state.identity
@@ -461,25 +492,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         body, uploads = await form(request, M.ChatCreate, blobs, store)
         def work(c):
             message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs))
-            items = [register(c, who, **upload) for upload in uploads]
-            for item in items:
-                c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
-            for index, (item, upload) in enumerate(zip(items, uploads)):
-                # Each is also a versioned file in this conversation, so a picture, video or audio a person sends
-                # is a visual like a bot's (backend/visuals.py); `id` and `url` stay the blob's for older clients.
-                cid = message["conversation_id"]
-                row, _, _ = files.add_version(
-                    c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
-                    identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
-                    mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
-                title = body.titles[index] if index < len(body.titles) else ""
-                item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
-                            kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
-            if items:
-                refs = {**message["refs"], "attachments": items}
-                c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]}
+                    "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))
@@ -487,7 +501,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         who = request.state.identity
         human_only(who)
         body, uploads = await form(request, M.TaskCreate, blobs, store)
-        # A Review 1 or Review 2 child is gated on the PR's current head and checks, read afresh as in create_task.
+        # A child for a review step is gated on the PR's current head and checks, read afresh as in create_task.
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = (await asyncio.to_thread(review_preflight, who, parents[0], child_title=body.title.strip())
                      if parents else None)
@@ -550,7 +564,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
-        # A question titled Review 1 or Review 2 under a Dev ticket meets the review gate as a review child does:
+        # A question titled for a review step under a Dev ticket meets the review gate as a review child does:
         # on the PR's current head and checks read afresh, so all-green hosted checks count (create_task).
         title = body.title or question
         snapshots = review_preflight(who, body.parent, child_title=title.strip()) if body.parent else None
@@ -602,6 +616,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
                                or parent and H.task_private(c, parent))
                 readable_by(c, person, private, parent)
+        # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
+        # withdrawn as soon as it is asked and the task does not wait on the person.
+        from . import ask_ingest
+        ingest = ask_ingest.preflight(store, app.state.judge, who, body.on, title,
+                                      "\n\n".join(filter(None, (question, body.why, body.body))),
+                                      kind="task_question")
         # A question the asking rules refuse stores no bytes: the write below refuses it first.
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
@@ -653,13 +673,22 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
             if topic:
                 ask["topic"] = topic
+            gate = None
             if found:
                 said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
             else:
+                # Judged against the plate before the question is on it.
+                gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
                 said = H.task_comment(c, who.actor, tid, question, ask=ask)
-                H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
+                if gate:
+                    ask_ingest.record(c, ingest, gate, tid, said["id"])
+                if gate and gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, tid, said["id"])
+                else:
+                    H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
             return {"task": H.task(c, tid), "folded": bool(found),
-                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
+                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"]),
+                    **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         app.state.file_metadata.wake.set()
         return result

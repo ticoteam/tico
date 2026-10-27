@@ -139,7 +139,7 @@ Administration: write ([GitHub App](github-app.md#when-the-app-cannot-create-rep
 | Switch | Lets the bot create | Who turns it on | Who turns it off | Built in |
 | --- | --- | --- | --- | --- |
 | **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | BotOps, always |
-| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click | the Owner or an admin | every bot, until switched off |
+| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click (asked through BotOps, a Confirm card they tap) | the Owner or an admin | every bot, until switched off |
 
 Create product repositories is a wider reach than bot repositories, so:
 - **Every bot has it by default** (Chris, Oct 17), BotOps and bots made later included. The Owner or an admin switches it
@@ -402,6 +402,10 @@ on a Confirm card in their BotOps chat is, and it runs the stored request as the
   (`POST /api/v2/system/update`), a change to the rules **BotOps changes providers and limits without asking** or
   **BotOps manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
   never in BotOps' answer;
+- always, too: moving the Gateway connection or an outgoing webhook that holds secret headers to another service while
+  credentials are saved (the Gateway's default address included). The request says `credentials` `keep` or `clear`
+  (and a webhook its `expected_revision`), the card names the old and new scheme, host and port and the choice, and it
+  is stale at the tap once the revision, the address, the credentials or the person's rights changed;
 - providers (turning the Tico AI Gateway off or back to automatic included, the owner only) and raised limits when the
   owner turned **BotOps changes providers and limits without asking** off.
 
@@ -469,7 +473,7 @@ The commands (with MCP tools of the same names):
 | `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
 | `hub bot go-live <bot> [--computer C] [--routines-file F]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. `--help` shows the `--routines-file` shape (docs/routines.md) |
 | `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
-| `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
+| `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
 | `hub bot budget <bot> [--hour N\|default] [--day N\|default]`, `hub bot budget <bot> release`, `hub bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `hub team budget [--hour N] [--day N]` sets the team default (owner and admins) |
 | `hub bot scope <bot> <task>`, `hub bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
@@ -510,14 +514,16 @@ and never on a closed one. With none that takes it the bot stays as it is and th
 Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
 key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > People > Team rules),
 who may change it, its class, the route and body it writes, and a link that opens that card
-(`#/settings/<tab>/<card>`). A person, or BotOps for them, finds and changes a setting without knowing the route:
+(`#/settings/<tab>/<card>`). A person, or BotOps or their own Assistant for them, finds and changes a setting
+without knowing the route:
 
     hub settings find "sql"                                  key, name, where, class and who may change it
     hub settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
-    hub settings set release.times 09:30,17:00               change it with your rights (BotOps: the requester's)
+    hub settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
+                                                             person's)
 
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
-what `set` does when BotOps asks for a person:
+what `set` does when BotOps or the Assistant asks for a person (the same answer from either):
 
 - **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
   the privacy count): it changes at once, as that person, and the answer names the new value.
@@ -528,6 +534,12 @@ what `set` does when BotOps asks for a person:
   can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
 - **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
   answers with a one-line reason and the card's link.
+
+The Assistant's Confirm card is in the person's own Assistant chat (the owner's CEO Bot chat), and it may card every
+catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat
+(`--on-behalf-of turn`), as a task action does. Without it, or while the owner's "Assistant acts without asking" is off,
+a direct entry is a card too. A card or a cited write from the Assistant is exactly one entry's body: two settings at
+once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
 The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write

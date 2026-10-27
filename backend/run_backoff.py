@@ -107,9 +107,22 @@ def classify(c, aid, body, now=None):
     (login_holds.after_turn) until that reset; the error events that show it are marked as limit notices, as a
     current runner marks them. Answers the kind of failure: USAGE_LIMIT, PROMPT_TOO_LONG or None."""
     now = now or H.now()
-    if body.limited or body.fallback or body.primary_limited:
+    if body.limited:
         return USAGE_LIMIT if body.limited else None   # the runner already read its limits (and any fallback's) itself
-    found = [t for t in texts(c, aid, body) if is_limit(t, now)]
+    candidates = texts(c, aid, body)
+    if body.fallback:
+        rows = []
+        for event in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
+            payload = json.loads(event['payload_json'])
+            text = payload.get('error') or payload.get('text') or ''
+            if event['kind'] == 'diagnostic' and login_holds.HOP_RE.search(text):
+                rows = []
+            elif event['kind'] == 'error':
+                rows.append(text)
+        candidates = [*rows, body.text if len(body.text or '') <= SUMMARY_CHARS else '']
+    elif body.primary_limited:
+        return None
+    found = [t for t in candidates if is_limit(t, now)]
     if found:
         body.limited = True
         if not body.limit_resets_at:

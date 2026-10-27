@@ -66,9 +66,12 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
+        # Check summaries enter support reports; private refusal context stays on the bot's display row.
+        why = ("Quarantined: queued work waits for the quarantine to clear."
+               if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
                       "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {row['why']}",
+                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {why}",
                       "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
@@ -525,7 +528,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
     from . import org_turns
-    company_stopped = settings and org_turns.snapshot(c, settings)['at_stop']
+    # Admission is enough for the company-stop gate: a full snapshot classifies every queued bot and held the
+    # writer for seconds on a live install. Detailed wait counts stay on the company-turns check below.
+    company_stopped = settings and org_turns.admission(c)['at_stop']
     busy, running, turns = set(), {}, {}
     for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
@@ -533,9 +538,10 @@ def _waiting(c, online_ids, settings=None, limits=None):
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
-    from .execution import turns_here
+    from . import start_places
+    held_now = start_places.held_totals(c)
     full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if sum(turns_here(c, r["id"]).values()) >= (r["capacity"] or 1)}
+            if held_now.get(r["id"], 0) >= (r["capacity"] or 1)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
@@ -723,7 +729,6 @@ HELD = {
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
-    "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -814,6 +819,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         elif reason == "updating":
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
+        elif reason == "quarantined":
+            from .quarantine_display import explanation
+            text = explanation(c, row["bot"], who, auth)
+            fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
@@ -834,8 +843,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
                    | {"dead": row.get("dead", 0), "held": row.get("held", 0),
-                      "why": text[:320], "fix": fix if full else None,
-                      **({"queue_reasons": queue_reasons} if queue_reasons else {}),
+                       "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
+                       **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 
@@ -1020,6 +1029,30 @@ def _github_workflows(c, github):
                       "if this stays, check the installation's repository access and the organisation's Actions "
                       "policy on GitHub. Refused: " + ", ".join(refused[:3])
                       + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
+                      [_fix("Open GitHub settings", "#/integrations")])
+    return None
+
+
+def _github_workflow_edits(c, github):
+    """`_github_workflows` for write grants an Owner or admin let edit workflow files: their token carries Workflows:
+    write only once the installation has accepted it."""
+    from .repo_waits import permissions_url
+    from .repositories import workflows_refused, workflows_waiting
+    connected = bool(github and github.row(c))
+    if waiting := workflows_waiting(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "Bots can't edit workflow files yet", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: the GitHub App's "
+                      "Workflows permission is not Read and write on the installation. Set it in the App's "
+                      "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
+                      + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
+                      [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
+                       _fix("Open GitHub settings", "#/integrations")])
+    if refused := workflows_refused(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
+                      "token with Workflows: write although the installation reports it. Tico asks again after a "
+                      "minute; if this stays, check the installation's repository access on GitHub. Refused: "
+                      + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
                       [_fix("Open GitHub settings", "#/integrations")])
     return None
 
@@ -1493,7 +1526,9 @@ def view(c, who, settings, auth, github, config):
         from . import org_turns
         incident = org_turns.saved(c, org_turns.INCIDENT)
         if incident.get('opened_at'):
-            value = org_turns.snapshot(c, settings)
+            # in_use / warning / stop come from admission. The fixer's saved finding already holds the detailed
+            # queue classification; rebuilding a fleet snapshot on every Health poll is not needed here.
+            value = org_turns.admission(c)
             # The turn fixer's finding (backend/turn_fixer.py) once it has run: one per incident, rewritten in place.
             found = (incident.get('finding') or {}) if incident.get('active') else {}
             text = (found.get('text') or f"{value['in_use']} company turns in use; warning {value['warning']}, "
@@ -1884,13 +1919,21 @@ def view(c, who, settings, auth, github, config):
 
     # Successful model turns can still make no task progress. Infrastructure and failed-run
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    stalled = list(c.execute(
-        "SELECT id,title,number,owner,updated FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
+    # Waiting tasks can also escalate when held only by their own quiet subtasks.
+    stalled = [row for row in c.execute(
+        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
+        # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
+        "AND (status<>'waiting' OR NOT EXISTS (SELECT 1 FROM task_relations r "
+        "WHERE r.to_task=tasks.id AND r.kind='blocks' AND r.from_task IN "
+        f"(SELECT tasks.id FROM tasks WHERE status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+        f"AND NOT coalesce(({auth.task_sql(c, who)}),0)))) "
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
+        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated", H.ACTIVE_STATUSES)
+        if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated"]),
@@ -1941,6 +1984,8 @@ def view(c, who, settings, auth, github, config):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
             checks.append(workflows)
+        if edits := _github_workflow_edits(c, github):
+            checks.append(edits)
         slack = _slack(c)
         if slack:
             checks.append(slack)

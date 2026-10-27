@@ -197,13 +197,11 @@ class Link:
 
 def link_of(c, vault, settings):
     """The Link for the connected key, or None. A base the key may not be sent to is no link."""
-    if not GC.connected(c, settings):
-        return None
-    key = GC.key(c, vault, settings)
+    key, base, _ = GC.target(c, vault, settings)
     if not key:
         return None
     try:
-        base = G.safe_base(GC.url(c, settings))
+        base = G.safe_base(base)
     except ValueError:
         return None
     return Link(key, base, GC.key_id(c, settings))

@@ -8,10 +8,18 @@ from jwt.exceptions import InvalidKeyError
 
 from . import test_receipts
 
-REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
-# The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not one: QA
-# sends a ticket back to QA Fixes and on to Pending Release and Done (docs/software-factory.md).
-REVIEWER_CHILD = re.compile(r"^(?:Review [12]|Security)(?:\b|:)", re.I)
+
+
+def is_review(c, parent, title):
+    """A request titled for one of the parent board's review steps (backend/step_flow.titled)."""
+    from . import step_flow
+    return step_flow.is_kind(c, parent, str(title or "").strip(), "review")
+
+
+def check_of(c, parent, title):
+    """The check step a request with this title is for on the parent's board: one open request per check step."""
+    from . import step_flow
+    return step_flow.titled(c, (parent or {}).get("type_id"), str(title or "").strip()) if parent else None
 
 
 def reviewing(c, actor, row):
@@ -23,14 +31,14 @@ def reviewing(c, actor, row):
         return None
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
-        if child and child["owner"] == actor and REVIEWER_CHILD.match(str(child.get("title") or "").strip()):
+        # The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not
+        # one: QA sends a ticket back to its fixes step and on to the merge (docs/software-factory.md).
+        from .check_pools import is_security
+        if child and child["owner"] == actor and (is_review(c, row, child.get("title")) or is_security(child.get("title"))):
             return child
     return None
 
 
-# One open request per kind of check on a ticket: Review 1, Review 2, QA or Post Release QA (a Security check can be
-# asked again).
-ONE_OPEN = re.compile(r"^(Review [12]|QA|Post Release QA)(?:\b|:)", re.I)
 
 
 def heads(c, parent, snapshots=None):
@@ -52,13 +60,14 @@ def refuse_second(c, actor, parent, title, snapshots=None):
     second reviewer turn. A push gives a new head, and with it a new check."""
     from . import hubdb as H
     from . import task_relations as TR
-    kind = ONE_OPEN.match(str(title).strip())
-    if not kind:
+    step = check_of(c, parent, title)
+    if not step:
         return
-    kind = " ".join(kind[1].lower().split())
+    from . import step_flow
+    kind = step_flow.label(step)
     wanted = heads(c, parent, snapshots)
     from . import check_pools
-    for wait in check_pools.waiting(c, parent["id"], kind):
+    for wait in check_pools.waiting(c, parent["id"], step["id"]):
         judged = set(filter(None, wait["heads"].split(",")))
         if wanted and judged and not wanted & judged:
             continue
@@ -68,9 +77,8 @@ def refuse_second(c, actor, parent, title, snapshots=None):
                  "you need not file another.")
     for child_id in TR.child_ids(c, parent["id"]):
         other = H.task(c, child_id)
-        other_kind = ONE_OPEN.match(str(other.get("title") or "").strip())
-        if (not other_kind or " ".join(other_kind[1].lower().split()) != kind
-                or other["status"] not in H.ACTIVE_STATUSES):
+        other_step = check_of(c, parent, other.get("title"))
+        if not other_step or other_step["id"] != step["id"] or other["status"] not in H.ACTIVE_STATUSES:
             continue
         seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
                          "ORDER BY ts DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
@@ -79,7 +87,7 @@ def refuse_second(c, actor, parent, title, snapshots=None):
             continue
         who = H.actor_id(other["owner"])
         H.refuse(c, actor, "duplicate",
-                 f"{kind.title() if kind != 'qa' else 'QA'} is already open on this ticket"
+                 f"{kind} is already open on this ticket"
                  f"{' for this head' if wanted else ''}: task {other['id']}, with {who}. Wait for its verdict; "
                  "if the code changed, push the new head first, and if that check is no longer needed, close it.")
 
@@ -238,6 +246,10 @@ def snapshot(service, prs):
             cause = mint_failure(exc, repo)
             out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
                              "retryable": cause["retryable"], "auth": cause["auth"]}
+    if any(r.get("head_sha") and not r.get("error") for r in out.values()):
+        from . import source_outages
+        with service.store.transaction() as c:
+            source_outages.github_read(c, prs, out)
     return out
 
 
@@ -282,14 +294,16 @@ def evidence(c, row, actor, receipt_owner=None):
                 if author_cache[author]:
                     authors.add(author)
         return {**item, "messages": messages, "receipt_authors": sorted(authors)}
+    from . import step_flow
     result = collect(row)
     result["children"] = []
+    result["review_steps"] = [s["name"] for s in step_flow.checks(c, row.get("type_id"), "review")]
     from . import task_relations as TR
     for child_id in TR.child_ids(c, row["id"]):
         item = H.task(c, child_id)
-        if (REVIEW.match(item.get("title", "")) and H.task_private_readable(c, actor, item)
+        if (is_review(c, row, item.get("title")) and H.task_private_readable(c, actor, item)
                 and H.task_private_readable(c, row["owner"], item)):
-            result["children"].append(collect(item))
+            result["children"].append({**collect(item), "review_check": True})
     return result
 
 
@@ -388,7 +402,9 @@ def notify(c, actor, notice):
     """After refusal rollback, keep one Builder comment per ticket/head/check kind."""
     from . import hubdb as H
     row = H.task(c, notice["task"])
-    if row:
+    from . import move_retry
+    source_wait = not notice.get('local') and (move_retry.outage(notice.get('text')) or notice.get('problem_code'))
+    if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
         c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
@@ -406,4 +422,4 @@ def notify(c, actor, notice):
     # owner's queue reaches it reads a ticket the retry has already moved.
     H._write_message(c, H.KEEPER, row["owner"], notice["text"], conv, "say",
                      {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True),
-                      **({"quiet": True} if notice.get("temporary") else {})}, None, None)
+                      **({"quiet": True} if source_wait else {})}, None, None)

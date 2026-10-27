@@ -3,8 +3,9 @@
 A step's flow may say `assign: {"pool": [bot slugs], "slots": n}` (backend/step_flow.py). A ticket at that step that
 no bot of the pool owns yet goes, on each scheduler pass, to the pool bot with the fewest tickets in hand on that type
 (ties: the fewest open tickets of any kind, then the slug), when it has a free slot. A ticket in hand is one the bot
-owns past the assigning step and before the type's merged step: work, checks waiting, fixes. A bot that is paused,
-archived or out of slots takes nothing; the ticket waits for the next pass, oldest first.
+owns past the assigning step and before the type's merged step: work, checks waiting, fixes. Only active bots with
+free slots, completed onboarding and a profile that accepts the ticket take it; otherwise the ticket waits for
+the next pass, oldest first.
 
 The allocator only changes the owner; the owner moves the ticket on, and the step's own wake tells it."""
 from . import hubdb as H
@@ -37,17 +38,23 @@ def clean(c, actor, raw):
 
 def _available(c, slug):
     found = c.execute("SELECT coalesce(state,'') FROM bots WHERE slug=?", (slug,)).fetchone()
-    return bool(found) and found[0] not in ("archived", "paused")
+    return bool(found) and found[0] == "active" and not H._onboarding(c, slug)
+
+
+def held_between(c, type_id, assign_step):
+    """(after, before): a ticket is in its owner's hand at a step whose position is strictly between the assigning
+    step and the type's merged step."""
+    merged = F.merge_step(c, type_id)
+    return assign_step["position"], merged["position"] if merged else 10 ** 6
 
 
 def in_hand(c, slug, type_id, assign_step):
     """The bot's tickets on the type past the assigning step and before its merged step."""
-    merged = F.merge_step(c, type_id)
-    limit = merged["position"] if merged else 10 ** 6
+    after, before = held_between(c, type_id, assign_step)
     return c.execute(
         "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner=? AND t.type_id=? "
         f"AND t.status NOT IN ({','.join('?' * len(FINISHED))}) AND s.position>? AND s.position<?",
-        ("bot:" + slug, type_id, *FINISHED, assign_step["position"], limit)).fetchone()[0]
+        ("bot:" + slug, type_id, *FINISHED, after, before)).fetchone()[0]
 
 
 def _open(c, slug):
@@ -76,7 +83,9 @@ def allocate(c, at=None):
                 continue
             ticket = H.task(c, ticket_id)
             free = [(in_hand(c, s, step["type_id"], step), _open(c, s), s) for s in pool
-                    if H.bot_reads_task(c, "bot:" + s, ticket)]
+                    if H.bot_reads_task(c, "bot:" + s, ticket)
+                    and not H.task_taking_refusal(c, H.KEEPER, "bot:" + s, ticket["title"],
+                                                 H.TR.parent_of(c, ticket_id))]
             free = [f for f in free if f[0] < rule["slots"]]
             if not free:
                 continue

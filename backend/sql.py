@@ -412,6 +412,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "mail_messages": "1" if owner else "0",
         "mail_fts": "1" if owner else "0",
         "slack_posts": by_message if owner else "message_id IS NULL",
+        # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.
+        "read_index": "key IS NULL",
     }
     for table in ("bot_status", "bot_status_history"):
         rules[table] += " AND (task_id IS NULL OR " + by_task + ")"
@@ -433,14 +435,14 @@ def guarded(c, auth, who, inner, function, columns=None):
 
 
 # Per-request sets, each an indexed temp table only this request's views may read.
-SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers")
+SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers", "denied_reads")
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
 class Gates:
     """SQL that answers yes, without Python, for a row the privacy functions in backend/privacy_index.py allow.
 
-    A fast yes settles the row and anything else still asks the privacy function, so a
+    Each gate is `(fast OR privacy function)`: a fast yes skips the function and anything else still asks it, so a
     fast clause may only be narrower than the function, never wider. A clause reads small sets built once per request
     (the caller's denied private tasks, the rooms whose plain messages they may not read, the runs that carry a denied
     task) and allows a message only when every message its provenance reaches is settled by its own row: its parent
@@ -485,8 +487,8 @@ class Gates:
                   f"AND instr({refs},'live_meeting')=0 AND {once} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
         if not top:
-            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 ELSE ({checks} "
-                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0) END)")
+            return (f"(coalesce({refs},'') IN ('','{{}}') OR ({checks} "
+                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0))")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
         checks += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
                    f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
@@ -495,7 +497,7 @@ class Gates:
                    f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
                    f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
                    f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 ELSE ({checks}) END)"
+        return f"(coalesce({refs},'') IN ('','{{}}') OR ({checks}))"
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
@@ -556,13 +558,25 @@ def materialize(conn, index, tables, inner, function, private):
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     create("run_carriers", sorted(aid for tid, aid in conn.execute(
         "SELECT id,carried_by FROM main.tasks WHERE carried_by IS NOT NULL") if tid in index.denied))
+    # Settled history rows that touched one of the caller's denied tasks (backend/read_deps.py). It grows with the
+    # rows those tasks reach, a busy private room included: about 35 ms per 100,000 rows here, once per request.
+    create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
+                           f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
     message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
     attempt = function("attempt") + "(id)"
-    # OR does not guarantee skipping the UDF after a successful SQL gate. CASE
-    # guarantees that approved rows skip the recursive provenance function.
-    return {table: (predicate.replace(message, f"(CASE WHEN {gates.message()} THEN 1 ELSE {message} END)")
-                    .replace(attempt, f"({gates.attempt('source.id')} OR {attempt})"), hidden)
+
+    def settled(prefix, fast):
+        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
+        key = f"'{prefix}:'||source.id"
+        return (f"CASE WHEN {key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
+                f'(SELECT id FROM "{private("denied_reads")}") THEN 1 ELSE {fast} END')
+    # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
+    # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
+    return {table: (predicate.replace(message, function("settled_message") +
+                                      f"(id,conversation_id,refs_json,in_reply_to,{settled('m', gates.message())})")
+                    .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
+                    hidden)
             for table, (predicate, hidden) in tables.items()}
 
 
@@ -593,6 +607,19 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             def __init__(self):
                 self.statements = {}
 
+            # Provenance helpers share this request's snapshot cache through the restricted source wrapper.
+            @property
+            def read_cache(self):
+                return conn.read_cache
+
+            @property
+            def in_transaction(self):
+                return conn.in_transaction
+
+            @property
+            def total_changes(self):
+                return conn.total_changes
+
             def execute(self, statement, args=()):
                 source = self.statements.get(statement)
                 if source is None:
@@ -611,6 +638,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
+                     "settled_message": (5, lambda mid, cid, refs, reply, fast:
+                                         True if fast else index.message(mid, cid, refs, reply)),
+                     "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
         for name, (arity, fn) in functions.items():

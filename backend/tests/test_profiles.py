@@ -127,6 +127,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
     ("Verify the change", "Review 1", True),
     ("Verify the change", "Review 2", True),
     ("Verify the change", "In QA", True),
+    ("Verify the change", "Second opinion", True),       # a renamed review step: its flow says it is a check
     ("Review 1: legacy request", None, True),
     ("Review 2: legacy request", None, True),
     ("Security: legacy request", None, True),
@@ -140,8 +141,11 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
         parent = H.task_create(c, "bot:ops", "Build it", "x", "bot:cpo") if child else None
         if parent_step:
             # Synthetic step: no production task, factory gate or PR is involved.
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('qa-stage','general',?,99,'review')",
-                      (parent_step,))
+            kind = {"Post Release QA": "release_qa", "In QA": "qa", "Review 1": "review", "Review 2": "review",
+                    "Second opinion": "review"}.get(parent_step)
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json) "
+                      "VALUES('qa-stage','general',?,99,'review',?)",
+                      (parent_step, json.dumps({"check": kind}) if kind else None))
             c.execute("UPDATE tasks SET step_id='qa-stage' WHERE id=?", (parent["id"],))
         c.execute("DELETE FROM jobs")
         made = H.task_create(c, "bot:ops", title, "x", "bot:checker",

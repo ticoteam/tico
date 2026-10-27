@@ -1323,6 +1323,9 @@ PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `turns.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
+# The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
+# but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
+BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
 
 
 def private_task_write(fn):
@@ -1345,8 +1348,14 @@ def private_task_write(fn):
                             private_tasks_default(conn, actor) or private_tasks_default(conn, target))
                            or parent and task_private(conn, parent))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
+        from . import task_trigger_rules
         try:
-            return fn(*args, **kwargs)
+            with task_trigger_rules.pending(conn):
+                result = fn(*args, **kwargs)
+            # Actions may have changed the task after the original write completed.
+            if fn.__name__ in ('task_create', 'task_update', 'task_close') and isinstance(result, dict) and result.get('id'):
+                result = {**result, **(task(conn, result['id']) or {})}
+            return result
         except Refused as exc:
             exc.private = PRIVATE_WRITE.get()
             raise
@@ -1415,7 +1424,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
         context = {"what": context.get("what")}
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
            "detail_json": _dump({"detail": recorded, **({"context": context} if context else {}),
-                                 **({"task": task} if task else {})}), "severity": severity}
+                                 **({"task": task} if task else {}),
+                                 **({"bulk": BULK_CALL.get()} if BULK_CALL.get() else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
@@ -1590,6 +1600,11 @@ LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])"
 LINT_CURRENCY = "$£€¥"
 # A year after a few letters (FY2026, CY2025, ES2022) or a standard's number (ISO27001) names a thing, not a record.
 LINT_NAMED_NUMBER = re.compile(r"[A-Z]{1,4}-?(?:19|20)\d{2}|ISO-?\d+")
+# A pull request is public and a person can look it up, so a line put in front of them may name one, in exactly the
+# form "PR #1555". A bare "#1555" is still a reference number, also where it ends a sentence or follows a word
+# ("Merge #1555.", "PR#1555", "#1555/files").
+LINT_PR_REF = re.compile(r"(?<![\w#/.-])PR #\d+(?![\w#/-]|\.\w)")
+LINT_BARE_REF = re.compile(r"(?<![&#/.-])#\d{3,}(?!\w)")
 LINT_WAIT_WORDS = 40
 
 
@@ -1601,10 +1616,13 @@ def lint_waiting_note(note, person, asked=False):
     if not text:
         return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
     problems = []
-    # An amount ("$250000") is not a reference number. Only here: a title keeps LINT_IDENT as it is.
-    m = LINT_HEX_ID.search(text) or next((i for i in LINT_IDENT.finditer(text)
-                                          if not (i.start() and text[i.start() - 1] in LINT_CURRENCY)
-                                          and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None)
+    # An amount ("$250000") is not a reference number, nor is a pull request named "PR #1555". Only here: a title
+    # keeps LINT_IDENT as it is.
+    unref = LINT_PR_REF.sub("PR", text)
+    m = LINT_HEX_ID.search(unref) or next((i for i in LINT_IDENT.finditer(unref)
+                                           if not (i.start() and unref[i.start() - 1] in LINT_CURRENCY)
+                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None) \
+        or LINT_BARE_REF.search(unref)
     if m:
         problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
     n = len(text.split())
@@ -1638,14 +1656,19 @@ LINT_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[A-Z0-9])")
 LINT_ABBREV = re.compile(r"(?:\b(?:[A-Za-z]\.){2,}|\b(?:Mr|Mrs|Ms|Dr|Prof|St|vs|etc|Inc|Ltd|Co|Jr|Sr|No|approx|e\.g|i\.e|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.)$")
 
 
-def lint_sentences(text):
-    """How many sentences an ask has, not counting a stop after an abbreviation or initials as an end."""
+def ask_sentences(text):
+    """An ask's sentences, a stop after an abbreviation or initials not counting as an end."""
     parts, start = [], 0
     for m in LINT_SENTENCE_END.finditer(text):
         if not LINT_ABBREV.search(text[start:m.start()]):
             parts.append(text[start:m.start()])
             start = m.end()
-    return len([s for s in [*parts, text[start:]] if s.strip()])
+    return [" ".join(s.split()) for s in [*parts, text[start:]] if s.strip()]
+
+
+def lint_sentences(text):
+    """How many sentences an ask has, not counting a stop after an abbreviation or initials as an end."""
+    return len(ask_sentences(text))
 
 
 def lint_person_ask(text):
@@ -1664,6 +1687,85 @@ def lint_person_ask(text):
     return problems + lint_plain(text)
 
 
+# What a too-long ask is cut down to: the one sentence that asks for something, and the one after it that says what
+# happens then ("If yes, I'll ...", "Then ...", "I will ..."). The rest is the bot's context and goes under Details.
+# A sentence that answers the request ("If yes, ...") is the outcome over one that only opens like one ("Then the
+# runner failed."), wherever it comes after the request.
+LINT_IF_YES = re.compile(r"if (?:yes|so|approved|you (?:agree|approve|do|say yes))\b", re.I)
+# A matching opener can still decline the request ("If you do not approve", "If you agree not to merge").
+# Inspect only the condition: a negation in what the bot does afterward does not change the person's answer.
+LINT_NEGATIVE_CONDITION = re.compile(r"\b(?:no|not|never)\b|\b\w+n['’]t\b", re.I)
+LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|if (?:not|no)\b|then\b|once\b"
+                          r"|after (?:that|you|it)\b|i(?:'ll|\s+will|\s+can|\s+then)\b|we(?:'ll|\s+will)\b"
+                          r"|th(?:at|is) (?:lets|unblocks|means)\b)", re.I)
+LINT_REQUEST = re.compile(r"\b(?:please|(?:need|want|would like) you to|you (?:must|should|need to|have to))\b", re.I)
+# Words that open a condition or a time ("If yes", "Once approved", "After you approve"): the clause after one leads.
+LINT_LEAD_IN = {"if", "once", "after", "when", "whenever", "before", "as", "unless", "until", "since", "because",
+                "while", "assuming", "given"}
+
+
+def _asks_for_something(sentence):
+    """A question, an indirect request, or an imperative clause, including one after a condition."""
+    if sentence.rstrip("\"')] ").endswith("?"):
+        return True
+    # An outcome opener does not make the rest of its sentence safe to discard: "Once approved, please sign ..."
+    # still asks for a second decision. Treat possible requests conservatively rather than silently losing them.
+    if LINT_REQUEST.search(sentence):
+        return True
+
+    def first_word(clause):
+        clause = re.sub(r"^(?:(?:and|please|also|then)\s+)+", "", clause.strip(), flags=re.I)
+        return re.split(r"[\s,;:]+", clause, 1)[0].strip("\"'*_()").lower()
+
+    if not LINT_OUTCOME.match(sentence):
+        return any(first_word(clause) in LINT_VERBS for clause in re.split(r"[,;]\s*", sentence))
+    # An outcome lists what happens ("If yes, I'll sign it, send it and close this task."), so only the clause that
+    # leads each part, past its condition, can tell the person to do something ("Once approved, sign the contract.").
+    for part in sentence.split(";"):
+        for clause in part.split(","):
+            word = first_word(clause)
+            if word in LINT_VERBS:
+                return True
+            if word not in LINT_LEAD_IN:
+                break
+    return False
+
+
+def person_ask_rewrite(text):
+    """For an ask too long or with too many sentences: (rewrite, "") where the rewrite keeps its one request and what
+    happens after, in one or two plain sentences of at most LINT_ASK_WORDS words, or ("", repair) saying exactly what
+    to change when no shorter wording keeps the same decision. Deterministic, like lint_person_ask: the bot retries
+    once with the rewrite and puts the other sentences under Details, so nothing is lost or decided for it."""
+    sentences = ask_sentences(str(text or "").strip())
+    # Every question and every request counts: an ask that asks one thing and requests another is two decisions,
+    # and keeping only one of them would change what the person is asked.
+    asks = [i for i, s in enumerate(sentences) if _asks_for_something(s)]
+    if not asks:
+        return "", ("none of its sentences asks for anything: open it with the one question or request, "
+                    "then say what happens after")
+    if len(asks) > 1:
+        quoted = "; ".join(f'"{sentences[i]}"' for i in asks)
+        return "", (f"it asks {len(asks)} things ({quoted}): keep the one decision this ask is for in one sentence, "
+                    "ask any other separately, and put the reasons in the details")
+    i = asks[0]
+    after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
+    outcome = next((s for s in after if LINT_IF_YES.match(s)
+                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, 1)[0])),
+                   after[0] if after else None)
+    kept = [sentences[i], *([outcome] if outcome else [])]
+    rewrite = " ".join(kept)
+    n = len(rewrite.split())
+    if n > LINT_ASK_WORDS:
+        what = "its request and what happens after are" if outcome else "its request alone is"
+        return "", (f'{what} {n} words: shorten "{rewrite}" to at most {LINT_ASK_WORDS} words, keeping what you '
+                    "need and what happens after, and put the reasons in the details")
+    unclear = lint_plain(rewrite)
+    if unclear:
+        return "", (f'its request "{rewrite}" {"; ".join(unclear)}: say that in plain words and put the reference '
+                    "in the details")
+    return rewrite, ""
+
+
 # Error output a bot pasted: a traceback, an exception or error class name (bare or with its message), an exit code, an
 # HTTP error status. "an error in the invoice" is prose; "TypeError", "ValueError: bad date" and "HTTP 502" are the
 # bot's own record, so they go under Details.
@@ -1674,17 +1776,18 @@ LINT_ERROR = re.compile(r"\bTraceback\b|(?-i:\b[A-Z]\w*(?:Error|Exception)\b)|(?
 
 def lint_plain(text):
     """What in `text` belongs under Details, not in front of a person, empty when nothing does: an s3:// link, an id
-    or hash, a file path, a tool or field name, or error output. The part of the ask rules (lint_person_ask,
+    or hash (a pull request named "PR #1555" is neither), a file path, a tool or field name, or error output. The part of the ask rules (lint_person_ask,
     lint_question) that holds for every line a card shows above Details."""
     text = str(text or "").strip()
     problems = []
     m = LINT_S3.search(text)
     if m:
         problems.append(f'has an s3:// link: "{m.group(0)}"')
-    plain = LINT_S3.sub(" ", re.sub(r"https?://\S+", " ", text))
+    plain = LINT_PR_REF.sub("PR", LINT_S3.sub(" ", re.sub(r"https?://\S+", " ", text)))
     m = LINT_HEX_ID.search(plain) or next((i for i in LINT_IDENT.finditer(plain)
                                            if not (i.start() and plain[i.start() - 1] in LINT_CURRENCY)
-                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None)
+                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None) \
+        or LINT_BARE_REF.search(plain)
     if m:
         problems.append(f'has an id or hash: "{m.group(0)}"')
     m = LINT_PATH.search(plain)
@@ -1709,18 +1812,31 @@ def person_ask_of_body(body, title=""):
 
 
 def person_ask_refusal(person, text, where):
-    """What a refusal of this ask says, or "" when it passes: what failed, the rule and an example, so the bot fixes
-    it in one retry. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to them)."""
+    """What a refusal of this ask says, or "" when it passes: what failed, what to do about it in this same turn, the
+    rule and an example, so the bot fixes it in one retry. An ask refused for its length carries a rewrite to retry
+    with (person_ask_rewrite), or, when none keeps the decision, the exact repair: a blocker is never left unasked
+    for want of a shorter wording. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to
+    them)."""
+    text = str(text or "").strip()
     problems = lint_person_ask(text)
     if not problems:
         return ""
     name = actor_id(person)
     place = ("the waiting note (--note)" if where == "waiting"
              else "the first paragraph of the task body (--body)")
-    return (f"Your ask to {name} {'; '.join(problems)}. The rule: {place} is one or two plain sentences saying what "
-            f"you need from {name} and what happens after, at most {LINT_ASK_WORDS} words, with no ids, hashes, file "
-            f"paths, s3:// links, tool names or error output; put details in a comment or further down the body. "
-            f'Example: "{LINT_ASK_EXAMPLE}"')
+    fix = ""
+    if len(text.split()) > LINT_ASK_WORDS or lint_sentences(text) > 2:
+        rewrite, repair = person_ask_rewrite(text)
+        details = ("a comment on the task" if where == "waiting"
+                   else "the body under it, after a blank line")
+        fix = (f' Retry once with this ask, which keeps what you need and what happens after: "{rewrite}" Put the '
+               f"rest of your text in {details}, so nothing is lost." if rewrite else
+               f" No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. To fix "
+               f"it, {repair}; then retry once.")
+    return (f"Your ask to {name} {'; '.join(problems)}.{fix} The rule: {place} is one or two plain sentences saying "
+            f"what you need from {name} and what happens after, at most {LINT_ASK_WORDS} words, with no ids, hashes, "
+            f"file paths, s3:// links, tool names or error output (a pull request may be named as \"PR #<number>\"); "
+            f'put details in a comment or further down the body. Example: "{LINT_ASK_EXAMPLE}"')
 
 
 def require_person_ask(conn, actor, person, text, where):
@@ -2043,21 +2159,34 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
-    counted, last, total = [], {}, 0
+    counted, last, total, calls, again = [], {}, 0, set(), False
     for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY ts, id", (actor, since))):
+        facts = _json(refused["detail_json"], {}) or {}
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
-            about = (_json(refused["detail_json"], {}) or {}).get("task")
+            about = facts.get("task")
             if about in last and parse_ts(refused["ts"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
                 continue
             last[about] = parse_ts(refused["ts"])
+        key = refused["detail_json"]
+        if call := facts.get("bulk"):
+            # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
+            # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
+            if call in calls:
+                again = again or call == BULK_CALL.get()
+                continue
+            calls.add(call)
+            key = _dump({k: v for k, v in facts.items() if k != "bulk"})
         total += 1
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
         if refused["rule"] != "target_inactive":
-            counted.append((refused["rule"], refused["detail_json"]))
+            counted.append((refused["rule"], key))
+    if again:
+        # This bulk change's first refusal already counted, reviewed and quarantined as need be.
+        return
     count, distinct = len(counted), len(set(counted))
     if rule == "target_inactive":
         # A sender retrying it in a loop still meets the day's backstop.
@@ -2370,11 +2499,12 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
-    watcher's for a Monitor. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
+    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2382,14 +2512,17 @@ def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
                      "WHERE b.slug=?", (actor_id(target),))
     if row and resolve_harness(_json(row["config_json"], {}) or {}) in SYNCED_HARNESSES:
         name = row["display_name"] or actor_id(target)
-        refuse(conn, actor, "external-bot", f"{name} works on another platform and only syncs its chat here, so it "
-               "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
+        return ("external-bot", f"{name} works on another platform and only syncs its chat here, so it "
+                "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
     if row:
         from . import profiles
-        found = profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
-                                 actor, title, parent, routine, owner=target)
-        if found:
-            refuse(conn, actor, *found)
+        return profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
+                                actor, title, parent, routine, owner=target)
+
+
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+        refuse(conn, actor, *found)
 
 
 def recruiting(conn, target):
@@ -2892,6 +3025,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run. The
     # rules engine (backend/rules.py) decides, names the rule on the message (refs.rule) and fails open.
     from . import rules as wake_rule_engine
+    if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
+        refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
     decision = wake_rule_engine.judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
     if decision and decision.outcome in ("ask", "action"):
         decision = wake_rule_engine.carry_out(conn, decision, actor, target, kind, refs, body, conv)
@@ -3010,6 +3145,9 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about and asked["from_actor"] == "bot:goal-manager" and is_human(actor):
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+    if about and is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
@@ -3396,6 +3534,11 @@ def _type_steps(conn, actor, type_id, steps):
         if flows:
             conn.execute("UPDATE task_steps SET flow_json=? WHERE id=?",
                          (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]))
+    renamed = {existing[r["id"]]["name"]: r["name"] for r in clean
+               if r["id"] in existing and existing[r["id"]]["name"] != r["name"]}
+    if renamed:
+        from .rules import steps_renamed
+        steps_renamed(conn, type_id, renamed)       # the board's rules follow its steps' new names
 
 
 def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=False, steps_only=False, default_visibility='private'):
@@ -4888,6 +5031,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner"] == "bot:goal-manager":
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
+    if is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
@@ -5034,14 +5180,49 @@ def task_comments(conn, task_id, *, actor=None):
     return out
 
 
+REVIEW_ANSWERS_SQL = (
+    "SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to=?) "
+    "OR id=(SELECT answered_by FROM messages WHERE id=?)) ORDER BY created,rowid")
+
+
+def prime_review_answers(conn, messages):
+    """Read question replies together as stored rows; each reader still filters their provenance in review_answers."""
+    from .read_cache import cache, prime_rows, rows
+    values = cache(conn)
+    if values is None:
+        return []
+    asks = {}
+    for message in messages:
+        refs = _json(message["refs_json"], {}) or {}
+        if message["kind"] == "ask" and isinstance(refs, dict) and refs.get("questions"):
+            asks[message["id"]] = message
+    wanted = {mid: m for mid, m in asks.items() if (REVIEW_ANSWERS_SQL, (mid, mid)) not in values}
+    for part in chunks(sorted(wanted)):
+        marks = ",".join("?" * len(part))
+        answered = {}
+        for mid in part:
+            if wanted[mid]["answered_by"]:
+                answered.setdefault(wanted[mid]["answered_by"], set()).add(mid)
+        found = {mid: [] for mid in part}
+        answers = conn.execute(
+            f"SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to IN ({marks})) "
+            "OR id IN (SELECT value FROM json_each(?))) ORDER BY created,rowid", (*part, _dump(list(answered))))
+        for row in answers:
+            linked = set(answered.get(row["id"], ()))
+            if row["kind"] == "answer" and row["in_reply_to"] in found:
+                linked.add(row["in_reply_to"])
+            for mid in linked:
+                found[mid].append(row)
+        prime_rows(conn, REVIEW_ANSWERS_SQL, {(mid, mid): replies for mid, replies in found.items()})
+    return [row for mid in asks for row in rows(conn, REVIEW_ANSWERS_SQL, (mid, mid))]
+
+
 def review_answers(conn, message_id, *, actor=None):
     from . import task_privacy as privacy
+    from .read_cache import rows
     out = []
-    for row in conn.execute(
-            "SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to=?) "
-            "OR id=(SELECT answered_by FROM messages WHERE id=?)) ORDER BY created,rowid",
-            (message_id, message_id)):
-        if actor is not None and not privacy.message_readable(conn, actor, row):
+    for row in rows(conn, REVIEW_ANSWERS_SQL, (message_id, message_id)):
+        if actor is not None and not privacy.message_readable(conn, actor, row, current=True):
             continue
         refs = _json(row["refs_json"], {}) or {}
         out.append(refs.get("answer") or {"by": row["from_actor"], "text": row["body"], "at": row["created"]})
@@ -5102,7 +5283,7 @@ def is_comment(msg):
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
-            and not (set(refs) - {"task", "comment", "quiet", "via", "rule"}))
+            and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate"}))
 
 
 
@@ -5293,7 +5474,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None,
-                quiet_notice=False):
+                quiet_notice=False, from_private=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5328,7 +5509,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         ceo_bot.check_cap(conn, actor, target)      # at most 5 a day in one person's Needs you (backend/ceo_bot.py)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.REVIEW.match(str(title).strip()):
+    if parent and review_gate.is_review(conn, parent, title):
         review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
@@ -5336,9 +5517,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
         private = None              # a bot cannot override a sensitive default to publish
-    private = bool((private if private is not None else
-                    private_tasks_default(conn, actor) or private_tasks_default(conn, target))
-                   or parent and task_private(conn, parent))
+    # A task filed from private work (app.task_create, task_privacy.from_private) is company-visible under its private
+    # parent: its words were checked to carry nothing of the parent.
+    private = not from_private and bool((private if private is not None else
+                                         private_tasks_default(conn, actor) or private_tasks_default(conn, target))
+                                        or parent and task_private(conn, parent))
     if private:
         requester = actor
     from .roadmaps import settings as roadmap_settings
@@ -5384,6 +5567,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
+        labels.insert(0, "incident")
     if qa is False:
         labels = [key for key in labels if key != "qa"]
     author_qa = qa if qa is not None else True if "qa" in labels else None
@@ -5480,6 +5665,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    from . import task_trigger_rules
+    task_trigger_rules.created(conn, row["id"], actor)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts
     # current-message refs in its prompt, so the bot can reuse or reconcile overlapping work
     # without making the human-facing notice noisy or merging distinct deliverables automatically.
@@ -5504,7 +5691,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     ], "guidance": "Check for overlap. Reuse shared work; keep distinct decisions and deliverables separate."} if related else None
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
-    if parent and review_gate.ONE_OPEN.match(str(title).strip()):
+    if parent and review_gate.check_of(conn, parent, title):
         review_gate.remember_heads(conn, actor, row["id"], parent, review_prs)
     # A task a bot files for itself in one of its turns starts its own turn only once that turn has ended
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
@@ -5937,6 +6124,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # before the status write supersedes those questions.
     finishing = status == "done" and row["status"] != "done" and is_human(actor)
     askers = [m["from_actor"] for m in open_task_asks(conn, row)] if finishing else []
+    if finishing:
+        # A waiting bot's person-owned question can live in a child instead of waiting_on on this card.
+        # Capture its requester before completion supersedes those questions.
+        askers += [child['requester'] for tid in TR.child_ids(conn, task_id)
+                   if (child := task(conn, tid)) and child['owner'] == actor
+                   and child['status'] in ACTIVE_STATUSES and is_bot(child['requester'])]
     # A bot's result rewritten or handed to someone else, before any status move below: that run's outcome.
     if title is not None or body is not None and body != row.get("body"):
         RT.turn_result(conn, actor, row, "edited", event)
@@ -6070,7 +6263,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               refs={**(refs or {}), "news": "task_done" if status == "done" else "task_declined",
                     **({"wake_batch": "completion"} if status == "done" and is_bot(actor)
                        and not _awaited_by(conn, after, after["requester"]) else {})},
-              quiet_bots=True)
+              quiet_bots=True, human_completion=is_human(actor) and status == 'done',
+              completion_actionable=bool(str(note or '').strip()) and not quiet)
     if finishing:
         # Not only the requester: the owner that parked it waiting on this person, a bot that asked them a
         # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
@@ -6087,7 +6281,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     and who != (parent or {}).get("owner"))
             _wake(conn, after, who, _marked_done(conn, actor, after["title"]) + (f"\n{note}" if note and not quiet else "")
                   + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), {"news": "task_done"},
-                  quiet_bots=True, quiet=idle)
+                  quiet_bots=True, quiet=idle, human_completion=is_human(actor),
+                  completion_actionable=bool(str(note or '').strip()) and not quiet or who in askers
+                  or who == row['owner'] and row.get('waiting_on') in (actor, actor_id(actor)))
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
@@ -6302,10 +6498,12 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     if (status if status is not None else row["status"]) != "waiting":
         refuse(conn, actor, "kind", "--on names who a waiting task waits on: set --status waiting with it")
     person = resolve_actor(conn, value)
+    if person and is_bot(person):
+        return _waiting_bot(conn, actor, row, person)
     if not person or not is_human(person):
         refuse(conn, actor, "waiting_on",
-               f"{value} is not a person on the team: a task waits on a person with --on, or on another "
-               "task with hub task relate <task> <other> --kind blocked_by")
+               f"{value} is not a person or an active bot on the team: a task waits on a person with --on, or on "
+               "another task with hub task wait <task> --on task:<other> (then --on bot:<its owner> names that bot)")
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
         # A private task with no person on it can take one, its guest, when its owning bot waits on them.
         if private is not None or not bot_only(row) and not row.get("guest"):
@@ -6316,6 +6514,33 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
             refuse(conn, actor, "private", refusal)
         task_reach(conn, actor, row, person)
     return person
+
+
+def _waiting_bot(conn, actor, row, bot_actor_id):
+    """`--status waiting --on bot:<slug>`: the task waits on that bot's prerequisite work, or the write is refused.
+
+    A bot alone does not say which of its work must finish, so the wait is the open blocker it owns (`hub task wait
+    <task> --on task:<other>`, a blocked_by relation): that holds the task's work while it is open and wakes its owner
+    with the outcome when it is done, declined or closed (_unblock). Nothing more is stored, so `waiting_on` stays the
+    person a task waits on (their Needs you); the note is the reason shown beside the bot's name."""
+    slug = actor_id(bot_actor_id)
+    if (bot(conn, slug) or {}).get("state") != "active":
+        refuse(conn, actor, "waiting_on",
+               f"{slug} is not an active bot on the team, so nothing it does can resume this task: wait on a person "
+               "with --on, or on an active bot's task with hub task wait <task> --on task:<other>")
+    # The first open blocker, in the order the task's relations are served (TR.grouped), is the one its views name,
+    # so the bot named here must own that one: naming a bot behind it would show another owner's name.
+    first = (TR.live_blockers(conn, row["id"], ACTIVE_STATUSES) or [None])[0]
+    if not first:
+        refuse(conn, actor, "waiting_on",
+               f"Nothing {slug} owns blocks this task, so Tico cannot tell which of its work resumes it: link that "
+               f"task first with hub task wait {row['id']} --on task:<its task>, then --on {bot_actor_id}")
+    if first["owner"] != bot_actor_id:
+        # Keep diagnostics independent of the blocker's read audience.
+        refuse(conn, actor, "waiting_on",
+               f"This task's first open blocker belongs to another owner, so its views would not name {slug}: wait on that "
+               f"blocker's owner, or take it off with hub task wait {row['id']} --on task:<it> --remove first")
+    return ""
 
 
 def _task_party(conn, actor, row):
@@ -6431,7 +6656,8 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
         batch = who == after["requester"] and is_bot(actor) and not _awaited_by(conn, after, who)
         _wake(conn, after, who, said, {"news": "task_done", **({"wake_batch": "completion"} if batch else {})},
               quiet_bots=True,
-              quiet=accepted or bool(finished and who == after["owner"]))
+              quiet=accepted or bool(finished and who == after["owner"] and not new_note),
+              human_completion=is_human(actor), completion_actionable=bool(new_note) and not quiet)
     parent = task(conn, TR.parent_of(conn, after["id"]) or "")
     if parent and parent["owner"] != actor and parent["owner"] not in told and parent["owner"] != subtask_told:
         _wake(conn, after, parent["owner"], f"Child closed: {after['title']}", quiet_bots=True, quiet=True)
@@ -6540,12 +6766,11 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
                 continue
-            # A gate or worktree hold on an engineering ticket clears only through task_blocked reconciliation, which
-            # knows its real condition (fresh CI, no unlinked pushes), and a move Tico still retries clears when it is
-            # made; reopening either here would claim nothing is outstanding when something is. A gate hold on
-            # another board that no retry will clear is released here, or nothing ever would.
-            if row.get("blocked_kind") in ("gate", "worktree") and (
-                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at))):
+            # Worktree holds stay on every board: unlinked pushes are still outstanding. Engineering gate holds
+            # clear through task_blocked reconciliation, and a move Tico still retries clears when it is made.
+            # Only a gate hold on another board that no retry will clear is released here, or nothing ever would.
+            if (row.get("blocked_kind") == "worktree" or row.get("blocked_kind") == "gate" and (
+                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at)))):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("
@@ -6565,8 +6790,9 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     return moved
 
 
-def task_ask(conn, actor, task_id, body):
-    """Rule 5's one clarifying question: the owner gets one ask before an answer comes back."""
+def task_ask(conn, actor, task_id, body, park=True):
+    """Rule 5's one clarifying question: the owner gets one ask before an answer comes back. `park` False leaves the
+    task's status as it is (a question ask ingest sends back, backend/ask_ingest.py)."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
@@ -6582,7 +6808,7 @@ def task_ask(conn, actor, task_id, body):
     msg = say(conn, actor, row["requester"], body, conversation_id=row["conversation_id"],
               kind="ask", refs={"task": task_id})
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))     # its question is part of it
-    if row["status"] in ("open", "doing", "review"):
+    if park and row["status"] in ("open", "doing", "review"):
         task_update(conn, actor, task_id, status="waiting")
     return msg
 
@@ -6604,6 +6830,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
         name = "task.reopened"
     else:
         name = "task.state_changed"
+    from . import task_trigger_rules
+    task_trigger_rules.enqueue(conn, name, task_id, actor, revision, field=field, new=new)
     # The owner column is written just after its event, so a new owner is said from `new`.
     hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
                                        **({"owner": new} if field == "owner" else {})}, actor, revision=revision)
@@ -6918,18 +7146,25 @@ def own_stuck_blockers(conn, row, at=None):
     parent's window is released is the case seen; a question for a person in a subtask is not (it
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
-    woken it, it is quiet again). Being blocked by these does not hold `row` back from the stall watcher."""
+    woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
+    A parent or subtask waiting on a person belongs to that person. These waits exempt the parent from the
+    stall watcher."""
     from .milestone_waits import pending as milestone_pending
+    from .quiet_work import own_job
     at = at or now()
+    if row.get("status") == "waiting" and is_human(row.get("waiting_on")):
+        return []
     blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
         return []
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
     for block in blockers:
-        if (not is_bot(block["owner"]) or block["updated"] >= quiet or not TR.is_descendant(conn, row["id"], block["id"])
+        if (not is_bot(block["owner"]) or block["status"] == "review" or block["updated"] >= quiet
+                or (block["status"] == "waiting" and is_human(block.get("waiting_on")))
+                or not TR.is_descendant(conn, row["id"], block["id"])
                 or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
                 or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")
-                or milestone_pending(conn, block["id"])):
+                or milestone_pending(conn, block["id"]) or own_job(conn, block, claimable=True)):
             return []
     return [block["id"] for block in blockers]
 
@@ -6940,7 +7175,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     or going. One BotOps sweep finds these instead of a daily run per bot.
 
     Also, at any age and even `waiting`, a task held only by its own quiet subtasks (own_stuck_blockers):
-    that wait never ends by itself. Those carry `own_blockers`."""
+    that wait never ends by itself. Those carry `own_blockers`, under the same busy and next-run rules."""
     at = now()
     cutoff = shift(at, seconds=-hours * 3600)
     rows = _rows(conn.execute(
@@ -6957,13 +7192,12 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     out = []
     for row in rows:
         slug = actor_id(row["owner"])
-        if slug in hidden or unanswered_ask(conn, row):
+        if slug in hidden or slug in busy or row.get("next_run") or unanswered_ask(conn, row):
             continue
         if not_yet_due(row, at):     # parked until its due date, like the stall watcher
             continue
         own = own_stuck_blockers(conn, row, at)
-        if not own and (row["status"] not in ("open", "doing", "ready") or row.get("next_run")
-                        or row["updated"] >= cutoff or slug in busy
+        if not own and (row["status"] not in ("open", "doing", "ready") or row["updated"] >= cutoff
                         or TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)):
             continue
         out.append({"id": row["id"], "short_id": row["id"][:8], "title": row["title"], "owner": row["owner"], "status": row["status"],
@@ -7373,7 +7607,7 @@ def stall_skip(conn, row, at=None):
     or the owner's profile has no stall sweeps (rules.sweeps_on). A task held only by its own quiet subtasks
     (`own_blockers`) keeps being checked: that deadlock is what the check is for. Task Manager reports read
     `stalled_tasks`, not this, so a task no sweep wakes still reaches a person's report."""
-    from . import rules, wake_rules
+    from . import rules
     at = at or now()
     slug = actor_id(row["owner"])
     if not rules.sweeps_on(conn, slug):
@@ -7383,6 +7617,15 @@ def stall_skip(conn, row, at=None):
         if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND lane IN (?,?) AND state IN ('leased','running') "
                         "LIMIT 1", (slug, *lanes)).fetchone():
             return "live_session"
+    return recorded_wait(conn, row, at)
+
+
+def recorded_wait(conn, row, at=None):
+    """What a quiet task waits on, as recorded, or None: an ask, a snooze, a due date, a stored resume, an approval, or
+    (unless only its own quiet subtasks hold it) a blocker, a pull request or milestone wait, or an open subtask. The
+    same whatever the owner's profile says about sweeps, so a list of stuck work reads a reviewer's waits too."""
+    from . import wake_rules
+    at = at or now()
     if unanswered_ask(conn, row):
         return "ask"
     if TS.snoozed(row, at):
@@ -7668,7 +7911,7 @@ def notes_waiting_counts(conn, bots, limit=500):
 
 
 def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False, trigger="status_or_relation",
-          source=None):
+          source=None, human_completion=False, completion_actionable=False):
     """Tell someone their task moved. Task traffic never counts against rule 4.
 
     `trigger` is what this wake is, for the run it starts (backend/run_triggers.py): a task's status or
@@ -7686,6 +7929,14 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     `quiet` is stronger: the caller knows this notice asks nothing of any bot, so no bot is
     woken for it, whatever it opted into.
     """
+    actionable_completion = human_completion and (completion_actionable or '?' in str(body or '') or _awaited_by(conn, task_row, target)
+                             or is_human(task_row.get('owner')) and task_row.get('requester') == target)
+    if (human_completion and is_bot(target) and _actor_exists(conn, target)
+            and task_private_readable(conn, target, task_row)
+            and (not actionable_completion or (bot(conn, actor_id(target)) or {}).get('state') != 'active')):
+        from . import completion_notes
+        completion_notes.record(conn, target, task_row['id'])
+        refs = {**(refs or {}), 'quiet': True}
     if quiet_bots and (quiet or tasks_only(conn, target)):
         refs = {**(refs or {}), "quiet": True}
     if (is_bot(target) and target == task_row.get("owner") and TS.snoozed(task_row)
@@ -8216,8 +8467,12 @@ def conversation(conn, conversation_id):
 
 def prime_conversations(conn, ids):
     """Read these conversations in one query per 500 for the conversation() lookups that follow in this snapshot."""
-    from .read_cache import prime
-    for part in chunks(sorted({cid for cid in ids if cid})):
+    from .read_cache import cache, prime
+    values = cache(conn)
+    wanted = {cid for cid in ids if cid}
+    if values is not None:
+        wanted = {cid for cid in wanted if ("one", CONVERSATION_SQL, (cid,)) not in values}
+    for part in chunks(sorted(wanted)):
         found = {row["id"]: row for row in conn.execute(
             "SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part)}
         prime(conn, CONVERSATION_SQL, {(cid,): found.get(cid) for cid in part})
@@ -8262,10 +8517,14 @@ def prime_messages(conn, ids):
     """Read these messages in one query per 500 for the message() lookups that follow in this snapshot, deleted or not.
     Returns {id: stored row} of those found (empty outside a snapshot, where nothing is kept)."""
     from .read_cache import cache
-    if cache(conn) is None:
+    values = cache(conn)
+    if values is None:
         return {}
-    out = {}
-    for part in chunks(sorted({mid for mid in ids if mid})):
+    wanted = {mid for mid in ids if mid}
+    known = {mid for mid in wanted if ("one", MESSAGE_SQL, (mid,)) in values}
+    out = {mid: values[("one", MESSAGE_SQL, (mid,))] for mid in known
+           if values[("one", MESSAGE_SQL, (mid,))] is not None}
+    for part in chunks(sorted(wanted - known)):
         found = {row["id"]: row for row in conn.execute(
             "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(part)), part)}
         _prime_message_lookups(conn, part, found)
@@ -8286,7 +8545,7 @@ MESSAGE_PARENT_DEPTH = 100      # task_privacy and live_privacy refuse a provena
 
 def prime_message_rows(conn, rows):
     """Seed message() with stored rows already read whole in this snapshot (a join's `m.*`), then read the messages
-    they reply to or answer, a level at a time in one query per 500 each, so the provenance walks that follow
+    they reply to or answer, and their question replies, a level at a time in one query per 500 each, so the walks
     (task_privacy.message_tasks, live_privacy) read none of them one by one. Returns every row seeded or read."""
     from .read_cache import cache
     values = cache(conn)
@@ -8297,14 +8556,16 @@ def prime_message_rows(conn, rows):
     level, seen = list(rows.values()), set(rows)
     for _ in range(MESSAGE_PARENT_DEPTH):
         parents = set()
+        answers = {row["id"]: row for row in prime_review_answers(conn, level)}
+        _prime_message_lookups(conn, list(answers), answers)
+        parents.update(answers)
         for row in level:
             refs = _json(row["refs_json"], {}) or {}
             parents.add(row["in_reply_to"])
             for key in ("answers", "inputs"):
                 if isinstance(refs, dict) and isinstance(refs.get(key), list):
                     parents.update(v for v in refs[key] if isinstance(v, str))
-        wanted = {mid for mid in parents if mid and mid not in seen
-                  and ("one", MESSAGE_SQL, (mid,)) not in values}
+        wanted = {mid for mid in parents if mid and mid not in seen}
         if not wanted:
             break
         seen |= wanted
@@ -8436,9 +8697,13 @@ def prime_tasks(conn, ids):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
     (a Needs you card reads its task, its ancestors and what they block, one at a time)."""
     from .read_cache import cache, prime, prime_rows
-    if cache(conn) is None:
+    values = cache(conn)
+    if values is None:
         return
-    for part in chunks(sorted({tid for tid in ids if tid})):
+    wanted = {tid for tid in ids if tid}
+    wanted = {tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values
+              or (TASK_TAGS_SQL % "?", (tid,)) not in values}
+    for part in chunks(sorted(wanted)):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})

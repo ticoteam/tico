@@ -552,7 +552,7 @@ def tag_update(api, args):
 @tool("hub_task_create", "File a task for a bot or a person. A task for a person is a decision "
       "or a review: title says what you are asking, body under 120 words, and the body's first paragraph is "
       "the ask: one or two plain sentences saying what you need and what happens after, at most 40 words, with "
-      "no ids, hashes, file paths, s3:// links or tool names (refused otherwise), e.g. \"Approve the video tool "
+      "no ids, hashes, file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool "
       "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
       "type's board is exempt; asks stay on General). `dry_run` reports the "
       "checks a create would fail and writes nothing.",
@@ -565,6 +565,11 @@ def tag_update(api, args):
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
+       "from_private": {"type": "boolean", "default": False,
+                        "description": "From a run on your own private task with no person on it: a company-visible "
+                                       "task for a bot, carrying only its own words (no 12 words copied from the private "
+                                       "work, no secret-shaped value, no file or link of it). Parent: that private task, "
+                                       "or none"},
        "parent": _s("Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
                     "person's approval or input for your task? File it for them with your task as parent"),
        "request_id": _s("A person's message this task carries: BotOps continuing its own chat, or another bot handing "
@@ -604,7 +609,7 @@ def task_create(api, args):
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
-                  "public_title", "public_summary"):
+                  "public_title", "public_summary", "from_private"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -870,9 +875,12 @@ def task_question(api, args):
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
                         "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
-                        "file paths, s3:// links or tool names (refused otherwise), e.g. \"Approve the video tool trial "
+                        "file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial "
                         "for Thursday? If yes, I'll send the invite.\" It becomes one small task for them; this task "
-                        "stays yours, blocked on it, and opens again with their answer. An empty string clears it"),
+                        "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
+                        "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
+                        "the note is then the reason displayed beside the bot. The existing relation holds the work and "
+                        "wakes the owner with its outcome when resolved. An empty string clears it"),
        "roles": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
                  "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
                                 "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several"},
@@ -1210,7 +1218,8 @@ def goal_show(api, args):
 
 @tool("hub_goal_create", "Set a goal for yourself, under a goal you own, or for someone below "
       "you on the org chart. A parent is optional: with none the goal is simply not linked. With one "
-      "it has no colour until whoever owns the parent gives it one; that is the acceptance.",
+      "it supports that goal. It starts with no colour, which its data or a person (its owner, the owner of "
+      "the goal it serves, or someone above them) sets.",
       {"owner": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
        "title": _s("Plain English: what you are going for"),
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
@@ -3202,14 +3211,16 @@ def settings_show(api, args):
     return shown
 
 
-@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps) or yourself. "
-      "direct: it changes and the answer has the new `value`; confirm, from BotOps: a Confirm card in the person's chat "
-      "with BotOps (`needs_confirm`), nothing changed yet; person: refused with the one-line reason and the card's "
-      "`link`. A refusal names who may change it.",
+@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps, the "
+      "Assistant) or yourself. direct: it changes and the answer has the new `value`; confirm, from BotOps or the "
+      "Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing changed yet; person: refused with the "
+      "one-line reason and the card's `link`. A refusal names who may change it. The Assistant cites the person's words "
+      "(`on_behalf_of`) for a direct one; without them, or while the owner's \"Assistant acts without asking\" is off, "
+      "it is a card too.",
       {"key": _s("The setting's key"), "value": {"description": "The new value: on/off, a number, text, a list or JSON, "
-       "as `hub_settings_show` says"}, **SETTING_TARGET}, required=("key", "value"), writes=True)
+       "as `hub_settings_show` says"}, **SETTING_TARGET, "on_behalf_of": ASKED}, required=("key", "value"), writes=True)
 def settings_set(api, args):
-    who = _as_person(api)
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     key = quote(args["key"], safe="")
     planned = who.post("settings/catalog/" + key + "/plan", {"value": args["value"], **_setting_query(args)},
                        key=_key(args, ":plan"))
@@ -3487,10 +3498,16 @@ def webhook_show(api, args):
        "rate_per_hour": {"type": "integer", "minimum": 1},
        "allow_http": {"type": "boolean", "description": "Owner only"},
        "filter": _WEBHOOK_FILTER, "headers": _WEBHOOK_HEADERS,
-       "expected_revision": {"type": "integer", "minimum": 1, "description": "The revision you read; a stale one answers 409"},
+       "expected_revision": {"type": "integer", "minimum": 1, "description": "The revision you read; a stale one answers 409. "
+                             "Needed to change the address"},
+       "credentials": {"type": "string", "enum": ["keep", "clear"],
+                       "description": "When the new address is another destination and secret headers keep their saved "
+                                      "values (the update answers 409 destination_change): keep sends them there, clear "
+                                      "removes them and pauses the endpoint until they are typed again. Ask the person"},
        "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
 def webhook_update(api, args):
-    body = {k: args[k] for k in ("name", "url", "events", "rate_per_hour", "allow_http", "filter", "headers", "expected_revision")
+    body = {k: args[k] for k in ("name", "url", "events", "rate_per_hour", "allow_http", "filter", "headers", "expected_revision",
+                                 "credentials")
             if args.get(k) is not None}
     return _as_person(api, args.get("on_behalf_of")).post(_hook_path(args, "update"), body, key=_key(args))
 
@@ -3673,12 +3690,12 @@ def bot_budget(api, args):
     return who.post(path, {**body, "expected_revision": current["revision"]}, key=_key(args))
 
 
-_PROFILES = ["doer", "reviewer", "lead", "responder", "monitor", "custom"]
+_PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
 
 
 @tool("hub_bot_profile", "Read or set a bot's profile, as the person who asked you: what wakes the bot and which tasks it takes. "
       "doer works its tasks (news batched); reviewer takes review and QA requests only; lead hears the rest once a day; "
-      "responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
+      "manager runs on its schedule over its exceptions list and hears ticket news only then; responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
       "rules on the Rules page. With no profile it reads the bot's and the choices. Leaving custom deletes the wake rules "
       "it copied into the rules table, so say confirm_drop_rules.",
       {"bot": _s("Bot slug"), "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
@@ -4570,7 +4587,8 @@ def turns(api, args):
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
       "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).",
+      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
+      "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
       {"type": _s("Task type id or name; default the engineering board"),
        "owner": _s("Only tickets this person or bot owns"),
        "label": _s("Only tickets with this label"),
@@ -4750,7 +4768,10 @@ def bot_repos_get(api, args):
        "chosen": {"type": "array", "items": {"type": "object", "properties": {
            "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"]),
            "run_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may start, rerun "
-                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"}},
+                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"},
+           "edit_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may create and "
+                              "change workflow files under .github/workflows (GitHub Workflows: write). Leave out to "
+                              "keep the current setting"}},
            "required": ["full_name", "access"], "additionalProperties": False}}},
       required=("bot", "mode"), writes=True)
 def bot_repos_set(api, args):
@@ -5334,7 +5355,8 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
-                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn"}
+                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
+                    "hub_settings_set"}
 AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.

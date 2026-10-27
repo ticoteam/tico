@@ -4,8 +4,8 @@ Every human has one private chat with the team's assistant (the `coo` bot; you m
 bot that knows how Tico is laid out and does things in it on your behalf. **Assistant** in the main left rail opens it
 as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
-page, and so does **Ask the Assistant…** at the bottom of search (⌘K), with your words in the box. The room takes text
-only, so the composer has no attach button. **BotOps** beside it in the rail opens BotOps' bot page. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
+page, and so does **Ask the Assistant…** at the bottom of search (⌘K), with your words in the box. An Assistant's room
+takes text only, so the composer has no attach button (the owner's CEO Bot chat takes files: [CEO Bot](ceo-bot.md)). **BotOps** beside it in the rail opens BotOps' bot page. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
 Ask it to find a meeting, a doc, a file or a task; to tell you what needs you; to make a task; to hand work to the
@@ -69,12 +69,16 @@ off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}
 comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
 card again. An assistant run's credential works only while its lease is live.
 
-**What you ask for in your chat, it does.** When you tell it to close, finish, decline, reopen, reassign, comment on or
+**What you ask for in your chat, it does.** When you tell it to change an everyday setting you may change (a direct
+one in the [settings catalogue](permissions.md#the-settings-catalogue): release times, a bot's model, a tag), it
+changes it and says the new value; a confirm one (team rules, spend, people) is a Confirm card in your chat, and a
+person-only one gets the reason and the link. When you tell it to close, finish, decline, reopen, reassign, comment on or
 link a task ("close those three", "mark the launch done"), decline an approval put to you ("decline the old publish
 batches, they're from before the reset") or answer a bot's question to you in your words ("tell Ops Oct 8"), it does it
 as you, with no card. The write cites your
 message (`X-Tico-On-Behalf-Of`: the message's id, or `turn` for the one that started the run; `hub task
-close|update|comment|link|label`, `hub approval decline` and `hub question answer`, each `--on-behalf-of turn`), and the
+close|update|comment|link|label`, `hub approval decline`, `hub question answer` and `hub settings set` for a direct
+setting, each `--on-behalf-of turn`), and the
 server checks that message: yours, typed in your own
 Assistant chat (not written by a bot or the Assistant, not another chat), and no more than 30 minutes old. Otherwise it
 answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do

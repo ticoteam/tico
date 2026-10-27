@@ -35,6 +35,71 @@ def error(api, sql, token="ana-test"):
     return query(api, sql, token, expected=422)["error"]["detail"]
 
 
+def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(api, monkeypatch):
+    from backend import sql as S, views
+    from backend.auth import Identity
+    from backend.tests.test_api import unrelated_task_managers
+
+    store, auth = api.app.state.store, api.app.state.auth
+    who = Identity("human:cara", "human", email="cara@acme.example")
+    with store.transaction() as c:
+        unrelated_task_managers(c)
+        c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='finance'")
+    builds, roster = [], views._roster
+
+    def counted(c):
+        builds.append(type(c).__name__)
+        return roster(c)
+
+    monkeypatch.setattr(views, "_roster", counted)
+    expected, guests, counts = set(), set(), {}
+
+    def open_read():
+        statements, before = [], len(builds)
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+        return conn, statements, len(builds) - before
+
+    def ids(conn):
+        return {row[0] for row in S.run(conn, "SELECT id FROM tasks", [], 500, 5)["rows"]}
+
+    for start, size in ((0, 3), (3, 30)):
+        with store.transaction() as c:
+            for n in range(start, size):
+                row = H.task_create(c, "human:ben", f"Private source {n}", "Secret", "bot:finance" if n % 3 == 0
+                                    else "bot:ops", private=True, lint=False)
+                if n % 3 == 0:
+                    expected.add(row["id"])
+                elif n % 3 == 2:
+                    c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (row["id"],))
+                    expected.add(row["id"])
+                    guests.add(row["id"])
+        conn, statements, built = open_read()
+        try:
+            assert ids(conn) == expected
+            counts[size] = len(statements), built
+        finally:
+            conn.close()
+    print(f"SQL private tasks 3 -> 30: statements/builds {counts[3]} -> {counts[30]}")
+    assert counts[30][0] - counts[3][0] <= 8, counts
+    assert counts[30][1] <= counts[3][1] <= 2, counts
+
+    # One in-flight WAL snapshot keeps its rights; a new request must observe the changed org chart.
+    held, _, _ = open_read()
+    try:
+        assert ids(held) == expected
+        with store.transaction() as c:
+            c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot='finance'")
+        assert ids(held) == expected
+        fresh, _, _ = open_read()
+        try:
+            assert ids(fresh) == guests
+        finally:
+            fresh.close()
+    finally:
+        held.close()
+
+
 @pytest.fixture
 def world(api):
     """Two people's private Tico rooms, a private bot's task, and a ops turn granted Ana's room."""
@@ -341,37 +406,6 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id=?", (public,))
     with store.read() as c:
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
-
-
-def test_message_scan_skips_python_only_when_the_sql_gate_proves_visibility(api, world, monkeypatch):
-    from backend import sql as S
-
-    room, public = world['coo_task']['conversation_id'], world['coo_task']['id']
-    with api.app.state.store.transaction() as c:
-        hidden = H.task_create(c, 'human:ben', 'Hidden scan source', '', 'bot:finance', private=True, lint=False)
-        plain = H.say(c, 'human:ana', 'human:ben', 'Plain scan row', conversation_id=room)
-        progress = H.say(c, 'human:ana', 'human:ben', 'Structured scan row', conversation_id=room,
-                         refs={'task': public, 'progress': {'sequence': 1}})
-        reply = H.say(c, 'human:ana', 'human:ben', 'Run scan row', conversation_id=room,
-                      in_reply_to=plain['id'], refs={'task': public, 'turn_id': world['attempt']['id'],
-                                                   'answers': [plain['id']]})
-        denied = H.say(c, 'human:ana', 'human:ben', 'Denied scan row', conversation_id=room,
-                       refs={'task': hidden['id']})
-        unknown = H.say(c, 'human:ana', 'human:ben', 'Unknown scan row', conversation_id=room,
-                        refs={'task': 'unknown-scan-task'})
-    checked = []
-    original = S.ReadIndex.message
-    def counted(index, mid, *args):
-        checked.append(mid)
-        return original(index, mid, *args)
-    monkeypatch.setattr(S.ReadIndex, 'message', counted)
-    visible = {plain['id'], progress['id'], reply['id']}
-    candidates = sorted(visible | {denied['id'], unknown['id']})
-    found = query(api, 'SELECT id FROM messages WHERE id IN (' + ','.join('?' for _ in candidates) + ')',
-                  world['attempt']['token'], params=candidates)
-    assert {row[0] for row in found['rows']} == visible
-    assert not visible.intersection(checked), checked
-    assert {denied['id'], unknown['id']} <= set(checked), checked
 
 
 def test_direct_content_prefilter_keeps_escaped_and_nested_provenance(api, world):

@@ -780,9 +780,11 @@ function hubModalHTML(t, it, opts = {}) {
   const askToYou = taskAskToPerson(t);
   const finished = taskFinished(t);
   // What it waits on: a question to you reads as one; any other waiting note is a quiet line. A blocker is in Related.
-  const blockers = taskBlockers(t);
-  const waitText = clipLine(blockers.length && !askToYou && !t.blocked_since ? '' : taskWaitLine(t), 400);
-  const waitLabel = askToYou ? needsWho(t) : t.status === 'waiting' ? 'Waiting on' : '';
+  // Waiting on a bot's prerequisite work reads "Waiting on <bot>: <reason>" (taskBotWait).
+  const blockers = taskBlockers(t), botWait = !askToYou && !finished ? taskBotWait(t) : null;
+  const waitText = clipLine(botWait ? `${botWait.name}${botWait.reason ? `: ${botWait.reason}` : ''}${botWait.since}`
+    : blockers.length && !askToYou && !t.blocked_since ? '' : taskWaitLine(t), 400);
+  const waitLabel = askToYou ? needsWho(t) : botWait || t.status === 'waiting' ? 'Waiting on' : '';
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
   const statusWord = taskStatusLabel(t);
@@ -808,6 +810,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
+    ${taskBuilderNotices(taskBuilderActors(t))}
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
@@ -816,7 +819,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
-      ${note && note.replace(/\s+/g, ' ').trim() !== waitText ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
+      ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       <div class="tsecs">
       <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>

@@ -142,4 +142,8 @@ def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cau
     if failure in ('timeout', 'transport'):
         assert 'HTTP' not in error['detail']
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'Blocked' and current['version'] > task['version']
+    assert current['step_id'] == task['step_id'] and current['version'] == task['version']
+    assert not current.get('blocked_since') and not current.get('blocked_gate_json')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 1
+        assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()

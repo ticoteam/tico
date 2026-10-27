@@ -14,13 +14,15 @@ changes; bots keep using whatever git access their computer already has.
 | Issues | write | a bot files and comments on issues. A read grant reads issues and pull request comments and cannot write them |
 | Metadata | read | required by GitHub for every app |
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
+| Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
 The app is private, receives installation change webhooks to refresh the repository list when its webhook is active, and requests no
-workflow permission, so a bot cannot change `.github/workflows` files. Add Workflows: write on the
-app's GitHub settings page if a bot's repository needs that.
+Workflows permission, so a bot cannot change `.github/workflows` files. Adding Workflows on the App's GitHub settings page
+alone changes nothing: Tico puts Workflows: write only in the token of a grant an Owner or admin lets edit workflow
+files ([Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files)).
 
 Run tokens carry write permissions for write grants and contents read for read grants, each with Actions, Checks,
 Commit statuses, Pull requests, Issues and Deployments read for whichever of them the installation has (a write
@@ -36,7 +38,8 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
 1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Actions** to
    **Read and write** and save. GitHub asks the organization to accept the change: open the installation
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
-2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant (Settings → bot → Repositories), or runs
+2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
+   **All ticked repos** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
@@ -46,8 +49,38 @@ ordinary write token, the token answer says why in `workflows_withheld`, and Hea
 yet**. If the installation reports Actions as read and write but GitHub still refuses the token, the setting is not
 the cause: the repositories get the ordinary write token, `workflows_withheld` says GitHub refused it, and Health shows
 **GitHub refused workflow tokens**. Tico remembers the refusal for a minute, so a bot's git calls in that time don't
-ask GitHub again; accepting new permissions or **Check permissions** asks at once. Workflows: write is never added,
-so the bot still cannot edit `.github/workflows` files.
+ask GitHub again; accepting new permissions or **Check permissions** asks at once. Running workflows does not add
+Workflows: write, so the bot still cannot edit `.github/workflows` files unless it may also edit them (below).
+
+### Letting a bot edit workflow files
+
+GitHub refuses a push that creates or changes a file under `.github/workflows` unless the token carries Workflows:
+write, which Tico never puts in an ordinary run token. To allow it for one repository:
+
+1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Workflows** to
+   **Read and write** and save, then accept the updated permissions on the installation, as above.
+2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
+   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
+   [Repositories](repositories.md).
+
+The bot then gets a separate token for those repositories, with its write permissions plus Workflows: write. A grant
+that may also run workflows gets one token carrying both Actions: write and Workflows: write, because the git
+credential helper picks one token per remote. Every other token goes without Workflows: write. Until the installation
+reports Workflows as read and write, the flagged repositories get the ordinary write token (with Actions: write if
+they may run workflows), the token answer says why in `workflow_edits_withheld`, and Health shows **Bots can't edit
+workflow files yet** with a link to the App's permissions. If the installation reports it but GitHub still refuses the
+token, `workflow_edits_withheld` says so and Health shows **GitHub refused workflow-editing tokens**; the refusal is
+remembered for a minute, as for running workflows.
+
+A workflow edited on a branch runs on `pull_request` (and `push`) events with the repository's secrets before
+anyone reviews it, so a bot that may edit workflow files can reach every secret those workflows can. Before you turn
+it on:
+
+- Keep deploy and release secrets in [protected Environments](https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+  with required reviewers or a branch rule, not as repository secrets.
+- Require review of `.github/workflows` changes by a person, with a `CODEOWNERS` entry for `.github/workflows/` and
+  branch protection (or a ruleset) that requires code owner review on the default branch.
 
 ## Set up
 
@@ -420,6 +453,12 @@ comments never wake it. A
 reviewer who pushes to a bot's PR remains a reviewer; only a pusher matching the PR author
 counts as the bot. New heads reset mergeability to Unknown, and conflicts wake once per head
 until a clean result clears the marker. Check suites are tracked separately by App.
+Checks left pending are read afresh from GitHub: by the background pass once a link has had no word for 10 minutes
+(at most once per link every 10 minutes), and when the task is opened. The fresh read rebuilds the head's checks from
+GitHub's current check runs, statuses and suites. A suite that has had no check run for 10 minutes never started (an
+installed App's suite, such as a deploy or monitoring service with nothing to run on that push). That suite is not
+pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
+check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Rules page (`hub rule list`) rows for `pr_checks_done` and `pr_review` change what these do.
 

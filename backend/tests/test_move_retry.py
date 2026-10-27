@@ -166,7 +166,7 @@ def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api
     assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == []   # inside the 5 minutes
     for minutes in (6, 12):
         assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
-    assert step(api, task) == 'Blocked' and devops_tasks(api) == []
+    assert step(api, task) == task['step']['name'] and devops_tasks(api) == []
     assert owner_woken(api, task) == [False]        # told on the ticket, not woken: Tico retries, nobody acts
     remembered = retries(api, task)[-1]
     assert remembered['temporary'] is True and remembered['devops'] is False
@@ -175,17 +175,17 @@ def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api
     assert step(api, task) == 'Review 1' and devops_tasks(api) == []
 
 
-def test_permission_failure_asks_devops_once_and_moves_when_github_reads_again(api, monkeypatch):
+def test_permission_failure_keeps_its_step_without_escalation_and_moves_when_github_reads_again(api, monkeypatch):
     task = ticket(api, RECEIPT)
     back = unreadable(api, monkeypatch, 'permission')
     assert move(api, task).status_code == 422
-    assert devops_tasks(api) == ['GitHub cannot be read for review moves']    # on the first refusal
-    assert owner_woken(api, task) == [True]
+    assert devops_tasks(api) == []    # on the first refusal
+    assert owner_woken(api, task) == [False]
     assert retries(api, task)[0]['devops'] is True
     fresh = get(api, 'tasks/' + task['id'])['task']
     assert move(api, fresh).status_code == 422                                # the builder tries again
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
-    assert len(devops_tasks(api)) == 1                                        # the same ask, reused
+    assert len(devops_tasks(api)) == 0                                        # the same ask, reused
     back()
     assert move_retry.tick(api.app.state.github_app, at=later(12), force=True) == [task['id']]
     assert step(api, task) == 'Review 1'
@@ -211,28 +211,28 @@ def test_github_403_rate_limits_retry_quietly_but_plain_403_needs_access(
     remembered = retries(api, task)[-1]
     assert remembered['temporary'] is temporary
     assert remembered['devops'] is not temporary
-    assert owner_woken(api, task) == [not temporary]
-    assert len(devops_tasks(api)) == (0 if temporary else 1)
+    assert owner_woken(api, task) == [False]
+    assert len(devops_tasks(api)) == 0
     assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == []
     assert len(retries(api, task)) == 1
     for minutes in (6, 12):
         assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
     assert len(retries(api, task)) == 3
-    assert len(devops_tasks(api)) == (0 if temporary else 1)
-    assert owner_woken(api, task) == [not temporary]
+    assert len(devops_tasks(api)) == 0
+    assert owner_woken(api, task) == [False]
     back()
     assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == [task['id']]
     assert step(api, task) == 'Review 1'
 
 
 @pytest.mark.parametrize('mode', ['read-422', 'read-boom'], ids=['answered-422', 'transport-boom'])
-def test_unreadable_without_a_temporary_cause_asks_devops_only_when_it_repeats(api, monkeypatch, mode):
+def test_unreadable_without_a_temporary_cause_stays_quiet_when_it_repeats(api, monkeypatch, mode):
     task = ticket(api, RECEIPT)
     unreadable(api, monkeypatch, mode)
     assert move(api, task).status_code == 422
     assert devops_tasks(api) == []
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
-    assert devops_tasks(api) == ['GitHub cannot be read for review moves']
+    assert devops_tasks(api) == []
 
 
 @pytest.mark.parametrize('record', ['unresolved', 'no-head'])
@@ -284,7 +284,7 @@ def test_a_retry_that_raises_waits_five_minutes_before_reading_github_again(api,
 
     monkeypatch.setattr(review_gate, 'snapshot', snapshot)
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
-    assert len(calls) == 1 and step(api, task) == 'Blocked'
+    assert len(calls) == 1 and step(api, task) == task['step']['name']
     assert tick(api) == [] and len(calls) == 1     # still inside the five minutes: no re-read
     assert devops_tasks(api) == []
 
@@ -303,10 +303,10 @@ def test_a_permission_failure_after_a_temporary_one_asks_devops_once(api, monkey
 
     monkeypatch.setattr(api.app.state.github_app, 'mint', refused)
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
-    assert devops_tasks(api) == ['GitHub cannot be read for review moves']
+    assert devops_tasks(api) == []
     assert move_retry.tick(api.app.state.github_app, at=later(12), force=True) == []
     assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == []
-    assert len(retries(api, task)) == 4 and devops_tasks(api) == ['GitHub cannot be read for review moves']
+    assert len(retries(api, task)) == 4 and devops_tasks(api) == []
 
 
 def test_a_retry_that_raises_on_a_receipt_refusal_waits_five_minutes_then_moves(api, monkeypatch):
@@ -362,24 +362,21 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     assert step(api, task) == 'Blocked'
 
 
-def test_a_private_tickets_blocker_is_private_to_devops_and_does_not_name_it(api, monkeypatch):
+def test_a_private_tickets_outage_does_not_create_a_task_or_wake_a_manager(api, monkeypatch):
+    from backend import source_outages
     task = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
     unreadable(api, monkeypatch, 'permission')
     assert move(api, task).status_code == 422
-    with api.app.state.store.read() as c:
-        blocker = dict(c.execute("SELECT * FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone())
-        audit = [tuple(r) for r in c.execute("SELECT target, detail_json FROM events WHERE action='blocker.routed'")]
-        assert blocker['private']
-        assert H.task_private_readable(c, H.bot_actor('devops-engineer'), blocker)
-        assert not H.task_private_readable(c, 'human:ana', blocker)     # not on the private task or the blocker
-    assert 'a private task' in blocker['body']
-    assert task['id'] not in blocker['body'] and task['title'] not in blocker['body']
-    for target, detail in audit:                       # the company-readable audit row carries no PR, repo or task
-        assert 'github.com' not in target and '/pull/' not in target and task['id'] not in detail
-    seen = api.get('/api/v2/tasks/' + blocker['id'], headers=headers())     # ana, a person not on it
-    assert seen.status_code in (403, 404) and 'github.com' not in seen.text and 'review moves' not in seen.text
+    with api.app.state.store.transaction() as c:
+        source_outages.sync(c, api.app.state.store.settings)
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone()
+        assert not c.execute("SELECT 1 FROM events WHERE action='blocker.routed'").fetchone()
+        for row in c.execute("SELECT body,refs_json FROM messages WHERE json_extract(refs_json,'$.source_outage') IS NOT NULL"):
+            assert task['id'] not in row['body'] + row['refs_json']
+            assert task['title'] not in row['body'] + row['refs_json']
+    assert not any(owner_woken(api, task))
 
 
 def test_a_private_tickets_receipt_comment_moves_it(api):

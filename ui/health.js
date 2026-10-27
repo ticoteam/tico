@@ -160,9 +160,13 @@ function hlQueueWords(row) {
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
 // one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
-  return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
+  return (rows || []).map(row => {
+    // Refused words are manager-only context, not support diagnostics.
+    const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
+    return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
     <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
-    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
+    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
+  }).join('');
 };
 
 async function hlStuckMove(button) {
@@ -319,13 +323,15 @@ window.hlMount = function hlMount() {
 
 window.hlBoot = function () {
   void hlRefresh();
-  // Every minute, or every 2 while live events flow (the tab is in use and nothing is broken).
+  // Every 2 minutes. Health classifies each computer's queue; the old 60 s cadence while live was
+  // down multiplied that work across tabs. Returning to the tab still refreshes at once.
   let at = 0;
   setInterval(() => {
-    if (document.hidden || !S.me?.cloud || (typeof liveConnected === 'function' && liveConnected() && Date.now() - at < 119000)) return;
+    if (document.hidden || !S.me?.cloud || Date.now() - at < 119000) return;
     at = Date.now(); void hlRefresh();
   }, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
+  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) { at = Date.now(); void hlRefresh(); } });
 };
 
 document.addEventListener('change', event => {

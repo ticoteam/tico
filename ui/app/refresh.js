@@ -30,14 +30,18 @@ async function refresh(force) {
   if (S.me?.cloud) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
+  taskBuilderNoticesRefresh();
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
-  // Poll data without destroying an expanded document or a comment being typed.
-  const reviewing = $('#main .req[open], #main .issue-compose:not([hidden])');
+  // Poll data without destroying an expanded document or a comment being typed. A question's answer form sits in its
+  // folded card all the time (needs-you.js looseAskRow): only one outside a closed card is being written in.
+  const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
-    if (TASKS_ST && isTasksRoute(S.route)) void tasksLoad(TASKS_ST, {poll: true});   // only what changed since the list's cursor (not Done's pages); only changed rows redraw
+    // Only what changed since the list's cursor (not Done's pages); only changed rows redraw. A full read on its way
+    // (tasksReadFull) brings all of it.
+    if (TASKS_ST && isTasksRoute(S.route) && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true});
     // The Active column beside the chat was loaded once and never again, so a task the bot closed
     // stayed listed until a reload. The poll redraws it too.
     if (BOT && isKeeper(BOT.slug) && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
@@ -115,6 +119,7 @@ function liveWire() {
     liveSoon('bots', () => {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       tipRefresh();
+      taskBuilderNoticesRefresh();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
@@ -136,13 +141,44 @@ function liveWire() {
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
-// cursor (tasksLoad), which costs only what changed while it was away.
+// cursor (tasksLoad), which costs only what changed while it was away, or a full read when the list has no cursor (its
+// paging stopped part-way, or its last read failed).
 let tasksHiddenAt = 0;
 function tasksCatchUp() {
-  if (TASKS_ST?.since && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
+  if (TASKS_ST && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
 }
+// The open list never drifts for long: it is read in full (tasksReadFull) at least every 15 minutes while it is on
+// screen, and at once when the page comes back after more than 10 minutes away. A delta read and the live stream bring
+// only what the change log names, and a phone can drop the stream while the app is suspended without the page hearing
+// of it, so it is reconnected then too. "Away" is hidden, or asleep: a suspended app's timers stop without the page
+// being hidden first, so a gap between two ticks of the 30-second clock counts as well.
+const TASKS_FULL_MS = 15 * 60e3, TASKS_AWAY_MS = 10 * 60e3;
+let tasksTickAt = Date.now();
+function tasksFreshen() {
+  const state = TASKS_ST;
+  if (!state || !isTasksRoute(S.route) || document.hidden || state.fullRead) return;
+  if (!state.stale && Date.now() - (state.fullAt || 0) < TASKS_FULL_MS) return;
+  if (formBusy($('#task-body'))) return;     // someone writing in the list: the next tick looks again
+  void tasksReadFull(state, {poll: true});
+}
+// The stream is reconnected once per return, not on each tick a failing full read leaves the list stale: that would
+// undo the stream's own backoff while the server is down.
+function tasksBack(away) {
+  if (away > TASKS_AWAY_MS) { liveResume(); if (TASKS_ST) TASKS_ST.stale = true; tasksFreshen(); }
+  else if (away > 30000) tasksCatchUp();
+}
+function tasksTick() {
+  const now = Date.now(), slept = now - tasksTickAt;
+  tasksTickAt = now;
+  if (document.hidden) return;
+  if (slept > TASKS_AWAY_MS) tasksBack(slept); else tasksFreshen();
+}
+setInterval(tasksTick, 30000);
 window.addEventListener('online', tasksCatchUp);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { tasksHiddenAt = Date.now(); return; }
-  if (tasksHiddenAt && Date.now() - tasksHiddenAt > 30000) tasksCatchUp();
+  tasksTickAt = Date.now();
+  if (tasksHiddenAt) tasksBack(Date.now() - tasksHiddenAt);
 });
+// Back from the browser's page cache: nothing ran meanwhile.
+window.addEventListener('pageshow', ev => { if (ev.persisted) tasksBack(Infinity); });

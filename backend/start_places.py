@@ -40,6 +40,17 @@ def held(c, runner_id):
         (runner_id, now, now))}
 
 
+def held_totals(c):
+    """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
+    `held` once per runner while already walking the fleet."""
+    now = H.now()
+    return {r[0]: r[1] for r in c.execute(
+        "SELECT a.runner_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
+        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id",
+        (now, now))}
+
+
 def claim(c, aid):
     c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
@@ -104,7 +115,7 @@ def reserve(c, attempt, settings=None):
     # Admission is claim's job: a turn already counted in the company's in-use total (waiting, or an unmanaged
     # live lease) takes its place without raising the count, so waiters cannot freeze a stopped company.
     counted = (place and place['wait_reason']) or (attempt['lease_until'] > H.now() and not (place and place['managed']))
-    if settings and not counted and org_turns.observe(c, settings)['at_stop']:
+    if settings and not counted and org_turns.observe(c, settings, detailed=False)['at_stop']:
         waiting(c, aid, org_turns.REASON)
         return {'reserved': False, 'waiting': org_turns.REASON}
     capacity = c.execute("SELECT capacity FROM runners WHERE id=?", (rid,)).fetchone()[0] or 1
@@ -123,8 +134,9 @@ def reserve(c, attempt, settings=None):
 
 
 def summary(c, runner_id, settings, default=None):
-    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Read once per computer
-    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total)."""
+    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Pass one company
+    Default across every computer in a listing (Health, Operations, /computers): without it each summary rebuilds
+    pools/groups/spend while classifying queued bots."""
     from .read_cache import value
     return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
 

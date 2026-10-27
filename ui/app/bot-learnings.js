@@ -11,13 +11,21 @@ async function botLearningsLoad(slug) {
   const button = $('#bot-learn');
   if (!button) return;
   let data;
-  try { data = await get(learnApi(slug)); } catch { return; }          // an older server has no history: no button
+  try { data = await get(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
   if (BOT?.slug !== slug || !button.isConnected) return;
   const docs = data.documents || {};
-  if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim())) return;
+  if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
+      !Object.values(data.document_status || {}).some(s => s.oversized || s.updated)) return;
   learnBadge(button, data.unseen);
   button.hidden = false;
-  button.onclick = () => learnOpen(slug, data);
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const current = await get(learnApi(slug));
+      if (BOT?.slug === slug && button.isConnected) learnOpen(slug, current);
+    } catch (e) { toast(e.message); }
+    finally { button.disabled = false; }
+  };
 }
 
 function learnBadge(button, unseen) {
@@ -113,8 +121,9 @@ function learnOpen(slug, data) {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   d.addEventListener('close', () => d.remove(), {once: true});
   const docs = data.documents || {};
+  const statuses = data.document_status || {};
   const views = [['updates', 'Updates'], ['memory/learnings.md', 'Learnings'], ['memory/decisions.md', 'Decisions']]
-    .filter(([k]) => k === 'updates' || String(docs[k] || '').trim());
+    .filter(([k]) => k === 'updates' || String(docs[k] || '').trim() || statuses[k]?.oversized);
   d.innerHTML = `<div class="learn-head"><h2 id="learn-title">Learnings</h2>
       ${views.length > 1 ? `<div class="learn-switch" role="tablist">${views.map(([k, label], i) =>
         `<button type="button" role="tab" data-learn-view="${esc(k)}" aria-selected="${i === 0}">${label}</button>`).join('')}</div>` : ''}
@@ -125,7 +134,14 @@ function learnOpen(slug, data) {
   const body = $('#learn-body', d);
   const show = view => {
     d.querySelectorAll('[data-learn-view]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.learnView === view)));
-    if (view !== 'updates') { body.innerHTML = `<div class="md">${md(learnNewestFirst(docs[view]))}</div>`; return; }
+    if (view !== 'updates') {
+      const status = statuses[view];
+      const banner = status?.oversized ? `<div class="learn-warning" role="status">${status.updated
+        ? `File too large, showing the copy from ${esc(new Date(status.updated).toLocaleString())}.`
+        : 'File too large. No saved copy is available.'}</div>` : '';
+      body.innerHTML = `${banner}<div class="md">${md(learnNewestFirst(docs[view]))}</div>`;
+      return;
+    }
     body.innerHTML = updates.length
       ? `<ol class="learn-list">${updates.map(learnRow).join('')}</ol>${next ? '<button class="ghost learn-more" type="button" data-learn-more>More</button>' : ''}`
       : '<div class="empty">No memory updates yet.</div>';
@@ -138,7 +154,7 @@ function learnOpen(slug, data) {
     else if (t.matches('[data-learn-more]')) {
       t.disabled = true;
       try {
-        const page = await get(`${learnApi(slug)}?before=${encodeURIComponent(next)}`);
+        const page = await get(`${learnApi(slug)}?before=${encodeURIComponent(next)}&include_documents=false`);
         updates = updates.concat(page.updates || []); next = page.next_before;
         show('updates');
       } catch (e) { t.disabled = false; toast(e.message); }

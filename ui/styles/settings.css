@@ -600,6 +600,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .brepo-row:has([data-brepo-pick]:not(:checked)) .repo-seg{visibility:hidden}
 .brepo-run{display:flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .brepo-row:has([data-brepo-pick]:not(:checked)) .brepo-run{visibility:hidden}
+.brepo-run:has(input:disabled){opacity:.6}
+.brepo-why{margin:0;font-size:var(--t-xs);line-height:1.4}
 .brepo-eff{display:flex;gap:8px;align-items:baseline;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .brepo-eff>span:last-child{display:flex;flex-wrap:wrap;gap:2px 10px;min-width:0}
 .brepo-eff-item{overflow-wrap:anywhere;font-family:var(--mono);font-size:var(--t-sm)}
@@ -817,7 +819,8 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .computer-add-dialog .model-login-body{padding:0}
 .computer-add-dialog .computer-add-terminal{margin:12px 0 0;overflow-wrap:anywhere}
 .computer-add-dialog .computer-add-terminal code{white-space:pre-wrap;overflow-wrap:anywhere}
-.model-login.tmodal-shell>.model-login-body{flex:1;min-height:0;overflow:auto}
+/* An auto basis gives an intrinsically sized WebKit dialog room for instructions received after it opens. */
+.model-login.tmodal-shell>.model-login-body{flex:1 1 auto;min-height:0;overflow:auto}
 .model-login.tmodal-shell>:is(.model-login-status,.model-login-actions){flex:none}
 
 /* Settings > Computers: hosted servers (ui/app/settings-hosted.js) */

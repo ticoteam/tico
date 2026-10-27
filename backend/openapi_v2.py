@@ -1041,7 +1041,7 @@ SCHEMAS = {
                                  required=["action"]),
     # Goals and KPIs
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
-                 "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"},
+                 "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"},
                  "status_note": "s", "status_by": "n", "status_at": "n",
                  "status_source": {"type": ["string", "null"], "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"},
                  "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"},
@@ -1287,7 +1287,7 @@ STABLE.extend([
     ("/api/v2/bots/{bot}/profile", "get", "Bots", "getBotProfile",
      "A bot's profile and the values it runs on", "BotProfileState"),
     ("/api/v2/bots/{bot}/profile", "post", "Bots", "setBotProfile",
-     "Set the bot's profile (doer, reviewer, lead, responder, monitor, custom); leaving custom deletes the wake rules it "
+     "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it "
      "copied and needs confirm_drop_rules", "BotProfileState"),
 ])
 SCHEMAS.update({
@@ -1310,9 +1310,14 @@ SCHEMAS.update({
                                      "note": "s"}),
     "RepositoryList": obj({"repositories": items(ref("Repository")), "new_bot_default": {"enum": ["own", "all"]},
                            "github_connected": "b"}),
-    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}}),
+    # The workflow options are present only when on; a request's access defaults to write.
+    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}, "run_workflows": "b",
+                            "edit_workflows": "b"}, required=["full_name"]),
     "BotRepositories": obj({"mode": {"enum": ["own", "all", "chosen"]}, "all_access": {"enum": ["read", "write"]},
-                            "chosen": items(ref("RepositoryGrant")), "effective": items(ref("RepositoryGrant"))}),
+                            "chosen": items(ref("RepositoryGrant")), "all_repos": items(ref("TickedRepository")),
+                            "effective": items(ref("RepositoryGrant"))}),
+    # Only the options that are on are present.
+    "TickedRepository": obj({"full_name": "s", "run_workflows": "b", "edit_workflows": "b"}, required=["full_name"]),
 })
 TAGS['Roadmaps'] = "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
 STABLE.extend([

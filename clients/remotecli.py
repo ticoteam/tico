@@ -79,15 +79,22 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
 
 
 def chosen_grant(value):
-    """`owner/repo`, `owner/repo:read`, `owner/repo:write` or `owner/repo:write+actions` (write, and may run workflows).
-    Without `+actions` a write grant keeps whatever workflow setting it has; `:write-actions` turns it off."""
+    """`owner/repo`, `owner/repo:read`, `owner/repo:write`, or a write grant with options: `+actions` (may run
+    workflows) and `+edit` (may edit workflow files), as in `owner/repo:write+actions+edit`. Left out, an option keeps
+    whatever setting the grant has; `-actions` or `-edit` turns it off."""
     name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
-    grants = {"read": ("read", None), "write": ("write", None), "write+actions": ("write", True),
-              "write-actions": ("write", False)}
-    if level not in grants:
-        raise APIError("validation", f"'{value}': use owner/repo, :read, :write, :write+actions or :write-actions")
-    access, workflows = grants[level]
-    return {"full_name": name, "access": access, **({"run_workflows": workflows} if workflows is not None else {})}
+    access, *options = re.split(r"(?=[+-])", level)
+    flags = {}
+    for option in options:
+        flag = {"actions": "run_workflows", "edit": "edit_workflows"}.get(option[1:])
+        if not flag or flag in flags:
+            access = ""
+            break
+        flags[flag] = option[0] == "+"
+    if access not in ("read", "write") or access == "read" and flags:
+        raise APIError("validation", f"'{value}': use owner/repo, :read, :write, or :write with +actions, -actions, "
+                       "+edit or -edit (e.g. :write+actions+edit)")
+    return {"full_name": name, "access": access, **flags}
 
 
 MARKET_SPEND = ("market define", "market segment add", "market segment tree", "market size add", "market size decide",
@@ -148,6 +155,7 @@ def run(args, who=None):
         # Say what the change took away: a switch to own keeps the chosen rows, but they stop applying.
         lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
         lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
+        lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
         lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
         lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
         if lost:
@@ -437,6 +445,8 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
+            if getattr(args, "from_private", False):
+                payload["from_private"] = True
             for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
                 if getattr(args, field, None) is not None:
                     payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)

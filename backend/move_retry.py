@@ -3,10 +3,11 @@
 The review gate (backend/review_gate.py) refuses a move to Review 1 or Review 2 while CI fails or cannot be read, or
 while no passing receipt names the current head. Each of those clears on its own: the checks finish, a receipt is
 posted, GitHub comes back. So the refusal is remembered on the ticket (task_events field `move_retry`, with the step it
-was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
-fingerprint changes: a PR link's head or checks, the ticket's note, a new message on the ticket, or another wait
-beside a Blocked hold ending. An unreadable GitHub is retried on a timer instead, and if it is still unreadable it goes
-to DevOps (backend/blockers.py). Nobody has to ask for the retry, and Head of Engineering hears nothing about it.
+was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass
+retries the same move as Tico when that fingerprint changes: a PR link's head or checks, the ticket's note, a new
+message on the ticket, or another wait beside a Blocked hold ending. An unreadable GitHub is retried on a timer
+while the ticket keeps its step. Source-level notices describe the outage once, without creating a DevOps or
+manager task.
 
 A retry stops when the ticket leaves the step it was refused at, closes, or RETRY_FOR after the first refusal: each
 retry that is refused again carries that first time forward (`since`), so a long outage still ends."""
@@ -94,23 +95,17 @@ def remember(c, actor, notice):
     step = notice.get("step")
     if not row or not step or row["status"] in ("done", "closed", "declined"):
         return
-    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
+    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"),
+              "by": str(notice.get("by") or actor),
               "outage": outage(notice.get("text")), "seen": fingerprint(c, row), "at": H.now(),
               "since": notice.get("since") or H.now(),
               "tries": int(notice.get("tries") or 0), "state": "waiting",
               **{key: notice[key] for key in CAUSE if key in notice}}
     if notice.get("problem_code"):
         detail["outage"] = True
-    # Access help is asked once per remembered move, on the first refusal that needs it: a temporary failure first
-    # and a permission one on a later retry still asks, and every later retry reuses that ask.
-    ask = detail["outage"] and route_now(notice) and not notice.get("asked")
-    if ask or notice.get("asked"):
-        detail["asked"] = True
     H._task_event(c, row["id"], H.KEEPER, FIELD, row.get("step_id"), json.dumps(detail, sort_keys=True),
                   "Tico retries this move when " + CLEARS["outage" if detail["outage"] else detail["kind"]]
                   if detail["kind"] in CLEARS else "")
-    if ask:
-        _route(c, notice, row)
 
 
 def _latest(c, task_id):
@@ -191,9 +186,6 @@ def retry(store, service, row, detail):
             if getattr(exc, "review_gate", None):
                 review_gate.notify(c, H.KEEPER, notice)
             remember(c, H.KEEPER, notice)
-            if outage(notice.get("text")) and detail.get("outage") and route_twice(notice):
-                # Unreadable twice, OUTAGE_EVERY apart, for no temporary reason: not a blip.
-                _route(c, notice, now_row, twice=True)
             return False
         moved = H.task(c, row["id"])
         landed = H._one(c, "SELECT name FROM task_steps WHERE id=?", (moved.get("step_id"),)) if moved else None

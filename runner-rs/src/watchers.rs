@@ -207,6 +207,9 @@ fn check(event: &Map<String, Value>) -> Option<Value> {
     event.get("key").and_then(|k| k.as_str()).filter(|k| !k.trim().is_empty())?;
     let mut clean = Map::new();
     clean.insert("op".into(), json!(op));
+    if event.get("incident") == Some(&Value::Bool(true)) {
+        clean.insert("incident".into(), json!(true));
+    }
     for (name, limit) in LIMITS {
         if let Some(Value::String(s)) = event.get(*name) {
             clean.insert(name.to_string(), json!(s.chars().take(*limit).collect::<String>()));
@@ -632,6 +635,15 @@ mod tests {
         let (found, log_text) = events(&many);
         assert_eq!(found.len(), MAX_EVENTS);
         assert_eq!(log_text.lines().count(), 10);
+    }
+
+    #[test]
+    fn an_incident_flag_reaches_the_server_only_when_it_is_true() {
+        let out = "tico-event {\"op\": \"task\", \"key\": \"a\", \"incident\": true}\n\
+                   tico-event {\"op\": \"comment\", \"key\": \"b\", \"incident\": \"yes\"}\n\
+                   tico-event {\"op\": \"task\", \"key\": \"c\", \"incident\": false}";
+        let (found, _) = events(out);
+        assert_eq!(found, vec![json!({"op": "task", "key": "a", "incident": true}), json!({"op": "comment", "key": "b"}), json!({"op": "task", "key": "c"})]);
     }
 
     #[test]

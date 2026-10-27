@@ -231,7 +231,8 @@ the bot owns, it gets its own room and session: the wake, the note and the bot's
 the bot's main chat gets one-line reports ([Sessions](sessions.md)).
 
 **A message to a bot may wake it, or wait.** One set of wake rules decides, each with an id: a person's message,
-an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`); a bot's own
+an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`), except that a
+Manager hears of a verdict as a note (`profile_manager_note`); a bot's own
 write (`own_write`), news about a task that waits on something (`parked`), a stall check on a task that has not moved
 (`same_state`; Quiet task triage can let one wake through, see [Tasks](tasks.md)) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
@@ -241,6 +242,12 @@ no rule names waits as a note (`default_note`). Teams, task types, departments, 
 single tasks can override these with rules of their own (Settings → Rules → **What wakes a bot**, `hub rule list`). Every message to a bot records the
 rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and
 runs that did nothing per rule ([Querying Tico with SQL](hub-sql.md)).
+
+Urgent task news covered by an existing urgent rule can still reach the bot when the task waits on an open
+dependency: incident news, a party's blocker or action request, and direct review or sign-off requests keep their
+existing audiences and deciding rules. The bot reads that news in a notice turn without starting the held task.
+Quiet, ignore, own-write, snooze and duplicate controls still apply. The dependency stays in place and continues
+to prevent task start and Doing or Review moves; other parked waits keep their existing behavior.
 
 **The Mac is asleep.** Everything on hub.acme.example stays available and accepts work. After 60 s
 without a heartbeat the bot shows *offline* and new messages show *Saved — waiting for <computer>*.
@@ -270,16 +277,19 @@ the same computer continues the same provider session. A consumed approval or a 
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
 is dismissed and BotOps is told. The computer records fixed operation labels alongside shell events without exposing
 command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
-command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without the computer’s restart report keeps the conservative rule above. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create a BotOps task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 A known primary login reset keeps runnable jobs queued until that reset when no eligible fallback is ready;
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
 approval. Missing telemetry or any output or possible effect keeps the safe review path.
 A quarantine stops each running turn through the runner's normal Stop response, carrying
 `stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
-(or *until a person clears it*). Its jobs return to the queue until the quarantine lifts;
-the bot's activity says they will run again. A real lease loss still says the computer
-stopped answering. Later held runs are named on the bot's existing review task, and
+(or *until a person clears it*). A run that only read, on a host that reports its tool calls,
+and used no approval returns to the queue until the quarantine lifts; the bot's activity says it
+will run again. Any other stopped run (one that used a tool that can change things, or whose host
+does not report its calls) is held for review like a lost run, so lifting the quarantine never
+repeats an outside action. An answer the run finished as the quarantine began is kept on the run,
+never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
@@ -308,13 +318,18 @@ progress line at most once a minute while it stays so, and one when it is back; 
 status` says when the running bot job predates the checkout's current commit. On a bot's Chat
 page, one line above the composer says when the bot is paused and why (a usage limit, a
 quarantine, or a Mac offline for more than ten minutes) and that messages are saved, or that a
-review is owed while chat still answers. For a quarantine it says when the bot resumes by itself, or, for a safety
+review is owed while chat still answers. Health and the bot page share the quarantine explanation: a refusal-count
+pause names rule 8 and its UTC resume date and time, and a person who manages the bot also sees the refusal rule
+and refused words, with credential values masked. It resumes by itself; a person who manages it can clear it sooner.
+A manual quarantine lasts until a person clears it and promises no automatic lift time. For a safety
 pause recorded before path mentions stopped pausing bots, what the check matched (a secrets path or another
 bot's folder, in the bot's own words). Anyone who manages the
-bot, wherever it runs, sees Resume bot beside the warning by its name and a Paused for review card under More with the
-refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
+bot, wherever it runs, sees Resume bot beside the warning by its name and a card under More. The card says
+Quarantined for repeated refused writes for an automatic pause, or Paused for review for a manual safety pause,
+and shows the explanation above. A manual safety pause also shows the refused text (credential values masked)
+and its task; one click releases that pause and the checks stay on.
 
-**A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
+**A subscription usage limit.** A safe run that hits one is saved as retryable and interrupted with `limited` set, preserving its checkpoint and provider session, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
 *limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer, saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
@@ -323,8 +338,11 @@ that says its model is at capacity or overloaded for now ("Selected model is at 
 20s", `overloaded_error`) has not spent the login's quota: that login is held two minutes, the streak does not grow,
 a fallback can still take the run, and the bot's line and Health say *temporary model capacity*, a check or task
 model's turn included; a quota hold already in force keeps its own end. Only a refusal before the bot sent a message
-or used a tool is a run that did nothing: one that came after the run had acted is never replayed or handed to a
-fallback, and waits for review as *uncertain*. A quota or billing refusal ("Quota exceeded. Check your plan and
+or used a tool is a run that did nothing. After the run acted, a runner that kept its thread queues one continuation
+on that same thread after the two-minute hold, with a note to carry on without repeating completed work. It never
+hands that continuation to a fallback or a fresh thread. If the thread cannot resume, or the continuation hits
+capacity again, the run waits for review as *uncertain*. A missing CLI session is never rebuilt for a continuation, and a cleared session stays cleared. Older runners that cannot keep the thread hold it for
+review immediately, and are never handed a continuation: it waits in the queue for a runner that can continue it. A quota or billing refusal ("Quota exceeded. Check your plan and
 billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
@@ -367,7 +385,17 @@ the run is limited as above. A limit is named by the login that returned it: the
 Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
 or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
 API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
-quota never holds or extends the bot's own login, nor the reverse. Every turn tries the bot's own provider first, so the
+quota never holds or extends the bot's own login, nor the reverse. A quota refusal before any message or tool call can
+move to the next ready provider. A fallback that has worked before quota or capacity stops it keeps its confirmed provider
+thread under that job on a runner advertising `source_continue_v1`. The next claim carries `source_continuation`
+(provider, model, profile and session-clear epoch) beside `continue_thread`; the runner requires that exact session,
+even after a runner restart. A changed login, cleared epoch or missing session never starts a fresh replay. The primary
+conversation session stays separate. Before a fallback starts, its pending handoff fences the old primary identity;
+its confirmed side session is then saved locally and on the server while the turn is still running. A safe lost lease
+can therefore continue that session once, even before any quota/capacity result. An unconfirmed side session never
+resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
+erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
+older runners are not handed these continuations. Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
@@ -390,6 +418,20 @@ failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage li
 error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
 thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
 ([Sessions](sessions.md#checkpoints-and-resume)).
+
+**Run time limits.** Five minutes before its configured time limit, a running turn that supports in-turn input
+receives one warning to stop at a safe point, commit or stash work, push what is ready and leave a hand-off note.
+Limits under ten minutes warn halfway through; the warning states the actual time left and starts no new run.
+This uses Codex's native input and Claude Code's input on supported versions (2.1.296 or later).
+Other runtimes keep the existing cut without a warning. A cut retains the last reply text and any task hand-off.
+A run cut by its configured time limit continues on the same task and provider session.
+The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
+any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
+A named merge, publish, send, payment or consumed approval still holds the run for BotOps to check.
+Like restart recovery, a time-limit continuation also permits a harness that does not report tool calls
+when no named outside action or consumed approval was recorded; it must check previous work before continuing.
+Two consecutive time-limit cuts hold the job with an open review task; a run that finishes inside its limit
+resets that count. Provider quotas and the Gateway credential lifetime limit keep their existing recovery rules.
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
@@ -503,12 +545,13 @@ window and a gap between sweeps, and it grants no right.
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
 | **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
+| **Manager** | people, a task given to it, its own clock, its exceptions list having a new entry | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
 
-A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead and Monitor, and a due date or a snooze
-ending wakes a Lead and Monitor; a Responder has no routines. Stall and status checks run only for a Doer (and for a
+A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
+snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Stall and status checks run only for a Doer (and for a
 Custom bot that keeps them on). Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
@@ -617,3 +660,5 @@ Heartbeats and `scripts/tico doctor` report each base clone's state, last fetch,
 any error. A base clone failure does not change a bot's readiness. A clone that has been absent
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
+
+Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.

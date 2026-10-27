@@ -48,17 +48,26 @@ def in_use(c):
         (REASON, now, now)).fetchone()[0]
 
 
-def snapshot(c, settings):
-    from .start_places import summary
-    counts = dict(running=0, starting=0, waiting=0, queued=0)
-    for row in c.execute('SELECT id FROM runners'):
-        here = summary(c, row['id'], settings)
-        for key in counts:
-            counts[key] += here[key]
-    value = {**levels(c), **counts, 'in_use': in_use(c)}
+def admission(c):
+    """The current turn ceiling, without classifying every queued bot's readiness and spending limits."""
+    value = {**levels(c), 'in_use': in_use(c)}
     value['at_warning'] = value['in_use'] >= value['warning']
     value['at_stop'] = value['in_use'] >= value['stop']
     return value
+
+
+def snapshot(c, settings):
+    """Classify every computer's queue once for a finding or the turn-levels settings view. Share one company
+    Default so each claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding it per bot."""
+    from . import usage_limits
+    from .start_places import summary
+    default = usage_limits.company(c)
+    counts = dict(running=0, starting=0, waiting=0, queued=0)
+    for row in c.execute('SELECT id FROM runners'):
+        here = summary(c, row['id'], settings, default)
+        for key in counts:
+            counts[key] += here[key]
+    return {**admission(c), **counts}
 
 
 def needs_observation(c, value):
@@ -66,15 +75,19 @@ def needs_observation(c, value):
     return value['at_warning'] != bool(incident.get('active')) or value['at_stop'] != bool(incident.get('at_stop'))
 
 
-def observe(c, settings, value=None):
+def observe(c, settings, value=None, *, detailed=True):
     """Caller holds the writer transaction: one durable crossing and hook per incident.
 
     C will consume turns.warning_crossed and own the detailed fixer finding. Until then Health
     shows this saved incident even with the optional Health Monitor switched off.
     """
-    value = value or snapshot(c, settings)
+    value = value or (snapshot(c, settings) if detailed else admission(c))
     old = saved(c, INCIDENT)
     incident = dict(old)
+    if not detailed and value['at_warning'] != bool(old.get('active')):
+        # The incident keeps its full crossing counts, but admission under the write
+        # lock does not repeatedly check every queued bot's subscription and budget.
+        value = {**snapshot(c, settings), **value}
     if value['at_warning'] and not old.get('active'):
         incident = {'id': H.new_id(), 'opened_at': H.now(), 'active': True, 'counts': value}
         H.event(c, H.KEEPER, 'turns.warning_crossed', incident['id'], value)

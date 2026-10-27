@@ -855,7 +855,7 @@ impl ClaudeHost {
                     let mut inner = self.inner();
                     let up = inner.up && !inner.interrupted.contains(&turn);
                     match inner.threads.get_mut(&tid) {
-                        Some(t) if up && (t.started || t.fork_from.is_some()) => {
+                        Some(t) if up && !t.settings.require_existing_session && (t.started || t.fork_from.is_some()) => {
                             t.started = false;
                             t.fork_from = None;
                             t.session_id = None;
@@ -1933,7 +1933,7 @@ mod tests {
     }
 
     /// One turn on a `claude` that writes `first` and exits 1 the first time it runs, and `then` the next time.
-    async fn error_first_turn(first: &str, then: &str, resumed: bool) -> Vec<Value> {
+    async fn error_first_turn(first: &str, then: &str, resumed: bool, require_existing_session: bool) -> Vec<Value> {
         let dir = std::env::temp_dir().join(format!("claude-err-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("first.jsonl"), first).unwrap();
@@ -1947,6 +1947,7 @@ mod tests {
         let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
         host.start().await.unwrap();
         let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.require_existing_session = require_existing_session;
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
         let thread = if resumed { host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings) } else { host.start_thread(&settings) };
         host.start_turn(&thread, "hello", None).unwrap();
@@ -1966,14 +1967,23 @@ mod tests {
     async fn a_zero_turn_error_before_the_prompt_is_still_the_turns_outcome() {
         // A resumed session that is not on this computer: restarted once as a new session, as before.
         let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
-        let got = error_first_turn(&format!("{missing}\n"), &format!("{}\n{}\n", assistant_line("m1", "Recovered."), result_line("Recovered.")), true).await;
+        let got = error_first_turn(&format!("{missing}\n"), &format!("{}\n{}\n", assistant_line("m1", "Recovered."), result_line("Recovered.")), true, false).await;
         assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
         // Any other error before the prompt, on a fresh session too, fails the turn with its own text.
         let refused = r#"{"type": "result", "subtype": "success", "is_error": true, "num_turns": 0, "result": "Invalid API key · Please run /login", "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
-        let got = error_first_turn(&format!("{refused}\n"), "", false).await;
+        let got = error_first_turn(&format!("{refused}\n"), "", false, false).await;
         let failed = got.iter().find(|e| e["kind"] == "turn_failed").expect("a failed turn");
         assert!(text_of(&failed["error"]).contains("Invalid API key"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn a_capacity_continuation_with_a_missing_claude_session_never_restarts() {
+        let missing = r#"{"type":"result","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: 5b1"]}"#;
+        let then = format!("{}\n{}\n", assistant_line("m1", "Repeated work."), result_line("Repeated work."));
+        let got = error_first_turn(&format!("{missing}\n"), &then, true, true).await;
+        assert!(got.iter().any(|e| e["kind"] == "turn_failed" && text_of(&e["error"]).contains("No conversation found")), "{got:?}");
+        assert!(!got.iter().any(|e| e["kind"] == "turn_completed" || (e["kind"] == "diagnostic" && e["text"] == RESTORING)), "{got:?}");
     }
 
     #[tokio::test]
