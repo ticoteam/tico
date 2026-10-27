@@ -66,7 +66,7 @@ def may_snooze(conn, actor, row, mover=False):
     return any(actor in actors for actors in roles_of(conn, row["id"]).values())
 
 
-def _check(conn, actor, task_id, mover):
+def _check(conn, actor, task_id, mover, what):
     H = _H()
     H._writer(conn, actor)
     row = H.task(conn, task_id)
@@ -75,6 +75,8 @@ def _check(conn, actor, task_id, mover):
     H._task_private_writer(conn, actor, row)
     if not may_snooze(conn, actor, row, mover):
         H.refuse(conn, actor, "identity", "Only the requester, owner, their managers, a role holder or a mover snoozes it")
+    from .ceo_acts import TASK, person_task
+    person_task(conn, actor, row, f"{what} {TASK}")      # a person's task stays theirs (backend/ceo_acts.py)
     return row
 
 
@@ -85,7 +87,7 @@ def _label(until):
 def snooze(conn, actor, task_id, until, mover=False):
     """Snooze a live task until `until` (see parse_until); snoozing it again moves the date."""
     H = _H()
-    row = _check(conn, actor, task_id, mover)
+    row = _check(conn, actor, task_id, mover, "snooze")
     if row["status"] not in H.ACTIVE_STATUSES:
         H.refuse(conn, actor, "snooze", f"the task is {row['status']}; only open work is snoozed")
     stamp = parse_until(until)
@@ -116,7 +118,7 @@ def snooze(conn, actor, task_id, until, mover=False):
 def unsnooze(conn, actor, task_id, mover=False):
     """End a snooze early: the task is back now, and its owner bot is woken once."""
     H = _H()
-    row = _check(conn, actor, task_id, mover)
+    row = _check(conn, actor, task_id, mover, "wake")
     if not row.get("snoozed_until"):
         return row
     after = _clear(conn, actor, row, "unsnoozed")

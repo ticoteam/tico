@@ -478,6 +478,9 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         above = {new, *ancestors(conn, new)}
         if any(above.intersection(blocker_ids(conn, tid)) for tid in (child_id, *descendant_ids(conn, child_id))):
             H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
+    from .ceo_acts import TASK, person_task
+    # A person's task stays theirs (backend/ceo_acts.py).
+    person_task(conn, actor, row, f"move {TASK} under another task" if new else f"take {TASK} out of its parent")
     at = H.now()
     if old:
         _delete(conn, child_id, old, "parent")
@@ -585,6 +588,8 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     if _exists(conn, blocker_id, task_id, "blocks"):
         return False
     _check_blocker(conn, actor, row, blocker_id)
+    from .ceo_acts import TASK, person_task
+    person_task(conn, actor, row, f"make {TASK} wait on another task")      # a person's task stays theirs
     _insert(conn, actor, blocker_id, task_id, "blocks", H.now())
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
     H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
@@ -614,6 +619,8 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
+    from .ceo_acts import TASK, person_task
+    person_task(conn, actor, row, f"take a wait off {TASK}")      # a person's task stays theirs
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile

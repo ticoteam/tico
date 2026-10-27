@@ -794,6 +794,9 @@ def switch(slug, manifest=None):
     who = str(row.get("updated_by") or "a person")
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
+    if row.get("per_message"):
+        # The CEO Bot (backend/mail_settings.py): off whatever is stored, and nobody turns it on, so no hint to.
+        out["on"], out["forward_to"], out["detail"] = False, [], "off in Tico: " + str(row["per_message"])
     return out
 
 

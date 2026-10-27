@@ -11,6 +11,11 @@ No row means no person has decided yet: sending without approval is off (docs/ma
 Each bot's computer reports what its bot.yaml asks (`mail_request` in the readiness report,
 runner-rs/src/declared_access.rs); Health raises an alert when it asks for more than a person approved, and a person may
 take exactly that request with `from_request` once they have read it.
+
+The CEO Bot never sends outside the company without a person's yes for that message, at any level (backend/ceo_acts.py
+`PERSON_ONLY`, "send"): its setting reads as off with no forward targets, whatever is stored (`per_message`), and nobody
+turns it on. Its mail connector then takes neither a forward target, nor the sender of a thread it answers, nor an
+allowance, without a send approval for the exact message.
 """
 
 import json
@@ -75,13 +80,26 @@ def unapproved(setting, request):
     return extra if extra["outbound_send"] or extra["forward_to"] else None
 
 
+def per_message(c, bot):
+    """Why `bot` sends nothing outside without a yes for each message, whatever is stored, or None: the CEO Bot."""
+    from . import ceo_bot
+    if bot != ceo_bot.SLUG:
+        return None
+    return (f"the {ceo_bot.name(c)} sends nothing outside the company without the owner's yes for each message, at "
+            "every level: request a Tico send approval for the exact message")
+
+
 def view(c, bot):
     setting, request = stored(c, bot), requested(c, bot)
-    return {"bot": bot, "set": setting is not None,
-            "outbound_send": bool(setting and setting["outbound_send"]),
-            "forward_to": (setting or {}).get("forward_to") or [],
-            "updated": (setting or {}).get("updated"), "updated_by": (setting or {}).get("updated_by"),
-            "requested": request, "unapproved": unapproved(setting, request)}
+    found = {"bot": bot, "set": setting is not None,
+             "outbound_send": bool(setting and setting["outbound_send"]),
+             "forward_to": (setting or {}).get("forward_to") or [],
+             "updated": (setting or {}).get("updated"), "updated_by": (setting or {}).get("updated_by"),
+             "requested": request, "unapproved": unapproved(setting, request)}
+    if why := per_message(c, bot):
+        # What applies, to the bot and to every person who reads it; nothing a person could approve is asked.
+        found.update({"set": True, "outbound_send": False, "forward_to": [], "per_message": why, "unapproved": None})
+    return found
 
 
 def require_person(who, bot=""):
@@ -114,6 +132,8 @@ def update(c, auth, who, bot, body):
         raise Problem("forward_to", "Not an email address: " + ", ".join(bad[:3]), 422)
     if len(targets) > MAX_TARGETS:
         raise Problem("forward_to", f"At most {MAX_TARGETS} forward addresses", 422)
+    if (on or targets) and (why := per_message(c, bot)):
+        raise Problem("per_message", why[0].upper() + why[1:], 422)
     c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET outbound_send=excluded.outbound_send, "
               "forward_to_json=excluded.forward_to_json, updated=excluded.updated, updated_by=excluded.updated_by",
@@ -129,7 +149,7 @@ def alerts(c):
     for row in c.execute("SELECT a.bot,r.id runner,r.readiness_json FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
-        if row["runner"] is None:
+        if row["runner"] is None or per_message(c, row["bot"]):     # nothing a person could turn on
             continue
         if row["runner"] not in documents:
             documents[row["runner"]] = readiness_document(row["readiness_json"])
