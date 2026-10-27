@@ -32354,7 +32354,6 @@
           }
         },
         "required": [
-          "access",
           "full_name"
         ],
         "additionalProperties": true

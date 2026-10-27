@@ -247,8 +247,10 @@ async function botReposMount(host, slug) {
     for (const name of state.chosen.keys()) if (!names.some(n => n.toLowerCase() === name.toLowerCase())) names.push(name);
     return names.sort((a, b) => a.localeCompare(b));
   };
-  // What All ticked repos reaches: the ticked repositories, less bot repositories.
-  const ticked = () => (team.repositories || []).filter(r => r.enabled && !r.bot_repo).map(r => r.full_name).sort((a, b) => a.localeCompare(b));
+  // What All ticked repos reaches: the ticked repositories, less bot repositories, a bot- name counting as one, as the
+  // server reads it (backend all_ticked).
+  const ticked = () => (team.repositories || []).filter(r => r.enabled && !r.bot_repo && !/^bot-/i.test(r.full_name.split('/')[1] || ''))
+    .map(r => r.full_name).sort((a, b) => a.localeCompare(b));
   // Why All ticked repos' options cannot change, said beside them; '' when they can.
   const allWhy = () => !admin ? 'Only an Owner or admin changes this' : state.all_access !== 'write' ? 'Needs Write for all ticked repos' : '';
   const id = `brepo-${slug}`;

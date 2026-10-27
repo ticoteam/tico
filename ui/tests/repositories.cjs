@@ -352,9 +352,13 @@ async function productCreate(browser) {
 async function saves(browser) {
   const {page, errors, writes, data} = await open(browser);
   data.bot = {mode: 'all', all_access: 'write', chosen: []};
+  // Ticked, not marked as a bot's, but named like one: All ticked repos does not reach it, so it has no row.
+  data.repositories.push(repo('acme/bot-notes', {enabled: true}));
   await page.evaluate(() => settingsEditBot('release-captain'));
   const box = page.locator('#bot-editor [data-bot-repos]');
   await box.locator('.brepo-all').waitFor();
+  assert.equal(await box.locator('[data-brepo-all="acme/bot-notes"]').count(), 0);
+  assert.equal(await box.locator('[data-brepo-all="acme/web"]').count(), 1);
   const status = () => box.locator('[data-brepo-status]').innerText();
   // A refused mode change: back to All ticked repos, the reason kept.
   data.refuse = 'Only owners and admins change this';

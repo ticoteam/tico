@@ -1310,9 +1310,9 @@ SCHEMAS.update({
                                      "note": "s"}),
     "RepositoryList": obj({"repositories": items(ref("Repository")), "new_bot_default": {"enum": ["own", "all"]},
                            "github_connected": "b"}),
-    # The workflow options are present only when on.
+    # The workflow options are present only when on; a request's access defaults to write.
     "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}, "run_workflows": "b",
-                            "edit_workflows": "b"}, required=["full_name", "access"]),
+                            "edit_workflows": "b"}, required=["full_name"]),
     "BotRepositories": obj({"mode": {"enum": ["own", "all", "chosen"]}, "all_access": {"enum": ["read", "write"]},
                             "chosen": items(ref("RepositoryGrant")), "all_repos": items(ref("TickedRepository")),
                             "effective": items(ref("RepositoryGrant"))}),
