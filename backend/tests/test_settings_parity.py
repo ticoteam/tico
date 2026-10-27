@@ -95,6 +95,7 @@ NOT_PROVEN = {
     # Confirm entries: the card is made, but the tap can't run on this fixture.
     "bot.agent_credential.revoke": "tap 404: finance has no agent credential",
     "webhooks.gateway.wake": "tap 404: the trigger has no Tico Gateway address (a member's tap is refused first)",
+    "me.tokens.revoke": "tap 404: no synthetic API token",
 }
 # Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
 # here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it

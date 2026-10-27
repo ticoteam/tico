@@ -65,9 +65,10 @@ def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
     assert changed["level"] == 2 and changed["level_changed_by"] == OWNER and changed["level_changed_at"]
     [entry] = changed["level_history"]
     assert (entry["level"], entry["was"], entry["by"]) == (2, 1, OWNER) and entry["by_name"]
-    for token in ("ben-test", "cara-test", ceo, other, via_assistant(api)):
+    for token in ("ben-test", "cara-test", ceo, other):
         refused = level(api, 3, token=token, expected=403)
         assert "Only the owner" in str(refused)
+    level(api, 3, token=via_assistant(api), expected=403)     # acting for the owner without their tap
     assert level(api, 3)["level"] == 3
     shown = get(api, "ceo-bot")
     assert shown["level"] == 3 and [(e["level"], e["by"]) for e in shown["level_history"]] == [(3, OWNER), (2, OWNER)]
