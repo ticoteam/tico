@@ -266,13 +266,29 @@ def tend(c, settings, owner_id='', freed=0, draft=None):
 
 
 def run(c, execution, settings, owner_id='', draft=None):
-    """One pass: free the dead, then tend the incident. Returns (freed, incident).
+    """One pass in one writer: free the dead, then tend the incident. Returns (freed, incident).
 
-    Prefer the scheduler's free → read `draft_finding` → tend split so fleet classification is not under the writer.
-    Tests may still call this with one writer transaction and `draft=None`.
-    """
+    For a caller that already holds one write transaction. The scheduler uses `run_split`, which keeps the fleet
+    classification out of the writer."""
     freed = free(c, execution)
     return freed, tend(c, settings, owner_id, freed, draft)
+
+
+def run_split(execution, settings, write, read, owner_id=None):
+    """The scheduler's pass: free the dead under one short write, classify the fleet for the finding on a read
+    connection (`draft_finding`), then tend the incident under a second short write. Claim renewals and events are
+    not parked behind every queued bot's refusal check. Returns (freed, incident).
+
+    `write(step)` and `read()` are context managers that give a connection; `owner_id` None means this
+    environment's owner, looked up under the first write."""
+    with write("turn_fixer.free") as c:
+        if owner_id is None:
+            owner_id = (execution.auth.owner_id(c) if execution.auth else '') or ''
+        freed = free(c, execution)
+    with read() as c:
+        draft = draft_finding(c, settings, force=bool(freed))
+    with write("turn_fixer.tend") as c:
+        return freed, tend(c, settings, owner_id, freed, draft)
 
 
 def words(freed, incident):

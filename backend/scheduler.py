@@ -248,19 +248,11 @@ class Scheduler:
             from . import org_turns
             org_turns.observe(c, self.store.settings, detailed=False)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
-        # Fleet classification for the Health finding runs on a read connection between the two short writes, so claim
+        # Fleet classification for the Health finding runs on a read connection between two short writes, so claim
         # renewals and events are not parked behind every queued bot's refusal check (TK / #1654 residual).
         with SR.recording(self.store, "turn_fixer", failures) as run:
             from . import turn_fixer
-            owner = ''
-            with locked("turn_fixer.free") as c:
-                if self.execution.auth:
-                    owner = self.execution.auth.owner_id(c) or ''
-                freed = turn_fixer.free(c, self.execution)
-            with self.store.read() as c:
-                draft = turn_fixer.draft_finding(c, self.store.settings, force=bool(freed))
-            with locked("turn_fixer.tend") as c:
-                incident = turn_fixer.tend(c, self.store.settings, owner, freed, draft)
+            freed, incident = turn_fixer.run_split(self.execution, self.store.settings, locked, self.store.read)
             run.did(turn_fixer.words(freed, incident), quiet=not freed)
         with self.store.read() as c:
             from . import start_places
