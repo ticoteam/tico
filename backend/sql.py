@@ -559,8 +559,11 @@ def materialize(conn, index, tables, inner, function, private):
     gates = Gates(inner, private, index.denied)
     message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
     attempt = function("attempt") + "(id)"
-    return {table: (predicate.replace(message, f"({gates.message()} OR {message})")
-                    .replace(attempt, f"({gates.attempt('source.id')} OR {attempt})"), hidden)
+    # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
+    # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
+    return {table: (predicate.replace(message, function("settled_message") +
+                                      f"(id,conversation_id,refs_json,in_reply_to,{gates.message()})")
+                    .replace(attempt, function("settled_attempt") + f"(id,{gates.attempt('source.id')})"), hidden)
             for table, (predicate, hidden) in tables.items()}
 
 
@@ -622,6 +625,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
                      "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
+                     "settled_message": (5, lambda mid, cid, refs, reply, fast:
+                                         True if fast else index.message(mid, cid, refs, reply)),
+                     "settled_attempt": (2, lambda aid, fast: True if fast else index.attempt(aid)),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
         for name, (arity, fn) in functions.items():
