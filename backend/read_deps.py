@@ -18,20 +18,19 @@ that are private, and denied tasks are private. Everything else, and every row n
 Triggers keep it current from every writer: a change to a node's source rows (the same columns the provenance clock
 watches, backend/provenance_clock.py) unsettles every row that touched it and queues it, and a new message or run is
 queued. A task turning private changes no node: denial is worked out per read. `sweep` settles queued rows in short
-write transactions beside the server, and the rows no pass has seen yet (history an older server wrote).
+write transactions beside the server, and the rows no pass has seen yet (history an older server wrote). SQLite
+refuses to drop a column a trigger names, so a migration dropping one of these columns rewrites the triggers here
+first; a rename is carried.
 """
 import json
-import re
 import sqlite3
 import threading
 
 from . import hubdb as H
 from .store import Problem
 
-READY = "read_deps.ready"
 BATCH = 100
 SPAN = 20000
-SHAPE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -41,8 +40,19 @@ def _touch(node):
             f"DELETE FROM read_index WHERE key IN (SELECT key FROM read_deps WHERE dep={node}); ")
 
 
-# Every row is unsettled: a task whose id a dependency string could not have recorded, or meeting provenance.
-EVERYTHING = "INSERT OR IGNORE INTO read_dirty SELECT key FROM read_index; DELETE FROM read_index; "
+def _touch_all(nodes):
+    """Unsettle and queue every row that touched one of `nodes` (an SQL SELECT of node strings)."""
+    return (f"INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep IN ({nodes}); "
+            f"DELETE FROM read_index WHERE key IN (SELECT key FROM read_deps WHERE dep IN ({nodes})); ")
+
+
+TURN = ("id", "meeting_id", "bot")
+
+
+def _turn_rooms(side):
+    """The rooms of the keeper inputs naming this turn, as nodes; the partial index holds only such inputs."""
+    turn = "json_extract(m.refs_json,'$.live_meeting.turn_id')"
+    return f"SELECT 'c:'||m.conversation_id FROM messages m WHERE {turn} IS NOT NULL AND {turn}={side}.id"
 
 
 def _changed(columns):
@@ -77,9 +87,6 @@ SCHEMA = (
     + _touch("'c:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_task_insert AFTER INSERT ON tasks BEGIN "
     + _touch("'t:'||NEW.id") + _touch("'a:'||NEW.carried_by") + "END",
-    # An id no dependency string could have recorded: settle everything again.
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_odd_id AFTER INSERT ON tasks WHEN NOT ("
-    "length(NEW.id) BETWEEN 1 AND 128 AND NEW.id NOT GLOB '*[^A-Za-z0-9_.:-]*') BEGIN " + EVERYTHING + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_task_update AFTER UPDATE OF id, carried_by ON tasks "
     f"WHEN {_changed(('id', 'carried_by'))} BEGIN " + _touch("'t:'||OLD.id") + _touch("'t:'||NEW.id")
     + _touch("'a:'||OLD.carried_by") + _touch("'a:'||NEW.carried_by") + "END",
@@ -107,8 +114,13 @@ SCHEMA = (
       + " OR ".join(f"{side}.action IN {RUN_EVENTS}" for side in sides) + " BEGIN "
       + "".join(_touch(f"'a:'||{side}.target") for side in sides) + "END"
       for op, sides in (("INSERT", ("NEW",)), ("UPDATE", ("OLD", "NEW")), ("DELETE", ("OLD",)))),
-    *(f"CREATE TRIGGER IF NOT EXISTS read_deps_meeting_turn_{op.lower()} AFTER {op} ON live_meeting_turns BEGIN "
-      + EVERYTHING + "END" for op in ("INSERT", "UPDATE", "DELETE")),
+    # A turn makes a room a meeting room through the keeper inputs that name it (live_privacy `_conversation_uncached`):
+    # only those rooms' readers change, and a claim, reply or skip changes none of the columns that check reads.
+    *(f"CREATE TRIGGER IF NOT EXISTS read_deps_meeting_turn_{op.lower()} AFTER {op}"
+      f"{' OF ' + ','.join(TURN) if op == 'UPDATE' else ''} ON live_meeting_turns "
+      f"{'WHEN ' + _changed(TURN) + ' ' if op == 'UPDATE' else ''}BEGIN "
+      + "".join(_touch_all(_turn_rooms(side)) for side in sides) + "END"
+      for op, sides in (("INSERT", ("NEW",)), ("UPDATE", ("OLD", "NEW")), ("DELETE", ("OLD",)))),
 )
 
 

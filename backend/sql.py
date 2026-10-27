@@ -558,7 +558,8 @@ def materialize(conn, index, tables, inner, function, private):
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     create("run_carriers", sorted(aid for tid, aid in conn.execute(
         "SELECT id,carried_by FROM main.tasks WHERE carried_by IS NOT NULL") if tid in index.denied))
-    # Settled history rows that touched one of the caller's denied tasks (backend/read_deps.py): few, like the tasks.
+    # Settled history rows that touched one of the caller's denied tasks (backend/read_deps.py). It grows with the
+    # rows those tasks reach, a busy private room included: about 35 ms per 100,000 rows here, once per request.
     create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
                            f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
