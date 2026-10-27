@@ -847,9 +847,13 @@ def _carries_private_file_or_link(c, kept, text):
 def create_texts(body):
     """Every text a task create keeps besides its title and body (models.TaskCreate): what a task from private work
     could otherwise carry past the words checks."""
+    from .task_roles import role_name
     blocker = body.blocker
+    # A role's name is checked as sent and as stored (task_roles.role_name): the store lower-cases and trims it.
+    roles = [name for raw in (body.roles or {}) for name in (str(raw), role_name(raw) or "")]
     return [*body.acceptance_criteria, *body.labels, *body.change_paths, *body.links, body.public_title or "",
-            body.public_summary or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ())]
+            body.public_summary or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ()),
+            *roles]
 
 
 def from_private_words(c, kept, title, body, texts=()):

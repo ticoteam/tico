@@ -1351,8 +1351,8 @@ criteria; the private task stays sealed.
   secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private
   task the run carries (title, body, note or comments), and no file, attachment or link of a private task. The checks
   read everything the task keeps: title, body, acceptance criteria, labels, links (a secret-shaped value in a link is
-  refused too), public title and summary, change paths and blocker. Rewrite it
-  and file again; it does not count toward quarantine. Nobody signs off on the words.
+  refused too), public title and summary, change paths, blocker and the names of its roles (as sent and as stored).
+  Rewrite it and file again; it does not count toward quarantine. Nobody signs off on the words.
 - The title of the parent, or of any private task the run carries, is refused anywhere in that text, in any case.
 - The copy check catches only 12 or more words copied in a row. A short name that is not a private task's title (a
   vendor, a person, a project) is not caught: that rests on the filing bot's judgement.

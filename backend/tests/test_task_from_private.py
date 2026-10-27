@@ -282,3 +282,39 @@ def test_a_private_tasks_title_anywhere_in_the_text_is_a_correction(api, field):
         correction(api, filed(row["id"], **extra), attempt["token"], "names a private task by its title")
     # A word of a title on its own is not the title.
     assert post(api, "tasks", filed(row["id"], body=REPAIR["body"] + " Triage it first."), attempt["token"])
+
+
+def _rows(api):
+    with api.app.state.store.read() as c:
+        return [c.execute(sql).fetchone()[0] for sql in (
+            "SELECT count(*) FROM tasks", "SELECT count(*) FROM task_roles", "SELECT count(*) FROM tags",
+            "SELECT count(*) FROM events WHERE action IN ('task.create','task.roles')",
+            "SELECT count(*) FROM refusals")]
+
+
+# A role's name is checked as sent and as stored (lower-cased): each of these secret shapes is caught by one side only.
+@pytest.mark.parametrize("under", [True, False])
+@pytest.mark.parametrize("name,check", [
+    ("ZIP_Triage", "names a private task by its title"),
+    (" Ops-Lockfile_scan ", "names a private task by its title"),
+    ("XOXB-1234567890-ABCDEFABCDEF", "secret-shaped"),      # secret-shaped once lower-cased
+    ("AKIAABCDEFGHIJ123456", "secret-shaped"),              # secret-shaped as sent
+])
+def test_a_role_name_gets_the_words_checks_as_sent_and_as_stored(api, under, name, check):
+    row = private_work(api)
+    carried = private_work(api, "Ops Lockfile_Scan")
+    attempt = run_on(api)
+    carry(api, attempt, carried)
+    before = _rows(api)
+    correction(api, filed(row["id"] if under else None, roles={name: ["doc-updater"]}), attempt["token"], check)
+    assert _rows(api) == before
+
+
+@pytest.mark.parametrize("under", [True, False])
+def test_a_plain_role_still_files(api, under):
+    row = private_work(api)
+    attempt = run_on(api)
+    body = filed(row["id"] if under else None, roles={"Reviewer": ["doc-updater"]})
+    assert not dry_run(api, body, attempt["token"])
+    made = post(api, "tasks", body, attempt["token"])
+    assert get(api, "tasks/" + made["id"], bot_token(api, "finance"))["task"]["roles"] == {"reviewer": ["bot:doc-updater"]}
