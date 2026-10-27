@@ -596,7 +596,7 @@ function settingsWatchTransition(id, origin = {}) {
     const input = settingsControlInput(origin.control);
     if (input && !input.disabled) input.value = input.defaultValue || origin.current;
   };
-  void paint(); SETTINGS_TRANSITION_TIMER = setInterval(paint, 2000);
+  void paint(); SETTINGS_TRANSITION_TIMER = setInterval(() => { if (!document.hidden) paint(); }, 2000);
 }
 
 function settingsEditInstructions(slug) {
