@@ -266,8 +266,9 @@ def refusal(e, base=""):
 def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_words=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps acting for a person, a confirm entry's Confirm card (`propose`) or a
-    person-only entry's reason and link. `card_words(c, auth, who, e, body, target)`: the card's plain words, or the
-    refusal the person's own click would get (then no card is made); None when the entry has no words of its own."""
+    person-only entry's reason and link. `card_words(c, auth, who, e, body, target)`: for an entry whose class rests on
+    what the change does to stored state, the change tried as the person's own click: (needs a card, the card's plain
+    words), or the refusal that click would get (then no card is made); None for any other entry."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via == "botops"
 
@@ -302,13 +303,18 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     kind = kind_for(e, class_body)
     if kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
+    tried = card_words(c, auth, who, e, body, target) if card_words and acting_for else None
+    if tried is not None:
+        # What the route itself does with BotOps' request: a kept Run workflows tick that comes back with
+        # `{"mode": "chosen"}` needs the card though the body holds no tick, and re-sending a tick that is on doesn't.
+        kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
     if kind == "confirm" and acting_for:
         if propose is None:
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
-        words = card_words(c, auth, who, e, body, target) if card_words else None
+        words = tried and tried[1]
         if words:
             return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
