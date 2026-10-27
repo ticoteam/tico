@@ -16,6 +16,8 @@ in its column: it saves the step and `step_rank` at once, and a card dropped on 
 the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
 row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
 card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
+When a Dev ticket's bot owner or a bot assigned the optional `builder` task role is quarantined, its card, column and ticket page show
+when the builder resumes in UTC, or that a person must clear it. The notice clears when the quarantine lifts.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
