@@ -136,21 +136,24 @@ def gated(who, assistant_bot=""):
 
 
 def hands_ids(c, person):
-    """Open tasks on this person's plate that the gate put under Hands needed."""
+    """The items the gate put under Hands needed on this person's plate: open tasks (a wait's own card, when the
+    wait asked in one) and questions outside any task, by message id (the id Needs you lists them under)."""
     return {r[0] for r in c.execute(
-        "SELECT i.ref FROM ask_ingest_items i JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.outcome=? "
-        f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})", (person, HANDS, *H.ACTIVE_STATUSES))}
+        "SELECT i.ref FROM ask_ingest_items i LEFT JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.outcome=? "
+        f"AND (i.kind='loose' OR t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}))",
+        (person, HANDS, *H.ACTIVE_STATUSES))}
 
 
 def load(c, person):
     """(decisions, chores): the open items on the person's Needs you, snoozed ones left out (hubdb.needs_you), with
-    the approvals waiting on them and the bots' loose questions to them; chores are those under Hands needed."""
+    the approvals waiting on them and the bots' loose questions to them; chores are those under Hands needed.
+    Read before the item is written, so it never counts itself."""
     plate = H.needs_you(c, person)
     ids = {t["id"] for t in plate["tasks"]} | {t["id"] for t in plate["waiting"]}
+    ids |= {m["id"] for m in H.loose_asks_to(c, person)}
     approvals = sum(1 for a in plate["approvals"] if a.get("decision_owner") == person)
-    loose = len(H.loose_asks_to(c, person))
     chores = len(ids & hands_ids(c, person))
-    return len(ids) - chores + approvals + loose, chores
+    return len(ids) - chores + approvals, chores
 
 
 def open_items(c, person):
@@ -374,9 +377,10 @@ def message(reason, name, load_now, chores, manager_name):
 
 
 def apply(c, verdict):
-    """Decide one gated item inside its write, before it lands. Returns {mode, outcome, would, reason, text, load,
-    acts}: `acts` is True when the write must keep the item off the person's plate (mode On and sent back or FYI).
-    The write then calls `record` with the item's id."""
+    """Decide one gated item inside its write, before it lands: called before the item is written, so the load is
+    the plate as it was. Returns {mode, outcome, would, reason, text, load, acts}: `acts` is True when the write must
+    keep the item off the person's plate (mode On and sent back or FYI). The write then calls `record` with the
+    item's id. Reads only."""
     person, asker = verdict["person"], verdict["asker"]
     own = settings(c, person)          # the settings at this item, not at the call
     decisions, chores = load(c, person)
@@ -406,6 +410,11 @@ def apply(c, verdict):
         text = "Rehearsal, nothing changed. With the filter on: " + text
     return {"mode": mode, "outcome": outcome, "would": would, "reason": reason, "text": text, "load": decisions,
             "merged_into": merged_into, "acts": mode == ON and outcome in OFF_PLATE}
+
+
+def matches(verdict, person):
+    """Whether a preflight verdict is about the person the write put the item on."""
+    return bool(verdict) and verdict["person"] == person
 
 
 def record(c, verdict, decided, ref, message_id=None):
@@ -442,8 +451,11 @@ def on_reply(c, actor, task_id, text):
         return
     item = H.task(c, task_id) or {}
     name = H.person_name(c, H.actor_id(actor)) or H.actor_id(actor)
-    said = f'{name} answered this on \u201c{item.get("title") or ""}\u201d: "{str(text).strip()[:2000]}"'
+    answer = str(text).strip()[:2000]
     for row in rows:
+        # The person's item is named only to a bot that may read it; the answer is what was asked for.
+        on = f' on \u201c{item.get("title") or ""}\u201d' if item and H.task_private_readable(c, row["asker"], item) else ""
+        said = f'{name} answered this{on}: "{answer}"'
         if row["kind"] == "loose":
             H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={"ask_ingest": row["id"]})
         else:
@@ -462,12 +474,15 @@ def withdraw_loose(c, asker, message_id, person):
     H.recount(c, [asker])
 
 
-def reply(decided):
+def reply(*decided):
     """What the write's reply says of the gate: only when it has something to tell the asker (sent back, FYI, or
-    what On would have done); an item that went through, or failed open, reads as before."""
-    if not decided or not decided["text"]:
+    what On would have done); an item that went through, or failed open, reads as before. A write that put two
+    items on people (a handoff and a wait) reads as the first with something to say, with both sentences."""
+    said = [d for d in decided if d and d["text"]]
+    if not said:
         return {}
-    return {"ingest": {k: decided[k] for k in ("mode", "outcome", "would", "reason", "text")}}
+    return {"ingest": {**{k: said[0][k] for k in ("mode", "outcome", "would", "reason")},
+                       "text": " ".join(d["text"] for d in said)}}
 
 
 # ---- what the person reads and sets -------------------------------------------------------------------------------
@@ -523,6 +538,8 @@ def let_through(c, person, item_id):
         if row["kind"] == "task_question":
             # A task question also holds its task on the person (media.task_question); the gate skipped that too.
             H.task_update(c, asker, task["id"], status="waiting", waiting_on=person)
+        elif row["kind"] == "task_ask" and task["status"] in ("open", "doing", "review"):
+            H.task_update(c, asker, task["id"], status="waiting")      # as hubdb.task_ask parks it
     told = f"{name} let this through their filter: it is on their Needs you as you first asked."
     if task:
         H.task_comment(c, H.KEEPER, task["id"], told, wake=False)
@@ -556,7 +573,7 @@ REPLAY_PAGE = 25
 def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
-_ACTIVE_AT = ("owner=? AND created<=? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+_ACTIVE_AT = ("owner=? AND created<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
               "AND COALESCE(snoozed_until,'')<=?")
 
 
@@ -580,20 +597,34 @@ def replay_items(c, person, start, end, assistant_bot=None):
 
 
 def load_at(c, person, at):
-    """Roughly how full the person's plate was at `at`: their tasks open then, snoozed ones left out."""
+    """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out."""
     return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT}", (person, at, at, at, at)).fetchone()[0]
 
 
-def open_items_at(c, person, at):
-    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} ORDER BY created DESC LIMIT ?",
-                     (person, at, at, at, at, MAX_ITEMS)).fetchall()
+def open_items_at(c, person, at, leave_out=""):
+    """The person's items open just before `at`, as the gate would have offered them as `covered`, the replayed
+    item itself left out."""
+    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} AND id<>? ORDER BY created DESC LIMIT ?",
+                     (person, at, at, at, at, leave_out, MAX_ITEMS)).fetchall()
     return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
 
 
-def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE):
+def _shown(c, viewer, person, it):
+    """Whether `viewer` may read a replayed item's title: the person always; anyone else (an owner or admin) only a
+    task they may read, never a bot's question to the person outside any task."""
+    if viewer in (None, person):
+        return True
+    if it["kind"] == "loose":
+        return False
+    task = H.task(c, it["ref"])
+    return bool(task) and H.task_private_readable(c, viewer, task)
+
+
+def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None):
     """Rehearsal over a past day: each bot item put on `person` in [start, end) judged as it would have been, with
-    the person's settings now and their plate then, decided as if the filter were On. Writes only the judge.call
-    rows; nothing on any plate moves. Returns {items, total, next_offset}, or raises LookupError with no model."""
+    the person's settings now and their plate just before it, decided as if the filter were On. Writes only the
+    judge.call rows; nothing on any plate moves. A `viewer` other than the person reads only the titles they may
+    read. Returns {items, total, next_offset}, or raises LookupError with no model."""
     with store.read() as c:
         own = settings(c, person)
         everything = replay_items(c, person, start, end, store.settings.assistant_bot)
@@ -605,15 +636,16 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE):
         if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
             raise LookupError("today's decision calls would pass the daily cap")
         person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        prepared = [(it, load_at(c, person, it["created"]), open_items_at(c, person, it["created"]),
-                     _bot_line(c, it["asker"])) for it in page]
+        prepared = [(it, load_at(c, person, it["created"]), open_items_at(c, person, it["created"], it["ref"]),
+                     _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
     out = []
-    for it, plate, items, asker in prepared:
+    for it, plate, items, asker, shown in prepared:
         answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
                                    it["kind"], replay=True)
         would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate, 0)
-        out.append({"kind": it["kind"], "ref": it["ref"], "title": it["title"], "asker": it["asker"],
-                    "asker_name": asker, "created": it["created"], "load": plate, "would": would, "reason": reason})
+        out.append({"kind": it["kind"], "ref": it["ref"] if shown else None, "title": it["title"] if shown else "",
+                    "private": not shown, "asker": it["asker"], "asker_name": asker, "created": it["created"],
+                    "load": plate, "would": would, "reason": reason})
     nxt = offset + len(page)
     return {"items": out, "total": len(everything), "next_offset": nxt if nxt < len(everything) else None}
 
@@ -697,7 +729,7 @@ def install(app, store, auth):
         except ValueError:
             raise Problem("validation", "date is YYYY-MM-DD", 422)
         try:
-            return replay(store, app.state.judge, person, start, end, body.offset, body.limit)
+            return replay(store, app.state.judge, person, start, end, body.offset, body.limit, viewer=who.actor)
         except LookupError as exc:
             raise Problem("state", str(exc), 409)
 

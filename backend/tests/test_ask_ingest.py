@@ -598,3 +598,245 @@ def test_a_bots_bulk_handoff_to_a_person_is_gated_task_by_task(gate):
     with api.app.state.store.read() as c:
         assert {H.task(c, i)["owner"] for i in ids} == {"bot:ops"}
     assert sorted(i["ref"] for i in items(api) if i["kind"] == "task" and i["ref"] in ids) == sorted(ids)
+
+
+# ---- Review 2: every way a bot asks a person is judged, against the plate before the item ----------------------
+
+def for_ben(api, title="Plan the November launch"):
+    """A task Ben asked ops for: ops owns it, Ben is its requester (filed by a person, not gated)."""
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, "human:ben", title, "Dates and venue.", "bot:ops", lint=False)
+
+
+def test_a_bots_task_ask_over_budget_is_sent_back_withdrawn_and_listed(gate):
+    api, model, token = gate
+    plate(api, 15)
+    task = for_ben(api)
+    with api.app.state.store.read() as c:
+        refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
+    r = api.post(f"/api/v2/tasks/{task['id']}/ask", json={"text": "Which launch date do you want?"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK and "15 open items" in r.json()["ingest"]["text"]
+    assert not on_plate(api, task["id"])
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+        assert row["status"] != "waiting", "not parked on a question that was withdrawn"
+        assert not [a for a in H.open_task_asks(c, row) if a["to_actor"] == "human:ben"]
+        assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert (item["kind"], item["task"], item["outcome"]) == ("task_ask", task["id"], A.SENT_BACK)
+    let_through(api, item["id"])
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "waiting"
+    assert on_plate(api, task["id"])
+
+
+def test_a_persons_task_ask_is_not_gated(gate):
+    api, model, token = gate
+    plate(api, 15)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Plan the offsite", "", "human:priya", lint=False)
+    r = api.post(f"/api/v2/tasks/{task['id']}/ask", json={"text": "Which week?"}, headers=headers("priya-test"))
+    assert r.status_code == 200, r.text
+    assert "ingest" not in r.json() and items(api) == [] and model.calls == []
+    assert on_plate(api, task["id"])
+
+
+def test_a_raw_ask_message_naming_a_task_is_judged(gate):
+    api, model, token = gate
+    plate(api, 15)
+    tid = own_task(api, token)["id"]
+    r = api.post("/api/v2/messages", headers=headers(token),
+                 json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask", "refs": {"task": tid}})
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    assert model.calls[-1]["state"]["item"]["title"] == "Plan the November launch"
+    [item] = items(api)
+    assert (item["kind"], item["message_id"]) == ("question", r.json()["id"])
+    with api.app.state.store.read() as c:
+        assert not on_plate(api, tid) and H.loose_asks_to(c, "human:ben") == []
+
+
+def test_a_question_sent_as_a_reply_is_judged(gate):
+    api, model, token = gate
+    first = api.post("/api/v2/messages", json={"to": "ben", "text": "Which venue do you want, A or B?", "kind": "ask"},
+                     headers=headers(token))
+    assert first.status_code == 200 and "ingest" not in first.json(), first.text      # under budget: through
+    answer = api.post("/api/v2/messages", json={"to": "ops", "text": "Venue A.", "in_reply_to": first.json()["id"]},
+                      headers=headers("ben-test"))
+    assert answer.status_code == 200, answer.text
+    with api.app.state.store.transaction() as c:      # the bot's next turn is on Ben's reply, in that thread
+        c.execute("INSERT OR IGNORE INTO attempt_conversations(attempt_id,conversation_id) SELECT id, ? FROM attempts",
+                  (answer.json()["conversation_id"],))
+    plate(api, 15)
+    r = api.post("/api/v2/messages", headers=headers(token),
+                 json={"to": "ben", "text": "Thanks. Which launch date do you want?", "kind": "ask",
+                       "in_reply_to": answer.json()["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    with api.app.state.store.read() as c:
+        assert r.json()["id"] not in {m["id"] for m in H.loose_asks_to(c, "human:ben")}
+
+
+def ask_loose(api, token):
+    return api.post("/api/v2/messages", json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask"},
+                    headers=headers(token))
+
+
+def ask_comment(api, token):
+    tid = own_task(api, token)["id"]
+    question = {"questions": [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
+                               "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
+                                           {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
+    return api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Which launch date do you want?", "ask": question},
+                    headers=headers(token))
+
+
+def ask_question(api, token):
+    return api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
+                    headers=headers(token))
+
+
+def ask_task(api, token):
+    return api.post(f"/api/v2/tasks/{for_ben(api)['id']}/ask", json={"text": "Which launch date do you want?"},
+                    headers=headers(token))
+
+
+@pytest.mark.parametrize("ask", [ask_loose, ask_comment, ask_question, ask_task])
+@pytest.mark.parametrize("load,meets,expected", [
+    (9, None, (A.THROUGH, "under_budget")),       # B-1: under budget, the question itself not counted
+    (10, None, (A.SENT_BACK, "criteria")),
+    (29, "Strategy", (A.THROUGH, "criteria")),    # 3B-1
+    (99, None, (A.SENT_BACK, "recommends")),      # 10B-1
+])
+def test_a_question_is_judged_against_the_plate_before_it(gate, ask, load, meets, expected):
+    api, model, token = gate
+    model.meets = meets
+    plate(api, load)
+    r = ask(api, token)
+    assert r.status_code == 200, r.text
+    [item] = [i for i in items(api) if i["asker"] == "bot:ops"]
+    assert (item["outcome"], item["reason"], item["load"]) == (*expected, load)
+    if expected[0] == A.SENT_BACK:
+        assert f"{load} open items" in r.json()["ingest"]["text"]
+
+
+def test_a_question_on_a_task_already_on_the_plate_counts_it_once(gate):
+    api, model, token = gate
+    plate(api, 8)
+    task = file(api, token)["task"]               # ops's task for Ben: on his plate, the ninth item
+    assert task["owner"] == "human:ben"
+    question = {"questions": [{"id": "date", "header": "Date", "question": "Nov 3 or Nov 10?",
+                               "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
+                                           {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Nov 3 or Nov 10?", "ask": question},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert [(i["kind"], i["outcome"], i["load"]) for i in items(api)][-1] == ("question", A.THROUGH, 9)
+
+
+def test_an_owner_and_a_wait_in_one_request_are_each_judged(gate):
+    api, model, token = gate
+    plate(api, 15)
+    task = own_task(api, token, "Pick the venue")
+    r = api.post(f"/api/v2/tasks/{task['id']}", headers=headers(token),
+                 json={"version": task["version"], "owner": "ops", "status": "waiting", "waiting_on": "ben",
+                       "note": "Venue A or B?"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["waiting_on"] is None
+    assert [(i["kind"], i["outcome"]) for i in items(api)] == [("wait", A.SENT_BACK)]
+
+
+def test_a_chore_wait_lands_its_card_in_hands_needed_and_fills_the_chores_budget(gate):
+    api, model, token = gate
+    model.kind = "chore"
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "on", "budget": 10, "chores_budget": 1, "criteria": []})
+    task = own_task(api, token, "Grant ops access")
+    r = api.post(f"/api/v2/tasks/{task['id']}", headers=headers(token),
+                 json={"version": task["version"], "status": "waiting", "waiting_on": "ben",
+                       "note": "Grant ops read access to the billing repo"})
+    assert r.status_code == 200, r.text
+    [item] = items(api)
+    assert item["outcome"] == A.HANDS and item["ref"] != task["id"], "the gate's row names the card"
+    cards = {it["id"]: it for it in get(api, "needs-you?limit=200", token="ben-test")["items"]}
+    assert cards[item["ref"]]["need"] == "hands"
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (0, 1)
+    again = own_task(api, token, "Grant ops access to the docs")
+    r = api.post(f"/api/v2/tasks/{again['id']}", headers=headers(token),
+                 json={"version": again["version"], "status": "waiting", "waiting_on": "ben",
+                       "note": "Grant ops read access to the docs repo"})
+    assert (r.json()["ingest"]["outcome"], r.json()["ingest"]["reason"]) == (A.SENT_BACK, "chores_full")
+
+
+def test_a_loose_chore_counts_as_a_chore(gate):
+    api, model, token = gate
+    model.kind = "chore"
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": "Please click Approve on the GitHub invite.",
+                                           "kind": "ask"}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (0, 1)
+    cards = {it["id"]: it for it in get(api, "needs-you?limit=200", token="ben-test")["items"]}
+    assert cards[r.json()["id"]]["need"] == "hands"
+
+
+def test_a_bots_bulk_handoff_tells_it_why_for_each_task(gate):
+    api, model, token = gate
+    plate(api, 15)
+    ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
+    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    lines = {line["id"]: line for line in r.json()["tasks"]["changed"]}
+    assert set(lines) == set(ids)
+    for line in lines.values():
+        said = line["ingest"]
+        assert (said["outcome"], said["reason"]) == (A.SENT_BACK, "criteria")
+        assert "cpo" in said["text"] and "nothing was refused" in said["text"]
+
+
+# ---- Review 2: the replay sees the plate just before each item, and an admin only what they may read ----------
+
+def test_a_replay_never_offers_an_item_as_its_own_repeat(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    plate(api, 9)
+    model.covered = "launch"
+    first = file(api, token)["task"]["id"]
+    second = file(api, token, "Choose the Acme launch day", "Nov 3 or Nov 10?")["task"]["id"]    # a true repeat
+    live = {i["ref"]: i for i in items(api)}
+    assert (live[first]["would"], live[first]["load"]) == (A.THROUGH, 9)
+    r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    got = {i["ref"]: i for i in r.json()["items"]}
+    assert (got[first]["would"], got[first]["load"]) == (A.THROUGH, 9), "agrees with the gate at B-1"
+    assert got[second]["would"] == A.MERGED
+    offered = [call["questions"].get("covered", {}).get("criteria", {}) for call in model.calls[-2:]]
+    assert not [t for t in offered[0].values() if "launch" in t]
+    assert "Pick the launch date" in offered[1].values()
+
+
+def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch):
+    api, model, token = gate
+    auth = api.app.state.auth
+    monkeypatch.setattr(auth, "bot_admins", {*auth.bot_admins, "priya@acme.example"})    # an admin, not a party
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Ben's private salary review", "body": "x",
+                                        "private": True}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    file(api, token, "Pick the launch date")
+    api.post("/api/v2/messages", json={"to": "ben", "text": "Which doctor do you see?", "kind": "ask"},
+             headers=headers(token))
+    day = H.now()[:10]
+    admin = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("priya-test"))
+    assert admin.status_code == 200, admin.text
+    shown = sorted(i["title"] for i in admin.json()["items"])
+    assert shown == ["", "", "Pick the launch date"]
+    assert "salary" not in admin.text and "doctor" not in admin.text
+    own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
+    assert {"Ben's private salary review", "Which doctor do you see?"} <= {i["title"] for i in own.json()["items"]}

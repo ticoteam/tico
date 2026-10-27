@@ -2685,20 +2685,28 @@ def create_app(settings=None):
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
         who = request.state.identity
-        # Ask ingest (backend/ask_ingest.py): a bot's question to a person outside any task is judged before it is
-        # written; sent back with the filter on, it is withdrawn as soon as it is asked.
+        # Ask ingest (backend/ask_ingest.py): a bot's question to a person is judged before it is written, whatever
+        # task or message it refers to; sent back with the filter on, it is withdrawn as soon as it is asked.
         ingest = None
-        if body.kind == "ask" and not (body.refs or {}).get("task") and not body.in_reply_to:
-            ingest = ask_ingest.preflight(store, app.state.judge, who, body.to, body.text.strip().split("\n")[0][:300],
-                                          body.text, kind="loose")
+        if body.kind == "ask":
+            title = body.text.strip().split("\n")[0][:300]
+            tref = (body.refs or {}).get("task")
+            tref = tref[0] if isinstance(tref, list) and tref else tref
+            if isinstance(tref, str) and ask_ingest.gated(who, settings.assistant_bot):
+                with store.read() as c:
+                    title = (H.task(c, tref) or {}).get("title") or title
+            ingest = ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
+                                          kind="question" if tref else "loose")
 
         def work(c):
+            # Judged against the plate before the question is on it.
+            gate = ask_ingest.apply(c, ingest) if ingest else None
             message = send(c, who, body)
-            if not ingest or message.get("to_actor") != ingest["person"] or message.get("kind") != "ask" or \
-                    H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"])):
+            if not ask_ingest.matches(ingest, message.get("to_actor")) or message.get("kind") != "ask":
                 return message
-            gate = ask_ingest.apply(c, ingest)
-            ask_ingest.record(c, ingest, gate, message["id"], message["id"])
+            tid = H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"]))
+            verdict = {**ingest, "kind": "question" if tid else "loose"}
+            ask_ingest.record(c, verdict, gate, tid or message["id"], message["id"])
             if gate["acts"]:
                 ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
             return {**message, **ask_ingest.reply(gate)}
@@ -3770,42 +3778,53 @@ def create_app(settings=None):
                 H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                 note = ""
             H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
-            warnings, gate = None, None
+            warnings, gates = None, []
         else:
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
             privacy.require_wait(c, caller, row, body.waiting_on)
-            gate = None
-            if ingest and ingest["kind"] == "task" and row["owner"] == who.actor and body.owner and \
-                    H.resolve_actor(c, body.owner) == ingest["person"]:
-                # Ask ingest (backend/ask_ingest.py): a bot handing its own task to a person is filing it for them;
-                # sent back or FYI with the filter on, the task stays the bot's.
-                gate = ask_ingest.apply(c, ingest)
-                ask_ingest.record(c, ingest, gate, task_id)
-                if gate["acts"]:
-                    fields["owner"] = None
-            elif ingest and ingest["kind"] == "wait" and row["owner"] == who.actor and \
-                    row.get("waiting_on") != ingest["person"] and H.resolve_actor(c, body.waiting_on) == ingest["person"]:
-                # Sent back or FYI with the filter on, the wait is not set.
-                gate = ask_ingest.apply(c, ingest)
-                ask_ingest.record(c, ingest, gate, task_id)
-                if gate["acts"]:
-                    fields["waiting_on"] = None
-                    if fields.get("status") == "waiting":
-                        fields["status"] = None
+            gates, waits = [], []
+            for verdict in ingest or ():
+                # Ask ingest (backend/ask_ingest.py), judged against the plate before the change: a bot handing its
+                # own task to a person is filing it for them, and sent back or FYI with the filter on the task stays
+                # the bot's; a wait sent back or FYI is not set. One request may do both, each judged on its own.
+                if verdict["kind"] == "task" and row["owner"] == who.actor and body.owner and \
+                        H.resolve_actor(c, body.owner) == verdict["person"]:
+                    gate = ask_ingest.apply(c, verdict)
+                    ask_ingest.record(c, verdict, gate, task_id)
+                    if gate["acts"]:
+                        fields["owner"] = None
+                elif verdict["kind"] == "wait" and row["owner"] == who.actor and \
+                        row.get("waiting_on") != verdict["person"] and \
+                        H.resolve_actor(c, body.waiting_on) == verdict["person"]:
+                    gate = ask_ingest.apply(c, verdict)
+                    waits.append((verdict, gate))
+                    if gate["acts"]:
+                        fields["waiting_on"] = None
+                        if fields.get("status") == "waiting":
+                            fields["status"] = None
+                else:
+                    continue
+                gates.append(gate)
             if "size" in body.model_fields_set and body.size is None:
                 fields["clear_size"] = True
-            warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
-                                     receipt_owner=Access.load_owner(c, settings)["email"]).get("warnings")
+            after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
+                                  receipt_owner=Access.load_owner(c, settings)["email"])
+            warnings = after.get("warnings")
+            for verdict, gate in waits:
+                # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
+                # their Needs you, so the gate's row names it (Hands needed reads it).
+                card = after.get("asked_in") if not gate["acts"] else None
+                ask_ingest.record(c, verdict, gate, card["id"] if card else task_id)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
         return {**({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
                 **({"warnings": warnings} if warnings else {}),
-                **(ask_ingest.reply(gate) if not body.close else {})}
+                **(ask_ingest.reply(*gates) if not body.close else {})}
 
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
-        ingest = None
+        ingest = []
         if (body.owner or body.waiting_on) and ask_ingest.gated(caller, settings.assistant_bot):
             with store.read() as c:
                 try:
@@ -3813,9 +3832,12 @@ def create_app(settings=None):
                 except Problem:
                     row = None
             if row and row["owner"] == caller.actor:
-                ingest = handoff_preflight(caller, row, body.owner, body.note) if body.owner else \
+                # The handoff and the wait are judged each on its own: a request may name both.
+                ingest = [v for v in (
+                    handoff_preflight(caller, row, body.owner, body.note) if body.owner else None,
                     ask_ingest.preflight(store, app.state.judge, caller, body.waiting_on, row["title"],
-                                         body.note or row.get("note") or "", kind="wait")
+                                         body.note or row.get("note") or "", kind="wait") if body.waiting_on else None)
+                    if v]
         return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots, ingest=ingest))
 
     def handoff_preflight(caller, row, owner, note=None):
@@ -3908,7 +3930,7 @@ def create_app(settings=None):
         def bulk_work(c):
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
-            changed, unchanged, skipped = [], [], []
+            changed, unchanged, skipped, judged = [], [], [], {}
             # Work queued to run after commit (a webhook's doorbell) goes with the rows a rollback takes back.
             queued = len(c.after_commit)
             if body.dry_run:
@@ -3928,7 +3950,8 @@ def create_app(settings=None):
                 try:
                     if tid in unchecked or tid not in snapshots and body.action in ("step", "status"):
                         raise unchecked.get(tid) or Problem("changed", "Task changed during the bulk change; try again", 409)
-                    task_update_one(c, caller, tid, change, snapshots.get(tid), view=False, ingest=ingests.get(tid))
+                    done = task_update_one(c, caller, tid, change, snapshots.get(tid), view=False,
+                                           ingest=[ingests[tid]] if tid in ingests else None)
                 except H.Refused as exc:
                     # Audited and answered as the single update's refusal would be; the other tasks go on.
                     del c.after_commit[before:]
@@ -3942,6 +3965,8 @@ def create_app(settings=None):
                 else:
                     c.execute("RELEASE bulk_task")
                     changed.append(tid)
+                    if done.get("ingest"):
+                        judged[tid] = done["ingest"]      # what ask ingest did with this handoff, and why
             if body.dry_run:
                 c.execute("ROLLBACK TO bulk_dry_run")
                 c.execute("RELEASE bulk_dry_run")
@@ -3953,7 +3978,8 @@ def create_app(settings=None):
             def line(tid, code=None, reason=None):
                 row = H.task(c, tid)
                 return {"id": tid, "number": row.get("number"), "title": row["title"],
-                        **({"code": code, "reason": reason} if code else {})}
+                        **({"code": code, "reason": reason} if code else {}),
+                        **({"ingest": judged[tid]} if tid in judged else {})}
             return {"dry_run": body.dry_run, "matched": len(ids), "cap": BULK_CAP,
                     "changed": len(changed), "unchanged": len(unchanged), "skipped": len(skipped),
                     "tasks": {"changed": [line(t) for t in changed if t in readable],
@@ -4061,11 +4087,35 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/ask")
     def task_ask(request: Request, tid: str, body: M.Answer):
+        """The owner's one question to the task's requester (hubdb.task_ask). A bot's question to a person passes
+        ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked and the task does
+        not wait on them."""
+        who = request.state.identity
+        ingest = None
+        if ask_ingest.gated(who, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    row = None
+            if row:
+                ingest = ask_ingest.preflight(store, app.state.judge, who, row["requester"], row["title"], body.text,
+                                              kind="task_ask")
+
         def work(c):
-            task_id = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, task_id)
-            lifecycle.refuse_send(c, request.state.identity, None, what="task questions")
-            return H.task_ask(c, request.state.identity.actor, task_id, body.text)
+            task_id = auth.resolve_task(c, who, tid)
+            row = auth.task(c, who, task_id)
+            lifecycle.refuse_send(c, who, None, what="task questions")
+            gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester"]) else None
+            msg = H.task_ask(c, who.actor, task_id, body.text)
+            if gate:
+                ask_ingest.record(c, ingest, gate, task_id, msg["id"])
+                if gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, task_id, msg["id"])
+                    if (H.task(c, task_id) or {}).get("status") != row["status"]:
+                        # Not parked on a question that was not sent.
+                        H.task_update(c, who.actor, task_id, status=row["status"], note=gate["text"])
+            return {**msg, **ask_ingest.reply(gate)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/comments")
@@ -4112,11 +4162,13 @@ def create_app(settings=None):
             extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
             if body.needs_action:
                 extra["needs_action"] = True
+            # Judged against the plate before the question is on it.
+            gate = ask_ingest.apply(c, ingest) if ingest and ask else None
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
-            gate = None
-            if ingest and ask and msg.get("to_actor") == ingest["person"]:
-                gate = ask_ingest.apply(c, ingest)
+            if gate and not ask_ingest.matches(ingest, msg.get("to_actor")):
+                gate = None
+            if gate:
                 ask_ingest.record(c, ingest, gate, task_id, msg["id"])
                 if gate["acts"]:
                     H.task_ask_resolve(c, who.actor, task_id, msg["id"])

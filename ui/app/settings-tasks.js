@@ -219,7 +219,7 @@ async function askFilterReplay(form) {
     const off = rows.filter(r => ['sent_back', 'fyi', 'merged'].includes(r.would));
     msg.textContent = `${rows.length} items; On would have kept ${off.length} off your plate`;
     list.innerHTML = [...off, ...rows.filter(r => !off.includes(r))].map(r => `<div class="tl-filtered-row" role="listitem">
-      <span class="tl-filtered-text"><span class="req-from">${esc(r.asker_name || actorLabel(r.asker))}:</span> ${esc(r.title || 'Untitled')}
+      <span class="tl-filtered-text"><span class="req-from">${esc(r.asker_name || actorLabel(r.asker))}:</span> ${esc(r.private ? 'A private item' : r.title || 'Untitled')}
         <span class="muted">${esc(ASK_FILTER_WHY[r.reason] || '')} · ${esc(r.load)} open then</span></span>
       <span class="tl-filtered-act">${esc(ASK_REPLAY_WOULD[r.would] || r.would)}</span></div>`).join('');
   } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; }

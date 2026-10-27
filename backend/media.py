@@ -677,9 +677,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if found:
                 said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
             else:
+                # Judged against the plate before the question is on it.
+                gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
                 said = H.task_comment(c, who.actor, tid, question, ask=ask)
-                if ingest and ingest["person"] == person:
-                    gate = ask_ingest.apply(c, ingest)
+                if gate:
                     ask_ingest.record(c, ingest, gate, tid, said["id"])
                 if gate and gate["acts"]:
                     H.task_ask_resolve(c, who.actor, tid, said["id"])

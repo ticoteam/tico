@@ -359,7 +359,8 @@ something. Plain code then decides from the answers, your settings and your open
 | Work the bot could do itself, or unclear | Sent back to the bot. |
 | Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also recommends something and can't wait past today. 10B or more: only something that can't wait at all. |
 
-Something urgent (an outage, a security exposure, money being lost) always reaches you. Sent back is never a
+Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
+note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
 refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
 Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
@@ -373,7 +374,9 @@ On would have done. With it On, the same line lists what was kept off today, and
 your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
 on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
-"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you.
+"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
+judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
+titles they may read.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
 `POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
