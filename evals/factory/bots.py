@@ -43,14 +43,16 @@ RECEIPTS = {
 PASSING_RECEIPTS = ("clean", "repaired_seen", "repaired_prior", "repaired_old")
 FAILING_RECEIPTS = ("failing", "failing_words", "failing_line", "rerun_failed")
 TRACE = os.environ.get("SIM_TRACE") == "1"
+FAMILY_MODEL = {"claude": "claude-opus-5-5", "gpt": "gpt-6.1-sol", "grok": "grok-4.6"}   # a model Tico's catalog lists
 
 
 class Bot:
-    def __init__(self, world, slug, role, rng, style=None, family="claude", model="claude-opus-5-5", slots=4):
+    def __init__(self, world, slug, role, rng, style=None, family="claude", model=None, slots=4):
         self.world, self.slug, self.role, self.rng = world, slug, role, rng
         self.architects = []
         self.style = style or {}
-        self.family, self.model, self.slots = family, model, slots
+        # Its runs report a model of its own family, so Tico's QA pool sees the companies a real team has (Dev 646).
+        self.family, self.model, self.slots = family, model or FAMILY_MODEL.get(family, "claude-opus-5-5"), slots
         self.available = True       # False: its computer is off (claims nothing)
         self.limited_until = None   # set: every run is refused on a usage limit until then
         self.turns = []             # one dict per finished turn
