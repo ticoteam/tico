@@ -213,6 +213,17 @@ async function owner(browser) {
   await page.waitForFunction(() => !/workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
     {full_name: 'acme/mobile', access: 'write', run_workflows: false});
+  // Edit workflow files is its own option on the same terms, sent beside Run workflows.
+  const edits = name => box.locator(`[data-brepo="${name}"] [data-brepo-edit]`);
+  assert.equal(await edits('acme/api').isDisabled(), true, 'a read grant cannot edit workflow files');
+  await edits('acme/mobile').check();
+  await page.waitForFunction(() => /acme\/mobile write \+ workflow edits/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
+    {full_name: 'acme/mobile', access: 'write', edit_workflows: true});
+  assert.equal(await runs('acme/mobile').isChecked(), false, 'editing workflow files leaves Run workflows as it was');
+  await edits('acme/mobile').uncheck();
+  await page.waitForFunction(() => !/workflow edits/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile').edit_workflows, false);
   await box.locator('[data-brepo="acme/api"] label:has(input[value=write])').click();
   await page.waitForFunction(() => /acme\/api write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/api'), {full_name: 'acme/api', access: 'write'});

@@ -28029,6 +28029,17 @@
               }
             ],
             "title": "Run Workflows"
+          },
+          "edit_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflows"
           }
         },
         "additionalProperties": false,

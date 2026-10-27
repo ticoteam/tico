@@ -95,8 +95,22 @@ def test_the_cli_says_what_a_mode_change_took_away(monkeypatch, capsys):
     assert capsys.readouterr().err.strip() == "ops no longer has: Acme/product (write), repository creation"
 
 
-def test_only_an_owner_or_admin_lets_a_bot_run_workflows(api, botops, repos):
-    flag = {"full_name": "Acme/product", "access": "write", "run_workflows": True}
+def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
+    from clients.remotecli import chosen_grant
+    from clients.tico import APIError
+    assert chosen_grant("Acme/product:write") == {"full_name": "Acme/product", "access": "write"}
+    assert chosen_grant("Acme/product:write+actions+edit") == {
+        "full_name": "Acme/product", "access": "write", "run_workflows": True, "edit_workflows": True}
+    assert chosen_grant("Acme/product:write+edit-actions") == {
+        "full_name": "Acme/product", "access": "write", "edit_workflows": True, "run_workflows": False}
+    for wrong in ("Acme/product:read+edit", "Acme/product:write+edit+edit", "Acme/product:write+deploy"):
+        with pytest.raises(APIError):
+            chosen_grant(wrong)
+
+
+@pytest.mark.parametrize("option", ["run_workflows", "edit_workflows"])
+def test_only_an_owner_or_admin_lets_a_bot_run_or_edit_workflows(api, botops, repos, option):
+    flag = {"full_name": "Acme/product", "access": "write", option: True}
     ana = turn(api, botops, person="ana-test", text="Let ops start the release check")
     refused = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [flag]})
     assert refused.status_code == 403 and "Owner or admin" in refused.text
@@ -107,7 +121,7 @@ def test_only_an_owner_or_admin_lets_a_bot_run_workflows(api, botops, repos):
         {"full_name": "Acme/product", "access": "write"}, {"full_name": "Acme/docs", "access": "read"}]})
     assert added.status_code == 200, added.text
     assert flag in effective(api)
-    cleared = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [{**flag, "run_workflows": False}]})
+    cleared = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [{**flag, option: False}]})
     assert cleared.status_code == 403 and flag in effective(api)
     # A kept setting coming back into effect is a gain too: BotOps cannot switch Own back to Chosen under it.
     put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")

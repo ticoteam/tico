@@ -1030,6 +1030,30 @@ def _github_workflows(c, github):
     return None
 
 
+def _github_workflow_edits(c, github):
+    """`_github_workflows` for write grants an Owner or admin let edit workflow files: their token carries Workflows:
+    write only once the installation has accepted it."""
+    from .repo_waits import permissions_url
+    from .repositories import workflows_refused, workflows_waiting
+    connected = bool(github and github.row(c))
+    if waiting := workflows_waiting(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "Bots can't edit workflow files yet", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: the GitHub App's "
+                      "Workflows permission is not Read and write on the installation. Set it in the App's "
+                      "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
+                      + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
+                      [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
+                       _fix("Open GitHub settings", "#/integrations")])
+    if refused := workflows_refused(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
+                      "token with Workflows: write although the installation reports it. Tico asks again after a "
+                      "minute; if this stays, check the installation's repository access on GitHub. Refused: "
+                      + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
+                      [_fix("Open GitHub settings", "#/integrations")])
+    return None
+
+
 def _slack(c):
     """Only once the owner has pasted tokens: the gateway reports its own state (backend/slack_app.py)."""
     from . import slack_app
@@ -1947,6 +1971,8 @@ def view(c, who, settings, auth, github, config):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
             checks.append(workflows)
+        if edits := _github_workflow_edits(c, github):
+            checks.append(edits)
         slack = _slack(c)
         if slack:
             checks.append(slack)
