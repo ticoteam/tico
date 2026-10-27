@@ -1213,7 +1213,8 @@ def goal_show(api, args):
 
 @tool("hub_goal_create", "Set a goal for yourself, under a goal you own, or for someone below "
       "you on the org chart. A parent is optional: with none the goal is simply not linked. With one "
-      "it has no colour until whoever owns the parent gives it one; that is the acceptance.",
+      "it supports that goal. It starts with no colour, which its data or a person (its owner, the owner of "
+      "the goal it serves, or someone above them) sets.",
       {"owner": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
        "title": _s("Plain English: what you are going for"),
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
