@@ -8,8 +8,8 @@ from backend.tests.test_performance import sample
 from backend.tests.test_bot_access import world  # noqa: F401
 
 
-def point(at, cpu=95, mem=.5, active=3):
-    return sample(at, mem=mem) | {"load": [cpu * 8 / 100, 1, 1], "active": active,
+def point(at, cpu=95, mem=.5, active=3, load=None):
+    return sample(at, cpu=cpu, mem=mem) | {"load": [load if load is not None else 1, 1, 1], "active": active,
                                   "swap_used": 20, "swap_total": 100}
 
 
@@ -19,7 +19,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
     rid = r["runner_id"]
     with api.app.state.store.transaction() as c:
         P.ingest(c, rid, [M.PerformanceSample(**point(now - 49 * 3600))], now=now - 49 * 3600)
-    samples = [point(now, cpu=125), point(now + 10, cpu=150)]
+    samples = [point(now, cpu=85), point(now + 10, cpu=97.5)]
     post(api, "runners/performance", {"samples": samples}, token=r["token"])
     # A delayed retry of the older reading cannot overwrite the newest reading in its minute.
     post(api, "runners/performance", {"samples": [point(now, cpu=5, active=1)]}, token=r["token"])
@@ -27,7 +27,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
         rows = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=?", (rid,)).fetchall()
     assert len(rows) == 1
     assert dict(rows[0]) == {"runner_id": rid, "ts": now, "sampled_at": now + 10,
-                                "cpu_pct": 150, "mem_used": 500, "mem_total": 1000,
+                                "cpu_pct": 97.5, "mem_used": 500, "mem_total": 1000,
                                 "swap_used": 20, "swap_total": 100, "running_turns": 3}
 
 
@@ -97,6 +97,18 @@ def test_five_full_minutes_trip_overload_in_health_and_gaps_calm_stale_or_off_cl
     with api.app.state.store.read() as c:
         assert P.load_status(c, rid, now) == {"latest_sample": None, "overloaded": False}
 
+
+
+def test_high_load_average_with_cpu_to_spare_does_not_hold_starts(api):
+    # Many turns waiting on the network push load average far past the cores while CPU still has room.
+    r, _, _ = setup_attempt(api)
+    rid = r["runner_id"]
+    now = int(time.time()) // 60 * 60
+    with api.app.state.store.transaction() as c:
+        P.ingest(c, rid, [M.PerformanceSample(**point(now - 300 + i * 60, cpu=70, mem=.3, load=14)) for i in range(6)],
+                 now=now)
+        status = P.load_status(c, rid, now)
+    assert status["overloaded"] is False and status["latest_sample"]["cpu_pct"] == 70
 
 def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(world):
     from backend.repositories import save_metadata

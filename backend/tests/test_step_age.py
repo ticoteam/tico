@@ -251,3 +251,29 @@ def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
     assert rows[working["id"]]["step_since"]
     assert "step_since" not in rows[queued["id"]]
     assert get(api, "tasks/" + working["id"])["task"]["step_since"] == rows[working["id"]]["step_since"]
+
+
+def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api):
+    from backend import step_flow
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
+        at_checkpoint(c, row)
+        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [], "failed": []}, "6 h, not the default 2"
+        assert SA.sweep(c, later(6.5))["asked"] == [row["id"]]
+        assert SA.sweep(c, later(8.5))["late"] == [row["id"]]
+        # A step of a type that is not engineering is timed only by its own setting, at whatever status it has.
+        typ = H.type_create(c, H.KEEPER, "Content", [{"name": "Drafting", "status": "open"}], bots="work")
+        step_flow.apply(c, typ["id"], {"Drafting": {"status_hours": 1}})
+        draft = H.task_create(c, "bot:ops", "Draft the launch mail", "x", "bot:cpo", type=typ["id"], lint=False)
+        assert SA.sweep(c, later(1.5))["asked"] == [draft["id"]]
+
+
+def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_late(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        # The manager's own sweep asked the owner about it just before it turned late.
+        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES('m1',?,?,'bot:coo','note','','',"
+                  "'What does this wait on?')", (row["id"], later(3.8)))
+        assert SA.sweep(c, later(4.2))["late"] == [], "they know: no notice now"
+        assert SA.sweep(c, later(5))["late"] == [row["id"]], "an hour on and still late: now they hear"

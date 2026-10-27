@@ -53,9 +53,11 @@ def end_reason(api, attempt):
         return run_diagnostics.metadata(c, attempt['id'])['end_reason']
 
 
-def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_its_job_for_review(api):
+def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_its_job_for_review(api, time_machine):
     """Its shell may have pushed, sent or paid: lifting the quarantine must not run it a second time. It takes the held
     path every other lost run takes, so its job is uncertain and BotOps's review names it."""
+    # Keep the one-hour cooldown on the same UTC date as the expected stop reason.
+    time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api)
     resumes = quarantine(api)
     line = f"Quarantined: 10 refusals today, resumes about {resumes[11:16]} UTC"
@@ -87,7 +89,9 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_i
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
 
 
-def test_a_quarantine_stopped_turn_that_only_read_runs_again_when_it_lifts(api):
+def test_a_quarantine_stopped_turn_that_only_read_runs_again_when_it_lifts(api, time_machine):
+    # Keep the one-hour cooldown on the same UTC date as the expected stop reason.
+    time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api, safe=True)
     resumes = quarantine(api)
     line = f"Quarantined: 10 refusals today, resumes about {resumes[11:16]} UTC"

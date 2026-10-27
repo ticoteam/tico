@@ -13,6 +13,8 @@ async function renderSettingsCompany() {
   let v;
   try { v = await get('/v2/company/server-connection', {fresh: true}); }
   catch (e) { host.innerHTML = `<p class="settings-cell-note err" role="status">${esc(e.message)}</p>`; return; }
+  // Settings can draw this twice at once: a code typed while the later read was out must not be wiped by it.
+  if (formBusy(host)) return;
   if (v.company) {
     host.innerHTML = `<dl class="settings-company">
         <dt>Company</dt><dd data-company-name>${esc(v.company.name)}</dd>

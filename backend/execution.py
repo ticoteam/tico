@@ -17,6 +17,7 @@ from .auth import Identity
 from .batch_work import isolated
 from .harnesses import reports_tool_calls
 from .statuses import PARKED_SQL
+from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 
 # The wait after a usage limit whose provider gave no reset time; a reported reset is used instead.
@@ -1417,21 +1418,40 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
 def obsolete_notices_sql():
     """FROM and WHERE of the keeper notices a claim cancels, for one runner (?), the keeper (?) and now (?): any queued
     on a task already finished, unless a person's own act caused it (H._write_message: it still owes that person its
-    answer), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended. The
+    answer), a status check of a quiet task that someone other than Tico has acted on since (it is no longer quiet), a step's
+    late warning for a task that has since left that step, news about a step (`at_step`: a verdict's move, a step
+    entered) once the task is at another step, unless a person's act caused it,
+    a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
+    the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
+    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended. The
     idle claim asks the same question: when it counted notices the claim keeps, every claim from that computer went
     on to the write lock for nothing. It goes from this computer's bots to their queued jobs (jobs_queue): left to
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
-            "AND m.from_actor=? AND m.kind='notice' "
+            "AND m.from_actor=? AND (m.kind='say' AND json_extract(m.refs_json,'$.review_gate') IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.ts>m.created AND e.field='step') "
+            "OR m.kind='notice' "
             "AND ((t.status IN ('done','closed','declined') "
             "AND coalesce(json_extract(m.refs_json,'$.caused_by'),'') NOT LIKE 'human:%') "
             "OR (m.body LIKE 'New task from %' AND m.to_actor=t.owner "
             "AND json_extract(m.refs_json,'$.filed_in') IS NOT NULL "
             "AND (t.status IN ('waiting','blocked') OR t.snoozed_until>?) "
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs_json,'$.filed_in') "
-            "AND fa.state IN ('leased','running')))) "
+            "AND fa.state IN ('leased','running'))) "
+            "OR ((json_extract(m.refs_json,'$.wake') IN ('status_check','stalled','step_status') "
+            "OR json_extract(m.refs_json,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM task_events "
+            "e WHERE e.task_id=t.id AND e.ts>m.created AND e.actor<>m.from_actor)) "
+            "OR (json_extract(m.refs_json,'$.step_late') AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
+            "AND e.ts>m.created AND e.field='step')) "
+            "OR (json_extract(m.refs_json,'$.at_step') IS NOT NULL AND json_extract(m.refs_json,'$.at_step')<>"
+            "coalesce(t.step_id,'') AND coalesce(json_extract(m.refs_json,'$.caused_by'),'') NOT LIKE 'human:%') "
+            "OR (json_extract(m.refs_json,'$.wake')='pr_checks_done' AND json_extract(m.refs_json,'$.pr_head') IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' AND coalesce(l.state,'')<>'closed' "
+            "AND coalesce(json_extract(l.detail_json,'$.head_sha'),'')<>'') "
+            "AND NOT EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' "
+            "AND lower(json_extract(l.detail_json,'$.head_sha'))=lower(json_extract(m.refs_json,'$.pr_head')))))) "
             "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
             "AND r.attempt_id=j.attempt_id AND r.decision='resume')")
 
@@ -1514,7 +1534,8 @@ def queued_jobs_sql(bots=None):
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
             "AND j.state='queued' AND j.held=0 "
-            "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id")
+            "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
+            f"{HANDOFF_FIRST_SQL},j.created,j.id")
 
 
 def prime_claimables(c, bots, first=3):
@@ -1545,7 +1566,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
-    the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
+    a builder hand-off, then the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
     neither held nor slow, and neither is an old free job behind a young chat the claim takes first.
     `oldest` diagnoses the oldest job outside a held lane; `with_job` also returns its ID for
     observation aging and message-level authorization."""
@@ -2245,9 +2266,10 @@ class Execution:
             ("AND m.from_actor LIKE 'human:%' " if people_only else "") +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then task rank, then the longest waiting.
+            # then a builder hand-off (backend/verdict_moves.py); then task rank, then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
-            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,(qt.rank IS NULL),qt.rank,j.created,j.id",
+            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,{HANDOFF_FIRST_SQL},"
+            "(qt.rank IS NULL),qt.rank,j.created,j.id",
             (*bots, who.runner_id, *((job_id,) if job_id is not None else ()),
              *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         candidates = candidates.fetchall()
@@ -2433,7 +2455,7 @@ class Execution:
                     and (H.status(c, old["bot"]) or {}).get("state") == "idle"):
                 # Clearing the status also publishes the new header to already-open pages.
                 settle_status(c, old["bot"], "idle", "")
-            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished before keeper notice delivery','task_id':old['task_id']})
+            H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished or acted on before keeper notice delivery','task_id':old['task_id']})
         company = org_turns.observe(c, self.store.settings)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}

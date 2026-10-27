@@ -14,7 +14,8 @@ def ticket(api, receipt=None, **fields):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Dev tickets', [
             {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
-            {'name': 'Review 2', 'status': 'review'}, {'name': 'Done', 'status': 'done'}])
+            {'name': 'Review 1 Fixes', 'status': 'doing'}, {'name': 'Review 2', 'status': 'review'},
+            {'name': 'Done', 'status': 'done'}])
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
                               'type': typ['id'], 'step': 'In Progress', 'links': [PR], **fields})
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
