@@ -3,6 +3,28 @@
 from .store import H
 
 
+def resume_time(timing):
+    """The UTC deadline shared by the full explanation and the compact task notice."""
+    at = timing.get("resumes_at")
+    return H.parse_ts(at) if at else None
+
+
+def resume_label(at, dated=True):
+    return (at.strftime("%Y-%m-%d ") if dated else "") + at.strftime("%H:%M UTC")
+
+
+def builder_notice(timing):
+    if not timing["auto"]:
+        return "Builder quarantined: until a person clears it"
+    at = resume_time(timing)
+    if not at:
+        return "Builder quarantined: resumes after its cooldown"
+    # An overnight cooldown must not look like an earlier time on the same day.
+    since = H.parse_ts(timing.get("since"))
+    dated = since is not None and since.date() != at.date()
+    return "Builder quarantined: resumes " + resume_label(at, dated)
+
+
 def explanation(c, slug, who, auth):
     timing = H.quarantine_resumes(c, slug)
     manages = auth is not None and (auth.operator(c, who, slug) or auth.bot_manager(c, who, slug))
@@ -17,9 +39,9 @@ def explanation(c, slug, who, auth):
             text += f" The safety check stopped {article} {what} that named {found}. It matched text only; nothing was sent or changed."
         return text
 
-    at = timing["resumes_at"]
+    at = resume_time(timing)
     # Include the date so a cooldown crossing midnight has an unambiguous UTC deadline.
-    resumes = f"at {H.parse_ts(at).strftime('%Y-%m-%d %H:%M UTC')}" if at else "after its cooldown"
+    resumes = f"at {resume_label(at)}" if at else "after its cooldown"
     text = (f"Quarantined for repeated refused writes (rule 8; {H.quarantine_reason(c, slug)}): "
             f"resumes by itself {resumes}; a person who manages it can clear it sooner.")
     if manages:

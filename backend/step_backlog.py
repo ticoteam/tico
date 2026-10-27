@@ -9,7 +9,11 @@
 - `every_hours` (default EVERY_HOURS): one warning per step (and owner) at most this often while it stays over.
 
 The warning is written into the room of the oldest ticket waiting there, as a `blocker` wake, which a Lead's profile
-lets through at once. Nobody is told twice in one sweep, and a target that cannot be resolved is skipped."""
+lets through at once. Nobody is told twice in one sweep, and a target that cannot be resolved is skipped.
+
+Only tickets every member may read are counted: a private ticket, or one owned or asked for by a bot not every member
+may read (updates.restricted_bots), never counts toward `over`, never names an owner in the spread and never hosts the
+warning. Everyone who reads the room reads the warning, so such a ticket changes nothing a warning says."""
 from . import hubdb as H
 
 EVENT = "task.step_backlog"
@@ -80,10 +84,11 @@ def _recent(c, key, at, hours):
 
 def sweep(c, at=None):
     """One pass over the steps with a backlog setting. Returns [(step name, owner or None, count, [told])]."""
-    from . import step_flow
+    from . import step_flow, updates
     if not step_flow._ready(c):
         return []
     at = at or H.now()
+    hidden = {H.bot_actor(slug) for slug in updates.restricted_bots(c)}
     sent = []
     for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"backlog\"%'")):
         rule = step_flow.of(step).get("backlog")
@@ -92,6 +97,7 @@ def sweep(c, at=None):
         rows = H._rows(c.execute(
             f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
             "ORDER BY created, id", (step["id"], *FINISHED)))
+        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner"], row["requester"]} & hidden]
         groups = {}
         for row in rows:
             groups.setdefault(row["owner"] if per_owner(rule) else None, []).append(row)

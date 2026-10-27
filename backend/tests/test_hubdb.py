@@ -967,6 +967,7 @@ class WaitingWithDependency(HubCase):
         for ask, failed in [("Approve it. I send it. Then I book it.", "3 sentences"),
                             ("Approve PO-1234? If yes, I pay it.", 'id or hash: "PO-1234"'),
                             ("Approve invoice #4821?", 'id or hash: "#4821"'),
+                            ("Approve invoice #4821.", 'id or hash: "#4821"'),
                             ("Ship the fix in app.js?", 'file path: "app.js"'),
                             # An error class name is the bot's record even with no message after it.
                             ("Retry the import? It stopped on a TypeError.", 'error output: "TypeError"')]:
@@ -1004,16 +1005,180 @@ class WaitingWithDependency(HubCase):
         made = H.task_create(self.conn, CMO, 'Approve the video tool trial', f'{plain}\n\nThe notes: reports/x.md', ANA)
         self.assertEqual(made['owner'], ANA)
 
+    # The refused escalations of 2026-10-26: a pull request named in the ask, and a 71-word ask in four sentences.
+    BLOCKER = "Approve the merge of PR #1555 so QA can test it? If yes, I will run the tests today."
+    LONG_BLOCKER = ("The hosted checks for the Settings change failed three times today on the same browser test, "
+                    "and I cannot tell yet whether the runner or the change is at fault. "
+                    "Approve the merge of PR #1555 so QA can test it on the release candidate? "
+                    "If yes, I will run the tests today and post the results. "
+                    "If no, I will keep it parked and ask DevOps to check the runner.")
+
+    def test_a_person_ask_may_name_a_pull_request_and_nothing_else(self):
+        # "PR #<number>" is public and a person can look it up; it stays in the ask as written.
+        for ask in [self.BLOCKER, "Merge PR #1555.", "Review PR #12 and PR #1555 today? If yes, I merge both."]:
+            self.assertEqual(H.lint_person_ask(ask), [], ask)
+        self.assertEqual(H.task_update(self.conn, CMO, H.task_create(self.conn, CMO, 'Merge the fix', '', CMO,
+                                                                     private=False)['id'],
+                                       status='waiting', waiting_on='ana', note=self.BLOCKER)['note'],
+                         f'Blocked on Ana Rivera: {self.BLOCKER}')
+        # Any other form is a reference number, as is a hash, a private task id, a path, a tool name or error output,
+        # even beside a pull request; all of it goes under Details.
+        for ask, failed in [("Approve the merge of #1555 so QA can test it?", '#1555'), ("Merge #1555.", '#1555'),
+                            ("Merge PR#1555?", '#1555'), ("Merge pr #1555?", '#1555'), ("Merge PR #1555/files?", '#1555'),
+                            ("Merge PR #1555 at 3f2a9c1d?", 'id or hash: "3f2a9c1d"'),
+                            ("Merge PR #1555 for 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f?",
+                             'id or hash: "8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f"'),
+                            ("Merge PR #1555 with backend/hubdb.py?", 'file path: "backend/hubdb.py"'),
+                            ("Merge PR #1555 with hub task update?", 'tool or field name: "hub task"'),
+                            ("Merge PR #1555? It failed with ValueError: bad date.", 'error output: "ValueError"')]:
+            self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
+        made = H.task_create(self.conn, CMO, 'Approve the merge', f'{self.BLOCKER}\n\nDetails: head 3f2a9c1d, '
+                             'backend/hubdb.py, ValueError: bad date.', ANA)
+        self.assertEqual(made['owner'], ANA)
+
+    def test_a_too_long_ask_is_refused_with_a_rewrite_the_bot_retries_once(self):
+        task = H.task_create(self.conn, CMO, 'Get the Settings change tested', '', CMO, private=False)
+        before = H.task(self.conn, task['id'])
+        with self.assertRaises(H.Refused) as refused:
+            H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=self.LONG_BLOCKER)
+        detail = refused.exception.detail
+        self.assertEqual(refused.exception.rule, 'lint')
+        self.assertIn('Your ask to ana is 71 words in 4 sentences. Retry once with this ask', detail)
+        rewrite = re.search(r'what happens after: "(.+?)" Put the rest of your text in a comment on the task', detail)[1]
+        # The rewrite keeps the request, the pull request and what happens after, and passes on its own.
+        self.assertEqual(rewrite, "Approve the merge of PR #1555 so QA can test it on the release candidate? "
+                                  "If yes, I will run the tests today and post the results.")
+        self.assertEqual(H.lint_person_ask(rewrite), [])
+        self.assertEqual(H.task(self.conn, task['id'])['version'], before['version'], 'nothing written on refusal')
+        # The one retry with it reaches the person; the bot's context goes in a comment.
+        H.task_comment(self.conn, CMO, task['id'], self.LONG_BLOCKER)
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=rewrite)
+        self.assertEqual((after['note'], H.task(self.conn, after['asked_in']['id'])['body']),
+                         (f'Blocked on Ana Rivera: {rewrite}', rewrite))
+        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
+        # A task given to a person: the rewrite opens the body and the original text stays below it.
+        with self.assertRaises(H.Refused) as refused:
+            H.task_create(self.conn, CMO, 'Approve the merge', self.LONG_BLOCKER, ANA)
+        self.assertIn(f'"{rewrite}" Put the rest of your text in the body under it, after a blank line',
+                      refused.exception.detail)
+        made = H.task_create(self.conn, CMO, 'Approve the merge', f'{rewrite}\n\n{self.LONG_BLOCKER}', ANA)
+        self.assertEqual((made['owner'], H.task(self.conn, made['id'])['body']),
+                         (ANA, f'{rewrite}\n\n{self.LONG_BLOCKER}'))
+        # A single sentence over the limit only by its context keeps the request; one with no outcome keeps it alone.
+        self.assertEqual(H.person_ask_rewrite("Merge PR #1555. " + "The runner was slow all day. " * 8),
+                         ("Merge PR #1555.", ""))
+        # What happens after is the sentence that answers the request, not context that only opens like one.
+        self.assertEqual(H.person_ask_rewrite("Approve the merge of PR #1555? Then the runner failed three times. "
+                                              "If yes, I will run the tests today."),
+                         ("Approve the merge of PR #1555? If yes, I will run the tests today.", ""))
+        # A negative branch is context, not the outcome of granting the request.
+        self.assertEqual(H.person_ask_rewrite("Approve PR #1555 so QA can test it? If no, I will keep it parked. "
+                                              "The checks failed three times today and we still need to understand "
+                                              "what caused that. If yes, I will run the tests today."),
+                         ("Approve PR #1555 so QA can test it? If yes, I will run the tests today.", ""))
+        # An outcome that lists the bot's next actions is one outcome, not more asks.
+        context = "The vendor needs our answer today because the pricing offer ends tomorrow morning. " * 3
+        for outcome in ("If yes, I'll sign it, send it and close this task.",
+                        "If approved, I'll merge it, then deploy to production.",
+                        "Then I'll book the venue, send invites and order food."):
+            self.assertEqual(H.person_ask_rewrite(f"Approve the $5,000 budget for Acme? {context}{outcome}"),
+                             (f"Approve the $5,000 budget for Acme? {outcome}", ""))
+
+    def test_negative_conditions_do_not_replace_the_affirmative_outcome(self):
+        request = "Approve PR #1555 so QA can test it?"
+        outcome = "If yes, I will run the tests today."
+        context = "The checks failed three times today and we still need to understand what caused that."
+        for negative in ("If you do not approve, I will keep it parked.",
+                         "If you agree not to merge, I will close it.",
+                         "If you don't approve, I will keep it parked."):
+            text = f"{request} {negative} {context} {outcome}"
+            self.assertTrue(H.lint_person_ask(text))
+            rewrite, repair = H.person_ask_rewrite(text)
+            self.assertEqual((rewrite, repair), (f"{request} {outcome}", ""))
+            self.assertEqual(H.lint_person_ask(rewrite), [])
+
+    def test_shortening_keeps_indirect_and_conditional_requests(self):
+        task = H.task_create(self.conn, CMO, 'Get the decisions', 'All the original details.', CMO, private=False)
+        asks = [
+            "Can you check the vendor numbers before Friday? I need you to approve the $5,000 budget for the Acme "
+            "contract as well. The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I'll sign it.",
+            "Approve PR #1555 so QA can test it? Once approved, please also sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? Once approved, sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? If approved, I'll merge it; sign the vendor contract too. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? And sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+        ]
+        before = H.task(self.conn, task['id'])
+        for ask in asks:
+            with self.assertRaises(H.Refused) as refused:
+                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
+            self.assertEqual(refused.exception.rule, 'lint')
+            self.assertIn('it asks 2 things', refused.exception.detail)
+            self.assertIn('ask any other separately', refused.exception.detail)
+            self.assertNotIn('Retry once with this ask', refused.exception.detail)
+            after = H.task(self.conn, task['id'])
+            self.assertEqual((after['version'], after['body'], after['status'], after['waiting_on']),
+                             (before['version'], before['body'], before['status'], before['waiting_on']))
+            self.assertEqual(TR.child_ids(self.conn, task['id']), [])
+        # A sole indirect request is preserved verbatim rather than disappearing as background context.
+        self.assertEqual(H.person_ask_rewrite("The vendor needs our answer today. I need you to approve the $5,000 "
+                                              "budget for Acme. If yes, I'll sign the contract. "
+                                              "The pricing offer ends tomorrow morning."),
+                         ("I need you to approve the $5,000 budget for Acme. If yes, I'll sign the contract.", ""))
+
+    def test_an_ask_no_shorter_wording_keeps_gets_a_repair_and_nothing_is_sent(self):
+        task = H.task_create(self.conn, CMO, 'Get the Settings change tested', 'All the runner notes.', CMO,
+                             private=False)
+        context = " The runner failed three times today on the same browser test, and nobody knows why yet."
+        for ask, repair in [
+                # Two decisions: picking one would change what the person is asked.
+                ("Approve the merge of PR #1555? Or should I close it and open a new one?" + context,
+                 'it asks 2 things ("Approve the merge of PR #1555?"; "Or should I close it and open a new one?")'),
+                # A question and a request are two decisions too: keeping only the question drops the merge.
+                ("Can you approve the merge today? Approve PR #1555 so QA can test it. The hosted checks failed three "
+                 "times today on the same browser test and I cannot tell yet whether the runner or the change is at "
+                 "fault.",
+                 'it asks 2 things ("Can you approve the merge today?"; "Approve PR #1555 so QA can test it.")'),
+                ("The runner is slow." + context + context, 'none of its sentences asks for anything'),
+                ("Approve the merge of PR #1555 " + "and the follow-up fixes " * 9 + "today?" + context,
+                 'its request alone is 43 words: shorten'),
+                ("Approve the merge of 3f2a9c1d today? If yes, I run the tests." + context,
+                 'its request "Approve the merge of 3f2a9c1d today? If yes, I run the tests." has an id or hash')]:
+            with self.assertRaises(H.Refused) as refused:
+                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
+            self.assertIn('No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. '
+                          f'To fix it, {repair}', refused.exception.detail)
+            self.assertIn('then retry once', refused.exception.detail)
+            self.assertNotIn('Retry once with this ask', refused.exception.detail)
+            after = H.task(self.conn, task['id'])
+            self.assertEqual((after['status'], after['waiting_on'], after['body'], TR.child_ids(self.conn, task['id'])),
+                             ('open', None, 'All the runner notes.', []))
+        # The refusals are recorded, so the blocker is never invisible, and none counts toward a quarantine.
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND rule='lint'",
+                                           (CMO,)).fetchone()[0], 5)
+        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
+
     def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
         flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]
         sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
         for note, ident in [('Approve the fix in db14c907.', 'db14c907'), (f'Approve the fix in {sha}.', sha),
                             ('Approve the fix in 3f2a9c1.', '3f2a9c1'), ('Review #388 before Friday.', '#388'),
-                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f')]:
+                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f'),
+                            ('Merge #1555.', '#1555'), ('Merge PR#1555 today.', '#1555'),
+                            ('Read #1555/files today.', '#1555')]:
             self.assertEqual(flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note)
         for note in ['Approve the $250000 budget.', 'Approve the £1500000 offer.', 'Approve the €250000 and ¥9000000 quotes.',
                      'Name the deadbeef test host.', 'Pick a date after 2026-10-11 for the launch.',
-                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.']:
+                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.',
+                     'Merge PR #1555.']:
             self.assertEqual(flagged(note), [], note)
         # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
         self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))

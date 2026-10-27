@@ -407,6 +407,15 @@ error that says the session grew too large to send (*too many total text bytes*,
 thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
 ([Sessions](sessions.md#checkpoints-and-resume)).
 
+**Run time limits.** A run cut by its configured time limit continues on the same task and provider session.
+The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
+any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
+A named merge, publish, send, payment or consumed approval still holds the run for BotOps to check.
+Like restart recovery, a time-limit continuation also permits a harness that does not report tool calls
+when no named outside action or consumed approval was recorded; it must check previous work before continuing.
+Two consecutive time-limit cuts hold the job with an open review task; a run that finishes inside its limit
+resets that count. Provider quotas and the Gateway credential lifetime limit keep their existing recovery rules.
+
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
 starts the count over. A message a person sends during the wait runs at once (it is the retry someone is watching), and

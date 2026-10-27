@@ -479,7 +479,11 @@ def operation_issues(c, who, auth):
                     runtime, billing = login_holds.label(src), src["billing"]
                 streak = hold.get("streak", 0) if hold else limit_streak(c, slug)
                 reset = hold.get("reset") if hold else bool(last and provider_reset(last, H.parse_ts(last["finished"])))
-                if billing:
+                resume = login_holds.fallback_resume_reason(c, last['id']) if last else None
+                if resume:
+                    add("bot", bot["display_name"] + " needs attention", f"{runtime}; {resume}",
+                        bot=slug, severity="warning", needs_person=False)
+                elif billing:
                     retry = H.shift(status["since"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
@@ -884,6 +888,9 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                                (cid, job["bot"])).fetchone()
             label, readiness_reason = queued_label(c, job["bot"], location, settings,
                                                    human=H.is_human(message.get("from_actor") or ""), behind=bool(behind))
+            if ((H.status(c, job['bot']) or {}).get('state') == 'limited'
+                    and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
+                label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
             parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(

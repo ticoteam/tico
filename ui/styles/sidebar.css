@@ -159,13 +159,6 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--accent);text-decoration:none}
 .tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* A name split at the first words it shares with another bot's (orgNameLeads): those are muted, and when the row is
-   too narrow for the whole name they wrap onto a second line that is cut off, so the rest keeps the row. The name takes
-   the row's free width, so its marks line up at the end however much of it shows. */
-.tree .nm-split{display:inline-flex;flex-grow:1;min-width:0}.tree .nm-split .proj{flex:none}
-.tree .nm-words{display:flex;flex-wrap:wrap-reverse;align-content:flex-end;min-width:0;height:1.5em;line-height:1.5;overflow:hidden}
-.tree .nm-lead{white-space:pre;color:var(--muted)}
-.tree .nm-rest{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .org-connect{flex:none;height:22px;margin-left:2px;padding:0 9px;border:1px solid var(--line);border-radius:11px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .org-connect:hover{background:var(--surface2)}
 

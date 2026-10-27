@@ -93,7 +93,8 @@ def _verdict(check):
 
 def move(c, row, target, why):
     """Move the ticket to step `target` (a step row or id) as Tico. True when it moved. A refusal (the review gate)
-    undoes only this move and tells the builder what clears it."""
+    undoes only this move, tells the builder what clears it, and is remembered so Tico retries it then
+    (backend/move_retry.py), as the notice promises."""
     target = target if isinstance(target, dict) else F.step(c, target)
     if not target or target["type_id"] != row.get("type_id") or row.get("step_id") == target["id"]:
         return False
@@ -108,6 +109,8 @@ def move(c, row, target, why):
         notice = getattr(exc, "review_gate", None)
         if notice:
             review_gate.notify(c, H.KEEPER, notice)
+            from . import move_retry
+            move_retry.remember(c, H.KEEPER, notice)
         return False
     except Exception:  # noqa: BLE001 - a verdict or a merge is never lost to the move it causes
         c.execute("ROLLBACK TO verdict_move")

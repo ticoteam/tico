@@ -182,7 +182,7 @@ function strategyFieldHtml(key, title, value, owner, placeholder) {
   return `<section class="strat-sec strat-${key}" id="strat-sec-${key}"><h2 class="strat-k">${esc(title)}</h2>${body}</section>`;
 }
 
-// A goal's colour is its status (red, yellow, green); none yet (proposed) is gray.
+// A goal's colour is its status (red, yellow, green); none yet is gray.
 function strategyGoalsHtml(goals) {
   if (!goals?.length) return '';
   return `<ul class="strat-goals" aria-label="Goals">${goals.map(g =>

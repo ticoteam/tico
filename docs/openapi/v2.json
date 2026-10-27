@@ -26214,7 +26214,7 @@
               "string",
               "null"
             ],
-            "description": "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"
+            "description": "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"
           },
           "status_note": {
             "type": "string"
@@ -27129,7 +27129,7 @@
                   "string",
                   "null"
                 ],
-                "description": "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"
+                "description": "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"
               },
               "status_note": {
                 "type": "string"
@@ -27341,7 +27341,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"
+                  "description": "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"
                 },
                 "status_note": {
                   "type": "string"
