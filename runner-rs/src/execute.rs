@@ -4309,7 +4309,11 @@ else:
                 std::fs::write(&script, code).unwrap();
             }
             let mut first = capacity_attempt("a-side", None);
-            if worktree { first["task"] = json!({"id": "fallback-task", "status": "doing"}); }
+            if worktree {
+                first["task"] = json!({"id": "fallback-task", "status": "doing"});
+                // Placement follows the claimed lane, not the task object on a main-chat turn.
+                first["lane"] = json!("task:fallback-task");
+            }
             let profile = runner.turn_profile(&first).unwrap();
             assert_eq!(profile.as_ref().map(|p| p.name.as_str()), named.then_some("lab"));
             let profile_suffix = profile.as_ref().map_or(String::new(), |p| format!(":profile:{}:{}", p.name, p.binding()));
