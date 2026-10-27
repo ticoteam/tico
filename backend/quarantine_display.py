@@ -9,6 +9,10 @@ def resume_time(timing):
     return H.parse_ts(at) if at else None
 
 
+def resume_label(at, dated=True):
+    return (at.strftime("%Y-%m-%d ") if dated else "") + at.strftime("%H:%M UTC")
+
+
 def builder_notice(timing):
     if not timing["auto"]:
         return "Builder quarantined: until a person clears it"
@@ -16,9 +20,9 @@ def builder_notice(timing):
     if not at:
         return "Builder quarantined: resumes after its cooldown"
     # An overnight cooldown must not look like an earlier time on the same day.
-    since = timing.get("since")
-    dated = since and H.parse_ts(since).date() != at.date()
-    return "Builder quarantined: resumes " + at.strftime("%Y-%m-%d %H:%M UTC" if dated else "%H:%M UTC")
+    since = H.parse_ts(timing.get("since"))
+    dated = since is not None and since.date() != at.date()
+    return "Builder quarantined: resumes " + resume_label(at, dated)
 
 
 def explanation(c, slug, who, auth):
@@ -37,7 +41,7 @@ def explanation(c, slug, who, auth):
 
     at = resume_time(timing)
     # Include the date so a cooldown crossing midnight has an unambiguous UTC deadline.
-    resumes = f"at {at.strftime('%Y-%m-%d %H:%M UTC')}" if at else "after its cooldown"
+    resumes = f"at {resume_label(at)}" if at else "after its cooldown"
     text = (f"Quarantined for repeated refused writes (rule 8; {H.quarantine_reason(c, slug)}): "
             f"resumes by itself {resumes}; a person who manages it can clear it sooner.")
     if manages:

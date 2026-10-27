@@ -24,7 +24,9 @@ const {unrouted} = require('./support/routes.cjs');
     const tasks = [task('Automatic cooldown', 'bot:builder-a'), task('Another ticket', 'bot:builder-a'),
       task('Manual quarantine', 'human:ana', {roles: {builder: ['bot:builder-b']}}), task('Healthy builder', 'bot:healthy'),
       task('General work', 'bot:builder-a', {type_id: 'general', type: {id: 'general', name: 'General'}}),
-      task('Completed work', 'bot:builder-a', {status: 'done', step_id: 'shipped', step: type.steps[1]})];
+      task('Completed work', 'bot:builder-a', {status: 'done', step_id: 'shipped', step: type.steps[1]}),
+      task('Declined work', 'bot:builder-a', {status: 'declined'}),
+      task('Two builders', 'bot:builder-a', {roles: {builder: ['bot:builder-a', 'bot:builder-c']}})];
     const active = slug => ({bot: slug, state: 'idle', bot_state: 'active'});
     const held = (slug, notice, auto = true) => ({bot: slug, state: 'quarantined', bot_state: 'quarantined',
       quarantine: {auto, resumes_at: auto ? '2030-10-26T13:00:00Z' : null, builder_notice: notice,
@@ -43,7 +45,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile(p.slice(1)), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'human', mover: false, cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
-      if (p === '/api/employees') return json(['builder-a', 'builder-b', 'healthy'].map(name => ({name, display_name: name, host: 'keeper', status: 'active', can_chat: true})));
+      if (p === '/api/employees') return json(['builder-a', 'builder-b', 'builder-c', 'healthy'].map(name => ({name, display_name: name, host: 'keeper', status: 'active', can_chat: true})));
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: statuses});
       if (p === '/api/v2/task-types') return json({types: [type, {id: 'general', name: 'General', steps: []}]});
@@ -62,22 +64,26 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('.bcard[data-task-key="tAutomatic cooldown"]').waitFor();
     assert.equal(await page.locator('.task-builder-notice').count(), 0);
     // A bot-status event alone changes all its cards and one column notice, with no ticket version change.
-    statuses = [auto, manual, active('healthy')];
+    statuses = [auto, manual, held('builder-c', auto.quarantine.builder_notice), active('healthy')];
     await page.evaluate(rows => rows.forEach(status => liveEmit('bots', {bot: status.bot, status})), statuses);
     await page.locator('.bcard[data-task-key="tAutomatic cooldown"] .task-builder-notice').waitFor();
     for (const id of ['Automatic cooldown', 'Another ticket']) assert.equal(await page.locator(`.bcard[data-task-key="t${id}"] .task-builder-notice`).innerText(), auto.quarantine.builder_notice);
     assert.equal(await page.locator('.bcard[data-task-key="tManual quarantine"] .task-builder-notice').innerText(), manual.quarantine.builder_notice);
     assert.equal(await page.locator('.bcard[data-task-key="tHealthy builder"] .task-builder-notice').count(), 0);
-    assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 2, 'column deduplicates each builder');
+    assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 3, 'column deduplicates each builder');
     assert.doesNotMatch(await page.locator('.board').innerText(), /Manager-only private detail/);
     assert.equal(await page.evaluate(tasks => taskBuilderActors(tasks.find(t => t.title === 'General work')).length, tasks), 0);
     assert.equal(await page.evaluate(tasks => taskBuilderActors(tasks.find(t => t.title === 'Completed work')).length, tasks), 0);
+    const both = page.locator('.bcard[data-task-key="tTwo builders"] .task-builder-notice');
+    assert.equal(await both.count(), 2, 'owner repeated in builder role is deduplicated');
+    assert.deepEqual(await both.locator('strong').allTextContents(), ['builder-a', 'builder-c']);
+    for (const text of await both.allTextContents()) assert(text.endsWith(auto.quarantine.builder_notice));
     if (process.env.DEV595_SHOTS) await page.screenshot({path: path.join(process.env.DEV595_SHOTS, 'board.png'), fullPage: true});
     // Lifting one builder leaves the other visible in its column. This includes already-open cards.
     statuses[0] = active('builder-a');
     await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), statuses[0]);
     await page.waitForFunction(() => !document.querySelector('.bcard[data-task-key="tAutomatic cooldown"] .task-builder-notice'));
-    assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 1);
+    assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 2);
     statuses[0] = auto;
     await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), auto);
     await page.goto('https://tico-ui.test/#/task/Automatic%20cooldown');
@@ -105,8 +111,18 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await modal.locator('.task-builder-notice').innerText(), manual.quarantine.builder_notice);
     await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), active('builder-b'));
     await modal.locator('.task-builder-notice').waitFor({state: 'detached'});
+    // Identical deadlines still identify both builders on the ticket page.
+    statuses[0] = auto;
+    await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), auto);
+    await page.goto('https://tico-ui.test/#/task/Two%20builders');
+    await modal.locator('.task-builder-notice').first().waitFor();
+    assert.deepEqual(await modal.locator('.task-builder-notice strong').allTextContents(), ['builder-a', 'builder-c']);
+    // A declined task is readable directly but must not inherit its bot owner's quarantine notice.
+    await page.goto('https://tico-ui.test/#/task/Declined%20work');
+    await page.waitForFunction(() => document.querySelector('#task-modal .tmodal-title')?.textContent === 'Declined work');
+    assert.equal(await modal.locator('.task-builder-notice').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('PASS: quarantine cards, column deduplication, ticket page, manual/auto/lift, healthy/general/finished controls, UTC phone and preserved drafts');
+    console.log('PASS: quarantine cards, column deduplication, ticket page, manual/auto/lift, healthy/general/finished/declined controls, named multiple builders, UTC phone and preserved drafts');
     await context.close();
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -336,6 +336,7 @@ function taskBuilderActors(t) {
   return [...new Set([t.owner, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
 }
 function taskBuilderNoticesHTML(actors, names = false) {
+  names ||= actors.length > 1;
   return actors.map(slug => {
     const status = v2StatusOf(slug);
     const text = status?.bot_state === 'quarantined' ? status.quarantine?.builder_notice : '';

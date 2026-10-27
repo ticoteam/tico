@@ -38,3 +38,13 @@ def test_escape_builder_notice_promises_no_lift_and_discloses_no_private_context
         q = status(api, token)["quarantine"]
         assert not q["auto"] and q["resumes_at"] is None
         assert q["builder_notice"] == "Builder quarantined: until a person clears it"
+
+
+def test_status_survives_unreadable_quarantine_start_with_known_deadline(api, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        H.quarantine(c, "ops", "10 repeated refusals today")
+    monkeypatch.setattr(H, "quarantine_resumes", lambda c, slug: {
+        "auto": True, "since": "unreadable", "resumes_at": "2030-10-26T13:00:00Z"})
+    q = status(api, "cara-test")["quarantine"]
+    assert q["builder_notice"] == "Builder quarantined: resumes 13:00 UTC"
+    assert "2030-10-26 13:00 UTC" in q["why"]
