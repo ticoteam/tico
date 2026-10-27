@@ -22,6 +22,10 @@ def asks(api, person):
         return [(H.task(c, json.loads(r["ask_json"])["task"]), dict(r)) for r in rows]
 
 
+def times(api):
+    return get(api, "release-schedule")["times"]
+
+
 def told(api, person, action_id):
     """What the asker was told about this ask's card, in the chat they asked from."""
     with api.app.state.store.read() as c:
@@ -29,52 +33,56 @@ def told(api, person, action_id):
         return [r["body"] for r in rows if json.loads(r["refs_json"] or "{}").get("settings_ask") == action_id]
 
 
+_SAID = iter(range(1000))
+
+
 def ask(api, botops, person, key, value, **more):
-    """`person` asks BotOps for a setting they may not change, then says yes to asking someone who can."""
-    attempt = turn(api, botops, person=person + "-test", text="Yes, ask an admin")
+    """`person` asks BotOps for a setting they may not change, then says yes to asking someone who can (each yes its
+    own words: the same message twice starts no second run)."""
+    attempt = turn(api, botops, person=person + "-test", text=f"Yes, ask an admin ({next(_SAID)})")
     err, got = mcp(api, "hub_settings_ask", {"key": key, "value": value, **more}, attempt["token"])
     finish(api, botops, attempt)
     return err, got
 
 
 def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card_and_tells_the_member(api, botops):
-    """Acceptance 14. Cara may not change Sleep when idle (an admin's). BotOps refuses her, naming who may; on her yes
+    """Acceptance 14. Cara may not change Release times (an admin's). BotOps refuses her, naming who may; on her yes
     Ben, the admin, gets one request: the card in his BotOps chat and a task he owns that Cara requested. Nothing
     changes until his tap, which runs as him; the task is then done, and Cara is told in her chat with BotOps."""
-    before = get(api, "sleep")["sleep"]["hours"]
-    cara = turn(api, botops, person="cara-test", text="Sleep after 3 quiet hours")
-    err, refused = mcp(api, "hub_settings_set", {"key": "sleep.hours", "value": 3}, cara["token"])
+    before = times(api)
+    cara = turn(api, botops, person="cara-test", text="Release at 09:30")
+    err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
     finish(api, botops, cara)
     assert err and refused["error"] == "forbidden", refused
     assert "Only the owner or an admin changes" in refused["detail"], refused
-    err, got = ask(api, botops, "cara", "sleep.hours", 3, note="Nights are quiet")
+    err, got = ask(api, botops, "cara", "release.times", "09:30", note="Customers are up early")
     assert not err and got["asked"] == {"person": "human:ben", "name": got["asked"]["name"]}, got
     assert "Nothing has changed yet" in got["detail"], got
     [(task, card)] = asks(api, "ben")
     assert task["owner"] == "human:ben" and task["requester"] == "human:cara" and task["status"] == "open", task
-    assert "Nights are quiet" in task["body"] and card["status"] == "pending" and card["path"] == "/api/v2/sleep"
-    assert get(api, "sleep")["sleep"]["hours"] == before                       # nothing until Ben's tap
+    assert "Customers are up early" in task["body"] and card["status"] == "pending", (task, card)
+    assert card["path"] == "/api/v2/release-schedule" and times(api) == before  # nothing until Ben's tap
     with api.app.state.store.read() as c:
         room = c.execute("SELECT * FROM conversations WHERE id=?", (card["conversation_id"],)).fetchone()
     assert "human:ben" in room["participants_json"] and "bot:botops" in room["participants_json"]
     assert not asks(api, "ana") and not asks(api, "cara")                      # one request, to one person
     tap = post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")["action"]
     assert tap["status"] == "done", tap
-    assert get(api, "sleep")["sleep"]["hours"] == 3
+    assert times(api) == ["09:30"]
     [(task, card)] = asks(api, "ben")
     assert task["status"] == "done", task
     [said] = told(api, "cara", card["id"])
-    assert "confirmed it" in said and "Sleep when idle" in said, said
+    assert "confirmed it" in said and "Release times" in said, said
 
 
 def test_cancelling_an_asked_card_declines_the_request_and_tells_the_asker(api, botops):
-    before = get(api, "sleep")["sleep"]["hours"]
-    err, got = ask(api, botops, "cara", "sleep.hours", 5)
+    before = times(api)
+    err, got = ask(api, botops, "cara", "release.times", "10:15")
     assert not err, got
     [(_, card)] = asks(api, "ben")
     post(api, f"assistant/actions/{card['id']}/cancel", {}, "ben-test")
     [(task, _)] = asks(api, "ben")
-    assert task["status"] == "declined" and get(api, "sleep")["sleep"]["hours"] == before, task
+    assert task["status"] == "declined" and times(api) == before, task
     [said] = told(api, "cara", card["id"])
     assert "said no" in said and "nothing changed" in said, said
 
@@ -88,25 +96,25 @@ def test_the_owners_setting_is_asked_of_the_owner_and_an_admin_asks_too(api, bot
 
 
 def test_the_same_ask_again_is_the_same_request(api, botops):
-    first = ask(api, botops, "cara", "sleep.hours", 4)[1]
-    again = ask(api, botops, "cara", "sleep.hours", 4)[1]
+    first = ask(api, botops, "cara", "release.times", "11:00")[1]
+    again = ask(api, botops, "cara", "release.times", "11:00")[1]
     assert first["task"] == again["task"] and first["action"]["id"] == again["action"]["id"]
     assert len(asks(api, "ben")) == 1
 
 
 def test_no_ask_for_a_setting_the_asker_may_change_or_one_only_a_person_changes(api, botops):
-    err, got = ask(api, botops, "ben", "sleep.hours", 3)
+    err, got = ask(api, botops, "ben", "release.times", "09:30")
     assert err and got["error"] == "may", got                                  # Ben may: he sets it
     err, got = ask(api, botops, "cara", "hooks.wake_url", "https://wake.acme.example/x")
     assert err and got["error"] == "person_only" and "the owner changes it in Settings" in got["detail"], got
-    err, got = ask(api, botops, "cara", "sleep.hours", 3, to="cara")
+    err, got = ask(api, botops, "cara", "release.times", "09:30", to="cara")
     assert err and got["error"] == "no_one", got                               # never the asker
     assert not asks(api, "ben") and not asks(api, "ana")
 
 
 def test_a_bot_on_its_own_rights_cannot_ask_for_anyone(api, botops):
     attempt = turn(api, botops, person="cara-test", text="Ask an admin")
-    refused = act(api, attempt, "POST", "settings/catalog/sleep.hours/ask", {"value": 3}, ref=None)
+    refused = act(api, attempt, "POST", "settings/catalog/release.times/ask", {"value": "09:30"}, ref=None)
     finish(api, botops, attempt)
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden", refused.text
     assert not asks(api, "ben")
@@ -133,7 +141,7 @@ def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, bot
         assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0] is None
 
 
-def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api):
+def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api, botops):
     """The same from Cara's Assistant: with her words cited, Ben gets the request and she is told in her Assistant
     chat; without them, nothing is asked. The raw refusal of her release time names who may, as `hub settings` does."""
     from backend.tests.test_api import as_member, headers
@@ -151,7 +159,7 @@ def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_
     [(task, card)] = asks(api, "ben")
     assert task["requester"] == "human:cara" and card["path"] == "/api/v2/release-schedule", (task, card)
     post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")
-    assert get(api, "release-schedule")["times"] == ["09:30"]
+    assert times(api) == ["09:30"]
     [said] = told(api, "cara", card["id"])
     with api.app.state.store.read() as c:
         room = c.execute("SELECT m.conversation_id, v.room_key FROM messages m JOIN conversations v ON "
