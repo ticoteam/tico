@@ -5770,7 +5770,8 @@ def create_app(settings=None):
         Newly discoverable computers expose no repositories, logs or operator identity."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot, so the per-computer lookups share read_cache across every computer.
+        with store.read_transaction() as c:
             return {"computers": computer_rows(c, who), "services": views.team_services(c, who, auth),
                     "services_scope": "team"}
 
