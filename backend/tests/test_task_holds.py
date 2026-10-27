@@ -206,3 +206,14 @@ def test_the_third_withdrawal_of_the_same_question_in_a_day_says_so(api):
         told = notices(c, "bot:ops")
         assert len(told) == 3
         assert "third question from you" in told[2]["body"] and "third" not in told[1]["body"]
+
+
+def test_a_private_child_is_never_named_in_its_parent_s_reason(api):
+    """The reason is shown to everyone who reads the parent; the private child's title stays off it."""
+    with api.app.state.store.transaction() as c:
+        mine = bot_task(c, "Plan the audit", owner="human:ana", actor="human:ana")
+        secret = H.task_create(c, "human:ana", "Vendor breach review", "x", "bot:ops", parent_id=mine,
+                               private=True, lint=False)["id"]
+        assert wait(c, mine, owner="human:ana")["blocked_reason"] == "Waiting on a private task"
+        H.task_update(c, "bot:ops", secret, status="done", note="Reviewed")
+        assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: A private task is done"

@@ -169,7 +169,8 @@ def refresh_many(conn, task_ids, cleared=None):
 def ended(conn, row, status):
     """`row` just finished as `status`: its parent and the tasks it blocked lose a hold."""
     from . import hubdb as H, task_relations as TR
-    what = f"{_line(row['title'], 120)} {'is done' if status == 'done' else 'was ' + H.TASK_ENDED[status]}"
+    title = "A private task" if H.task_private(conn, row) else _line(row["title"], 120)   # as _task_hold names it
+    what = f"{title} {'is done' if status == 'done' else 'was ' + H.TASK_ENDED[status]}"
     parent = TR.parent_of(conn, row["id"])
     if parent:
         refresh(conn, parent, what)
