@@ -330,6 +330,8 @@ def key_cleared_by_runner(c):
             "SELECT runner_id, runtime FROM model_login_cleared WHERE profile='' AND clear_key=1 ORDER BY runtime"):
         out.setdefault(row["runner_id"], []).append(row["runtime"])
     return out
+
+
 def sign_out(c, who, rid, runtime, profile="", auth=None):
     """Sign `runtime` out on a computer: the runner runs the CLI's own logout and checks it took. The login stays
     signed out: the shared key no longer signs it back in, until a person signs in or chooses the shared key."""

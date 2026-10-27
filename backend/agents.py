@@ -330,7 +330,8 @@ def listing(c, who, auth):
     operators = {r["bot"]: r["operator"] for r in read_cache.configs(c, slugs)}
     out = []
     for record in rows:
-        if not access.get(record["bot"], auth.FULL)["read"]:
+        # bot_accesses answers every slug asked for; a missing one denies rather than allows.
+        if not (access.get(record["bot"]) or {}).get("read"):
             continue
         operator = operators.get(record["bot"])
         if who.role != "owner" and not (operator and who.actor == "human:" + operator):
