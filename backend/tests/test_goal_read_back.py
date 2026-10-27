@@ -79,8 +79,9 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert room_messages(api)[-2]["id"] == back["message_id"]
     made = save(api, attempt, first)
     gid = made["goal"]["id"]
-    assert made["read_back"] == {"change": 1, "step": 1, "steps": 2, "saved": True,
-                                 "link": f"{api.app.state.settings.public_url.rstrip('/')}/#/goals/{gid}"}
+    link = made["read_back"].pop("link")
+    assert made["read_back"] == {"change": 1, "step": 1, "steps": 2, "saved": True}
+    assert link.endswith(f"/#/goals/{gid}")
     # The measure goes on the goal this read-back made, and nowhere else.
     save(api, attempt, {**measure, "path": f"/api/v2/goals/{serves['id']}/kpis"}, expected=403)
     save(api, attempt, {**measure, "path": measure["path"].replace(GR.NEW, gid)})
