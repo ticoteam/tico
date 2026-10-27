@@ -30,22 +30,30 @@ def metadata(c, key):
 
 
 def computer_repositories(c):
-    """{runner_id: repositories status} for every computer in one pass (Operations listing).
+    """{runner_id: repositories status} for every computer, once per read snapshot.
 
-    Missing keys stay absent so callers keep the historical default of \"unknown\".
+    Health / `/computers` (`computer_details`) and Operations used to look up
+    `computer-repositories:<id>` once per machine. Missing keys stay absent so
+    callers keep the historical default of \"unknown\".
     """
+    values = read_cache.cache(c)
+    key = "repositories.computer_repositories"
+    if values is not None and key in values:
+        return values[key]
     out = {}
-    prefix = 'computer-repositories:'
-    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE ?", (prefix + '%',)):
-        if not row['key'].startswith(prefix):
+    prefix = "computer-repositories:"
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE ?", (prefix + "%",)):
+        if not row["key"].startswith(prefix):
             continue
-        rid = row['key'][len(prefix):]
+        rid = row["key"][len(prefix):]
         try:
-            value = json.loads(row['value_json'] or '{}')
+            value = json.loads(row["value_json"] or "{}")
         except ValueError:
             continue
-        if isinstance(value, dict) and 'repositories' in value:
-            out[rid] = value['repositories']
+        if isinstance(value, dict) and "repositories" in value:
+            out[rid] = value["repositories"]
+    if values is not None:
+        values[key] = out
     return out
 
 
@@ -394,38 +402,23 @@ def preview_change(c, settings, actor, bot, body):
         return None
 
 
-def needs_card(result):
-    """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
-    class for it): it gives what only their own click may (`started`), or takes something away."""
-    return bool(result.get('workflows_started') or result.get('product_creation_started') or result.get('stopped')
-                or result.get('creation_stopped') or result.get('workflows_stopped')
-                or result.get('product_creation_stopped'))
-
-
-def trial(c, bot, update, org, actor, owner=False):
+def tried(c, bot, update, org, actor, name, owner=False):
     """The change made as the person's own click on its card would make it (`owner`: the Owner's), then rolled back:
-    `access()` before it and what it did (`set_access` and `started`), or the refusal that click would get."""
+    its plain words (`plain_change`), or the refusal that click would get."""
     c.execute('SAVEPOINT repo_preview')
     try:
         before = access(c, bot, org)
         result = set_access(c, bot, update, org, actor, team_list=True, owner=owner)
-        return before, {**result, **started(before, access(c, bot, org))}
+        return plain_change(name, before, {**result, **started(before, access(c, bot, org))})
     finally:
         c.execute('ROLLBACK TO repo_preview')
         c.execute('RELEASE repo_preview')
 
 
-def tried(c, bot, update, org, actor, name, owner=False):
-    """`trial` in plain words (`plain_change`)."""
-    return plain_change(name, *trial(c, bot, update, org, actor, owner))
-
-
 def card_words(c, settings, auth, who, bot, body):
-    """For the settings catalogue (settings_catalog.plan), the change BotOps would make for a person tried as that
-    person's own click: (whether it needs their Confirm card, the card's plain words). It needs one exactly when
-    `bot_set` would make one, a kept Run workflows tick coming back included. A change that click could not make (no
-    write access for Run workflows, an admin turning Create product repositories on) is refused now, so no card is made
-    for it."""
+    """For a catalogue Confirm card (settings_catalog.plan): the card's plain words, after trying the change as the
+    person's own click; a change that click could not make (no write access for Run workflows, an admin turning Create
+    product repositories on) is refused now, so no card is made for it."""
     if auth.system_bot(bot) and who.role != 'owner':
         raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
     try:
@@ -435,8 +428,7 @@ def card_words(c, settings, auth, who, bot, body):
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
     name = (H.bot(c, bot) or {}).get('display_name') or bot
-    before, result = trial(c, bot, update, org, who.actor, owner=who.role == 'owner')
-    return needs_card(result), plain_change(name, before, result)
+    return tried(c, bot, update, org, who.actor, name, owner=who.role == 'owner')
 
 
 def plain_change(name, before, result):
@@ -861,7 +853,8 @@ def install(app, store, service):
                 c.execute('RELEASE repo_narrowing')
                 raise
             gains = result.get('workflows_started') or result.get('product_creation_started')
-            if not needs_card(result):
+            if not gains and not result['stopped'] and not result.get('creation_stopped') \
+                    and not result.get('workflows_stopped') and not result.get('product_creation_stopped'):
                 c.execute('RELEASE repo_narrowing')
                 return result
             c.execute('ROLLBACK TO repo_narrowing')
