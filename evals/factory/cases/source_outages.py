@@ -100,13 +100,30 @@ def bulk_setup(run, w, team):
 
 
 def server_setup(run, w, team):
+    from backend.store import Problem
+    from evals.factory.world import Refusal
     attempt = probe(w)
     execution = w.app.state.execution
-    execution.record_contact(w.H.now())
-    w.clock.shift(20 * 60)  # no renew, events, heartbeat or claim can reach the server
-    with w.store.transaction() as c:
-        execution.expire(c)
-        running = c.execute('SELECT state FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'running'
+    execution.served_at = None
+    original = execution.renew
+    def busy(*args, **kwargs):
+        raise Problem('unavailable', 'Synthetic write lock is busy', 503, retryable=True)
+    execution.renew = busy
+    running = True
+    try:
+        for _ in range(20):
+            w.clock.shift(60)
+            try:
+                w.post(f"attempts/{attempt['id']}/renew", {}, w.runner['token'])
+            except Refusal as exc:
+                assert exc.status == 503
+            else:
+                raise AssertionError('the blocked renewal unexpectedly wrote')
+            with w.store.transaction() as c:
+                execution.expire(c)
+                running &= c.execute('SELECT state FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'running'
+    finally:
+        execution.renew = original
     renewed = w.post(f"attempts/{attempt['id']}/renew", {}, w.runner['token'])
     thread = w.sql('SELECT thread_id FROM attempts WHERE id=?', (attempt['id'],))[0]['thread_id']
     run.proof = running and bool(renewed) and thread == 'factory-source-session'
@@ -123,5 +140,5 @@ SCENARIOS = [Scenario(name, about, setup=setup, hours=0, drain_hours=0,
                  ('stale_quota_reset', 'A later status refresh cannot extend the absolute provider reset.', stale_setup),
                  ('restore_backlog_100', 'One hundred waiting notices recover through one carrier and one computer slot.', backlog_setup),
                  ('bulk_close_30', 'Thirty human closures leave one note per paused recipient and no queued wake.', bulk_setup),
-                 ('server_renew_outage_20m', 'Twenty minutes of server silence keeps the running lease and session.', server_setup),
+                 ('server_renew_outage_20m', 'Twenty minutes of busy server renewals keeps the running lease and session.', server_setup),
              )]

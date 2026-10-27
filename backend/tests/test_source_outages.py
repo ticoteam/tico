@@ -149,20 +149,30 @@ def test_thirty_human_closures_make_one_note_and_no_wakes_for_a_paused_bot(api):
         assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'Closed:%'").fetchone()[0] == 60
 
 
-def test_twenty_minute_server_silence_keeps_the_running_lease_and_thread(api, monkeypatch):
-    from backend.tests.test_api import setup_attempt
+def test_twenty_minutes_of_busy_server_renewals_keep_the_running_lease_and_thread(api, monkeypatch):
+    from backend.tests.test_api import headers, setup_attempt
+    from backend.store import Problem
     machine, _, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'keep-this-session'}, machine['token'])
     store, execution = api.app.state.store, api.app.state.execution
     last = H.now()
-    execution.record_contact(last)
-    at(monkeypatch, H.shift(last, seconds=20 * 60), api)
-    with store.transaction() as c:
-        execution.expire(c)
-        assert c.execute('SELECT state FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'running'
-        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'running'
-    renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
-    assert renewed
+    execution.served_at = None  # prove per-attempt arrival protection, independently of global stall grace
+    original = execution.renew
+    def busy(*args, **kwargs):
+        raise Problem('unavailable', 'Synthetic write lock is busy', 503, retryable=True)
+    monkeypatch.setattr(execution, 'renew', busy)
+    for minute in range(1, 21):
+        at(monkeypatch, H.shift(last, seconds=minute * 60), api)
+        refused = api.post(f"/api/v2/attempts/{attempt['id']}/renew", json={}, headers=headers(machine['token']))
+        assert refused.status_code == 503
+        with store.transaction() as c:
+            execution.expire(c)
+            assert c.execute('SELECT state FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'running'
+            assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'running'
+    monkeypatch.setattr(execution, 'renew', original)
+    assert post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
+    with store.read() as c:
+        assert c.execute('SELECT thread_id FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'keep-this-session'
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Continued the same thread.'}, machine['token'])
 
 

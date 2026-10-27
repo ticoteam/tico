@@ -32,7 +32,6 @@ BILLING_LIMIT_RE = re.compile(r"quota exceeded\. check your plan|exceeded your c
 # get grace instead of expiring, and a runner reporting in afterwards gets its attempt back.
 # A backup can starve a single small API worker for minutes: 90 s leases lapsed and healthy running turns were marked interrupted for review.
 STALL_MAX = 900
-SERVER_STALL_MAX = 30 * 60  # a slow server keeps existing leases, including a twenty-minute outage
 # How long the sweep waits for a run whose lease lapsed (its runner never said it stopped) before running it again. On
 # Oct 17-18 eight finished turns reached the hub 15 to 76 minutes after their lease lapsed, while their runner was
 # stalled between the model's last word and the hand-in; one sweep resumed at 15 minutes and the request ran twice.
@@ -2070,7 +2069,7 @@ class Execution:
         if not self.served_at:
             return False
         gap = (H.parse_ts(now) - H.parse_ts(self.served_at)).total_seconds()
-        return self.store.settings.lease_seconds / 2 < gap <= SERVER_STALL_MAX
+        return self.store.settings.lease_seconds / 2 < gap <= STALL_MAX
 
     def stall_recovery(self, now):
         """Keep the original cutoff and deadline while bounded sweeps drain a stalled fleet.
