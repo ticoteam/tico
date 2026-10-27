@@ -374,11 +374,15 @@ class Support:
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
         answer = _ask_hq("POST", "/v1/support", body=payload)
-        if answer.status_code == 422 and {"app_version", "kind", "source"} & set(payload) and _refused_field(answer) == "fields":
-            # An HQ from before app_version, kind or source refuses unknown fields; the ticket still goes without them,
-            # and names its kind in the message instead (BotOps' and the Health Monitor's messages already start with
-            # their name, which is how such an HQ reads the source).
-            for name in ("app_version", "kind", "source"):
+        if answer.status_code == 422 and _refused_field(answer) == "fields":
+            # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
+            # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
+            payload.pop("source")
+            answer = _ask_hq("POST", "/v1/support", body=payload)
+        if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
+            # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
+            # names its kind in the message instead.
+            for name in ("app_version", "kind"):
                 payload.pop(name, None)
                 sent.pop(name, None)
             named = f"[{body.kind.capitalize()}] {message}"

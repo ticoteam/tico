@@ -120,13 +120,15 @@ def test_the_desktop_apps_version_goes_labelled_apart_and_an_older_hq_still_gets
     assert [json.loads(x.content).get("app_version") for x in hq.seen[-2:]] == ["0.3.47", None]
     assert len(hq.tickets) == 3
 
-    # Only that refusal is retried, once: HQ objecting to the value itself, or to another field, is answered as it is.
-    for fields, refuse, body in ((None, "app_version", {"app_version": "0.3.47"}),
-                                 ({"message"}, None, {"email": "ana@acme.example"})):
+    # Only that refusal is retried: HQ objecting to the value itself is answered at once; objecting to another field is
+    # answered after the one retry without source (an older HQ's refusal does not say which field it was).
+    for fields, refuse, body, asks in ((None, "app_version", {"app_version": "0.3.47"}, 1),
+                                       ({"message"}, None, {"email": "ana@acme.example"}, 2)):
         hq.fields, hq.refuse_field, before = fields, refuse, len(hq.seen)
         r = file(api, **body)
         assert r.status_code < 500 and r.status_code >= 400, r.text
-        assert len(hq.seen) == before + 1
+        assert len(hq.seen) == before + asks
+    assert "source" not in json.loads(hq.seen[-1].content)
     assert len(hq.tickets) == 3
 
 
@@ -649,7 +651,18 @@ def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(envir
     first, again = (json.loads(x.content) for x in hq.seen[-2:])
     assert first["source"] == "botops" and "source" not in again and again["message"] == "[BotOps] Sync fails"
     assert len(hq.tickets) == filed + 1
-    # Only that refusal is retried, once.
+    # Today's HQ knows kind but not source: only source is dropped, so a setup request keeps its kind.
+    r = file(api, message="Stuck on the computer step", kind="setup")
+    assert r.status_code == 200 and r.json()["sent"]["kind"] == "setup"
+    last = json.loads(hq.seen[-1].content)
+    assert "source" not in last and last["kind"] == "setup" and last["message"] == "Stuck on the computer step"
+    # An HQ from before kind as well: both go, as before, and the kind is named in the message.
+    hq.fields = {"message", "email", "install_id", "version"}
+    r = file(api, message="Stuck again", kind="setup")
+    assert r.status_code == 200 and "kind" not in r.json()["sent"]
+    last = json.loads(hq.seen[-1].content)
+    assert set(last) <= hq.fields and last["message"] == "[Setup] Stuck again"
+    # Only those refusals are retried: HQ objecting to the value itself is answered as it is, after one request.
     hq.fields, hq.refuse_field, before = None, "source", len(hq.seen)
     assert 400 <= file(api).status_code < 500 and len(hq.seen) == before + 1
 
