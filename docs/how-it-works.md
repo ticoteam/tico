@@ -308,11 +308,16 @@ progress line at most once a minute while it stays so, and one when it is back; 
 status` says when the running bot job predates the checkout's current commit. On a bot's Chat
 page, one line above the composer says when the bot is paused and why (a usage limit, a
 quarantine, or a Mac offline for more than ten minutes) and that messages are saved, or that a
-review is owed while chat still answers. For a quarantine it says when the bot resumes by itself, or, for a safety
+review is owed while chat still answers. Health and the bot page share the quarantine explanation: a refusal-count
+pause names rule 8 and its UTC resume date and time, and a person who manages the bot also sees the refusal rule
+and refused words, with credential values masked. It resumes by itself; a person who manages it can clear it sooner.
+A manual quarantine lasts until a person clears it and promises no automatic lift time. For a safety
 pause recorded before path mentions stopped pausing bots, what the check matched (a secrets path or another
 bot's folder, in the bot's own words). Anyone who manages the
-bot, wherever it runs, sees Resume bot beside the warning by its name and a Paused for review card under More with the
-refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
+bot, wherever it runs, sees Resume bot beside the warning by its name and a card under More. The card says
+Quarantined for repeated refused writes for an automatic pause, or Paused for review for a manual safety pause,
+and shows the explanation above. A manual safety pause also shows the refused text (credential values masked)
+and its task; one click releases that pause and the checks stay on.
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
