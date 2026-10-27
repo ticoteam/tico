@@ -276,6 +276,12 @@
     async function poll() {
       timer = 0;
       if (closed || !issued) return;
+      // A background tab used to keep hitting /v2/me/tokens every few seconds for five minutes
+      // while waiting for the agent's first call. Resume when the tab is shown again.
+      if (document.hidden) {
+        timer = setTimeout(poll, POLL_MS);
+        return;
+      }
       const id = issued.id;
       let row;
       try { row = ((await get('/v2/me/tokens')).tokens || []).find(r => r.id === id); }
@@ -287,9 +293,16 @@
       timer = setTimeout(poll, POLL_MS);
     }
 
+    const onVis = () => {
+      if (document.hidden || closed || !issued || timer) return;
+      timer = setTimeout(poll, 0);
+    };
+    document.addEventListener('visibilitychange', onVis);
+
     dialog.querySelector('[data-close]').onclick = () => dialog.close();
     dialog.onclose = () => {
       closed = true; stopPolling(); issued = null;
+      document.removeEventListener('visibilitychange', onVis);
       dialog.remove();
       if (typeof renderSettingsTokens === 'function' && document.getElementById('set-tokens')) void renderSettingsTokens();
       window.dispatchEvent(new Event('tico:agents-changed'));     // the team chart's Connect button (ui/app/sidebar.js)
