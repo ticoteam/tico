@@ -42,6 +42,8 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert verbs.index("exec") < verbs.index("up") and "run" not in verbs and updater.status["restored"] is False
     exec_call = next(a for a, _ in docker.calls if "exec" in a)
     assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
+    assert 'target.execute("PRAGMA quick_check")' not in updater.SNAPSHOT_SCRIPT
+    assert 'target.execute("PRAGMA page_count")' in updater.SNAPSHOT_SCRIPT
 
 
 
