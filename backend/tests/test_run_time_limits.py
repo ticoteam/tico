@@ -4,7 +4,7 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post
 from backend.tests.test_task_lanes import task_bot, new_task
-from backend.tests.test_execution_review import add_recovery_reviewer, job_state, rival, sweep
+from backend.tests.test_execution_review import add_recovery_reviewer, job_state, sweep
 
 
 def running(api):
@@ -46,7 +46,11 @@ def next_attempt(api, machine, first):
 def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(api):
     """A session fence delays recovery without changing the cause to a computer restart."""
     machine, _, first = running(api)
-    other = rival(api, machine, first)
+    new_task(api, 'Finish other session work')
+    other = claim(api, machine)
+    post(api, f"attempts/{other['id']}/started", {'thread_id': 'other-session-work'}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lane=? WHERE id=?', (first['lane'], other['id']))
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
