@@ -142,8 +142,14 @@ def sources(task):
     callers without one retain the owner-only rule.
     """
     out = []
+    # The review gate marks each child it collected as a review of the board's review steps and names those steps;
+    # a caller that did not classify them gets the Dev board's generic review titles.
+    names = [re.escape(n) for n in task.get("review_steps") or ()] or [r"Review \d+"]
+    keeper_words = re.compile(r"ready[ -]for[ -]review|" + "|".join(names), re.I)
     for item in [task, *task.get("children", [])]:
-        if item is not task and not re.match(r"^Review [12](?:\b|:)", item.get("title", ""), re.I):
+        review = item.get("review_check")
+        if item is not task and not (review if review is not None
+                                     else re.match(r"^Review \d+(?:\b|:)", item.get("title", ""), re.I)):
             continue
         if item.get("note"):
             out.append({"task": item["id"], "message": None, "actor": item.get("owner"),
@@ -153,7 +159,7 @@ def sources(task):
                 continue
             actor = message.get("from_actor")
             text = message.get("body", "")
-            keeper = actor == "keeper" and re.search(r"ready[ -]for[ -]review|Review [12]", text, re.I)
+            keeper = actor == "keeper" and keeper_words.search(text)
             allowed = {item.get("owner"), task.get("owner"), *item.get("receipt_authors", [])}
             if actor not in allowed and not keeper:
                 continue

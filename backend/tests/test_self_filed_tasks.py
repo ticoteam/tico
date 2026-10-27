@@ -51,7 +51,7 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
     fields = {"title": "Post Release QA pass: v1.2.3"}
     if child:
         typ = post(api, "task-types", {"name": "Release flow", "steps": [
-            {"name": "Post Release QA", "status": "review"}]})["type"]
+            {"name": "Post Release QA", "status": "review", "flow": {"check": "release_qa"}}]})["type"]
         parent = post(api, "tasks", {"owner": "finance", "title": "Released work", "body": "Verify it.",
                                      "type": typ["id"], "step": "Post Release QA"}, token=active["token"])
         fields = {"title": "Verify shipped behavior", "relations": [{"kind": "parent", "task": parent["id"]}]}

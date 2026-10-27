@@ -28,7 +28,7 @@ def queries():
             ("SELECT count(*) FROM messages", [])]
 
 
-def populate(store, attempt, seed=7):
+def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=MESSAGES):
     """About the shape of a busy team's database: task rooms and chat rooms, bot runs that answer messages and
     cite their task or run, replies, a few private tasks of the restricted inbox bot, and their run provenance."""
     rng = random.Random(seed)
@@ -42,7 +42,7 @@ def populate(store, attempt, seed=7):
                              ).fetchall()
         for name, _ in triggers:
             c.execute(f'DROP TRIGGER "{name}"')
-        task_ids, room_ids = ids(TASKS), ids(ROOMS)
+        task_ids, room_ids = ids(tasks_n), ids(rooms_n)
         tasks, private = [], set()
         for i, tid in enumerate(task_ids):
             owner = "bot:" + BOTS[i % len(BOTS)]
@@ -51,13 +51,13 @@ def populate(store, attempt, seed=7):
                 private.add(tid)
             tasks.append((tid, f"Task {i}", "Body", "human:ana" if hidden else rng.choice(PEOPLE),
                           "bot:inbox" if hidden else owner, rng.choice(("open", "done", "closed")),
-                          room_ids[i] if i < 4000 else None, stamp(rng.randrange(180 * 1440)), 1 if hidden else 0,
+                          room_ids[i] if i < tasks_n * 2 // 3 else None, stamp(rng.randrange(180 * 1440)), 1 if hidden else 0,
                           100_000 + i))
         c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,private,number) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", tasks)
         rooms = []
         for i, cid in enumerate(room_ids):
-            if i < 4000:
+            if i < tasks_n * 2 // 3:
                 rooms.append((cid, "task", task_ids[i], json.dumps([tasks[i][3], tasks[i][4]]), "direct", None, None))
             else:
                 person, bot = rng.choice(PEOPLE), rng.choice(BOTS)
@@ -67,13 +67,13 @@ def populate(store, attempt, seed=7):
                       "VALUES(?,?,?,?,?,?,?,'2026-01-01T00:00:00.000000Z')", rooms)
         messages, jobs, attempts, turns, inputs, events = [], [], [], [], [], []
         last, root, waiting = {}, {}, {}
-        message_ids, attempt_ids = ids(MESSAGES), ids(MESSAGES // 5)
+        message_ids, attempt_ids = ids(messages_n), ids(messages_n // 5)
         runs = iter(attempt_ids)
         for i, mid in enumerate(message_ids):
-            r = rng.randrange(ROOMS)
-            cid, task = room_ids[r], task_ids[r] if r < 4000 else None
-            bot = "bot:inbox" if task in private else "bot:" + BOTS[r % len(BOTS)] if r < 4000 else json.loads(rooms[r][3])[1]
-            created = stamp(MESSAGES - i)        # one message a minute, the newest now
+            r = rng.randrange(rooms_n)
+            cid, task = room_ids[r], task_ids[r] if r < tasks_n * 2 // 3 else None
+            bot = "bot:inbox" if task in private else "bot:" + BOTS[r % len(BOTS)] if r < tasks_n * 2 // 3 else json.loads(rooms[r][3])[1]
+            created = stamp(messages_n - i)        # one message a minute, the newest now
             shape, sender, to, reply, refs = i % 10, rng.choice(PEOPLE), bot, None, None
             if shape in (1, 2):
                 refs = "{}"
@@ -135,3 +135,149 @@ def test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_histor
             seconds = time.monotonic() - started
             assert r.status_code == 200, (name, sql, r.text)
             assert seconds < 5, (name, sql, seconds)
+
+
+def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
+    """The fast SQL gates only settle rows early: every caller reads the same messages, turns and attempts as when the
+    per-row privacy functions decide each one, denied private tasks, unreadable rooms and run provenance included."""
+    from backend import sql as S
+    from backend.auth import Identity
+    from backend.privacy_index import ReadIndex
+    post(api, "chat/ops", {"text": "Summarize the week."})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    attempt = claim(api, machine)
+    world = populate(api.app.state.store, attempt, tasks_n=300, rooms_n=300, messages_n=3000)
+    store, auth = api.app.state.store, api.app.state.auth
+    denied, public = sorted(world["private"])[0], next(t for t in world["tasks"] if t not in world["private"])
+    with store.transaction() as c:
+        room = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (public,)).fetchone()[0]
+        hidden_room = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (denied,)).fetchone()[0]
+        secret = H.say(c, "human:ana", "bot:inbox", "Synthetic private note", conversation_id=hidden_room)
+        # Rows the fast gate leaves to the privacy function, readable or not.
+        for refs, reply in (({"task": public, "note": "say \"hi\""}, None),
+                            ({"task": public, "comment": "see #/task/" + denied}, None),
+                            ({"task": public, "answers": [secret["id"]]}, None),
+                            ({"task": public}, secret["id"]),
+                            ({"task": public, "turn_id": world_attempt(c, denied)}, None)):
+            H.say(c, "bot:ops", "human:ben", "Synthetic edge", conversation_id=room, refs=refs, in_reply_to=reply)
+        # Bot answers to a person's reply, the live rows the SQL gates leave to the provenance walk.
+        for n in range(300):
+            ask = H.say(c, "human:ben", "human:ana", "Synthetic question", conversation_id=room,
+                        refs={"task": public})
+            again = H.say(c, "human:ana", "human:ben", "Synthetic follow-up", conversation_id=room,
+                          refs={"task": public}, in_reply_to=ask["id"])
+            H.say(c, "bot:ops", "human:ana", "Synthetic answer", conversation_id=room,
+                  refs={"task": public, "answers": [again["id"]]}, in_reply_to=again["id"])
+        # Rows no stored walk decides: references of the wrong shape and a reply chain deeper than a walk follows.
+        odd = H.say(c, "bot:ops", "human:ben", "Synthetic odd refs", conversation_id=room)["id"]
+        c.execute("UPDATE messages SET refs_json='[1]' WHERE id=?", (odd,))
+        deep = None
+        for _ in range(105):
+            deep = H.say(c, "human:ben", "bot:ops", "Synthetic chain", conversation_id=room, in_reply_to=deep)["id"]
+
+    def settled(who):
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                return {table: {r[0] for r in conn.execute(f"SELECT id FROM {table}")}
+                        for table in ("messages", "turns", "attempts")}
+            finally:
+                conn.close()
+
+    def reference(who):
+        """The views' row rules with every message and run decided by the privacy functions alone."""
+        with store.read() as c:
+            index = ReadIndex(c, who, rooms=True)
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                conn.set_authorizer(None)
+                rooms = {r[0] for r in conn.execute(f'SELECT id FROM "{conn.private_prefix}readable_conversations"')}
+                tasks = {r[0] for r in conn.execute(f'SELECT id FROM "{conn.private_prefix}visible_tasks"')}
+            finally:
+                conn.close()
+            hidden = auth.unreadable_bots(c, who)
+            messages = {r["id"] for r in c.execute("SELECT id,conversation_id,refs_json,in_reply_to FROM messages "
+                                                   "WHERE deleted_at IS NULL")
+                        if r["conversation_id"] in rooms and index.message(r["id"], r["conversation_id"],
+                                                                           r["refs_json"], r["in_reply_to"])}
+            jobs = {r[0] for r in c.execute("SELECT id,bot,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
+            attempts = {r[0] for r in c.execute("SELECT id,job_id FROM attempts") if r[1] in jobs and index.attempt(r[0])}
+            turns = {r[0] for r in c.execute("SELECT id,bot,message_id,task_id FROM turns")
+                     if r[1] not in hidden and (r[2] is None or r[2] in messages)
+                     and (r[3] is None or r[3] in tasks) and index.attempt(r[0])}
+            return {"messages": messages, "turns": turns, "attempts": attempts}
+
+    callers = [Identity("bot:ops", "bot", attempt_id=attempt["id"]), Identity("human:ben", "human"),
+               Identity("human:ana", "owner")]
+
+    def same(when):
+        for who in callers:
+            assert settled(who) == reference(who), (when, who.actor)
+    same("before any row is settled")
+    with store.read() as c:
+        everything = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    bot = settled(callers[0])["messages"]
+    assert 0 < len(bot) < everything and secret["id"] not in bot
+
+    # Settled rows are read from the stored index (backend/read_deps.py); every caller still reads the same rows.
+    from backend import read_deps
+    with store.read() as c:
+        read_deps.sweep(c)
+        indexed = c.execute("SELECT count(*) FROM read_index").fetchone()[0]
+        assert indexed > everything // 2
+        assert c.execute("SELECT count(*) FROM read_dirty").fetchone()[0] == 0
+        assert not c.execute("SELECT 1 FROM read_index WHERE key IN (?,?)", ("m:" + odd, "m:" + deep)).fetchall()
+    same("settled")
+    # What keeps a count fast: settled rows never reach the per-row provenance walk, only the few left undecided.
+    walked = []
+    original = ReadIndex.message
+    ReadIndex.message = lambda self, *args: walked.append(args[0]) or original(self, *args)
+    try:
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, callers[0])
+            try:
+                assert conn.execute("SELECT count(*) FROM messages").fetchone()[0] == len(bot)
+            finally:
+                conn.close()
+    finally:
+        ReadIndex.message = original
+    assert len(walked) < 100, len(walked)
+
+    # Each change that moves a row's provenance drops the rows it touched back to the gate at once, with no sweep
+    # between the change and the read. A task turning private moves no provenance: readers deny it from the index.
+    with store.transaction() as c:
+        cited = c.execute("SELECT id,refs_json FROM messages WHERE refs_json LIKE '%\"task\"%' AND conversation_id=? "
+                          "LIMIT 1", (room,)).fetchone()
+        task = json.loads(cited["refs_json"])["task"]
+    changes = [
+        ("a cited task turns private", False,
+         lambda c: c.execute("UPDATE tasks SET private=1, requester='human:ana', owner='bot:inbox' WHERE id=?",
+                             (task,))),
+        ("a message now cites a denied task", True,
+         lambda c: c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+                             (json.dumps({"task": denied}), next(iter(sorted(bot)))))),
+        ("a replied-to message is deleted", False,
+         lambda c: c.execute("UPDATE messages SET deleted_at=? WHERE id=(SELECT in_reply_to FROM messages "
+                             "WHERE in_reply_to IS NOT NULL AND conversation_id<>? LIMIT 1)", (H.now(), hidden_room))),
+        ("a room moves to a denied task", True,
+         lambda c: c.execute("UPDATE conversations SET task_id=? WHERE id=?", (denied, room))),
+        ("a run carries a denied task", True, lambda c: world_attempt(c, sorted(world["private"])[1])),
+    ]
+    for when, moves, change in changes:
+        with store.transaction() as c:
+            change(c)
+            assert (c.execute("SELECT count(*) FROM read_dirty").fetchone()[0] > 0) == moves, when
+        same(when)
+        with store.read() as c:
+            read_deps.sweep(c)
+        same(when + ", settled again")
+
+
+
+def world_attempt(c, denied):
+    """A finished run that carried a denied private task."""
+    aid = c.execute("SELECT id FROM attempts ORDER BY created LIMIT 1").fetchone()[0]
+    c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, denied))
+    return aid

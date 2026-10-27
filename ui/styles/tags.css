@@ -15,4 +15,5 @@
 .tag-form label:has(> input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
 .tag-advanced > summary { cursor: pointer; color: var(--muted); font-size: var(--t-sm); width: max-content; }
 .tag-advanced[open] { display: grid; gap: 12px; }
+.tag-key-line { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
 .tags-empty { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
