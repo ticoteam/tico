@@ -673,7 +673,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
     from backend.privacy_index import ReadIndex
 
     mid, attempt = derived
-    store, auth = live.app.state.store, live.app.state.auth
+    store, auth, aid = live.app.state.store, live.app.state.auth, attempt["id"]
     # Bots read history in task rooms.
     root_room = {"id": post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
     with store.transaction() as c:
