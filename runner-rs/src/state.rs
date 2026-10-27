@@ -116,15 +116,6 @@ impl State {
         })
     }
 
-    /// Message ids this attempt steered into the provider thread (phase `applied`).
-    pub fn applied_inputs(&self, aid: &str) -> Result<Vec<String>, String> {
-        self.with(|c| {
-            let mut q = c.prepare("SELECT message_id FROM inputs WHERE attempt_id=? AND phase='applied' ORDER BY rowid")?;
-            let rows = q.query_map(params![aid], |r| r.get(0))?;
-            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-    }
-
     pub fn phase(&self, aid: &str, phase: &str) -> Result<(), String> {
         self.with(|c| c.execute("UPDATE attempts SET phase=? WHERE id=?", params![phase, aid]).map(|_| ()))
     }

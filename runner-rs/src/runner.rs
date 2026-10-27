@@ -275,53 +275,7 @@ impl Runner {
         }
         result
     }
-}
 
-/// Advance `session_cursors` for a completed result recovered after a restart (same rule as a live hand-in).
-fn advance_recovered_cursor(state: &State, aid: &str, payload: &Value, completion: &Value) -> Result<(), ApiError> {
-    let thread = recovered_thread(state, payload, completion).map_err(|e| ApiError::new("state", e, 0, false))?;
-    let Some(thread) = thread else {
-        return Ok(());
-    };
-    let bot = text_of(&payload["bot"]);
-    let origin = text_of(&payload["message"]["id"]);
-    if origin.is_empty() {
-        return Ok(());
-    }
-    let applied = state.applied_inputs(aid).map_err(|e| ApiError::new("state", e, 0, false))?;
-    let history = payload["history"].as_array().cloned().unwrap_or_default();
-    let own = format!("bot:{bot}");
-    let message = crate::prompt::history_cursor_after(&origin, &applied, &history, &own);
-    state.cursor(&thread, Some(&message)).map_err(|e| ApiError::new("state", e, 0, false))?;
-    Ok(())
-}
-
-/// The provider thread a recovered completion belonged to: a saved fallback continuation first, else the
-/// conversation's saved session for this claim's runtime (and its persistent `runtime:harness` form).
-fn recovered_thread(state: &State, payload: &Value, completion: &Value) -> Result<Option<String>, String> {
-    let from_source = text_of(&completion["source_continuation"]["thread_id"]);
-    if !from_source.is_empty() {
-        return Ok(Some(from_source));
-    }
-    let bot = text_of(&payload["bot"]);
-    let conv = crate::execute::session_key(payload);
-    let runtime = text_of(&payload["config"]["runtime"]);
-    let harness = text_of(&payload["config"]["harness"]);
-    if bot.is_empty() || runtime.is_empty() {
-        return Ok(None);
-    }
-    if let Some(th) = state.session(&bot, &conv, &runtime)? {
-        return Ok(Some(th));
-    }
-    if !harness.is_empty() {
-        if let Some(th) = state.session(&bot, &conv, &format!("{runtime}:{harness}"))? {
-            return Ok(Some(th));
-        }
-    }
-    Ok(None)
-}
-
-impl Runner {
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
         self.upload_stderr(None).await;
@@ -344,13 +298,6 @@ impl Runner {
                 };
                 self.flush(&row.id).await?;
                 self.complete(&row.id, &completion).await?;
-                // Same cursor advance a live hand-in would have made: a recovered completed turn must not
-                // leave folded acks after the origin for the next resumed prompt.
-                if completion["outcome"] == "completed" {
-                    if let Ok(payload) = serde_json::from_str::<Value>(&row.payload) {
-                        advance_recovered_cursor(&self.state, &row.id, &payload, &completion)?;
-                    }
-                }
                 self.state.phase(&row.id, "synced").map_err(|e| ApiError::new("state", e, 0, false))?;
                 Ok(())
             }

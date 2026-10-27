@@ -2190,14 +2190,9 @@ impl Runner {
             match sent {
                 Ok(()) => {
                     if drove.outcome == "completed" {
-                        // Past the origin and every contiguous folded input this turn already delivered.
+                        // The next turn on this thread forwards only what the room said after this.
                         if let Some(th) = &thread {
-                            let origin = text_of(&attempt["message"]["id"]);
-                            let applied = self.state.applied_inputs(&aid).unwrap_or_default();
-                            let history = attempt["history"].as_array().cloned().unwrap_or_default();
-                            let own = format!("bot:{bot}");
-                            let message = crate::prompt::history_cursor_after(&origin, &applied, &history, &own);
-                            let th = th.clone();
+                            let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
                             self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
                         }
                     }
