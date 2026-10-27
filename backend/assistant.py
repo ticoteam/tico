@@ -86,6 +86,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
                 "/api/v2/assistant/read-back", "/api/v2/assistant/learned"):
         return True
+    # Asking the settings catalogue for a change's plan writes nothing: it answers with the request, a card in the
+    # person's chat or a refusal (backend/settings_catalog.py), and the change itself meets the checks below.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
+        return True
     try:
         fields = json.loads(body or b"{}")
     except ValueError:
@@ -172,6 +176,25 @@ def _fields(body):
         except ValueError:
             return {}
     return body if isinstance(body, dict) else {}
+
+
+def instructed_setting(method, path, body=None):
+    """Whether this write is one direct setting from the catalogue, exactly as `hub settings set` makes it, so it may run
+    on the person's cited words like a task action (backend/settings_catalog.py). Two settings at once, a confirm or
+    person-only one, or anything the catalogue does not list stays a card."""
+    from . import settings_catalog
+    path = normalize_path(path)
+    found = path and settings_catalog.matched(method, path, _fields(body))
+    return bool(found) and found[2] == "direct"
+
+
+def require_setting(c, auth, who, method, path, body):
+    """403, naming who may, unless the person passes the catalogue's own check for the setting their words change: the
+    one `plan` makes, so a write sent without asking for its plan first meets it too."""
+    from . import settings_catalog
+    found = settings_catalog.matched(method, normalize_path(path) or "", _fields(body))
+    if found and not settings_catalog.may(c, auth, who, found[0], found[1]):
+        raise settings_catalog.refusal(found[0])
 
 
 def instructed_route(method, path, body=None, decides=False):
@@ -431,12 +454,22 @@ def normalize_path(path):
     return path
 
 
+def catalogue_card(method, path):
+    """Whether the Assistant may put this route on a card as a setting: a catalogue entry that is not person-only writes
+    it, and BotOps may card it (the Assistant changes settings with the same rules as BotOps)."""
+    from . import settings_catalog
+    return (any(e.kind != "person" for e, _ in settings_catalog.routed(method, path))
+            and valid_operation(method, path, None, "botops"))
+
+
 def valid_operation(method, path, settings=None, proposer="assistant"):
     path = normalize_path(path)
     if not path or (settings is not None and path == "/api/v2/chat/" + settings.assistant_bot):
         return False
     routes = _PROPOSABLE + (_PROPOSABLE_BOTOPS if proposer == "botops" else [])
     if any(m == method and p.fullmatch(path) for m, p in routes):
+        return True
+    if proposer == "assistant" and catalogue_card(method, path):
         return True
     # BotOps also puts to a person, as a card, any change it makes for a person directly (a bot's hand-off that
     # lends nothing: app.py `confirm_for_carried`). It runs only on their click, as them.
@@ -764,6 +797,13 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                       "a person confirms", 422)
     if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
         raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
+    if proposer == "assistant" and not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE):
+        # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
+        from . import settings_catalog
+        found = settings_catalog.matched(method, path, body if isinstance(body, dict) else None)
+        if not found or found[2] == "person":
+            raise Problem("operation", "A setting on a card is one setting from the catalogue (`hub settings find`) "
+                          "that is not the person's own to change in Settings", 422)
     if path == "/api/v2/support/tickets":
         # The person approves the exact text, so it must be one the ticket will take: no card for a message that
         # would fail (too long, control characters) only after the click.
@@ -1638,6 +1678,15 @@ def install(app, store, auth, mutate, onboarding):
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
         return mutate(request, body, work)
+
+    def propose_setting(c, who, method, path, data, summary, asked=None):
+        """A setting the person asked their Assistant for that needs their own click: a Confirm card in their chat
+        (backend/settings_catalog.py plan), and what the Assistant tells them."""
+        card = create_proposal(c, settings, who, chat_room(c, settings, who), "assistant", summary[:300], method, path,
+                               data, asked, routes=app.routes)
+        return {"proposed": True, "needs_confirm": True, **card,
+                "detail": "This needs the person's own OK: a Confirm card is in their chat; nothing has changed yet."}
+    app.state.assistant_propose = propose_setting
 
     def expiring(c):
         return c.execute("SELECT 1 FROM assistant_actions WHERE status='running' AND running_since<? LIMIT 1",

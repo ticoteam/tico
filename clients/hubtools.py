@@ -3206,14 +3206,16 @@ def settings_show(api, args):
     return shown
 
 
-@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps) or yourself. "
-      "direct: it changes and the answer has the new `value`; confirm, from BotOps: a Confirm card in the person's chat "
-      "with BotOps (`needs_confirm`), nothing changed yet; person: refused with the one-line reason and the card's "
-      "`link`. A refusal names who may change it.",
+@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps, the "
+      "Assistant) or yourself. direct: it changes and the answer has the new `value`; confirm, from BotOps or the "
+      "Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing changed yet; person: refused with the "
+      "one-line reason and the card's `link`. A refusal names who may change it. The Assistant cites the person's words "
+      "(`on_behalf_of`) for a direct one; without them, or while the owner's \"Assistant acts without asking\" is off, "
+      "it is a card too.",
       {"key": _s("The setting's key"), "value": {"description": "The new value: on/off, a number, text, a list or JSON, "
-       "as `hub_settings_show` says"}, **SETTING_TARGET}, required=("key", "value"), writes=True)
+       "as `hub_settings_show` says"}, **SETTING_TARGET, "on_behalf_of": ASKED}, required=("key", "value"), writes=True)
 def settings_set(api, args):
-    who = _as_person(api)
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     key = quote(args["key"], safe="")
     planned = who.post("settings/catalog/" + key + "/plan", {"value": args["value"], **_setting_query(args)},
                        key=_key(args, ":plan"))
@@ -5344,7 +5346,8 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
-                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn"}
+                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
+                    "hub_settings_set"}
 AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.

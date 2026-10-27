@@ -4,9 +4,14 @@ setting by its words, read it and change it without guessing a route or a body (
 Each entry (backend/settings_entries.py) names a stable key (`team.rules.admin_sql`), the control's plain name and
 where it sits in Settings, who may change it, its class and the route it writes:
 
-  direct       runs at once, as the person (BotOps acting for them has exactly their rights)
-  confirm      BotOps acting for a person puts it to them as a Confirm card; the person's own call runs at once
-  person       only the person themselves, in Settings: BotOps is told why, with the link to the card
+  direct       runs at once, as the person (BotOps or their Assistant acting for them has exactly their rights)
+  confirm      BotOps or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
+               runs at once
+  person       only the person themselves, in Settings: BotOps or the Assistant is told why, with the link to the card
+
+The Assistant acts for its person with the same entries and classes as BotOps (`ACTING_FOR`). A direct entry runs on the
+person's own words in their own chat (the turn cites their message, as a task action does) while the owner's rule
+"Assistant acts without asking" is on; otherwise it too is a Confirm card in their chat.
 
 `hub settings find|show|set` (clients/hubtools.py) read it here; `set` asks `plan` for the exact request and makes it
 with the requester's rights, so the route's own checks still decide. backend/tests/test_settings_catalog.py fails when a
@@ -16,6 +21,7 @@ Settings card writes to a route no entry covers.
   entry(key)                     the entry, or a 404 naming the nearest keys
   public(e, base)                what a caller sees of an entry, with its card's full link
   plan(c, auth, who, e, value, target)  {"run": {method, path, body}}, the Confirm card, or a refusal naming who may
+  matched(method, path, body)    the entry and target a request is exactly the body of, and its class
 """
 import json
 import re
@@ -36,6 +42,8 @@ WHO = {
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
+# Who acts for a person through the catalogue, with exactly their rights: BotOps, and the person's own Assistant.
+ACTING_FOR = ("botops", "assistant")
 
 
 @dataclass(frozen=True)
@@ -261,12 +269,15 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
-def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None):
+def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_direct=False,
+         can_card=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
-    make with the caller's rights; for BotOps acting for a person, a confirm entry's Confirm card (`propose`) or a
-    person-only entry's reason and link."""
+    make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
+    (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
+    when the owner's rule is off or the turn cites no words of the person's). `can_card(method, path)`: whether that
+    card can carry the route."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
-    acting_for = who.via == "botops"
+    acting_for = who.via in ACTING_FOR
 
     def person_only():
         why = e.why or f"{e.name} is changed only by the person themselves"
@@ -301,13 +312,68 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
         raise person_only()
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if kind == "confirm" and acting_for:
-        if propose is None:
+    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
+        if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
                        f"Change {e.name} ({e.where}) to {json.dumps(parsed)}")
     return {"run": request, "setting": public(e, base), "value": parsed}
+
+
+def _pattern(route):
+    """An entry's route as a regex over the path a request names, one group per target."""
+    out, at = "", 0
+    for m in re.finditer(r"\{(" + "|".join(TARGETS) + r")\}", route):
+        out += re.escape(route[at:m.start()]) + "(?P<" + m.group(1) + ">[^/]+)"
+        at = m.end()
+    return re.compile("/api/v2/" + out + re.escape(route[at:]))
+
+
+_PATTERNS = {}
+
+
+def routed(method, path):
+    """The entries whose route this request names, each with the target its path holds."""
+    from urllib.parse import unquote
+    out = []
+    for e in _entries():
+        pattern = _PATTERNS.get(e.route) or _PATTERNS.setdefault(e.route, _pattern(e.route))
+        m = e.method == method and pattern.fullmatch(str(path or ""))
+        if m:
+            out.append((e, {k: unquote(v) for k, v in m.groupdict().items()}))
+    return out
+
+
+def _without(body, dotted):
+    """The body with the value at `dotted` taken out, and parents left empty dropped; None when it holds none."""
+    if not isinstance(body, dict):
+        return None
+    head, _, rest = dotted.partition(".")
+    if head not in body:
+        return None
+    if not rest:
+        return {k: v for k, v in body.items() if k != head}
+    inner = _without(body[head], rest)
+    if inner is None:
+        return None
+    return {**{k: v for k, v in body.items() if k != head}, **({head: inner} if inner else {})}
+
+
+def matched(method, path, body):
+    """`(entry, target, class)` when this request is exactly what `plan` builds for one entry: its route, its fixed
+    keys and its value at its place, nothing else; else None. A request that sets two settings at once matches none."""
+    for e, target in routed(method, path):
+        if not isinstance(body, dict):
+            continue
+        if e.field:
+            rest = _without(body, e.field)
+            if rest is None or rest != e.extra:
+                continue
+        elif any(body.get(k) != v for k, v in e.extra.items()):
+            continue
+        return e, target, kind_for(e, body)
+    return None
 
 
 def install(app, store, auth, settings):
@@ -331,7 +397,7 @@ def install(app, store, auth, settings):
         e = entry(key)
         target = {"bot": bot, "computer": computer, "person": person, "id": id}
         with store.read() as c:
-            allowed = may(c, auth, who, e, target) and not (e.kind == "person" and who.via == "botops")
+            allowed = may(c, auth, who, e, target) and not (e.kind == "person" and who.via in ACTING_FOR)
         read = None
         if e.read and (not e.target or target.get(e.target)):
             route, _, pointer = e.read.partition("#")
@@ -341,12 +407,23 @@ def install(app, store, auth, settings):
     @app.post("/api/v2/settings/catalog/{key}/plan")
     def settings_plan(request: Request, key: str, body: M.SettingsPlan):
         """The request that sets this entry, checked against the caller first: `run` (make it with your rights), a Confirm
-        card for BotOps acting for a person on a confirm entry, or a refusal that names who may change it."""
+        card for BotOps or the Assistant acting for a person on a confirm entry, or a refusal that names who may change
+        it. The Assistant's direct change runs only on the person's cited words while "Assistant acts without asking" is
+        on (the same check its write then meets); otherwise it is a card in their chat."""
+        from .assistant import valid_operation
         who = request.state.identity
         auth.domain(who)
         e = entry(key)
         target = {"bot": body.bot or "", "computer": body.computer or "", "person": body.person or "", "id": body.id or ""}
-        propose = getattr(app.state, "botops_propose", None)
+        assistant = who.via == "assistant" and not who.confirmed
+        asked = request.headers.get("x-tico-on-behalf-of")
+        if assistant:
+            made = getattr(app.state, "assistant_propose", None)
+            propose = made and (lambda c, who, method, path, data, summary: made(c, who, method, path, data, summary, asked))
+        else:
+            propose = getattr(app.state, "botops_propose", None)
+            propose = propose and (lambda c, who, method, path, data, summary, made=propose:
+                                   made(c, who, method, path, data, summary[:300]))
         with store.transaction() as c:
             def effective_wake_update(c, auth, who, rule_id, update):
                 from . import rules
@@ -358,7 +435,15 @@ def install(app, store, auth, settings):
                 params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
                 return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
 
-            return plan(c, auth, who, e, body.value, target, settings.public_url,
-                        propose=propose and (lambda c, who, method, path, data, summary:
-                                             propose(c, who, method, path, data, summary[:300])),
-                        effective_update=effective_wake_update)
+            card_direct = False
+            if assistant:
+                from . import assistant as assistant_mod, team_rules
+                try:
+                    cited = bool(asked) and bool(assistant_mod.instruction(c, who, asked))
+                except Problem:
+                    cited = False
+                card_direct = not (cited and team_rules.load(c)["assistant_direct"])
+            return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
+                        effective_update=effective_wake_update, card_direct=card_direct,
+                        can_card=lambda method, path: valid_operation(method, path, settings,
+                                                                      "assistant" if assistant else "botops"))
