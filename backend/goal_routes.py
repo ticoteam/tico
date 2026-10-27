@@ -9,6 +9,8 @@ nothing else: a change to a definition or a target it is judged against is a pro
 person confirms.
 """
 
+import re
+
 from fastapi import Request
 
 from . import botkpis
@@ -18,6 +20,7 @@ from . import ceo_merge as CM
 from . import ceo_suggest as CS
 from . import company as C
 from . import goal_asks as GA
+from . import goal_read_back as GR
 from . import goals as G
 from . import kpis as K
 from . import models as M
@@ -65,7 +68,17 @@ def install(app, store, auth, mutate, settings):
         """Every goals write, then the CEO Bot's asks brought up to date in the same transaction: a reading
         logged or a proposal decided closes its task at once, not at the next hourly pass."""
         def work_then_ask(c):
+            # A save the owner agreed to in words (backend/goal_read_back.py): checked again inside this write, so two
+            # saves of one step never both land, and recorded with the history rows it wrote.
+            claim = GR.active() and agreed_save(c, request)
+            mark = c.execute("SELECT coalesce(max(rowid), 0) FROM goal_events").fetchone()[0] if claim else 0
             out = work(c)
+            if claim:
+                gid = GR.record(c, request.state.identity.actor, claim, mark, out) or claim.get("goal_id")
+                if isinstance(out, dict):
+                    out = {**out, "read_back": {"change": claim["change"], "step": claim["step"] + 1,
+                                                "steps": claim["steps"], "saved": True,
+                                                "link": gid and goal_link(gid)}}
             try:
                 GA.sync(c, auth.owner_id(c), reads=GA.readers(c, auth))
             except Exception as exc:          # the person's write stands; the hourly pass asks instead
@@ -174,9 +187,14 @@ def install(app, store, auth, mutate, settings):
                 names[owner] = {"kind": "person", "id": H.actor_id(owner), "name": human.get("name") or H.actor_id(owner)}
         return names
 
+    def in_words(who):
+        """The owner's yes to a goal read-back, saved by the CEO Bot in their chat (backend/goal_read_back.py)."""
+        return who.role == "owner" and who.via == "assistant" and bool(GR.active())
+
     def decider(c, who, item):
-        """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes."""
-        if who.role not in ("owner", "human") or who.via:
+        """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes (or the
+        owner's yes to its read-back)."""
+        if who.role not in ("owner", "human") or (who.via and not in_words(who)):
             return False
         if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
             return company_editor(who)
@@ -264,7 +282,7 @@ def install(app, store, auth, mutate, settings):
         return out
 
     def refuse_bot_why(who):
-        if who.role not in ("owner", "human") or who.via:
+        if who.role not in ("owner", "human") or (who.via and not in_words(who)):
             raise Problem("forbidden", "A person sets a goal's Why on their own click; a bot proposes one "
                           "(POST /api/v2/goal-proposals, kind goal_why)", 403)
 
@@ -525,6 +543,355 @@ def install(app, store, auth, mutate, settings):
                                                   "kpi_name": record and record["name"]}
                     items.append({**item, "proposal": {**item["proposal"], "card": G.card(c, p, hidden, editor)}})
             return {"actor": who.actor, "items": GA.for_person(c, who.actor, items)}
+
+    # ------------------------------------------------------------------ goals agreed in words (backend/goal_read_back.py)
+    def goal_link(gid):
+        return settings.public_url.rstrip("/") + "/#/goals/" + gid
+
+    def agreed_save(c, request):
+        """The read-back save the middleware let through (backend/app.py), checked again in this write."""
+        who, record = request.state.identity, GR.active()
+        claim = GR.agreement(c, who, record["cited"], request.method, request.url.path,
+                             getattr(request, "_body", b"") or b"{}")
+        if claim["goal_read_back"] != record["goal_read_back"] or claim["change"] != record["change"] \
+                or claim["step"] != record["step"]:
+            raise GR.not_agreed("The read-back changed while this was saved")
+        m = re_goal.fullmatch(request.url.path)
+        if m:
+            claim["goal_id"] = m.group(1)
+        elif request.url.path.endswith("/decide"):
+            claim["goal_id"] = (G.proposal(c, request.url.path.split("/")[-2]) or {}).get("goal_id")
+        return claim
+
+    re_goal = re.compile(r"/api/v2/goals/([^/]+)(?:/.*)?")
+
+    def plain(value):
+        from .assistant import plain_line
+        return plain_line(value or "")
+
+    def q(value):
+        return "“" + plain(value) + "”"
+
+    def bold(title):
+        title = plain(title)
+        return f"**{title}**" if "*" not in title else q(title)
+
+    def owner_name(c, actor):
+        return owner_names(c, [{"owner": actor}])[actor]["name"]
+
+    def fields_of(n, raw, allowed):
+        extra = sorted(str(k) for k in raw if k != "kind" and k not in allowed)
+        if extra:
+            raise Problem("validation", f"Change {n} ({raw.get('kind')}) does not take {', '.join(extra)}", 422)
+
+    def bet_words(c, bet_id):
+        return (S.bet(c, bet_id) or {}).get("statement") or bet_id
+
+    def measure_plan(c, who, n, goal_row_owner, measure, target):
+        """A measure for a goal: an existing KPI or a new one, with the target on the link, as the save's body and in
+        words."""
+        if not isinstance(measure, dict) or (target is not None and not isinstance(target, dict)):
+            raise Problem("validation", f"Change {n}: a measure and its target are objects", 422)
+        fields_of(n, measure, GR.MEASURE_FIELDS)
+        fields_of(n, target or {}, GR.TARGET_FIELDS)
+        body = {k: v for k, v in measure.items() if v is not None}
+        body.update({k: v for k, v in (target or {}).items() if v is not None})
+        if body.get("owner"):
+            body["owner"] = goal_owner(c, who, body["owner"])
+        if body.get("name"):
+            body["name"] = plain(body["name"])
+        try:
+            M.GoalKpiLink(**body)
+        except Exception as exc:
+            raise Problem("validation", f"Change {n}: the measure is not complete ({type(exc).__name__})", 422)
+        if body.get("kpi_id"):
+            record = kpi_or_404(c, who, body["kpi_id"])
+            spec, words = record, q(record["name"])
+            owner = record["owner"]
+        elif body.get("name"):
+            spec = {"direction": body.get("direction") or "up", "unit": body.get("unit") or ""}
+            details = [f"definition {q(body['definition'])}" if body.get("definition") else "",
+                       f"unit {q(body['unit'])}" if body.get("unit") else "",
+                       {"up": "higher is better", "down": "lower is better", "range": "kept in a range"}[spec["direction"]],
+                       body.get("cadence") or "weekly"]
+            words = f"{q(body['name'])} (new: {', '.join(d for d in details if d)})"
+            owner = body.get("owner") or goal_row_owner
+        else:
+            raise Problem("validation", f"Change {n}: name the measure, or give the kpi_id of one", 422)
+        _, error = K.validate_target(spec, target or {"kind": "none"})
+        if error:
+            raise Problem("validation", f"Change {n}: {error}", 422)
+        return body, spec, owner, words + ", target " + GR.target_words(spec, target)
+
+    def suggestion_words(c, p):
+        card, pl = G.card(c, p, set(), True), p.get("payload") or {}
+        was_now = lambda rows: "; ".join(f"{r['label']} was {q(r['now'] or 'none')}, now {q(r['proposed'] or 'none')}"
+                                         for r in rows)
+        kind = p["kind"]
+        if kind == "goal_wording":
+            return was_now(card.get("changes") or [])
+        if kind == "kpi_definition":
+            return f"{q(card.get('kpi_name') or '')}: " + was_now(card.get("changes") or [])
+        if kind == "goal_kpi":
+            label = (card.get("target_label") or "").removeprefix("→ ")
+            return f"add the measure {q((card.get('measure') or {}).get('name') or '')}, target {label or 'none'}"
+        if kind == "kpi_target":
+            return (f"the target of {q(card.get('kpi_name') or '')} was "
+                    f"{(card.get('now_label') or '').removeprefix('→ ') or 'none'}, now "
+                    f"{(card.get('target_label') or '').removeprefix('→ ') or 'none'}")
+        if kind == "flag":
+            return f"flag it as {plain(pl.get('issue'))}" + (f": {plain(p.get('reason'))}" if p.get("reason") else "")
+        row = G.goal(c, p["goal_id"]) or {}
+        return f"Why was {q(row.get('why') or 'none')}, now {q(pl.get('why') or '')}"
+
+    def read_back_plan(c, who, n, raw):
+        """One change as the saves it stands for and the line the owner reads; 403 when it stays a click."""
+        if not isinstance(raw, dict):
+            raise Problem("validation", f"Change {n} is not an object", 422)
+        if why := GR.click_reason(raw):
+            raise Problem("stays_a_click", why, 403)
+        kind = raw.get("kind")
+        if kind not in GR.KINDS:
+            raise Problem("validation", f"Change {n}: kind is one of {', '.join(GR.KINDS)}", 422)
+        steps, watch = [], []
+        step = lambda path, body: steps.append({"method": "POST", "path": path, "body": body})
+        if kind == "goal_create":
+            fields_of(n, raw, (*GR.GOAL_FIELDS, "measure", "target"))
+            title = plain(raw.get("title"))
+            if not title or not raw.get("owner"):
+                raise Problem("validation", f"Change {n}: a new goal needs a title and an owner", 422)
+            owner = goal_owner(c, who, raw["owner"])
+            parent = goal_or_404(c, raw["parent_id"]) if raw.get("parent_id") else None
+            bet = raw.get("bet_id") or None
+            if bet and not S.bet(c, bet):
+                raise Problem("not_found", f"Change {n}: no strategy bet {bet}", 404)
+            why = plain(raw.get("why"))
+            step("/api/v2/goals", {"title": title, "owner": owner, "parent_id": parent and parent["id"], "bet_id": bet})
+            words = [bold(title), "owner " + owner_name(c, owner)]
+            if parent:
+                words.append("supports " + q(parent["title"]))
+            if bet:
+                words.append("serves the bet " + q(bet_words(c, bet)))
+            if why:
+                step(f"/api/v2/goals/{GR.NEW}/why", {"why": why})
+                words.append("Why " + q(why))
+            if raw.get("measure") is not None:
+                body, _, kowner, said = measure_plan(c, who, n, owner, raw["measure"], raw.get("target"))
+                refuse_exposed(c, {"owner": owner}, kowner)
+                step(f"/api/v2/goals/{GR.NEW}/kpis", body)
+                words.append("measure " + said)
+            elif raw.get("target") is not None:
+                raise Problem("validation", f"Change {n}: a target goes with a measure", 422)
+            text = " · ".join(words)
+        elif kind == "goal_update":
+            fields_of(n, raw, ("goal_id", *GR.GOAL_FIELDS))
+            row = goal_or_404(c, str(raw.get("goal_id") or ""))
+            watch.append(row["id"])
+            sets, said = {}, []
+            if raw.get("title") is not None:
+                title = plain(raw["title"])
+                if not title:
+                    raise Problem("validation", f"Change {n}: a goal keeps a title", 422)
+                if title != row["title"]:
+                    sets["title"] = title
+                    said.append(f"title was {q(row['title'])}, now {q(title)}")
+            if raw.get("owner") is not None:
+                owner = goal_owner(c, who, raw["owner"])
+                if owner != row["owner"]:
+                    sets["owner"] = owner
+                    said.append(f"owner was {owner_name(c, row['owner'])}, now {owner_name(c, owner)}")
+            if raw.get("parent_id") is not None:
+                parent = goal_or_404(c, raw["parent_id"]) if raw["parent_id"] else None
+                if (parent and parent["id"]) != (row["parent_id"] or None):
+                    old = G.goal(c, row["parent_id"]) if row["parent_id"] else None
+                    sets["parent_id"] = parent["id"] if parent else ""
+                    said.append(f"supports was {q(old['title']) if old else 'nothing'}, "
+                                f"now {q(parent['title']) if parent else 'nothing'}")
+            if raw.get("bet_id") is not None:
+                bet = raw["bet_id"] or None
+                if bet and not S.bet(c, bet):
+                    raise Problem("not_found", f"Change {n}: no strategy bet {bet}", 404)
+                if bet != (row.get("bet_id") or None):
+                    sets["bet_id"] = bet or ""
+                    said.append(f"bet was {q(bet_words(c, row['bet_id'])) if row.get('bet_id') else 'none'}, "
+                                f"now {q(bet_words(c, bet)) if bet else 'none'}")
+            if sets:
+                step(f"/api/v2/goals/{row['id']}", sets)
+            if raw.get("why") is not None:
+                why = plain(raw["why"])
+                if why != (row.get("why") or ""):
+                    step(f"/api/v2/goals/{row['id']}/why", {"why": why})
+                    said.append(f"Why was {q(row.get('why')) if row.get('why') else 'none'}, "
+                                f"now {q(why) if why else 'none'}")
+            if not said:
+                raise Problem("no_change", f"Change {n} changes nothing: {q(row['title'])} already reads that way", 409)
+            text = f"Change {bold(row['title'])}: " + "; ".join(said)
+        elif kind == "measure_add":
+            fields_of(n, raw, ("goal_id", "measure", "target"))
+            row = goal_or_404(c, str(raw.get("goal_id") or ""))
+            watch.append(row["id"])
+            body, _, kowner, said = measure_plan(c, who, n, row["owner"], raw.get("measure"), raw.get("target"))
+            if body.get("kpi_id") and K.link(c, row["id"], body["kpi_id"]):
+                raise Problem("no_change", f"Change {n}: that measure is on {q(row['title'])} already; change its "
+                              "target instead (target_set)", 409)
+            refuse_exposed(c, row, kowner)
+            step(f"/api/v2/goals/{row['id']}/kpis", body)
+            text = f"Add the measure {said} to {bold(row['title'])}"
+        elif kind in ("target_set", "measure_remove"):
+            fields_of(n, raw, ("goal_id", "kpi_id", "target") if kind == "target_set" else ("goal_id", "kpi_id"))
+            row = goal_or_404(c, str(raw.get("goal_id") or ""))
+            record = kpi_or_404(c, who, str(raw.get("kpi_id") or ""))
+            link = K.link(c, row["id"], record["id"])
+            if not link:
+                raise Problem("not_found", f"Change {n}: {q(record['name'])} is not a measure of {q(row['title'])}", 404)
+            watch.append(row["id"])
+            if kind == "measure_remove":
+                step(f"/api/v2/goals/{row['id']}/kpis/{record['id']}/unlink", {})
+                text = f"Take the measure {q(record['name'])} off {bold(row['title'])} (the measure and its readings stay)"
+            else:
+                target = raw.get("target")
+                if not isinstance(target, dict):
+                    raise Problem("validation", f"Change {n}: give the target (kind none takes it away)", 422)
+                fields_of(n, target, GR.TARGET_FIELDS)
+                target = {k: v for k, v in target.items() if v is not None}
+                _, error = K.validate_target(record, target)
+                if error:
+                    raise Problem("validation", f"Change {n}: {error}", 422)
+                was, now = GR.target_words(record, link), GR.target_words(record, target)
+                if was == now:
+                    raise Problem("no_change", f"Change {n} changes nothing: the target is {was} already", 409)
+                step(f"/api/v2/goals/{row['id']}/kpis/{record['id']}", target)
+                text = f"Change the target of {q(record['name'])} on {bold(row['title'])}: was {was}, now {now}"
+        else:
+            fields_of(n, raw, ("proposal_id", "decision"))
+            p = G.proposal(c, str(raw.get("proposal_id") or ""))
+            if not p:
+                raise Problem("not_found", f"Change {n}: no such suggestion", 404)
+            if p["kind"] not in GR.SUGGESTIONS:
+                raise Problem("stays_a_click", GR.CLICK["recovery" if p["kind"] == "recovery" else "strategy"], 403)
+            if p["status"] != "pending":
+                raise Problem("conflict", f"Change {n}: that suggestion was {p['status']} already", 409)
+            if raw.get("decision") not in ("confirm", "reject"):
+                raise Problem("validation", f"Change {n}: a suggestion's decision is confirm or reject", 422)
+            row = G.goal(c, p["goal_id"]) if p["goal_id"] else None
+            if row:
+                watch.append(row["id"])
+            step(f"/api/v2/goal-proposals/{p['id']}/decide", {"decision": raw["decision"]})
+            about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
+            text = (("Accept" if raw["decision"] == "confirm" else "Turn down") + f" the suggestion on {about}: "
+                    + suggestion_words(c, p))
+        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch}
+
+    def read_back_trial(c, who, changes):
+        """Every change made as the owner's own click would make it, in order, then rolled back: what could not be
+        saved is refused now, before the owner reads it."""
+        c.execute("SAVEPOINT goal_read_back")
+        try:
+            for change in changes:
+                made = None
+                for st in change["steps"]:
+                    path, body = st["path"].replace(GR.NEW, made or GR.NEW), st["body"]
+                    try:
+                        if path == "/api/v2/goals":
+                            made = G.create(c, who.actor, body["title"], body["owner"], body["parent_id"],
+                                            bet_id=body["bet_id"])["id"]
+                        elif path.endswith("/why"):
+                            C.set_why(c, who.actor, path.split("/")[-2], body["why"])
+                        elif path.endswith("/unlink"):
+                            G.kpi_unlink(c, who.actor, path.split("/")[-4], path.split("/")[-2])
+                        elif path.endswith("/decide"):
+                            G.decide(c, who.actor, path.split("/")[-2], body["decision"])
+                        elif path.endswith("/kpis"):
+                            gid, target = path.split("/")[-2], {k: body.get(k) for k in GR.TARGET_FIELDS}
+                            if body.get("kpi_id"):
+                                G.kpi_link(c, who.actor, gid, body["kpi_id"], target)
+                            else:
+                                G.kpi_create(c, who.actor, body.get("owner") or G.goal(c, gid)["owner"],
+                                             {k: body.get(k) for k in ("name", "definition", "unit", "direction",
+                                                                       "cadence", "source_note") if k in body},
+                                             goal_id=gid, target=target)
+                        elif "/kpis/" in path:
+                            G.kpi_link(c, who.actor, path.split("/")[-3], path.split("/")[-1], body)
+                        else:
+                            G.update(c, who.actor, path.split("/")[-1], **body)
+                    except Problem as exc:
+                        raise Problem(exc.code if exc.status != 400 else "validation",
+                                      f"Change {change['n']} can't be saved: {exc.detail}",
+                                      exc.status if exc.status != 400 else 422) from None
+        finally:
+            c.execute("ROLLBACK TO goal_read_back")
+            c.execute("RELEASE goal_read_back")
+
+    @app.post("/api/v2/goals/read-back")
+    def goal_read_back(request: Request, body: M.GoalReadBack):
+        """The CEO Bot, in the owner's own chat: Tico writes the read-back of up to 20 changes as its reply and stores
+        the exact saves; the owner's yes to it is what lets them through (backend/goal_read_back.py)."""
+        who = request.state.identity
+        if not GR.ceo_turn(who):
+            raise Problem("forbidden", "Only the CEO Bot, in the owner's own chat, reads back goal changes", 403)
+
+        def work(c):
+            from . import assistant
+            room = assistant.find_ceo_room(c, who.actor)
+            if not room:
+                raise Problem("not_found", "No CEO Bot chat", 404)
+            changes = [read_back_plan(c, who, n, raw) for n, raw in enumerate(body.changes, 1)]
+            read_back_trial(c, who, changes)
+            text = GR.text(changes)
+            # The turn's reply: its closing text is not posted after it (backend/execution.py), so the owner's next
+            # message answers this and nothing else.
+            turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                             (who.attempt_id,)).fetchone()
+            msg = H._write_message(c, "bot:" + ceo_bot.SLUG, who.actor, text, room, "say",
+                                   {"assistant": True, "read_back": True, "goal_read_back": True},
+                                   turn["message_id"] if turn else None, None, delivered_at=H.now())
+            H.event(c, who.actor, GR.EVENT, msg["id"], {"changes": changes})
+            return {"message_id": msg["id"], "text": text,
+                    "changes": [{k: ch[k] for k in ("n", "kind", "text", "steps")} for ch in changes]}
+        return write(request, body, work)
+
+    @app.get("/api/v2/goals/read-back/{mid}")
+    def goal_read_back_show(request: Request, mid: str):
+        """One read-back as it stands: each change, its saves (the exact calls), whether it is saved, and, in the turn
+        the owner's reply started, whether their reply says yes to it and why not."""
+        who = request.state.identity
+        if not (GR.ceo_turn(who) or company_editor(who)):
+            raise Problem("forbidden", "The owner or the CEO Bot in their chat reads a goal read-back", 403)
+        with store.read() as c:
+            back = GR.stored(c, mid)
+            if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:
+                raise Problem("not_found", "No such read-back", 404)
+            done = GR.saves(c, mid)
+            yes, why_not = None, ""
+            if GR.ceo_turn(who):
+                turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                                 (who.attempt_id,)).fetchone()
+                try:
+                    answered, yes, _ = GR.answered(c, who, turn["message_id"] if turn else "")
+                    if answered["id"] != mid:
+                        yes, why_not = None, "The owner's reply answers a later read-back"
+                except Problem as exc:
+                    why_not = exc.detail.split("; nothing was saved")[0]
+            out = []
+            for ch in back["changes"]:
+                saved = all((ch["n"], i) in done for i in range(len(ch["steps"])))
+                gid = next((d.get("goal_id") for (n, _), d in sorted(done.items()) if n == ch["n"] and d.get("goal_id")),
+                           None) or (ch["watch"][0] if ch.get("watch") else None)
+                said = [] if saved else GR.changed_since(c, back, ch, done)
+                if saved:
+                    reason = ""
+                elif said:
+                    reason = "Since the read-back " + "; ".join(said)
+                elif yes is not None:
+                    reason = "" if ch["n"] in yes else "The owner did not say yes to it"
+                else:
+                    reason = why_not
+                out.append({"n": ch["n"], "kind": ch["kind"], "text": ch["text"],
+                            "steps": [{**st, "path": GR.step_path(st, ch, done), "saved": (ch["n"], i) in done}
+                                      for i, st in enumerate(ch["steps"])],
+                            "saved": saved, "agreed": None if yes is None else ch["n"] in yes, "reason": reason,
+                            "link": gid and goal_link(gid)})
+            return {"message_id": mid, "created": back["created"], "changes": out}
 
     @app.post("/api/v2/goals/refresh")
     def goals_refresh(request: Request, body: M.GoalRefresh):

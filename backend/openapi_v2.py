@@ -471,6 +471,14 @@ STABLE = [
     ("/api/v2/goals/refresh", "post", "Goals", "refreshGoalStatuses",
      "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
      "GoalRefreshView"),
+    ("/api/v2/goals/read-back", "post", "Goals", "readBackGoalChanges",
+     "The CEO Bot only, in the owner's own chat: Tico writes the read-back of up to 20 changes to goals, measures and "
+     "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
+     "within 30 minutes lets exactly those saves through, cited with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. "
+     "A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click", None),
+    ("/api/v2/goals/read-back/{mid}", "get", "Goals", "getGoalReadBack",
+     "One goal read-back: each change with its exact saves, whether it is saved and, in the turn the owner's reply "
+     "started, whether that reply says yes to it and why not", None),
     ("/api/v2/goals/{gid}", "get", "Goals", "getGoal",
      "One goal with its KPIs, the goals under and above it, tasks, history, recent check-ins and pending proposals", "GoalResult"),
     ("/api/v2/goals/{gid}", "post", "Goals", "updateGoal",
