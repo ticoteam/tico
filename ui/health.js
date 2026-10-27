@@ -330,7 +330,8 @@ window.hlBoot = function () {
     if (document.hidden || !S.me?.cloud || Date.now() - at < 119000) return;
     at = Date.now(); void hlRefresh();
   }, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
+  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) { at = Date.now(); void hlRefresh(); } });
 };
 
 document.addEventListener('change', event => {
