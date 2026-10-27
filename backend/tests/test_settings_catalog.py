@@ -288,7 +288,7 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
     assert "$50" in card["action"]["description"], card["action"]
     finish(api, botops, ben)
-    assert "eng" not in (get(api, "usage/limits")["pools"].get("groups") or {})
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None      # nothing until the tap
     post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
     assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
     for bad in ("groups", "groups/eng/x", "eng"):
