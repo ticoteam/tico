@@ -1,9 +1,55 @@
 //! The turn's prompt (`Runner.prompt` in the old Python runner), line for line. Bot Desk reads the next-run and
 //! notes blocks back out of transcripts by their first lines, so those headers are byte-identical.
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value};
 
 use crate::util::{py_dumps, text_of};
+
+/// Where the next resumed turn on this provider thread should start reading history.
+///
+/// Advances past the origin and every contiguous later **applied** input this turn already
+/// delivered. Stops before any message that was not applied — including this bot's own replies
+/// (a side-session resume re-includes those) and unacked human lines. Applied inputs that arrived
+/// after the claim-time history page are used only when that contiguous walk reached the end of
+/// the page (no gap left in the snapshot).
+pub fn history_cursor_after(origin: &str, applied: &[String], history: &[Value], _own_actor: &str) -> String {
+    if origin.is_empty() {
+        return String::new();
+    }
+    let applied: HashSet<&str> = applied.iter().map(String::as_str).collect();
+    let start = history.iter().position(|m| s(&m["id"]) == origin);
+    let Some(start) = start else {
+        // Origin not on this page: keep current behaviour (cursor = origin). Live applied ids are
+        // not ordered relative to an unseen gap, so do not jump ahead of them.
+        return origin.to_string();
+    };
+    let mut cursor = origin.to_string();
+    let mut reached_end = true;
+    for m in &history[start + 1..] {
+        let id = s(&m["id"]);
+        if id.is_empty() {
+            reached_end = false;
+            break;
+        }
+        if applied.contains(id.as_str()) {
+            cursor = id;
+            continue;
+        }
+        reached_end = false;
+        break;
+    }
+    if reached_end {
+        // Claim-time history after origin was fully delivered; later steered inputs are newer.
+        for mid in applied {
+            if !history.iter().any(|m| s(&m["id"]) == *mid) {
+                cursor = (*mid).to_string();
+            }
+        }
+    }
+    cursor
+}
 
 pub const SETUP_TURN: &str = "Onboarding: you are learning before you start work. You may answer and ask questions in chat, read, connect tools and talk with your manager; you take no tasks, run no routines and send nothing to anyone else until a person above you on the org chart marks your onboarding complete. Follow the setup section of AGENT.md and playbooks/onboarding.md in order and do only the step the conversation has reached. On their first message that is: read them, introduce yourself, ask your questions in one message and end the turn. Never edit AGENT.md; what you learn goes in state.md and knowledge/. Missing access is a question to ask, not a task to file. When you have learned enough to start, say so with `hub bot ready --summary` and a few lines on what you learned. This message is not a request to do work, so give no status report, backlog or contract.";
 pub const NEXT_RUN_HEADER: &str = "Next-run tasks, carried into this run (filed for your next run instead of waking you). Handle each one in this turn as well as the current message; each is its own task, so mark each done or declined with `hub task update`:";
@@ -390,5 +436,52 @@ mod tests {
         assert!(prompt(&turn("ceo"), &names, None, false).contains("You are privately assisting human:ana."));
         // Its old per-person chat (room_key goal-manager) is not the owner's chat: no person's authority there.
         assert!(!prompt(&turn("goal-manager"), &names, None, false).contains("privately assisting"));
+    }
+
+    #[test]
+    fn history_cursor_advances_past_contiguous_applied_inputs_not_past_a_gap() {
+        let history = json!([
+            {"id": "m0", "from_actor": "human:ana", "body": "before"},
+            {"id": "m1", "from_actor": "human:ana", "body": "origin"},
+            {"id": "m2", "from_actor": "bot:ops", "body": "own reply"},
+            {"id": "m3", "from_actor": "bot:reviewer", "body": "folded handoff"},
+            {"id": "m4", "from_actor": "human:ana", "body": "unacked follow-up"},
+            {"id": "m5", "from_actor": "bot:reviewer", "body": "later handoff"}
+        ]);
+        let hist = history.as_array().unwrap();
+        // Folded ack after origin: next turn must not re-read it. Own reply m2 is not applied, so the
+        // walk stops there (side-session resume still needs own replies after the cursor).
+        assert_eq!(
+            history_cursor_after("m1", &["m3".into()], hist, "bot:ops"),
+            "m1"
+        );
+        // Contiguous applied with no gap: origin then applied m3 (own m2 absent from this page).
+        let folded = json!([
+            {"id": "m1", "from_actor": "human:ana", "body": "origin"},
+            {"id": "m3", "from_actor": "bot:reviewer", "body": "folded handoff"},
+            {"id": "m4", "from_actor": "human:ana", "body": "unacked follow-up"},
+            {"id": "m5", "from_actor": "bot:reviewer", "body": "later handoff"}
+        ]);
+        let folded = folded.as_array().unwrap();
+        assert_eq!(
+            history_cursor_after("m1", &["m3".into()], folded, "bot:ops"),
+            "m3"
+        );
+        // An intervening unacked human line stops the walk; the later applied id must not jump the gap.
+        assert_eq!(
+            history_cursor_after("m1", &["m3".into(), "m5".into()], folded, "bot:ops"),
+            "m3"
+        );
+        // No applied inputs: stay on the origin (same as today's hand-in).
+        assert_eq!(history_cursor_after("m1", &[], hist, "bot:ops"), "m1");
+        // Live applied after a fully-acked page may advance past the snapshot.
+        let short = json!([
+            {"id": "m1", "from_actor": "human:ana", "body": "origin"},
+            {"id": "m3", "from_actor": "bot:reviewer", "body": "folded"}
+        ]);
+        assert_eq!(
+            history_cursor_after("m1", &["m3".into(), "m9".into()], short.as_array().unwrap(), "bot:ops"),
+            "m9"
+        );
     }
 }
