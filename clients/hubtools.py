@@ -3189,7 +3189,8 @@ def _pointer(data, pointer):
 
 @tool("hub_settings_find", "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
       "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
-      "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
+      "person gets a Confirm card for them; yes: BotOps or the Assistant reads the change back and the person's plain "
+      "yes in conversation, cited, makes it, else a Confirm card; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
       "person), the route and body it writes, and the `card` link. Then `hub_settings_show` or `hub_settings_set` with its key.",
       {"words": _s("What the setting is about, e.g. sql, budget, release time")}, required=("words",))
 def settings_find(api, args):

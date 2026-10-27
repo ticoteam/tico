@@ -7,6 +7,9 @@ where it sits in Settings, who may change it, its class and the route it writes:
   direct       runs at once, as the person (BotOps or their Assistant acting for them has exactly their rights)
   confirm      BotOps or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
                runs at once
+  yes          a person's yes in conversation: BotOps or the Assistant acting for a person reads the change back, and
+               the person's plain yes to it, cited, makes it (their rights read again then); with no yes it is their
+               Confirm card. The route checks the yes (Run workflows for one repository, backend/run_workflows_yes.py)
   person       only the person themselves, in Settings: BotOps or the Assistant is told why, with the link to the card
 
 The Assistant acts for its person with the same entries and classes as BotOps (`ACTING_FOR`). A direct entry runs on the
@@ -30,7 +33,7 @@ from dataclasses import dataclass, field as _field
 
 from .store import Problem
 
-CLASSES = ("direct", "confirm", "person")
+CLASSES = ("direct", "confirm", "yes", "person")
 # Who may change a setting: the check made before the route's own, so a refusal names who can.
 WHO = {
     "owner": "the owner",

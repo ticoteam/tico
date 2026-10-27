@@ -118,7 +118,7 @@ def read_back(c, auth, who, bot, org, repository, on):
     if not room:
         raise Problem("forbidden", "This turn has no conversation to ask the person in", 403)
     text = sentence(bot_name(c, bot), repo["full_name"], on)
-    msg = H._write_message(c, who.task_actor, who.actor, text, room, "say", {"run_workflows_read_back": True},
+    msg = H._write_message(c, who.task_actor, who.actor, text, H.conversation(c, room), "say", {"run_workflows_read_back": True},
                            asked, None, delivered_at=H.now())
     H.event(c, who.actor, READ_BACK, msg["id"], {"bot": bot, "repository": repo["full_name"], "on": bool(on),
                                                   "carrier": carrier})
@@ -149,8 +149,12 @@ def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
         raise Problem("no_yes", "That yes is from another conversation: ask again here", 403)
     if str(yes.get("created") or "") <= at:
         raise Problem("no_yes", "That message came before the read-back: only a yes to it counts", 403)
-    between = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created>? AND created<? AND id NOT IN (?,?) "
-                        "AND deleted_at IS NULL LIMIT 1", (room, at, yes["created"], read_back_id, yes_id)).fetchone()
+    # Between the two, only the carrier's own closing words may come: nothing from the person or anyone else, and no
+    # other read-back, so the yes answers this one.
+    between = c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>? AND m.created<? "
+                        "AND m.id NOT IN (?,?) AND m.deleted_at IS NULL AND (m.from_actor<>? OR EXISTS("
+                        "SELECT 1 FROM events e WHERE e.action=? AND e.target=m.id)) LIMIT 1",
+                        (room, at, yes["created"], read_back_id, yes_id, who.task_actor, READ_BACK)).fetchone()
     later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, yes["created"], yes_id)).fetchone()
     if between or later or len(words) > 60 or not AFFIRM.fullmatch(words):
@@ -226,7 +230,8 @@ def change(c, auth, who, bot, org, repository, on, read_back_id=None, yes_id=Non
     person = (H.human(c, H.actor_id(live.actor)) or {}).get("name") or live.actor
     reply = (f"Run workflows is now {'on' if on else 'off'} for {name} on {repo['full_name']}, approved by {person}"
              + (" in this conversation" if yes else "") + ". "
-             + (f"The check is {name}'s next RunsOn run there: I can't read its repository list back."
+             + (f"The check is {name}'s next RunsOn run there: I can't read its repository list back. If that run "
+                "is refused, the tick did not take effect; say so rather than trying again."
                 if on else f"{name}'s other repositories are unchanged."))
     return {"changed": True, "bot": bot, "repository": repo["full_name"], "on": bool(on), "approver": live.actor,
             "carrier": carrier or None, "change": change_id, "reply": reply}
