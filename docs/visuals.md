@@ -202,8 +202,11 @@ Slack is the only place outside Tico that gets this line.
 
 ## Self-hosting
 
-Visuals are shown from a separate site, apart from the app's sign-in and cookies. Set these in `.env`; `compose.yaml`
-passes them to the server, and `.env.example` lists them.
+Visuals are shown from a separate site, apart from the app's sign-in and cookies. Hosted companies get
+`https://<name>.ticofiles.com` automatically, with no owner switch or setup step. If address setup fails or is
+interrupted, visuals keep using the fallback while Tico retries until the address is verified; the company does not
+get stuck waiting for setup. Self-hosted installations set these in `.env`; `compose.yaml` passes them to the server,
+and `.env.example` lists them.
 
 | Setting | What it does |
 |---|---|
