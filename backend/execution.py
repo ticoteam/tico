@@ -3570,13 +3570,14 @@ class Execution:
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested']:
             failure = run_backoff.classify(c, aid, body)
             errors = limit_errors(c, aid)
-            if body.limited and not (errors and all(login_holds.capacity(e) for e in errors)):
+            if body.limited and not any(gateway.run_code(e) for e in errors) and not (errors and all(login_holds.capacity(e) for e in errors)):
                 job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
                 facts = retry_facts(c, job, row['started'], H.now())
                 quota_acted = bool(facts['consumed'] or outside_actions(c, job, row['started'], H.now()))
                 source_pause = not quota_acted
                 if source_pause:
-                    body = body.model_copy(update={'outcome': 'interrupted', 'retryable': True})
+                    worked = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
+                    body = body.model_copy(update={'outcome': 'interrupted' if worked else body.outcome, 'retryable': True})
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
@@ -3803,7 +3804,8 @@ class Execution:
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
-        if source_pause and login_hold:
+        if source_pause and login_hold and (body.fallback or not fallback_choice(
+                c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         if rejected:
             self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)

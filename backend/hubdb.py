@@ -7721,7 +7721,11 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     `quiet` is stronger: the caller knows this notice asks nothing of any bot, so no bot is
     woken for it, whatever it opted into.
     """
-    if human_completion and is_bot(target) and _actor_exists(conn, target) and task_private_readable(conn, target, task_row):
+    actionable_completion = human_completion and ('?' in str(body or '') or _awaited_by(conn, task_row, target)
+                             or is_human(task_row.get('owner')) and task_row.get('requester') == target)
+    if (human_completion and is_bot(target) and _actor_exists(conn, target)
+            and task_private_readable(conn, target, task_row)
+            and (not actionable_completion or (bot(conn, actor_id(target)) or {}).get('state') != 'active')):
         from . import completion_notes
         completion_notes.record(conn, target, task_row['id'])
         refs = {**(refs or {}), 'quiet': True}
