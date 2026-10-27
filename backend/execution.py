@@ -594,7 +594,12 @@ def retry_facts(c, job, started, finished):
     outside = outside_actions(c, job, started, finished) if restart or lease_lost or timeout else []
     result = c.execute("SELECT result_json FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
-    fallback_unknown = result.get('outcome') == 'interrupted' and result.get('primary_held') and result.get('fallback') and not result.get('source_pause')
+    pending_source = result.get('source_pending') and not result.get('source_running')
+    lease_lost = lease_lost and not pending_source
+    source_bound = bool(result.get('source_running') and result.get('source_continuation')
+                        and result['source_continuation'].get('thread_id') == attempt['thread_id'])
+    fallback_unknown = pending_source or (result.get('outcome') == 'interrupted' and result.get('primary_held')
+                       and result.get('fallback') and not result.get('source_pause') and not source_bound)
     return {'calls': calls, 'acted': acted, 'consumed': consumed, 'reported': reported, 'starts': starts,
             'restart': restart, 'lease_lost': lease_lost, 'timeout': timeout,
             'limit_cuts': run_limit_cuts(c, job) if timeout else 0,
@@ -3134,8 +3139,16 @@ class Execution:
         what the run actually produced — and the job is left exactly as its owner left it. The
         attempt stays `expired`, which is the true account of its lease and keeps late output
         archivable against it."""
+        result = body.model_dump(exclude={"load_snapshot"})
+        prior = json.loads(row['result_json'] or '{}')
+        # A late report cannot erase the saved-session decision that already requeued this job.
+        for key in ('lease_continue', 'quota_continue', 'capacity_continue', 'source_continue', 'source_running', 'source_pending'):
+            if key in prior:
+                result[key] = prior[key]
+        if prior.get('source_continuation') and (prior.get('source_running') or prior.get('source_continue')):
+            result['source_continuation'] = prior['source_continuation']
         c.execute("UPDATE attempts SET final_text=?,result_json=? WHERE id=?",
-                  (body.text, encode(body.model_dump(exclude={"load_snapshot"})), row["id"]))
+                  (body.text, encode(result), row["id"]))
         from .performance import stamp_attempt
         stamp_attempt(c, row["id"], row["runner_id"], "end", body.load_snapshot)
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
@@ -3293,6 +3306,12 @@ class Execution:
     def record_thread(self, c, who, row, thread_id):
         """The provider thread a running attempt is on: the run's, the bot's session under the model it ran, and the
         task's primary session. Returns the attempt's message id."""
+        source = source_continuation(c, row['job_id'])
+        if source:
+            if source['thread_id'] != thread_id:
+                raise Problem('wrong_thread', 'This job must continue its saved provider session', 409)
+            self.record_source_thread(c, row, source)
+            return c.execute('SELECT message_id FROM jobs WHERE id=?', (row['job_id'],)).fetchone()[0]
         c.execute("UPDATE attempts SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         c.execute("UPDATE turns SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         from .shared_bots import follow
@@ -3355,14 +3374,35 @@ class Execution:
         return {**msg, "body": msg["body"] + "\n\nQueued on this task while this run was held, now part of this "
                 "turn (no separate run follows for them):\n" + "\n".join(lines)}
 
+    @staticmethod
+    def record_source_thread(c, row, source):
+        # A fallback belongs to this job, not the primary bot/task session recorded at start.
+        c.execute("UPDATE attempts SET thread_id=?,result_json=json_set(coalesce(result_json,'{}'),"
+                  "'$.source_running',json('true'),'$.source_pending',json('false'),"
+                  "'$.source_continuation',json(?)) WHERE id=?", (source['thread_id'], encode(source), row['id']))
+        c.execute('UPDATE turns SET thread_id=? WHERE id=?', (source['thread_id'], row['id']))
+
     def thread(self, c, who, aid, body):
-        """A running attempt's new provider thread, once its harness confirmed the session (runner-rs execute.rs
-        Fresh): a run that left a large thread starts on the old one and moves here, so one whose new session never
-        came up leaves the task on the old thread."""
+        """A confirmed running provider session, persisted before work can need a lease continuation."""
         row = self.attempt(c, who, aid)
         if row["state"] != "running":
             raise Problem("not_running", "This attempt is not running", 409)
-        self.record_thread(c, who, row, body.thread_id)
+        if body.source_pending or body.source_continuation:
+            computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            if SOURCE_CONTINUE not in json.loads(computer[0] or '[]'):
+                raise Problem('capability', 'Saved fallback sessions require source continuation support', 409)
+            if body.source_pending:
+                # The primary's thread is no proof of where the fallback is. Fence recovery before launching it.
+                c.execute("UPDATE attempts SET result_json=json_set(coalesce(result_json,'{}'),"
+                          "'$.source_pending',json('true'),'$.source_running',json('false'),"
+                          "'$.source_continuation',json('null')) WHERE id=?", (aid,))
+            else:
+                source = body.source_continuation.model_dump()
+                if source['thread_id'] != body.thread_id:
+                    raise Problem('wrong_thread', 'The saved provider session must match this thread', 409)
+                self.record_source_thread(c, row, source)
+        else:
+            self.record_thread(c, who, row, body.thread_id)
         return {"thread_id": body.thread_id}
 
     @staticmethod
@@ -4717,6 +4757,8 @@ class Execution:
                 if facts['lease_lost']:
                     c.execute("UPDATE attempts SET result_json=json_set(coalesce(result_json,'{}'),'$.lease_continue',json('true')) WHERE id=?",
                               (row['attempt_id'],))
+                    c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) "
+                              "WHERE id=? AND json_extract(result_json,'$.source_running')=1", (row['attempt_id'],))
                 if facts['restart'] or facts['lease_lost']:
                     # The cut time is the attempt's finished (report) time: the closest Tico has to when
                     # the computer was cut off.

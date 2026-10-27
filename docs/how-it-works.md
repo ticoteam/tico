@@ -378,11 +378,16 @@ the run is limited as above. A limit is named by the login that returned it: the
 Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
 or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
 API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
-quota never holds or extends the bot's own login, nor the reverse. A quota- or capacity-stopped fallback on a runner advertising
-`source_continue_v1` keeps its confirmed provider thread under that job. The next claim carries `source_continuation`
+quota never holds or extends the bot's own login, nor the reverse. A quota refusal before any message or tool call can
+move to the next ready provider. A fallback that has worked before quota or capacity stops it keeps its confirmed provider
+thread under that job on a runner advertising `source_continue_v1`. The next claim carries `source_continuation`
 (provider, model, profile and session-clear epoch) beside `continue_thread`; the runner requires that exact session,
 even after a runner restart. A changed login, cleared epoch or missing session never starts a fresh replay. The primary
-conversation session stays separate. The result field is sent only when the server advertises `source_continue`;
+conversation session stays separate. Before a fallback starts, its pending handoff fences the old primary identity;
+its confirmed side session is then saved locally and on the server while the turn is still running. A safe lost lease
+can therefore continue that session once, even before any quota/capacity result. An unconfirmed side session never
+resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
+erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
 older runners are not handed these continuations. Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and

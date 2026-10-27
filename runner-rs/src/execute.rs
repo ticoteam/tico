@@ -382,6 +382,8 @@ pub struct Fresh {
     pub told: String,
     /// The session the host confirmed.
     pub confirmed: Mutex<Option<String>>,
+    /// A confirmed fallback is kept under its job and handed to the server before completion.
+    pub source: Option<crate::source_resume::Saved>,
 }
 
 /// How long a saved thread's compaction may take before the turn gives it up for a new session.
@@ -438,6 +440,16 @@ impl Runner {
         keep_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, session).await?;
         if let Some(old) = fresh.left.as_deref().filter(|old| *old != session) {
             drop_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, old).await?;
+        }
+        if let Some(source) = &fresh.source {
+            let mut source = source.clone();
+            source.thread_id = session.to_string();
+            let aid = &fresh.aid;
+            self.client.post(&format!("attempts/{aid}/thread"),
+                &json!({"thread_id": session, "source_continuation": source}),
+                Some(&format!("source-thread:{aid}:{}", fresh.runtime))).await?;
+            *fresh.confirmed.lock().unwrap() = Some(session.to_string());
+            return Ok(());
         }
         *fresh.confirmed.lock().unwrap() = Some(session.to_string());
         if session != fresh.told && thread_updates() {
@@ -1453,6 +1465,7 @@ impl Runner {
                 told: if thread_updates() { left.clone().or_else(|| previous.clone()).unwrap_or_else(|| th.clone()) } else { th.clone() },
                 left: left.clone(),
                 confirmed: Mutex::new(None),
+                source: None,
             });
             if fresh.is_none() && !side_run && continuing.is_empty() {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
@@ -1761,6 +1774,33 @@ impl Runner {
                     None => format!("{primary} was unavailable"),
                 };
                 let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
+                let live_source = source_continue() && thread_updates();
+                let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
+                    format!("{}:{}", hop.runtime, hop.harness)
+                } else { hop.runtime.clone() };
+                let scope = crate::source_resume::scope(&attempt);
+                let fallback_fresh = if live_source {
+                    // Fence the old primary identity before this side session can do any work.
+                    self.client.post(&format!("attempts/{aid}/thread"), &json!({"thread_id": th, "source_pending": true}),
+                        Some(&format!("source-pending:{aid}:{}", hop.harness))).await?;
+                    if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
+                        self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
+                    }
+                    Some(Fresh {
+                        bot: bot.clone(), conversation: scope.clone(), runtime: kept_runtime.clone(), aid: aid.clone(),
+                        left: None, told: th.clone(), confirmed: Mutex::new(None),
+                        source: Some(crate::source_resume::Saved {
+                            thread_id: th.clone(), runtime: hop.runtime.clone(), harness: hop.harness.clone(),
+                            model: hop.model.clone(), reasoning_effort: hop.reasoning_effort.clone().unwrap_or_default(),
+                            profile: selected.as_ref().map_or(String::new(), |p| p.name.clone()), epoch: clear_epoch(&attempt, &key),
+                        }),
+                    })
+                } else { None };
+                if !h.confirms_threads() {
+                    if let Some(fresh) = &fallback_fresh {
+                        self.confirm_thread(fresh, &h.session_id(&th)).await?;
+                    }
+                }
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let d = Drive {
@@ -1777,10 +1817,18 @@ impl Runner {
                     bot: &bot,
                     session: &key,
                     login: yields(&attempt, &login_held),
-                    // A fallback's thread is for this turn only: never kept for the conversation.
-                    fresh: None,
+                    // Its confirmed thread belongs to the job, never to the primary conversation.
+                    fresh: fallback_fresh.as_ref(),
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if let Some(fresh) = fallback_fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
+                    if let Some(confirmed) = h.confirmed(&th) {
+                        // A transient handoff failure must not erase a completed result or start a new provider.
+                        if self.confirm_thread(fresh, &confirmed).await.is_err() {
+                            self.diagnose(&aid, "Fallback session kept locally; its cloud handoff is still unconfirmed.");
+                        }
+                    }
+                }
                 // Keep the actual fallback thread under this job, separate from every normal conversation session.
                 // A refusal before any message or tool call can still use the next ready fallback.
                 // A host that has not confirmed its provider session cannot promise strict continuation.
@@ -4206,10 +4254,12 @@ else:
         std::fs::remove_dir_all(dir).ok();
     }
     #[tokio::test]
-    async fn quota_or_capacity_stopped_fallback_survives_a_runner_restart_and_resumes_its_own_session() {
-        for quota in [true, false] {
+    async fn quota_capacity_or_computer_stopped_fallback_survives_a_runner_restart_in_its_own_session() {
+        for mode in ["quota", "capacity", "computer"] {
+            let quota = mode == "quota";
             let _controls = RunControls;
             SOURCE_CONTINUE.with(|on| on.set(Some(true)));
+            THREAD_UPDATES.with(|on| on.set(Some(true)));
             CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
             let (url, seen, server) = recording_server().await;
             let (runner, dir) = runner_at(&url, "fallback-quota");
@@ -4220,6 +4270,12 @@ else:
                 "Selected model is at capacity. Please try a different model.",
                 "Usage limit reached; resets at 2099-01-01T07:00:00Z");
             if quota { std::fs::write(&script, code).unwrap(); }
+            if mode == "computer" {
+                let code = std::fs::read_to_string(&script).unwrap().replace(
+                    "    print(json.dumps({'type':'result','subtype':'error_during_execution'",
+                    "    import time; time.sleep(5)\n    print(json.dumps({'type':'result','subtype':'error_during_execution'");
+                std::fs::write(&script, code).unwrap();
+            }
             // The saved primary already belongs to this clear epoch; a later clear must still discard it.
             runner.state.epoch_moved("ops", "", "bot", 3).unwrap();
             runner.state.save_session("ops", "bot", "codex", "primary-untouched").unwrap();
@@ -4227,11 +4283,30 @@ else:
             first["job_id"] = json!("job-side");
             first["bot_session_epoch"] = json!(3);
             first["config"]["primary_held"] = json!("2099-01-01T07:00:00Z");
-            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(first.clone())).await.unwrap().unwrap();
+            let observe = async {
+                if mode != "computer" { return; }
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let handed = seen.lock().unwrap().iter().any(|(_, path, body)|
+                            path.ends_with("/attempts/a-side/thread") && body["source_continuation"].is_object());
+                        if handed { break; }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.expect("the live side session is handed off before its result");
+                assert_eq!(posted(&seen, "/attempts/a-side/complete"), 0);
+                runner.shut_down();
+                runner.shut_down();
+            };
+            let run = runner.clone();
+            let (ran, _) = tokio::join!(tokio::time::timeout(Duration::from_secs(12), run.execute(first.clone())), observe);
+            ran.unwrap().unwrap();
             let done = completion(&seen, "a-side");
             if quota { assert_eq!(done["limited"], true, "{done}"); }
-            else { assert_eq!(done["continues"], true, "{done}"); }
-            let saved = done["source_continuation"].clone();
+            else if mode == "capacity" { assert_eq!(done["continues"], true, "{done}"); }
+            else { assert_eq!(done["outcome"], "interrupted", "{done}"); }
+            let saved = seen.lock().unwrap().iter().find_map(|(_, path, body)|
+                (path.ends_with("/attempts/a-side/thread") && body["source_continuation"].is_object())
+                    .then(|| body["source_continuation"].clone())).expect("confirmed source persisted while live");
             assert_eq!(saved["thread_id"], "capacity-session", "{done}");
             assert_eq!(saved["runtime"], "claude", "{done}");
             assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("primary-untouched"));

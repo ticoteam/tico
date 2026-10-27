@@ -2133,8 +2133,22 @@ class Started(Contract):
     load_snapshot: LoadSnapshot | None = None
 
 
+class SourceContinuation(Contract):
+    # A source-stopped side session belongs to this job, never the primary conversation session.
+    thread_id: str = Field(min_length=1, max_length=1000)
+    runtime: str = Field(min_length=1, max_length=80)
+    harness: str = Field(min_length=1, max_length=80)
+    model: str = Field(default="", max_length=200)
+    reasoning_effort: str = Field(default="", max_length=80)
+    profile: str = Field(default="", max_length=80)
+    epoch: tuple[str, int] | None = None
+
+
+
 class AttemptThread(Contract):
     thread_id: ID
+    source_pending: bool = False
+    source_continuation: SourceContinuation | None = None
 
 
 class AttemptStderr(Contract):
@@ -2243,15 +2257,6 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
-class SourceContinuation(Contract):
-    # A source-stopped side session belongs to this job, never the primary conversation session.
-    thread_id: str = Field(min_length=1, max_length=1000)
-    runtime: str = Field(min_length=1, max_length=80)
-    harness: str = Field(min_length=1, max_length=80)
-    model: str = Field(default="", max_length=200)
-    reasoning_effort: str = Field(default="", max_length=80)
-    profile: str = Field(default="", max_length=80)
-    epoch: tuple[str, int] | None = None
 
 
 class Completion(Contract):

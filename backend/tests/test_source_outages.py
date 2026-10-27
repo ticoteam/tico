@@ -264,14 +264,19 @@ def test_quota_after_a_named_external_action_stays_held(api, monkeypatch):
         assert not result.get('source_pause') and not result.get('source_continue')
 
 
+@pytest.mark.parametrize('source_live', [False, True])
 @pytest.mark.parametrize('evidence', ['unknown_shell', 'final_answer'])
-def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(api, monkeypatch, evidence):
+def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(api, monkeypatch, evidence, source_live):
     from backend.execution import retry_facts
     from backend.tests.test_api import setup_attempt
     machine, _, attempt = setup_attempt(api)
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
-                                     'capabilities': ['capacity_continue_v1']}, machine['token'])
+                                     'capabilities': ['capacity_continue_v1', 'source_continue_v1']}, machine['token'])
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'kept'}, machine['token'])
+    if source_live:
+        post(api, f"attempts/{attempt['id']}/thread", {'thread_id': 'side-kept',
+             'source_continuation': {'thread_id': 'side-kept', 'runtime': 'codex', 'harness': 'codex',
+                                     'model': 'synthetic', 'profile': '', 'epoch': None}}, machine['token'])
     payload = ({'seq': 2, 'kind': 'tool', 'payload': {'name': 'shell'}} if evidence == 'unknown_shell' else
                {'seq': 2, 'kind': 'message', 'payload': {'text': 'Done.', 'final': True}})
     post(api, f"attempts/{attempt['id']}/events", {'events': [
@@ -395,3 +400,74 @@ def test_saved_fallback_capacity_uses_its_own_thread_after_the_short_hold(api, m
     again = claim(api, machine)
     assert again and again['job_id'] == first['job_id'] and again['continue_thread'] == 'capacity-fallback'
     assert again['source_continuation'] == saved
+
+
+def test_live_fallback_handoff_survives_a_lease_loss_without_replacing_the_primary(api, monkeypatch):
+    from backend.execution import STALL_MAX
+    from backend.tests.test_execution_recovery_dependencies import setup_attempt
+    machine, _, first = setup_attempt(api)
+    caps = ['capacity_continue_v1', 'source_continue_v1']
+    def heartbeat():
+        post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                      'capabilities': caps}, machine['token'])
+    heartbeat()
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'primary-kept'}, machine['token'])
+    saved = {'thread_id': 'actual-side-session', 'runtime': 'codex', 'harness': 'codex',
+             'model': 'synthetic', 'reasoning_effort': '', 'profile': '', 'epoch': None}
+    post(api, f"attempts/{first['id']}/thread", {'thread_id': 'side-local', 'source_pending': True}, machine['token'])
+    post(api, f"attempts/{first['id']}/thread", {'thread_id': saved['thread_id'], 'source_continuation': saved}, machine['token'])
+    post(api, f"attempts/{first['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'name': 'Read'}}]}, machine['token'])
+    store, execution = api.app.state.store, api.app.state.execution
+    for previous in (first, None):
+        if previous is None:
+            heartbeat()
+            previous = claim(api, machine)
+            assert previous and previous['job_id'] == first['job_id']
+            assert previous['continue_thread'] == saved['thread_id'] and previous['source_continuation'] == saved
+            post(api, f"attempts/{previous['id']}/started", {'thread_id': saved['thread_id']}, machine['token'])
+            post(api, f"attempts/{previous['id']}/events", {'events': [
+                {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}}]}, machine['token'])
+        expire(api, previous['id'])
+        execution.served_at = None
+        with store.transaction() as c:
+            execution.expire(c)
+        at(monkeypatch, H.shift(H.now(), seconds=STALL_MAX + 1), api)
+        with store.transaction() as c:
+            execution.auto_reconcile(c)
+            assert c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops'").fetchone()[0] == 'primary-kept'
+        if previous['id'] == first['id']:
+            filed = post(api, f"attempts/{first['id']}/complete", {'outcome': 'interrupted', 'last_seq': 2,
+                         'fallback': 'codex', 'primary_held': True, 'text': 'The execution lease expired'}, machine['token'])
+            assert filed.get('filed')  # late diagnostics must not erase the server's continuation or provider binding
+    with store.read() as c:
+        assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 2
+        assert not c.execute("SELECT 1 FROM events WHERE action='job.review_requested'").fetchone()
+        assert not c.execute('SELECT 1 FROM tasks').fetchone()
+        assert 'second lost lease' in H.status(c, 'ops')['focus']
+
+
+def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_lease(api, monkeypatch):
+    from backend.execution import retry_facts
+    from backend.tests.test_execution_recovery_dependencies import setup_attempt
+    machine, _, first = setup_attempt(api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1', 'source_continue_v1']}, machine['token'])
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'primary-kept'}, machine['token'])
+    post(api, f"attempts/{first['id']}/thread", {'thread_id': 'side-local', 'source_pending': True}, machine['token'])
+    # The host reports tools before its provider session is confirmed; this must not prove the old primary safe.
+    post(api, f"attempts/{first['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}}]}, machine['token'])
+    expire(api, first['id'])
+    execution = api.app.state.execution
+    execution.served_at = None
+    with api.app.state.store.transaction() as c:
+        execution.expire(c)
+        job = dict(c.execute('SELECT * FROM jobs WHERE id=?', (first['job_id'],)).fetchone())
+        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (first['id'],)).fetchone()
+        facts = retry_facts(c, job, attempt['started'], attempt['finished'])
+        assert facts['fallback_unknown'] and not facts['safe'] and not facts['lease_lost']
+        assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result_json,'$.lease_continue')=1").fetchone()
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
