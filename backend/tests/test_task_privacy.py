@@ -119,6 +119,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'").fetchall():
             c.execute('DROP TRIGGER ' + name)
         c.execute('DROP INDEX IF EXISTS tasks_private')
+        c.execute('DROP INDEX IF EXISTS tasks_private_parties')
         c.execute('ALTER TABLE tasks DROP COLUMN private')
         c.execute('DELETE FROM cloud_migrations WHERE version=57')
     api.app.state.store.initialize(seed_market=False)
@@ -195,6 +196,7 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
     c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
     c.execute('DROP INDEX IF EXISTS tasks_private')
+    c.execute('DROP INDEX IF EXISTS tasks_private_parties')
     c.execute('ALTER TABLE tasks DROP COLUMN private')
     c.execute('PRAGMA user_version=23')
     ids = {row[0] for row in c.execute('SELECT id FROM messages')}
