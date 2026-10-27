@@ -9,6 +9,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -137,17 +138,27 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
     errors, taken = [], 0
     rng = random.Random(678)
 
+    def routed(path, call):
+        # The app names a hold's route only when it starts with a recorder; name it here as the server would.
+        _, token = flight.request_started("POST", {"route": SimpleNamespace(path=path)})
+        try:
+            return call()
+        finally:
+            flight.request_finished(token)
+
     def claim(computer):
-        r = api.post("/api/v2/jobs/claim", headers=headers(computer["token"]), json={"start_places": True})
+        r = routed("/api/v2/jobs/claim", lambda: api.post(
+            "/api/v2/jobs/claim", headers=headers(computer["token"]), json={"start_places": True}))
         if r.status_code != 200:
             errors.append((r.status_code, r.text[:200]))
             return None
         return r.json().get("attempt")
 
     def beat(computer):
-        r = api.post("/api/v2/runners/heartbeat", headers=headers(computer["token"]), json={
-            "version": "test", "platform": "test", "capacity": 40,
-            "readiness": {s: True for s in places[computer["runner_id"]]}})
+        r = routed("/api/v2/runners/heartbeat", lambda: api.post(
+            "/api/v2/runners/heartbeat", headers=headers(computer["token"]), json={
+                "version": "test", "platform": "test", "capacity": 40,
+                "readiness": {s: True for s in places[computer["runner_id"]]}}))
         if r.status_code != 200:
             errors.append((r.status_code, r.text[:200]))
 
@@ -168,6 +179,7 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
                 pending.result(timeout=120)
     seconds = time.monotonic() - started
     claim_holds = [h for h in holds if h["route"] == "POST /api/v2/jobs/claim"]
+    beats = [h["hold_ms"] for h in holds if h["route"] == "POST /api/v2/runners/heartbeat"]
     by_site = {}
     for h in claim_holds:
         by_site.setdefault(h["site"], []).append(h["hold_ms"])
@@ -181,13 +193,14 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
                       for name, v in sorted(phases.times.items())},
         "claim_route_holds_ms": {site: {"n": len(v), "p95": pct(v, .95), "max": pct(v, 1)}
                                  for site, v in sorted(by_site.items())},
+        "heartbeat_holds_ms": {"n": len(beats), "p95": pct(beats, .95), "max": pct(beats, 1)},
         "all_claim_holds_ms": {"n": len(claim_holds), "p95": pct([h["hold_ms"] for h in claim_holds], .95),
                                "max": pct([h["hold_ms"] for h in claim_holds], 1)},
     }
     print("CLAIM_HOLD_RECEIPT " + json.dumps(receipt, indent=1), flush=True)
     assert not errors, errors[:5]
     assert taken, "the synthetic queue handed out no work"
-    assert receipt["all_claim_holds_ms"]["max"] < 5000, receipt
+    assert claim_holds and receipt["all_claim_holds_ms"]["max"] < 5000, receipt
     # A claim chosen on the read snapshot never repeats the full selection under the lock because its own expiry
     # requeued work: the route expires lapsed leases in its own short write first.
     assert phases.fallbacks == 0 and phases.full_under_lock == 0, receipt
