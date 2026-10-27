@@ -106,3 +106,28 @@ def test_the_mcp_door_lists_ack_and_the_agent_cannot_act_as_a_runner(api):
     # And a runner credential cannot heartbeat as an agent.
     machine = runner(api)
     assert api.post("/api/v2/agents/heartbeat", json={}, headers=headers(machine["token"])).status_code == 403
+
+
+def test_agent_unread_inbox_is_privacy_checked_in_one_batch(api, monkeypatch):
+    """Health/status used to re-fetch each unread inbox message; one readable_messages pass covers them."""
+    from backend import task_privacy as privacy
+
+    hermes_bot(api)
+    token = credential(api)["token"]
+    beat(api, token)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE agents SET last_seen=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
+    for i in range(12):
+        post(api, "chat/scout", {"text": f"Note {i}"})
+    calls = []
+    real = privacy.readable_messages
+
+    def once(c, actor, messages):
+        calls.append(len(list(messages)))
+        return real(c, actor, messages)
+
+    monkeypatch.setattr(privacy, "readable_messages", once)
+    (issue,) = issues(api, "scout")
+    assert "12 unread messages waiting in its inbox" in issue["detail"]
+    # Other status paths may call readable_messages with empty lists; the agent inbox is one batched pass.
+    assert calls.count(12) == 1
