@@ -143,13 +143,21 @@ def session_task_id(c, bot, config, task_id, roots):
     return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
 
 
+def work_task_id(message, conversation=None):
+    """The work attached to a turn; parked urgent notices retain their task refs only as news.
+
+    Privacy, operator scope and interrupted-work SQL continue to use the message's actual task.
+    """
+    return None if wake_rule_engine.notice_only(message) else H.message_task_id(message, conversation)
+
+
 def job_lane(c, bot, config, message, conversation, lanes, roots=False):
     """The lane a queued message would run in (clients/sessions.py), `main` for a runner without lanes.
     `config` is the bot's followed config, the one its runner keys sessions on. A subtask's turn runs in
     its session root's lane, so it and its parent's turns take turns in one session."""
     if not lanes:
         return sessions.MAIN_LANE
-    return sessions.lane(config, bot, session_task_id(c, bot, config, H.message_task_id(message, conversation), roots),
+    return sessions.lane(config, bot, session_task_id(c, bot, config, work_task_id(message, conversation), roots),
                          conversation["id"] if conversation else None)
 
 
@@ -274,7 +282,7 @@ def lane_history(c, bot, config, history, conversation, lane, roots=False):
         refs = message.get("refs") or {}
         if refs.get("task_report") or refs.get("task_started"):
             return sessions.MAIN_LANE
-        task_id = H.message_task_id(message, conversation)
+        task_id = work_task_id(message, conversation)
         if task_id not in memo:
             memo[task_id] = sessions.lane(config, bot, session_task_id(c, bot, config, task_id, roots),
                                           conversation["id"] if conversation else None)
@@ -1417,7 +1425,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if why := turn_budgets.refusal(c, job["bot"], message) or run_backoff.job_refusal(c, job["bot"], message):
         return why                  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
-    task_id = H.message_task_id(message, conversation)
+    if wake_rule_engine.notice_only(message):
+        notice_task = H.task(c, H.message_task_id(message, conversation) or "")
+        if notice_task and (H.TS.snoozed(notice_task) or auto_tasks.put_back_held(c, notice_task)):
+            return "task_wait"          # a silence control applied after enqueue still wins
+    task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
     if task and task['owner'] == 'bot:' + job['bot'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now'):
@@ -2599,7 +2611,7 @@ class Execution:
             if meeting_claim["status"] != "claimed":
                 return {"attempt": None}
         conv = H.conversation(c, msg["conversation_id"])
-        task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
+        task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
         if task and task["owner"] == "bot:" + row["bot"] and row["bot"] != self.store.settings.assistant_bot:
             # A bot's task filed before task rooms moves to its own room now; this turn's message stays put.
             # The Assistant's stay in the person's own room, where its turns act for that person.
@@ -2918,7 +2930,7 @@ class Execution:
         c.execute("UPDATE turns SET finished=NULL,exit=NULL,summary=NULL WHERE id=?", (row["id"],))
         current = H.message(c, job["message_id"])
         settle_status(c, row["bot"], "running", "Responding to queued work",
-                      claimed=row["created"], task_id=H.message_task_id(current) or "")
+                      claimed=row["created"], task_id=work_task_id(current) or "")
         H.event(c, H.KEEPER, "attempt.lease-restored", row["id"],
                 {"bot": row["bot"], "job_id": row["job_id"], "lapsed": row["finished"], "lease_until": until})
         return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
@@ -3190,7 +3202,7 @@ class Execution:
         msg = self.record_thread(c, who, row, body.thread_id)
         H.mark_delivered(c, H.KEEPER, msg)
         settle_status(c, row["bot"], "running", "Responding to queued work",
-                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
+                      claimed=row["created"], task_id=work_task_id(H.message(c, msg)) or "")
         return {"started": True}
 
     def record_thread(self, c, who, row, thread_id):
@@ -3298,7 +3310,7 @@ class Execution:
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
                            include_deleted=True)
-        origin_task = H.message_task_id(origin, H.conversation(c, origin["conversation_id"]))
+        origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         capabilities = c.execute("SELECT capabilities_json FROM runners WHERE id=?", (attempt["runner_id"],)).fetchone()
         lanes, roots = lanes_on(capabilities), roots_on(capabilities)
         if lanes:
@@ -3337,7 +3349,7 @@ class Execution:
             if not privacy.message_readable(c, "bot:" + attempt["bot"], row):
                 continue
             incoming_conversation = H.conversation(c, row["conversation_id"])
-            incoming_task = H.message_task_id(H.message(c, row["id"]), incoming_conversation)
+            incoming_task = work_task_id(H.message(c, row["id"]), incoming_conversation)
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue                    # a new task gets its own run, even in the same bot room
             if lanes and job_lane(c, attempt["bot"], followed, H.message(c, row["id"]), incoming_conversation,
@@ -3352,7 +3364,7 @@ class Execution:
                 origin = c.execute("SELECT j.message_id,m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
                                    "WHERE j.id=?", (attempt["job_id"],)).fetchone()
                 origin_message = H.message(c, origin["message_id"], include_deleted=True)
-                task_id = H.message_task_id(origin_message)
+                task_id = work_task_id(origin_message)
                 task = H.task(c, task_id) if task_id else None
                 requester = task["requester"] if task else origin["from_actor"]
                 cancelled = bool(task and task["status"] == "closed" and refs.get("task") == task_id)
@@ -3484,7 +3496,7 @@ class Execution:
             return {"woke": False}
         job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
         origin = H.message(c, job["message_id"]) if job else None
-        task = H.task(c, H.message_task_id(origin) or "") if origin else None
+        task = H.task(c, work_task_id(origin) or "") if origin else None
         lines = []
         for cmd in body.commands:
             ended = ("killed: ran over the run's time limit" if cmd.killed
@@ -3583,7 +3595,7 @@ class Execution:
                 "AND m.conversation_id=? AND m.from_actor=? AND m.body=?",
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
-            task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
+            task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
             if task and task["owner"] == actor:
                 # Record the owner's final verdict even when the reply is withheld until Done.
                 H.record_verdict(c, actor, task, text=text)
@@ -3779,7 +3791,7 @@ class Execution:
             complete_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"],
                                  body.text if body.outcome == "completed" else "", body.outcome,
                                  requeued=requeue)
-        turn_task = H.message_task_id(msg, conv)
+        turn_task = work_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():
             message = H.message(c, incoming["message_id"], include_deleted=True)
@@ -3790,7 +3802,7 @@ class Execution:
                           ("completed" if body.outcome == "completed" else "cancelled", incoming["message_id"]))
                 continue
             answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
-            task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+            task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
             deferred = False
             if task_id and task_id != turn_task:
                 task = H.task(c, task_id)
@@ -3810,12 +3822,12 @@ class Execution:
             # dozens of Slack digests and hourly occurrences stacked this way. A bot's chat
             # room carries notices for many tasks, so only the ones about this turn's own task
             # (or, for a turn with no task, the ones about none) count as read.
-            turn_task = H.message_task_id(msg, conv)
+            turn_task = work_task_id(msg, conv)
             for extra in c.execute("SELECT j.id,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                                    "WHERE j.bot=? AND j.state='queued' AND m.kind='notice' "
                                    "AND m.conversation_id=? AND m.created<=? AND j.id<>?",
                                    (row["bot"], conv["id"], row["created"], row["job_id"])).fetchall():
-                if H.message_task_id(H.message(c, extra["message_id"]), conv) != turn_task:
+                if work_task_id(H.message(c, extra["message_id"]), conv) != turn_task:
                     continue
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, extra["id"]))
                 H.mark_delivered(c, H.KEEPER, extra["message_id"])
@@ -3833,7 +3845,7 @@ class Execution:
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
         # the subtask moved during the turn. A lane naming a task this bot does not own checkpoints nothing.
-        turn_task_id = H.message_task_id(msg, conv)
+        turn_task_id = work_task_id(msg, conv)
         lane_task = row["lane"][len("task:"):] if turn_task_id and str(row["lane"] or "").startswith("task:") else ""
         if lane_task and lane_task != turn_task_id:
             root = H.task(c, lane_task)
@@ -4465,7 +4477,7 @@ class Execution:
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
-                task_id = H.message_task_id(msg, conv) if msg else None
+                task_id = work_task_id(msg, conv) if msg else None
                 task = H.task(c, task_id) if task_id else None
                 if not privacy.message_readable(c, 'bot:' + row['bot'], msg):
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',

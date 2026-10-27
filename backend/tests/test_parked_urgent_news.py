@@ -4,8 +4,9 @@ import json
 import pytest
 
 from backend import auto_tasks, hubdb as H, rules as R, wake_rules
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, claim, post  # noqa: F401
 from backend.tests.test_profiles import put
+from backend.tests.test_task_lanes import task_bot
 from backend.tests.test_urgent_news import sent_job
 from backend.tests.test_wake_rules import as_cause
 
@@ -28,10 +29,7 @@ def still_blocked(c, task, blocker):
 
 
 def machine(api):
-    r = runner(api)
-    assign(api, r, 'cpo')
-    ready(api, r, ['cpo'])
-    return r
+    return task_bot(api, lanes=True, others=('cpo',))
 
 
 @pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
@@ -51,21 +49,67 @@ def test_parked_party_blocker_delivers_a_usable_notice_job(api, profile, party):
     attempt = claim(api, r, 'cpo')
     assert attempt is not None, 'A queued urgent notice must be usable while its work remains blocked'
     assert attempt['message']['id'] == msg['id']
+    assert attempt['task'] is None and attempt['lane'] == 'main'
+    assert msg['refs'][R.PARKED_NOTICE] is True
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'notice-session'}, token=r['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 0,
+                                                  'text': 'Read the blocker notice.'}, token=r['token'])
     with api.app.state.store.read() as c:
         assert H.message(c, msg['id'])['delivered_at']
+        assert c.execute('SELECT task_id FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] is None
+        assert H.task(c, task['id'])['status'] == task['status']
+        assert H.task(c, task['id'])['checkpoint_at'] is None
         still_blocked(c, task, blocker)
 
 
 @pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
-def test_unrelated_blocker_keeps_its_existing_audience(api, profile):
+def test_unrelated_blocker_preserves_actual_baseline_audience(api, profile):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, profile, party='unrelated')
         msg, job = sent_job(c, task, 'bot:cpo', 'Another task is blocked', {'news': 'task_blocked'})
-        if profile == 'lead':
-            assert msg['refs']['rule'] == 'task_blocker' and job and job['held'] == 0
-        else:
-            assert job is None and msg['refs']['quiet']
+        # Baseline, not Product's originally described unrelated control (Engineering disposition).
+        assert R.urgent_rule(c, H.KEEPER, 'bot:cpo', {'task': task['id']}, None, 'task_blocked') is None
+        assert R.PARKED_NOTICE not in msg['refs']
+        assert job and job['held'] == (1 if profile == 'lead' else 0)
+        assert msg['refs']['rule'] == ('profile_lead_digest' if profile == 'lead' else 'task_blocked')
+        still_blocked(c, task, blocker)
+
+
+def test_marker_cannot_turn_ordinary_held_news_into_a_notice_run(api):
+    with api.app.state.store.transaction() as c:
+        task, blocker = parked(c)
+        msg, job = sent_job(c, task, 'bot:cpo', 'A routine step changed',
+                            {'news': 'step_entered', R.PARKED_NOTICE: True})
+        assert job is None and R.PARKED_NOTICE not in msg['refs']
+        still_blocked(c, task, blocker)
+
+
+def test_parked_incident_notice_is_claimed_without_starting_work(api, monkeypatch):
+    r = machine(api)
+    with api.app.state.store.transaction() as c:
+        task, blocker = parked(c, incident=True)
+        msg, job = sent_job(c, task, 'bot:cpo', 'The incident entered a step', {'news': 'step_entered'})
+        assert job and job['held'] == 0 and msg['refs']['rule'] == 'incident_news'
+    def no_start(*args, **kwargs):
+        pytest.fail('A notice turn must never start held work')
+    monkeypatch.setattr(auto_tasks, 'started', no_start)
+    attempt = claim(api, r, 'cpo')
+    assert attempt and attempt['message']['id'] == msg['id']
+    assert attempt['task'] is None and attempt['lane'] == 'main'
+    assert any(m['id'] == msg['id'] for m in attempt['history'])
+    with api.app.state.store.read() as c:
+        still_blocked(c, task, blocker)
+
+
+def test_snooze_after_enqueue_still_holds_the_notice(api):
+    r = machine(api)
+    with api.app.state.store.transaction() as c:
+        task, blocker = parked(c, incident=True)
+        _, job = sent_job(c, task, 'bot:cpo', 'The incident entered a step', {'news': 'step_entered'})
+        assert job and job['held'] == 0
+        H.TS.snooze(c, 'human:ana', task['id'], H.shift(H.now(), days=1))
+    assert claim(api, r, 'cpo') is None
+    with api.app.state.store.read() as c:
         still_blocked(c, task, blocker)
 
 

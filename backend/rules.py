@@ -264,6 +264,16 @@ class Decision(NamedTuple):
     reason: Optional[str] = None        # the held_by mark when the message is written quiet here
     params: Optional[dict] = None
     by: Optional[str] = None            # task action's effective writer; event actions retain the row's creator
+    notice_only: bool = False           # read urgent news without starting the work its dependency holds
+
+
+PARKED_NOTICE = "parked_urgent_notice"
+
+
+def notice_only(message):
+    """Only the keeper's server-stamped urgent notices run without attaching their held task."""
+    return bool(message and message.get("from_actor") == H.KEEPER and message.get("kind") == "notice"
+                and (message.get("refs") or {}).get(PARKED_NOTICE) is True)
 
 
 # Pull request checks (backend/github.py): the webhook writes no message for one check finishing (`pr_check`), and one
@@ -608,7 +618,15 @@ def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided
     if not str(target).startswith("bot:"):
         return None
     try:
-        return _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+        found = _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
+        if found.outcome == WAKE and actor == H.KEEPER and kind == "notice":
+            from . import wake_rules
+            task = _Context(conn, actor, target, refs, conv, None).task
+            if (task and not H.TS.snoozed(task) and wake_rules.parked(conn, task) == "blocked_by"
+                    and urgent_rule(conn, actor, target, refs, conv, event_of(actor, kind, refs, body))):
+                # This changes delivery only, after the decision and its silence controls. Preserve the rule id.
+                found = found._replace(notice_only=True)
+        return found
     except Exception:  # noqa: BLE001 - fail open: a message the engine cannot read starts its run as before
         return Decision(WAKE, FAIL_OPEN)
 
@@ -696,6 +714,9 @@ def stamp(refs, decision):
     """The message's refs with the rule that decided it. A row's `batch` stamps the hold the jobs trigger reads
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
+    out.pop(PARKED_NOTICE, None)          # callers cannot supply a notice-only dispatch capability
+    if decision.notice_only:
+        out[PARKED_NOTICE] = True
     out.pop("wake_immediate", None)
     if decision.outcome == WAKE and decision.rule in (*URGENT_EVENTS, "needs_action", "ask"):
         # Urgent news and a question or flagged action for the bot skip every hold; the trigger reads this.
