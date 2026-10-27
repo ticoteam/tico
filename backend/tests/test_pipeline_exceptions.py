@@ -196,7 +196,8 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
     blocker notices wake it."""
 
     def routine(c, typ, title):
-        row = ticket(c, typ, title)
+        # Both tickets first: making one settles the jobs queued so far, and every event below must stay counted.
+        row, late = ticket(c, typ, title), ticket(c, typ, title + " late")
         check = check_of(c, row, "Review 1: PR #7")
         H.task_comment(c, "bot:ops", check["id"], "VERDICT: approve at " + HEAD)
         H.task_update(c, "bot:ops", check["id"], status="done", note="approve")
@@ -205,7 +206,6 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
-        late = ticket(c, typ, title + " late")
         c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
         step_age.sweep(c, H.shift(H.now(), minutes=1))
