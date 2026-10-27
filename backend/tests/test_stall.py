@@ -323,7 +323,7 @@ def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_tim
 
 
 @pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked", "hold_in_review",
-                                  "hold_job_queued", "hold_job_leased", "hold_job_running"])
+                                  "hold_waiting_on_person", "hold_job_queued", "hold_job_leased", "hold_job_running"])
 def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c, hold_parent=case != "not_a_subtask")
@@ -336,6 +336,8 @@ def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
             H.task_ask(c, "bot:finance", hold["id"], "Which window do you mean?")
         if case == "hold_in_review":     # its reviewer moves it
             c.execute("UPDATE tasks SET status='review' WHERE id=?", (hold["id"],))
+        if case == "hold_waiting_on_person":
+            c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (hold["id"],))
         if case.startswith("hold_job_"):
             job = c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
                             "JOIN conversations cv ON cv.id=m.conversation_id "
@@ -349,6 +351,9 @@ def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
             assert flagged(c, window, hold, other, keep_jobs_of="finance") == (True, True)
         elif case == "hold_in_review":
             c.execute("UPDATE tasks SET status='doing' WHERE id=?", (hold["id"],))
+            assert flagged(c, window, hold, other) == (True, True)
+        elif case == "hold_waiting_on_person":
+            c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (hold["id"],))
             assert flagged(c, window, hold, other) == (True, True)
 
 
@@ -370,6 +375,28 @@ def test_a_parked_child_only_exempts_its_parent_for_a_job_the_runner_can_claim(a
                   f"WHERE j.bot='finance' AND {H.MESSAGE_TASK_SQL}=?)", (sender, hold["id"]))
         assert flagged(c, window, hold, keep_jobs_of="finance") == ((True, True) if sender == "bot:ops"
                                                                   else (False, False))
+
+
+@pytest.mark.parametrize("reason", ["uncertain", "scope"])
+def test_a_queued_child_job_held_by_the_claim_fence_does_not_silence_its_parent(api, reason):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        if reason == "uncertain":
+            c.execute("UPDATE jobs SET state='uncertain' WHERE bot='finance'")
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                      "VALUES(?,?,'bot:ops','bot:finance','notice','Continue the hold',?,?)",
+                      (H.new_id(), hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
+        else:
+            other = H.task_create(c, "bot:ops", "Run the migration", "", "bot:finance")
+            c.execute("INSERT INTO bot_control(bot,claim_task) VALUES('finance',?) "
+                      "ON CONFLICT(bot) DO UPDATE SET claim_task=excluded.claim_task", (other["id"],))
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued' AND held=0").fetchone()[0]
+        assert flagged(c, window, hold, keep_jobs_of="finance") == (True, True)
+        if reason == "uncertain":
+            c.execute("UPDATE jobs SET state='completed' WHERE state='uncertain'")
+        else:
+            c.execute("UPDATE bot_control SET claim_task=NULL WHERE bot='finance'")
+        assert flagged(c, window, hold, keep_jobs_of="finance") == (False, False)
 
 
 def test_botops_stuck_list_skips_an_own_blocked_parent_while_its_bot_is_busy_or_it_waits_for_the_next_run(api):

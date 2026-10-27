@@ -84,12 +84,16 @@ ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts W
 
 
 def _own_job_sql(claimable=False):
-    from .statuses import PARKED_SQL
-    # A parked bot cannot start ordinary bot messages. Already active jobs still count.
-    eligibility = ("AND (j.state!='queued' OR m.from_actor LIKE 'human:%' OR NOT EXISTS "
-                   "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot "
-                   f"AND pc.onboarding_state IN {PARKED_SQL} "
-                   "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) ") if claimable else ""
+    eligibility = ""
+    if claimable:
+        from .execution import scoped_sql, unfenced_sql
+        from .statuses import PARKED_SQL
+        # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
+        eligibility = ("AND (j.state!='queued' OR m.from_actor LIKE 'human:%' OR NOT EXISTS "
+                       "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot "
+                       f"AND pc.onboarding_state IN {PARKED_SQL} "
+                       "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
+                       f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
     return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
@@ -104,7 +108,7 @@ def _last_sql(outcomes):
 
 
 def own_job(conn, row, *, claimable=False):
-    """The task's queued or active run; `claimable` excludes queued work parked by onboarding."""
+    """The task's queued or active run; `claimable` excludes queued work held by onboarding or task fences."""
     from .read_cache import one
     H = _H()
     try:

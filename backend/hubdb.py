@@ -6842,7 +6842,8 @@ def own_stuck_blockers(conn, row, at=None):
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
     woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
-    A parent waiting on a person belongs to that person. These waits exempt the parent from the stall watcher."""
+    A parent or subtask waiting on a person belongs to that person. These waits exempt the parent from the
+    stall watcher."""
     from .milestone_waits import pending as milestone_pending
     from .quiet_work import own_job
     at = at or now()
@@ -6854,6 +6855,7 @@ def own_stuck_blockers(conn, row, at=None):
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
     for block in blockers:
         if (not is_bot(block["owner"]) or block["status"] == "review" or block["updated"] >= quiet
+                or (block["status"] == "waiting" and is_human(block.get("waiting_on")))
                 or not TR.is_descendant(conn, row["id"], block["id"])
                 or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
                 or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")
