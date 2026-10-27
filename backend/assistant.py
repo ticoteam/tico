@@ -1457,15 +1457,19 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
+    def chat_bot_for(c, who, files):
+        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+        info = availability(c, settings, who)
+        if not info["available"]:
+            raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+        if files and info["bot"] != ceo_bot.SLUG:
+            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
+        auth.require_write(c, who, info["bot"])
+        return info["bot"]
+
     def post_message_sync(request, body, who, intent, reply, links, uploads=None):
         def work(c):
-            info = availability(c, settings, who)
-            if not info["available"]:
-                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-            bot = info["bot"]
-            if uploads is not None and bot != ceo_bot.SLUG:
-                raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
-            auth.require_write(c, who, bot)
+            bot = chat_bot_for(c, who, uploads is not None)
             room = chat_room(c, settings, who)
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
@@ -1507,7 +1511,12 @@ def install(app, store, auth, mutate, onboarding):
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
-        body, uploads = await app.state.uploads.form(request, M.AssistantUpload)
+
+        def admit(body):
+            # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
+            with store.read() as c:
+                chat_bot_for(c, who, True)
+        body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
 
     @app.post("/api/v2/assistant/turn-on")

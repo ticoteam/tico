@@ -156,7 +156,9 @@ def guessed_type(name):
     return visuals.stored_type(mimetypes.guess_type(name)[0])
 
 
-async def form(request, model, blobs, store):
+async def form(request, model, blobs, store, admit=None):
+    """The request's fields and its files, the bytes stored unless this key's receipt replays. `admit(body)`, when
+    given, runs before any byte is stored: a request it refuses keeps nothing, in the database or in storage."""
     upload_key(request)
     raw = await request.body()
     content_type = request.headers.get("content-type", "application/json")
@@ -201,6 +203,8 @@ async def form(request, model, blobs, store):
         return body, uploads, prepared
     body, uploads, prepared = await asyncio.to_thread(decode)
     if await asyncio.to_thread(replay_upload, store, request, {**body.model_dump(), "uploads": prepared}) is None:
+        if admit is not None:
+            await asyncio.to_thread(admit, body)
         # Binary bytes become durable before the transaction publishes references to them.
         for upload in uploads:
             await asyncio.to_thread(blobs.put, upload["data"], upload["content_type"])
@@ -477,7 +481,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
     # The owner's CEO Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
-    app.state.uploads = SimpleNamespace(form=lambda request, model: form(request, model, blobs, store), attach=chat_uploads,
+    app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
+                                        attach=chat_uploads,
                                         write=write)
 
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
