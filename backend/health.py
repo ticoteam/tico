@@ -331,12 +331,24 @@ def missing_repositories(c, online_ids):
 def failed_repository_copies(c, online_ids):
     """(computer, repository, why) for the repositories an online computer could not copy to its workspace: the
     runner's own words, git's reason included, so nobody has to guess between access, network and disk."""
-    from .repositories import metadata
+    import json
+    # One registry_metadata scan for every computer (not one lookup per online runner).
+    by_repos = {}
+    prefix = "computer-repositories:"
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE ?", (prefix + "%",)):
+        if not row["key"].startswith(prefix):
+            continue
+        try:
+            value = json.loads(row["value_json"] or "{}")
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            by_repos[row["key"][len(prefix):]] = value.get("repositories")
     out = []
     for r in c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL ORDER BY label"):
         if r["id"] not in online_ids:
             continue
-        rows = metadata(c, "computer-repositories:" + r["id"]).get("repositories")
+        rows = by_repos.get(r["id"])
         for row in rows if isinstance(rows, list) else ():
             if isinstance(row, dict) and row.get("state") == "failed" and row.get("full_name"):
                 out.append((r["label"], str(row["full_name"]), str(row.get("error") or "the copy failed")[:500]))
