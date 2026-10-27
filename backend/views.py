@@ -1355,17 +1355,18 @@ def recent_bots(c, auth, who, since, limit, needs):
     def touch(slug, ts):
         if slug and access.get(slug, auth.FULL)["see"] and ts and ts > seen.get(slug, ""):
             seen[slug] = ts
-    for row in c.execute("SELECT * FROM messages WHERE created>=? AND "
-                         "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
-                         (since, me, me)):
-        if not privacy.message_readable(c, privacy.actor(who), row):
-            continue
+    # Discovery window: one readable_messages prime (not message_readable per row), then task_sql for tasks.
+    recent_msgs = [dict(r) for r in c.execute(
+        "SELECT id, from_actor, to_actor, created FROM messages WHERE created>=? AND "
+        "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
+        (since, me, me))]
+    for row in privacy.readable_messages(c, privacy.actor(who), recent_msgs):
         touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created"])
-    for row in c.execute("SELECT * FROM tasks WHERE updated>=? AND "
-                         "((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%'))",
-                         (since, me, me)):
-        if not privacy.task_readable(c, who, dict(row)):
-            continue
+    visible = auth.task_sql(c, who)
+    for row in c.execute(
+            "SELECT id, owner, requester, updated FROM tasks WHERE updated>=? AND "
+            f"((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%')) AND ({visible})",
+            (since, me, me)):
         touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated"])
     waiting = {}
     for item in needs:
@@ -1385,10 +1386,16 @@ def recent_bots(c, auth, who, since, limit, needs):
         # to them, not what it is doing.
         status = (privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}) if access.get(slug, auth.FULL)["read"] else {}
         actor = H.bot_actor(slug)
-        mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
-                    "ORDER BY created DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
-        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
-                      "ORDER BY created DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+        # Newest readable line each way: a short recent window + one readable_messages pass, not an
+        # unbounded scan that called message_readable (and re-fetched) for every older row.
+        mine_rows = list(c.execute(
+            "SELECT * FROM messages WHERE from_actor=? AND to_actor=? ORDER BY created DESC LIMIT 40",
+            (me, actor)))
+        theirs_rows = list(c.execute(
+            "SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
+            "ORDER BY created DESC LIMIT 40", (actor, me)))
+        mine = next(iter(privacy.readable_messages(c, privacy.actor(who), mine_rows)), None)
+        theirs = next(iter(privacy.readable_messages(c, privacy.actor(who), theirs_rows)), None)
 
         conversation = next((m["conversation_id"] for m in sorted(filter(None, (mine, theirs)),
                              key=lambda m: m["created"], reverse=True) if m["conversation_id"]), None)
