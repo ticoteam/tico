@@ -809,7 +809,9 @@ def from_private(c, who, owner, parent):
 
 
 def _private_words(c, row):
+    criteria = H._json(row.get("acceptance_json"), []) or []
     return "\n".join([row.get("title") or "", row.get("body") or "", row.get("note") or "",
+                       *(str(item or "") for item in (criteria if isinstance(criteria, list) else [])),
                        *(m.get("body") or "" for m in H.task_comments(c, row["id"]))])
 
 

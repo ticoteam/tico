@@ -133,14 +133,19 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
 @pytest.mark.parametrize("words", [
     "Background: the vendor's intake form posts every upload to the shared bucket before the chat setting is read.",
     "Comment",
+    "Criteria",
 ])
 def test_words_copied_from_the_private_work_are_a_correction_naming_the_copy_check(api, under, words):
     row = private_work(api)
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:cpo", row["id"], "Note for ops: the bucket lifecycle rule deletes refused uploads only "
                                                  "after twenty four hours have passed.", wake=False)
+        c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (json.dumps(
+            ["The quarantine report lists every refused upload with its owner and the hour it was deleted"]), row["id"]))
     if words == "Comment":
         words = "The bucket lifecycle rule deletes refused uploads only after twenty four hours have passed, so check first."
+    elif words == "Criteria":
+        words = "Done when the quarantine report lists every refused upload with its owner and the hour it was deleted."
     attempt = run_on(api)
     correction(api, filed(row["id"] if under else None, body=words), attempt["token"], "copies 12 or more words")
 

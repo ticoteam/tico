@@ -131,7 +131,8 @@ def _pr_reason(c, row):
 
 def _parent_reason(c, row):
     parent = H.task(c, TR.parent_of(c, row["id"]) or "")
-    if parent and parent["status"] in ("done", "closed"):
+    # A company task filed from private work sits under a private parent: its state never goes to Decide.
+    if parent and not H.task_private(c, parent) and parent["status"] in ("done", "closed"):
         return f"Its parent task is {parent['status']}"
     return None
 

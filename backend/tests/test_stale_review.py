@@ -506,6 +506,11 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (ended, snoozed))
         found = {row["id"]: why for row, why in SR.candidates(c, H.now())}
     assert found[child] == "Its parent task is done"
+    # A company task under a private parent (a task filed from private work): the parent's state stays private.
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (parent,))
+        hidden = {row["id"]: why for row, why in SR.candidates(c, H.now())}
+    assert child not in hidden
     assert found[blocked] == "Everything it was blocked by is done"
     assert found[twin].startswith("Same title as an older open task of the same owner") and first not in found
     assert found[spaced].startswith("Same title as an older open task of the same owner")
