@@ -645,7 +645,79 @@ def guest_for(c, who, person, parent):
     return None
 
 
-def require_create(c, who, private, owner, parent, actor=None):
+# ----------------------------------------------------------------------------- a sealed subtask for another bot
+# A private task with no person on it could hand nothing to a bot outside its parties: every create from its runs was
+# refused, so a repair its owner found stranded (Dev 632). Its owning bot (or that bot's manager) may file one private
+# subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
+# or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
+# widen: the refusal names them and the route to them.
+SEALED_ROUTE = "ask them with `hub task question`, or have them file the subtask"
+COPIED_WORDS = 12
+
+
+def _person_on(row):
+    return next((row[k] for k in ("requester", "owner", "guest") if row.get(k) and H.is_human(row[k])), None)
+
+
+def _person_name(c, person):
+    return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
+
+
+def sealed_for(c, who, owner, parent):
+    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (the parent
+    and every other private task the run carries that `owner` cannot read), when that create is a sealed hand-off;
+    None when it is not one, so the create is judged as before. Problem when one of them, or a private task above it,
+    has a person on it: the words name them and the route to them."""
+    if not (parent and who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
+            and H.is_bot(owner or "") and owner != who.actor and H.task_private(c, parent)
+            and H.task_represents(c, who.actor, parent["owner"])):
+        return None
+    kept = {} if H.task_private_readable(c, owner, parent) else {parent["id"]: H.task(c, parent["id"]) or dict(parent)}
+    for tid in attempt_tasks(c, who.attempt_id):
+        row = _task(c, tid)
+        if row and H.task_private(c, row) and not H.task_private_readable(c, owner, row):
+            kept.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
+    from . import task_relations as TR
+    for row in kept.values():
+        if person := _person_on(row):
+            raise Problem("privacy", f"{_person_name(c, person)} is on this private task: {SEALED_ROUTE}", 403)
+        for above in TR.ancestors(c, row["id"]):
+            above = H.task(c, above)
+            if above and H.task_private(c, above) and (person := _person_on(above)):
+                raise Problem("privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}",
+                              403)
+    return list(kept.values()) or None
+
+
+def _copied_runs(text):
+    words = re.findall(r"\w+", str(text or "").lower())
+    return {tuple(words[i:i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
+
+
+def secret_shaped(text):
+    """Whether `text` holds a credential-shaped value, by the detectors that mask one in a refusal preview."""
+    from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
+    text = str(text or "")
+    return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
+            or any(_looks_secret(m.group(0)) for m in LONG.finditer(text)))
+
+
+def sealed_words(kept, title, body):
+    """Refuse a sealed subtask whose words carry what the other bot may not read: a secret-shaped value, or 12 or more
+    words in a row copied from a private task it is kept from. The refusal names the check, never the text; it is a
+    writing correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
+    text = f"{title or ''}\n{body or ''}"
+    if secret_shaped(text):
+        raise Problem("lint", "This subtask holds a secret-shaped value: take it out, and say only what the repair "
+                              "needs", 422)
+    runs = _copied_runs(text)
+    if runs and any(runs & _copied_runs(f"{r.get('title') or ''}\n{r.get('body') or ''}\n{r.get('note') or ''}")
+                    for r in kept):
+        raise Problem("lint", f"This subtask copies {COPIED_WORDS} or more words in a row from private work the other "
+                              "bot cannot read: say only what the repair needs, in your own words", 422)
+
+
+def require_create(c, who, private, owner, parent, actor=None, title=None, body=None):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
     Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None."""
@@ -654,7 +726,10 @@ def require_create(c, who, private, owner, parent, actor=None):
         raise Problem("privacy", "Private task work cannot create company-visible tasks", 403)
     guest = guest_for(c, who, owner, parent)
     if execution:
-        require_destination(c, who, owner, None, {}, guest=guest)
+        kept = None if guest else sealed_for(c, who, owner, parent)
+        if kept is not None:
+            sealed_words(kept, title, body)
+        require_destination(c, who, owner, None, {}, guest=guest, sealed={r["id"] for r in kept or ()})
         require_destination(c, who, actor or who.actor, None, {}, guest=guest)
     return guest
 
@@ -746,9 +821,10 @@ def tag_readable(c, who, row):
             any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
+def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
     """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
     write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+    `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
     (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
     ids = references(c, refs)
@@ -774,7 +850,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, guest) for actor in audience):
+        if all(_reads(c, actor, row, guest) for actor in audience if not (actor == to and row["id"] in sealed)):
             continue
         if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)

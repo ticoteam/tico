@@ -3476,7 +3476,10 @@ def create_app(settings=None):
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
-                                       actor=who.actor)
+                                       actor=who.actor, title=body.title, body=body.body)
+        # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
+        sealed = (not guest and privacy.private_execution(c, source)
+                  and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -3562,6 +3565,12 @@ def create_app(settings=None):
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if sealed:
+            # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
+            H._task_event(c, parent_id, who.actor, "handed", None, owner,
+                          f"Handed to {H.actor_id(owner)} in a private subtask")
+            H._task_event(c, row["id"], who.actor, "sealed", None, who.actor,
+                          f"Filed by {H.actor_id(who.actor)} from private work it does not share")
         joined = blocker_asks.record(c, who.actor, row, blocker_key, joins, asked_of) if blocker_key else None
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
