@@ -4061,6 +4061,9 @@ class Execution:
             if wait:
                 owner = 'BotOps' if wait['action'] == 'job.held' else 'Tico'
                 reason += ' ' + owner + ' owns recovery. ' + json.loads(wait['detail_json']).get('reason', '')
+            if readable and (limit := login_holds.fallback_reset_notice(c, row['attempt_id'])):
+                reason += f" Provider limit: {limit['notice']} Quota reset ~{limit['reset'][11:16]} UTC"
+                reason += f" on {limit['reset'][:10]}."
             jobs.append({'id':row['id'], 'attempt_id':row['attempt_id'], 'readable':readable,
                          'task':{'id':task['id'],'title':task['title'],'status':task['status'],'owner':task['owner'],
                                  'owner_name':owner_name(c, task['owner'])} if task and readable else None,

@@ -238,3 +238,56 @@ def test_fallbacks_own_named_reset_holds_only_that_login_and_is_visible(api, mon
     resumed = claim(api, machine, bot='ops')
     assert resumed and resumed['job_id'] == fallback['job_id']
     assert resumed['config']['primary_held'].startswith('2026-10-26T12:50:00')
+
+
+OBSERVED_LIMIT = "Model error: You've hit your session limit · resets 11:50am (UTC)"
+
+
+@pytest.mark.parametrize('writes', [False, True])
+@pytest.mark.parametrize('notice,named', [
+    (OBSERVED_LIMIT, True),
+    ("Model error: You've hit your session limit · resets soon", False),
+])
+def test_fallback_limit_reason_on_job_health_and_review(api, monkeypatch, writes, notice, named):
+    machine = two_bots(api, monkeypatch)
+    at(monkeypatch, '2026-10-26T10:53:00.000000Z', api)
+    post(api, 'chat/ops', {'text': 'Finish the queued work'})
+    first = claim(api, machine, bot='ops')
+    limit(api, machine, first, errors=('Usage limit',), limit_resets_at='2026-10-26T12:50:00Z')
+    at(monkeypatch, '2026-10-26T10:54:00.000000Z', api)
+    signed_in(api, machine, ['ops', 'finance'], ['codex'])
+    fallback = claim(api, machine, bot='ops')
+    post(api, f"attempts/{fallback['id']}/started", {'thread_id': 'fallback'}, machine['token'])
+    rows = [('status', {'tool_events': True})]
+    if writes:
+        rows.append(('tool', {'tool': 'mcp__hub__hub_webhook_send', 'status': 'started'}))
+    rows += [('error', {'error': notice, 'limit': True}),
+             ('diagnostic', {'interruption_complete': True})]
+    post(api, f"attempts/{fallback['id']}/events", {'events': [
+        {'seq': n, 'kind': kind, 'payload': payload} for n, (kind, payload) in enumerate(rows, 1)]}, machine['token'])
+    post(api, f"attempts/{fallback['id']}/complete", {
+        'outcome': 'interrupted' if writes else 'failed', 'last_seq': len(rows),
+        'limited': True, 'primary_held': True, 'fallback': 'codex', 'text': ''}, machine['token'])
+    assert job_state(api, fallback['job_id']) == ('uncertain' if writes else 'queued')
+    review = get(api, 'bots/ops/execution-review')['jobs']
+    if writes:
+        assert len(review) == 1
+        reason = review[0]['reason']
+        assert (notice in reason) == named
+        assert ('reset ~11:50 UTC' in reason) == named
+    else:
+        assert review == []
+        from backend import views
+        with api.app.state.store.read() as c:
+            job = views.conversation_execution(c, first['message']['conversation_id'], settings=api.app.state.store.settings)
+        assert job['state'] == 'queued'
+        assert ('resumes ~11:50 UTC' in job['label']) == named
+        assert ('resumes ~11:50 UTC' in health_detail(api, 'ops')) == named
+        if named:
+            assert claim(api, machine, bot='ops') is None
+            # Try now must clear the visible wait as well as release the login hold.
+            post(api, 'bots/ops/limit/retry', {})
+            with api.app.state.store.read() as c:
+                job = views.conversation_execution(c, first['message']['conversation_id'],
+                                                   settings=api.app.state.store.settings)
+            assert 'resumes ~11:50 UTC' not in job['label']
