@@ -616,6 +616,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
                                or parent and H.task_private(c, parent))
                 readable_by(c, person, private, parent)
+        # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
+        # withdrawn as soon as it is asked and the task does not wait on the person.
+        from . import ask_ingest
+        ingest = ask_ingest.preflight(store, app.state.judge, who, body.on, title,
+                                      "\n\n".join(filter(None, (question, body.why, body.body))),
+                                      kind="task_question")
         # A question the asking rules refuse stores no bytes: the write below refuses it first.
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
@@ -667,13 +673,22 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
             if topic:
                 ask["topic"] = topic
+            gate = None
             if found:
                 said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
             else:
+                # Judged against the plate before the question is on it.
+                gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
                 said = H.task_comment(c, who.actor, tid, question, ask=ask)
-                H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
+                if gate:
+                    ask_ingest.record(c, ingest, gate, tid, said["id"])
+                if gate and gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, tid, said["id"])
+                else:
+                    H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
             return {"task": H.task(c, tid), "folded": bool(found),
-                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
+                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"]),
+                    **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         app.state.file_metadata.wake.set()
         return result

@@ -327,9 +327,12 @@ html.demo .dask{top:var(--demo-h)}
       if (again) { again = false; void read(); }
     };
     // The page's live events (ui/app/live.js): a change to this conversation reads its snapshot again. Without
-    // them, a poll.
+    // them, a poll. A hidden tab does not hit the snapshot endpoint every 2.5s.
     const live = window.liveEvents;
-    if (!live || !live.available()) { if (!poll) poll = setInterval(read, 2500); return; }
+    if (!live || !live.available()) {
+      if (!poll) poll = setInterval(() => { if (!document.hidden) void read(); }, 2500);
+      return;
+    }
     const mine = d => d.conversation_id === cid;
     let timer = 0;
     const soon = () => { clearTimeout(timer); timer = setTimeout(read, 150); };

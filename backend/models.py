@@ -220,6 +220,8 @@ class TaskCreate(Contract):
     # A bot's own subtask run on another model, `<runtime>[:<model>]`, as a review or a check (backend/check_models.py).
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
+    # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
+    from_private: StrictBool = False
 
 
 class NoteCreate(Contract):

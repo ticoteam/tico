@@ -108,8 +108,9 @@ def restored(c, aid):
 
 
 def metadata(c, aid):
-    row = c.execute('SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at '
-                    'FROM attempt_diagnostics WHERE attempt_id=?', (aid,)).fetchone()
+    from .read_cache import one
+    row = one(c, 'SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at '
+              'FROM attempt_diagnostics WHERE attempt_id=?', (aid,))
     return {'end_reason': row['end_reason'] if row else None, 'ended_at': row['ended_at'] if row else None,
             'last_event': row['last_event'] if row else None, 'last_event_at': row['last_event_at'] if row else None,
             'last_heartbeat_at': row['heartbeat_at'] if row else None,

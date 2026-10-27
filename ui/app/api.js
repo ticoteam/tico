@@ -24,6 +24,8 @@ const GET_INFLIGHT = new Map();
 // What startup asks for ahead of the page that will need it (getPrefetch): read once, within a few seconds.
 const GET_PREFETCHED = new Map();
 const getForget = () => { GET_INFLIGHT.clear(); GET_PREFETCHED.clear(); };
+// A read that must come from the server's rows, not a copy kept here: its tag goes, so no 304 can answer it.
+const getForgetTagged = test => { for (const p of [...GET_TAGGED.keys()]) if (test(p)) GET_TAGGED.delete(p); };
 const getRaw = p => {
   const kept = GET_TAGGED.get(p);
   return fetch(API + p, {cache:'no-store', headers: kept ? {'If-None-Match': kept.tag} : {}}).then(async r => {

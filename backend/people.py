@@ -87,6 +87,31 @@ def _person(row):
             "add_people": row.get("add_people") if isinstance(row.get("add_people"), bool) else None}
 
 
+def people_rows(doc, owner=None):
+    """Normalised people only (no groups/teams). Used where callers need headcount, not the chart."""
+    doc = doc if isinstance(doc, dict) else {}
+    owner = owner if isinstance(owner, dict) else {}
+    people, seen = [], set()
+    for row in doc.get("people") or []:
+        person = _person(row)
+        if person and person["id"] not in seen:
+            seen.add(person["id"])
+            people.append(person)
+    owner_id = _clean(owner.get("id")) or _clean(owner.get("email")).split("@")[0]
+    default = _clean(doc.get("default_user")) or owner_id or (people[0]["id"] if people else "")
+    if default and not any(p["id"] == default for p in people):
+        people.insert(0, {**DEFAULT_PERSON, "id": default, "name": default.title(),
+                          "email": _clean(owner.get("email")).lower() if default == owner_id else "",
+                          "reports_to": "", "inbox_bot": None})
+    return people
+
+
+def signed_in_count(doc, owner=None):
+    """How many roster people count toward company turn levels: email set, may sign in, not hidden or left."""
+    return sum(1 for p in people_rows(doc, owner)
+               if p["email"] and not p["hidden"] and not p["directory_left"] and p["sign_in"])
+
+
 def load(doc, owner=None):
     """The roster, normalised.
 
@@ -96,12 +121,7 @@ def load(doc, owner=None):
     """
     doc = doc if isinstance(doc, dict) else {}
     owner = owner if isinstance(owner, dict) else {}
-    people, seen = [], set()
-    for row in doc.get("people") or []:
-        person = _person(row)
-        if person and person["id"] not in seen:
-            seen.add(person["id"])
-            people.append(person)
+    people = people_rows(doc, owner)
     roots = {}
     for name, body in (doc.get("teams") or {}).items():
         root = _clean((body or {}).get("root")) if isinstance(body, dict) else _clean(body)
@@ -109,10 +129,7 @@ def load(doc, owner=None):
             roots[_clean(name)] = root
     owner_id = _clean(owner.get("id")) or _clean(owner.get("email")).split("@")[0]
     default = _clean(doc.get("default_user")) or owner_id or (people[0]["id"] if people else "")
-    if default and not any(p["id"] == default for p in people):
-        people.insert(0, {**DEFAULT_PERSON, "id": default, "name": default.title(),
-                          "email": _clean(owner.get("email")).lower() if default == owner_id else "",
-                          "reports_to": "", "inbox_bot": None})
+    # people_rows already inserted a missing default_user; keep the same default id for groups below.
     groups, gseen = {}, set()
     for name, body in (doc.get("org_groups") or {}).items():
         gid = _clean(name)

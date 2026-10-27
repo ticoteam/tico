@@ -805,6 +805,8 @@ class Store:
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
             c.executescript(_stall_triage.SCHEMA)
+            from . import ask_ingest as _ask_ingest
+            c.executescript(_ask_ingest.SCHEMA)
             from . import rule_suggestions as _rule_suggestions
             c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines
@@ -1526,7 +1528,12 @@ class Store:
                                    ("bot_file_versions_poster",
                                     "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
                                    ("bot_file_versions_thumb",
-                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL")):
+                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
+                                   # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
+                                   # but runs before cloud migration 57 adds tasks.private on an upgraded database.
+                                   ("tasks_private_parties",
+                                    "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   ("conversations_id_task", "conversations(id, task_id)")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.

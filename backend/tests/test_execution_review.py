@@ -332,6 +332,35 @@ def test_a_turn_that_failed_before_doing_anything_goes_back_in_the_queue(api):
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
 
+def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
+    """A host that streams almost nothing can still have written to the hub, reported usage and left text.
+    Treating that as no-effect would retry work that may already have pushed, sent or paid."""
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-positive'}, machine['token'])
+    post(api, 'messages', {'to': 'ana', 'text': 'Synthetic effect already delivered'}, attempt['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT writes FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] > 0
+    post(api, f"attempts/{attempt['id']}/complete",
+         {'outcome': 'failed', 'last_seq': 0, 'text': 'Synthetic partial output',
+          'usage': {'output_tokens': 100_000, 'model': 'gpt-6-sol', 'runtime': 'codex'}}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert job_state(api, attempt['job_id']) == 'uncertain'
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.no_effect_retry' AND target=?",
+                         (attempt['id'],)).fetchone()[0] == 0
+    assert get(api, 'bots/finance/execution-review')['jobs'][0]['id'] == attempt['job_id']
+
+
+def test_a_sparse_failure_billed_only_for_its_prompt_still_goes_back_in_the_queue(api):
+    """A provider bills the prompt and then errors: input tokens alone are not evidence the turn did anything."""
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-billed'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete",
+         {'outcome': 'failed', 'last_seq': 0, 'text': '', 'tokens_in': 9_000,
+          'usage': {'input_tokens': 9_000, 'cached_tokens': 2_000, 'model': 'gpt-6-sol', 'runtime': 'codex'}},
+         machine['token'])
+    assert job_state(api, attempt['job_id']) == 'queued'
+
+
 def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     """A run that may have acted is not run again on its own: it waits, named, for its operator or BotOps.
     Their resume runs it once more; a second stop is dismissed and BotOps finds out why."""
@@ -1348,6 +1377,27 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     ben = stopped_issue(api, 'ben-test')
     assert 'saved 1 stopped run for later' in ben['title'] and ben['needs_person'] is False
     assert not ben.get('held_back') and 'Ana only' not in ben['detail']
+    # Each count checks its rows' privacy in one batched pass, the one Ben may not read included.
+    from backend import execution
+    from backend import task_privacy as privacy
+    store, calls, real = api.app.state.store, [], privacy.readable_messages
+
+    def counted(c, actor, messages):
+        rows = list(messages)
+        calls.append(len(rows))
+        return real(c, actor, rows)
+
+    seen = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(privacy, 'readable_messages', counted)
+        for token in ('ana-test', 'ben-test'):
+            who = store.settings.test_identities[token]
+            calls.clear()
+            with store.read_transaction() as c:
+                seen[token] = (execution.held_back(c, who, api.app.state.auth, 'ops')[0],
+                               execution.left_by_keeper(c, who, 'ops'), execution.unreviewed(c, who, 'ops')[0])
+            assert len(calls) == 3 and calls[:2] == [1, 1], calls
+    assert seen['ana-test'][:2] == (1, 1) and seen['ben-test'][:2] == (0, 0), seen
 
 
 def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(api):

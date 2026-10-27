@@ -59,15 +59,41 @@ def weekly_key(runner, profile, runtime):
     return 'subscription-weekly:' + json.dumps([runner, profile, runtime], separators=(',', ':'))
 
 
-def reported_runtimes(c, runner, profile, raw):
+def subscription_meta(c):
+    """{key: dict} for every subscription* registry row in one pass, once per read snapshot (Operations profiles and
+    renamed logins). A key range, not LIKE, so the primary key is used. Callers only read it."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is not None and "subscriptions.meta" in values:
+        return values["subscriptions.meta"]
+    out = {}
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key>='subscription' "
+                         "AND key<'subscriptioo'"):
+        try:
+            value = json.loads(row['value_json'] or '{}')
+        except ValueError:
+            value = {}
+        out[row['key']] = value if isinstance(value, dict) else {}
+    if values is not None:
+        values["subscriptions.meta"] = out
+    return out
+
+
+def reported_runtimes(c, runner, profile, raw, meta=None):
     from .repositories import metadata
     from . import subscription_refresh as refresh
+
+    def lookup(key):
+        if meta is not None:
+            return meta.get(key) or {}
+        return metadata(c, key)
+
     runtimes = json.loads(raw or '{}')
-    cutoff = refresh.signin_after(c, runner, profile)
+    cutoff = lookup(refresh.signin_key(runner, profile))
     for runtime, state in runtimes.items():
         reported = weekly_snapshot(state.get('weekly'))
-        manual = weekly_snapshot(metadata(c, weekly_key(runner, profile, runtime)))
-        refreshed = metadata(c, refresh.key(runner, profile, runtime))
+        manual = weekly_snapshot(lookup(weekly_key(runner, profile, runtime)))
+        refreshed = lookup(refresh.key(runner, profile, runtime))
         direct = weekly_snapshot(refreshed.get('weekly'))
         if refreshed:
             state['refresh'] = refresh.view(refreshed)
@@ -113,6 +139,25 @@ def computer_profiles(c, runner, accounts):
         rows.append({'name': row['profile'], **identity(c, runner['id'], row['profile']),
                      'runtimes': runtimes if accounts else without_accounts(runtimes)})
     return rows
+
+
+def profiles_by_runner(c):
+    """{runner_id: computer_profiles(... accounts=True)} for every computer in one pass (Operations listing).
+
+    Loads computer_profiles once, shares subscription* registry metadata, and resolves display names from that map.
+    """
+    from .subscription_identity import connection_id
+    meta = subscription_meta(c)
+    out = {}
+    for row in c.execute('SELECT * FROM computer_profiles ORDER BY profile'):
+        rid, profile = row['runner_id'], row['profile']
+        sid = connection_id(rid, profile)
+        named = meta.get(sid) or {}
+        runtimes = reported_runtimes(c, rid, profile, row['runtimes_json'], meta=meta)
+        out.setdefault(rid, []).append({
+            'name': profile, 'id': sid, 'display_name': named.get('display_name') or profile,
+            'runtimes': runtimes})
+    return out
 
 
 def context(c, settings=None):
@@ -254,6 +299,98 @@ def connections(c, runner_id, settings, ctx=None):
         line.pop('computer', None)
         rows.append({'bot': row['bot'], **line})
     return rows
+
+
+def connections_by_runner(c, settings, ctx=None):
+    """{runner_id: connections(...)} for every computer. One assignment/config pass instead of per-bot lookups
+    (Operations listing). Identity display names are also read once for every profile that appears."""
+    from . import providers
+    from .read_cache import configs as load_configs
+    from .shared_bots import follow, source_of
+    from .subscription_identity import connection_id
+
+    ctx = ctx if ctx is not None else context(c, settings)
+    placed, runners = {}, {}
+    for row in c.execute("SELECT a.runner_id, a.bot, r.id, r.label, r.readiness_json, r.capabilities_json, "
+                         "r.revoked_at FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "JOIN runners r ON r.id=a.runner_id "
+                         "WHERE b.state<>'archived' ORDER BY a.bot"):
+        placed.setdefault(row["runner_id"], []).append(row["bot"])
+        runners.setdefault(row["runner_id"], row)
+    bots = [bot for group in placed.values() for bot in group]
+    config_rows = {row["bot"]: row for row in load_configs(c, bots)} if bots else {}
+    # A branch follows its original's config, and the original need not be placed anywhere.
+    sources = {source_of(json.loads(row["config_json"] or "{}")) for row in config_rows.values()} - {""}
+    if missing := sorted(sources - set(config_rows)):
+        config_rows.update({row["bot"]: row for row in load_configs(c, missing)})
+
+    def rows_of(slug):
+        return config_rows.get(slug)
+
+    # First pass: build lines without identity, collect connection ids that need a display name.
+    built, needed = {}, set()
+    for rid, bot_list in placed.items():
+        runner = runners[rid]
+        # A revoked computer is no bot's connection: its bots are listed as on none, as bot_subscription does.
+        computer = None if runner["revoked_at"] else {"runner_id": runner["id"], "label": runner["label"]}
+        report = readiness_document(runner["readiness_json"])
+        items = []
+        for bot in bot_list:
+            row = config_rows.get(bot)
+            config = providers.fill(ctx["providers"], follow(
+                c, bot, json.loads(row["config_json"] or "{}") if row else {}, rows=rows_of))
+            runtime = config.get("runtime")
+            line = {"profile": None, "source": "computer", "computer": computer,
+                    "runtime": runtime or "", "harness": config.get("harness") or ""}
+            if computer is None:
+                line.update(computer=None, signed_in=None, problem="")
+                items.append((bot, line))
+                continue
+            bot_report = report.get("bots", {}).get(bot, {})
+            line["profile"] = bot_report.get("profile") or None
+            if problem := login_upgrade(runner, report, bot=bot):
+                line.update(signed_in=None, problem=problem)
+            elif bot_report.get("data_problem"):
+                line.update(signed_in=None, problem=bot_report["data_problem"],
+                            detail={"runtime": runtime})
+            else:
+                state = bot_report.get("sign_in") or report.get("runtimes", {}).get(runtime, {}).get("authenticated")
+                signed_in = True if state == "ready" else False if state in ("missing", "failed", "rejected") else None
+                from .readiness import login_warning
+                if warning := login_warning(report, runtime, config.get("harness") or ""):
+                    line["warning"] = warning
+                line.update(signed_in=signed_in, problem="")
+            if line["profile"]:
+                needed.add(connection_id(rid, line["profile"]))
+            items.append((bot, line))
+        built[rid] = items
+
+    names = {}
+    if needed:
+        for start in range(0, len(needed), 500):
+            part = list(needed)[start:start + 500]
+            for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key IN ("
+                                 + ",".join("?" * len(part)) + ")", part):
+                try:
+                    value = json.loads(row["value_json"] or "{}")
+                except ValueError:
+                    value = {}
+                if isinstance(value, dict) and value.get("display_name"):
+                    names[row["key"]] = value["display_name"]
+
+    out = {}
+    for rid, items in built.items():
+        rows = []
+        for bot, line in items:
+            profile = line.get("profile")
+            if profile:
+                sid = connection_id(rid, profile)
+                line["id"] = sid
+                line["display_name"] = names.get(sid) or profile
+            line.pop("computer", None)
+            rows.append({"bot": bot, **line})
+        out[rid] = rows
+    return out
 
 
 def install(app, store, auth, mutate, settings, computer_rows):

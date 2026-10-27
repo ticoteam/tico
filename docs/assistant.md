@@ -69,12 +69,16 @@ off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}
 comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
 card again. An assistant run's credential works only while its lease is live.
 
-**What you ask for in your chat, it does.** When you tell it to close, finish, decline, reopen, reassign, comment on or
+**What you ask for in your chat, it does.** When you tell it to change an everyday setting you may change (a direct
+one in the [settings catalogue](permissions.md#the-settings-catalogue): release times, a bot's model, a tag), it
+changes it and says the new value; a confirm one (team rules, spend, people) is a Confirm card in your chat, and a
+person-only one gets the reason and the link. When you tell it to close, finish, decline, reopen, reassign, comment on or
 link a task ("close those three", "mark the launch done"), decline an approval put to you ("decline the old publish
 batches, they're from before the reset") or answer a bot's question to you in your words ("tell Ops Oct 8"), it does it
 as you, with no card. The write cites your
 message (`X-Tico-On-Behalf-Of`: the message's id, or `turn` for the one that started the run; `hub task
-close|update|comment|link|label`, `hub approval decline` and `hub question answer`, each `--on-behalf-of turn`), and the
+close|update|comment|link|label`, `hub approval decline`, `hub question answer` and `hub settings set` for a direct
+setting, each `--on-behalf-of turn`), and the
 server checks that message: yours, typed in your own
 Assistant chat (not written by a bot or the Assistant, not another chat), and no more than 30 minutes old. Otherwise it
 answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do

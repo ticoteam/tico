@@ -424,3 +424,90 @@ def test_a_reviewer_whose_last_run_fell_back_to_the_builders_company_is_passed_o
                   "VALUES('t1',0,'claude-haiku-5-5','anthropic')")
     assert move(api, task).status_code == 200
     assert [k["owner"] for k in checks(api, task)] == ["bot:rev-b"]
+
+
+# Dev 646: a QA bot on the builder's model company declines the build, so the QA pool never gives it the check.
+def qa_ticket(api, built=True):
+    """A Dev ticket on the full board, its PR built by cpo (configured on Anthropic), ready to enter In QA. `built`
+    adds the builder's run on Anthropic; without it the ticket's only run has no usage record (provenance unknown)."""
+    from backend import rules
+    from backend.tests.test_github import PR, hook, post, pr_event
+    from backend.tests.test_verdict_moves import STEPS
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        rules.seed_dev(c)
+    task = post(api, "tasks", {"owner": "cpo", "title": "Improve messages", "body": "Build messages.",
+                               "type": typ["id"], "step": "In Progress", "links": [PR]})
+    hook(api, "pull_request", pr_event("opened", head={"sha": HEAD}))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET note=? WHERE id=?", (RECEIPT, task["id"]))
+        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+                  ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
+        if built:
+            c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
+                      "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+    return get(api, "tasks/" + task["id"])["task"]
+
+
+def to_qa(api, task):
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+
+
+def test_qa_is_never_given_to_a_qa_bot_on_the_builders_company_and_waits_for_another(api):
+    team(api)
+    task = qa_ticket(api)
+    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
+    held = busy(api, "rev-a")
+    to_qa(api, task)
+    assert checks(api, task) == [], "rev-c runs on Claude like the builder: it would decline, so it is not asked"
+    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
+    assert wait["label"] == "Waiting for QA" and "limit" in wait["reason"] and "model company" in wait["reason"]
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
+    [check] = checks(api, task)
+    assert check["owner"] == "bot:rev-a" and check["title"] == "QA: PR #412"
+
+
+def test_a_pool_of_only_builder_company_qa_bots_waits_rather_than_asking_one(api):
+    team(api)
+    task = qa_ticket(api)
+    set_pool(api, task, "In QA", ["rev-c"])
+    to_qa(api, task)
+    assert checks(api, task) == []
+    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
+    assert wait["reason"] == "every QA bot in the pool runs on the builder's model company"
+    with api.app.state.store.transaction() as c:
+        assert check_pools.drain(c) == [], "a sweep gives it to nobody either"
+
+
+def test_a_qa_bot_configured_elsewhere_whose_recent_runs_were_claude_is_not_asked(api):
+    """qa-xai's shape: named for another company, but its runs are on Claude, and it declines Claude-built PRs."""
+    team(api)
+    task = qa_ticket(api)
+    set_pool(api, task, "In QA", ["rev-a", "rev-b"], limit=1)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('qa-run','rev-a',?,?)", (H.now(), H.now()))
+        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
+                  "VALUES('qa-run',0,'claude-haiku-5-5','anthropic')")
+    busy(api, "rev-b")
+    to_qa(api, task)
+    assert checks(api, task) == [], "rev-a ran on Claude and rev-b is at its limit"
+
+
+def test_unknown_builder_provenance_still_keeps_qa_off_the_builders_configured_company(api):
+    """Dev 627: the builder's ticket run had no usage record, so provenance was unknown, and every QA bot looked alike."""
+    team(api)
+    task = qa_ticket(api, built=False)
+    set_pool(api, task, "In QA", ["rev-c", "rev-a"])
+    to_qa(api, task)
+    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
+
+
+def test_reviews_still_take_a_same_company_reviewer_when_none_other_is_free(api):
+    team(api)
+    task = qa_ticket(api)
+    set_pool(api, task, "Review 1", ["rev-c"])
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", task["id"], step="Review 1")
+    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-c"], "family is a preference for reviews"

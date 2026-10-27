@@ -39,7 +39,7 @@ EMPTY = (
     "task_milestone_waits", "milestones",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
-    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",
+    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     # runner and bot sessions
@@ -77,7 +77,7 @@ KEEP = frozenset((
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_task_tabs", "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_actions",
-    "ceo_merges", "changes", "chat_goals",
+    "ask_ingest_items", "ask_ingest_settings", "ceo_merges", "changes", "chat_goals",
     "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",

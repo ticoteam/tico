@@ -248,11 +248,11 @@ class Scheduler:
             from . import org_turns
             org_turns.observe(c, self.store.settings, detailed=False)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
+        # Fleet classification for the Health finding runs on a read connection between two short writes, so claim
+        # renewals and events are not parked behind every queued bot's refusal check (TK / #1654 residual).
         with SR.recording(self.store, "turn_fixer", failures) as run:
             from . import turn_fixer
-            with locked("turn_fixer") as c:
-                freed, incident = turn_fixer.run(c, self.execution, self.store.settings,
-                                                 self.execution.auth.owner_id(c) if self.execution.auth else '')
+            freed, incident = turn_fixer.run_split(self.execution, self.store.settings, locked, self.store.read)
             run.did(turn_fixer.words(freed, incident), quiet=not freed)
         with self.store.read() as c:
             from . import start_places
@@ -717,6 +717,13 @@ class Scheduler:
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at
+            try:
+                # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
+                from . import task_holds
+                with self.store.transaction() as c:
+                    task_holds.backfill(c, stamp(at))
+            except Exception as exc:
+                failures.append({"task_holds_backfill": type(exc).__name__})
             with SR.recording(self.store, "waiting_checks") as run:
                 with self.store.transaction() as c:
                     moved = H.sweep_stranded(c, stamp(at))

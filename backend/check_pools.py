@@ -6,8 +6,9 @@ When a ticket enters a step with a pool and has no open check there for its pull
 (`Review 1: PR #n`, the head recorded as any check's is: review_gate.remember_heads) and gives it to the least busy
 eligible member: other model company first, then fewest open checks, then longest idle. Eligible means active and
 online, not paused or held, under the step's limit of open checks, and on a later review step not the bot of an
-earlier one (Review 2 is never Review 1's bot). Model company
-is a preference, never a requirement. The
+earlier one (Review 2 is never Review 1's bot). For a review, model company
+is a preference, never a requirement. A QA bot known to run on a model company the builder builds on is never given
+the ticket's QA: it declines the build, so the check waits for a QA bot of another company (Dev 646). The
 check is filed as the ticket's owner would file it, so the gate, the one-check-per-head rule, the reviewer's wake and
 the verdict's way back to the builder are the ones a builder's own request gets.
 
@@ -231,9 +232,10 @@ def maker(c, slug):
 RECENT_TURNS = 3
 
 
-def makers(c, slug):
+def makers(c, slug, known_only=False):
     """Every model company a checker may run on: its own model, and what its last few runs actually ran on (a bot whose
-    model is not signed in runs on its fallback, which is the company that would do the check)."""
+    model is not signed in runs on its fallback, which is the company that would do the check). A run with an unknown
+    segment makes the answer empty, or with `known_only` adds nothing, leaving what is known."""
     from .usage_records import ran_on
     turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
                                      (slug, RECENT_TURNS))]
@@ -241,10 +243,19 @@ def makers(c, slug):
     found = set()
     for run in recent:
         segments = run["segments"]
-        if not segments or any(not segment.get("family") for segment in segments):
+        if not known_only and (not segments or any(not segment.get("family") for segment in segments)):
             return set()
-        found.update(segment["family"] for segment in segments)
+        found.update(segment["family"] for segment in segments if segment.get("family"))
     return (found | {maker(c, slug)}) - {""}
+
+
+def builder_makers(c, ticket):
+    """The model companies the ticket's builder is known to build on: what its runs on the ticket ran on, and its
+    configured model's, so a run with no usage record leaves the rest known."""
+    from .check_independence import _executed
+    built, _ = _executed(c, ticket["id"])
+    owner = ticket.get("owner") or ""
+    return (set(built) | ({maker(c, H.actor_id(owner))} if H.is_bot(owner) else set())) - {""}
 
 
 def candidate_details(c, slugs):
@@ -301,12 +312,18 @@ def _earlier_reviewers(c, ticket, step):
 
 def ranked(c, ticket, step, slugs, limit, exclude=()):
     """(free members best first, why none is) for this ticket's check at `step`. Best is fewest open checks, then the
-    longest idle (no turn yet counts as longest), then by name."""
+    longest idle (no turn yet counts as longest), then by name. A QA bot known to run on a model company the builder
+    builds on is never free for that ticket: it declines the build (Dev 646), so the check waits for another QA bot."""
+    from . import step_flow
     from .check_independence import assess
     excluded = set(exclude) | _earlier_reviewers(c, ticket, step)
+    builder = builder_makers(c, ticket) if step_flow.check_kind(step) == "qa" else set()
     free, why = [], set()
     for slug in slugs:
         if slug in excluded or "bot:" + slug == ticket["owner"]:
+            continue
+        if builder and makers(c, slug, known_only=True) & builder:
+            why.add("family")
             continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
@@ -326,10 +343,14 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         reason = "every reviewer in the pool is at its limit of open checks"
     elif "offline" in why:
         reason = "no reviewer in the pool is online"
+    elif "family" in why:
+        reason = "every QA bot in the pool runs on the builder's model company"
     elif slugs:
         reason = "no reviewer in the pool is eligible for this check"
     else:
         reason = "the step's pool has no reviewers"
+    if "family" in why and ("busy" in why or "offline" in why):
+        reason += "; the rest run on the builder's model company"
     return [], reason
 
 

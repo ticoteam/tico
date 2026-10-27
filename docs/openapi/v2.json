@@ -23906,6 +23906,12 @@
               "$ref": "#/components/schemas/RepositoryGrant"
             }
           },
+          "all_repos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TickedRepository"
+            }
+          },
           "effective": {
             "type": "array",
             "items": {
@@ -23915,6 +23921,7 @@
         },
         "required": [
           "all_access",
+          "all_repos",
           "chosen",
           "effective",
           "mode"
@@ -28180,6 +28187,17 @@
               }
             ],
             "title": "Run Workflows"
+          },
+          "edit_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflows"
           }
         },
         "additionalProperties": false,
@@ -32270,6 +32288,20 @@
               }
             ],
             "title": "Chosen"
+          },
+          "all_repos": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TickedRepo"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "All Repos"
           }
         },
         "additionalProperties": false,
@@ -32463,10 +32495,15 @@
               "read",
               "write"
             ]
+          },
+          "run_workflows": {
+            "type": "boolean"
+          },
+          "edit_workflows": {
+            "type": "boolean"
           }
         },
         "required": [
-          "access",
           "full_name"
         ],
         "additionalProperties": true
@@ -35909,6 +35946,11 @@
               }
             ],
             "title": "Check Role"
+          },
+          "from_private": {
+            "type": "boolean",
+            "title": "From Private",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -37366,6 +37408,60 @@
         "type": "object",
         "title": "TeamBudgets",
         "description": "The team defaults for bots with no budget of their own. Fields left out stay as they are; 0 is no limit."
+      },
+      "TickedRepo": {
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "run_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Workflows"
+          },
+          "edit_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "full_name"
+        ],
+        "title": "TickedRepo"
+      },
+      "TickedRepository": {
+        "type": "object",
+        "properties": {
+          "full_name": {
+            "type": "string"
+          },
+          "run_workflows": {
+            "type": "boolean"
+          },
+          "edit_workflows": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full_name"
+        ],
+        "additionalProperties": true
       },
       "Token": {
         "type": "object",

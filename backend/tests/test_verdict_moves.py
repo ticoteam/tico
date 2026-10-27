@@ -521,3 +521,168 @@ def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clea
         assert not any(e["field"] in ("verdict_wait", "verdict_move") or "gave changes" in (e["note"] or "")
                        for e in history), history
     assert step(api, task) == "Review 1"
+
+
+# Dev 646: a pass at the head stalled In QA while a suite GitHub queued for the head never started (zero check runs).
+STUCK = 109731401006
+
+
+def _github(api, monkeypatch, suites, runs, statuses=()):
+    """A configured GitHub App whose commit lists answer with `suites`, `runs` and `statuses` for the head."""
+    from types import SimpleNamespace
+    from backend import github as G
+    service = api.app.state.github_app
+    with service.store.transaction() as c:
+        c.execute("INSERT INTO repositories(full_name,reachable,enabled,added_by,updated) VALUES(?,1,1,?,?)",
+                  ("ticoteam/tico", "human:ana", H.now()))
+    monkeypatch.setattr(service, "row", lambda c=None: {"slug": "test-app", "org": "ticoteam"})
+    monkeypatch.setattr(service, "mint", lambda *args, **kw: ("test-token", "later"))
+    monkeypatch.setattr(G, "_pending_reads", {})
+    lists = {"/check-suites": ("check_suites", suites), "/check-runs": ("check_runs", runs),
+             "/status": ("statuses", list(statuses))}
+    read = []
+    def call(method, path, **kw):
+        read.append(path)
+        for end, (field, rows) in lists.items():
+            if path.endswith(f"/commits/{HEAD}{end}"):
+                return SimpleNamespace(status_code=200, json=lambda field=field, rows=rows: {field: rows})
+        if path.endswith("/pulls/412"):
+            return SimpleNamespace(status_code=200, json=lambda: {"state": "open", "head": {"sha": HEAD}})
+        return SimpleNamespace(status_code=404, json=lambda: {})
+    monkeypatch.setattr(service, "_call", call)
+    return service, read
+
+
+def _suite_row(id, slug, status, conclusion=None, runs=0, minutes_ago=60):
+    return {"id": id, "status": status, "conclusion": conclusion, "app": {"slug": slug},
+            "latest_check_runs_count": runs, "created_at": H.shift(H.now(), minutes=-minutes_ago)}
+
+
+def _quiet(api, task, minutes=20):
+    """No word from GitHub on the link for `minutes`."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET updated=? WHERE task_id=? AND kind='pr'", (H.shift(H.now(), minutes=-minutes),
+                                                                                   task["id"]))
+
+
+def _link(api, task):
+    with api.app.state.store.read() as c:
+        return next(l for l in H.task_links(c, task["id"]) if l["kind"] == "pr")
+
+
+def _passed_at_head_behind_a_stuck_suite(api):
+    """Dev 627's shape: green Actions, a Tico App suite queued for the head and never run, a QA check closed with no
+    verdict at the head, then a pass at the head."""
+    task = ticket(api, step="In QA")
+    _suite(api, "github-actions", "completed", "success", sha=HEAD, id=1)
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
+    sibling = check(api, task, "QA: PR #412")
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, sibling["id"], note="No verdict: same family as the builder.")
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "pending"
+    assert step(api, task) == "In QA"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"], "CI is not green yet"
+    return task
+
+
+GREEN_RUNS = [{"name": "tests", "status": "completed", "conclusion": "success"},
+              {"name": "docs", "status": "completed", "conclusion": "skipped"}]
+
+
+def test_a_pass_at_head_behind_a_suite_that_never_started_wakes_the_merge_on_the_next_sweep(api, monkeypatch):
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "queued")], GREEN_RUNS)
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
+    link = _link(api, task)
+    assert link["checks"] == "passing"
+    assert not any(k.startswith("suite:tico-team-bots") for k in H._json(link["detail_json"], {})["checks"])
+    merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD and "--match-head-commit " + HEAD in merges[0]["body"]
+    assert step(api, task) == "In QA", "Tico does not merge; the builder does"
+    # Nothing is pending any more, so the next pass reads nothing and wakes nobody again.
+    assert G.refresh_pending_checks(service) == []
+    assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1
+
+
+def test_a_task_read_rebuilds_pending_checks_from_github(api, monkeypatch):
+    import threading
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "queued")], GREEN_RUNS)
+    G.refresh_task_prs(service, task["id"])
+    for worker in threading.enumerate():
+        if worker.name == "tico-pr-refresh":
+            worker.join(5)
+    assert _link(api, task)["checks"] == "passing"
+    assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
+
+
+@pytest.mark.parametrize("suites,runs", [
+    # GitHub has just queued the suite; its runs may still come.
+    ([_suite_row(STUCK, "tico-team-bots", "queued", minutes_ago=2)], GREEN_RUNS),
+    # A suite with runs is going until GitHub says it finished.
+    ([_suite_row(STUCK, "tico-team-bots", "in_progress", runs=1)], GREEN_RUNS),
+    # A run still going.
+    ([], GREEN_RUNS + [{"name": "e2e", "status": "in_progress", "conclusion": None}]),
+])
+def test_checks_still_going_on_github_stay_pending_and_wake_nobody(api, monkeypatch, suites, runs):
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2), *suites], runs)
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == []
+    assert _link(api, task)["checks"] == "pending"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_link_with_recent_word_from_github_is_left_to_its_webhooks(api, monkeypatch):
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, read = _github(api, monkeypatch, [_suite_row(STUCK, "tico-team-bots", "queued")], GREEN_RUNS)
+    assert G.refresh_pending_checks(service) == [] and read == []
+    assert _link(api, task)["checks"] == "pending"
+
+
+def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, H.shift(H.now(), hours=3)) == [task["id"]]
+        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='round_skipped'",
+                         (task["id"],)).fetchone()[0]
+    assert "no usable verdict" not in note and f"pass at head {HEAD[:12]}" in note, note
+
+
+def test_a_finished_suite_with_no_check_run_keeps_its_failure(api, monkeypatch):
+    """Only a suite still waiting to start is left out: one GitHub finished as failed, runs or none, still fails."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "completed", "failure")], GREEN_RUNS)
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
+    assert _link(api, task)["checks"] == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):
+    """The read began before a failed suite's webhook landed: its older green must not replace the failure."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "queued")], GREEN_RUNS)
+    _quiet(api, task)
+    read = service._call
+    def webhook_mid_read(method, path, **kw):
+        if path.endswith("/check-runs"):
+            _suite(api, "lint", "completed", "failure", sha=HEAD, id=7)
+        return read(method, path, **kw)
+    monkeypatch.setattr(service, "_call", webhook_mid_read)
+    assert G.refresh_pending_checks(service) == []
+    link = _link(api, task)
+    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"].get("suite:lint#7") == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]

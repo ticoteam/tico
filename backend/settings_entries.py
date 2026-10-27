@@ -195,14 +195,16 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    # Letting a bot run workflows, or turning Create product repositories back on (the Owner only), is the person's
-    # own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
+    # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
+    # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
-      value="json", card=_card("repos", "set-repos"), words="run workflows actions ci product",
-      confirm_when=(("chosen.run_workflows", (True,)), ("create_product_repositories", (True,))),
-      why="A Run workflows tick (a kept one coming back too), turning Create product repositories back on (the owner "
-          "only), or taking access away needs a Confirm card: running workflows starts CI, which uses the repository's "
-          "secrets"),
+      value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
+                    ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
+                    ("create_product_repositories", (True,))),
+      why="A Run workflows or Edit workflow files tick (a kept one coming back too), turning Create product "
+          "repositories back on (the owner only), or taking access away needs a Confirm card: running or editing "
+          "workflows starts CI, which uses the repository's secrets"),
     # CEO bot
     S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
       card=_card("ceo")),

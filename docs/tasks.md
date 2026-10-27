@@ -94,7 +94,7 @@ A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Relea
 
 Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse`; Post Release QA `qa-engineer-copy`.
 
-When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. Family is a preference, never a requirement. The bot is woken at once.
+When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. For a review, family is a preference, never a requirement. A QA bot known to run on a model company the Builder builds on (its configured model, or what its last few runs ran on) is never given that ticket's QA. Such a bot declines the build, so the check waits for a QA bot of another company. The bot is woken at once.
 
 With no free pool bot, the check waits on the ticket: its page shows **Waiting for a reviewer** (or **Waiting for QA**) with the reason, and the first bot in the pool to finish a check takes it. A pool member only takes checks this way. An empty pool waits the same way. A Builder that files the same check meanwhile is told it already exists. The wait ends when the check is filed or the ticket leaves the step.
 
@@ -341,6 +341,49 @@ request continues to occupy its slot until the runner removes it. When all linke
 finish, clean worktrees are released even while the task awaits release or post-release QA.
 Trees with unpushed work stay and show the reason. Keep the task at its real step; do not mark it Done or Closed just to free space.
 
+## What bots may put on you
+
+Bots can file a person more than they can decide. The ask filter judges each bot item before it lands on a person's
+Needs you: a task filed for them, a question to them (on a task or not) and a bot task set waiting on them. People's
+own writes (also through their Assistant), required approvals and Tico's own items are never filtered; they still
+count toward how full the plate is. When your Tico has a [decision model](how-it-works.md), one call per item asks
+the `person-ask-ingest` question set (`questions/person-ask-ingest.json`): is it clear, what kind of ask it is, which
+of your lines it meets, whether it repeats one of your open items, how urgent it is and whether the bot recommends
+something. Plain code then decides from the answers, your settings and your open items (snoozed ones left out):
+
+| The item | What happens |
+| --- | --- |
+| Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
+| A progress note | FYI: stays with the bot; no wait is set. |
+| A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
+| Work the bot could do itself, or unclear | Sent back to the bot. |
+| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also recommends something and can't wait past today. 10B or more: only something that can't wait at all. |
+
+Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
+note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
+refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
+A question sent back from a bot's own task leaves that task's status and note as they were; the reason is a quiet
+comment on it.
+Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
+its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
+readout counts the outcomes and what people let through.
+
+**Settings → Tasks → What bots may put on you** sets Off, Rehearsal or On, the budget, the chores budget and up to
+ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
+**Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
+ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line at the foot of Needs you, lists what
+On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
+your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
+items with your settings and your plate as it was then, so you can see what On would have done before you turn it
+on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
+"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
+judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
+titles they may read.
+
+API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
+`POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
+of up to 25; the person, or an owner or admin).
+
 ## Picking work back up
 
 Each completed turn on a task leaves a **checkpoint** on it: the turn's final reply, up to 1,500
@@ -516,6 +559,33 @@ another rule's action, so a rule cannot retrigger itself.
 The person who last saved a rule's action, conditions, event, or enabled it supplies its private-task access;
 the original creator stays in its audit record. An older edited rule with no recorded action writer wakes the bot
 instead of changing a private task until someone saves its action again.
+
+**Task Triggers and Actions.** The rules API also accepts the Triggers `task.created`, `task.step_changed`,
+`task.done`, `task.declined` and `task.closed`. These run on the task change itself, including tasks owned by people.
+Scopes are team, type, department and bot; the bot scope means the task's owner. Trigger conditions are `type`,
+`step`, `tag`, `owner` and `requester`. Entering a step requires a `step` condition. Actions are `note`, `set_wait`,
+`relate`, `move_step`, `close`, `wake_bot`, `create_task` and `send_webhook`, saved as `then: "action"` with
+`params.action`. Existing Rules edit rights and Action permissions apply.
+
+Every matching task Trigger runs its Action, most specific scope first (bot, department, type, team), then by
+position. Actions run after the complete task save, inside the same transaction. Creation runs its Actions before
+the initial step Trigger, including default placement into the first step. A repeated delivery of that transition
+does nothing; reopening and finishing again is a new transition. An Action cannot start another task Trigger's
+Action, including through a different rule. The task history names the rule and explains any skipped chain.
+
+Task Actions use their existing domain checks; `set_wait` can record a `blocked_by` task, while a person wait
+retains its existing owner and question requirements. Templates can read `{{task.id}}`, `{{task.title}}`,
+`{{task.body}}`, `{{task.note}}`, `{{task.status}}`, `{{task.owner}}`, `{{task.requester}}`, `{{task.type_id}}`,
+`{{task.step_id}}`, `{{event}}` and `{{actor}}`. The Action author must be able to read the source and any task it
+links. A create-task Action accepts `owner`, `title`, optional `body`, `type` and `step`; it links the new task to
+the source and keeps it private when the source is private. Wake and webhook Actions retain their recipients' read checks.
+
+An Action failure preserves the triggering task save. Rule reads return `last_error` and `last_error_at`, including
+later webhook delivery failures. A later successful webhook keeps the rule's last failure visible. Shared error
+text contains no task content. At the 51st attempt within an hour,
+the Action pauses: reads return `paused`, `paused_at` and `pause_reason` (`Paused: too many runs`). It stays paused
+until an authorized editor explicitly enables it again; the hourly cap still applies. The Rules list exposes
+`task_triggers`, `task_when_keys` and `task_actions` for editor clients.
 
 **Events without a task.** Some events are not a message to a bot and have no task: `webhook.received` (an incoming
 webhook was accepted) and `tico.notice`. A rule names one as its `event`
@@ -1285,6 +1355,60 @@ who it reached, and its Private row names them.
 - Approvals stay refused from private work (they go to the default approver): ask the person with a subtask or
   `hub task question`.
 - `POST /api/v2/tasks/dry-run` makes the same privacy checks as the create and returns the same refusal text.
+
+### A private task with no person on it: a sealed subtask for another bot
+
+The same task's owning bot (or its manager), from its own run, may hand work to another bot in a **sealed** private
+subtask: `hub task create --owner <bot> --parent <task>`. The other bot reads that subtask, and only the words written
+into it: never the parent (its title, words, comments or id), its other subtasks, or the run's other work. Each of
+those stays "not found" for it, and its notices and run prompt leave the parent out.
+
+- Every private task the run carries that the other bot cannot read must have no person on it (no person requester,
+  owner or guest), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
+  `hub task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
+  the refusal leaves their name out and says to ask the filer's own requester to file it.
+- The subtask is private; a company-visible one is refused, as for any create from private work.
+- Its words may not carry the private work: a secret-shaped value, or 12 or more words in a row copied from a private
+  task the other bot cannot read, is refused naming the check (never the text). Rewrite it and file again; it does not
+  count toward quarantine. A full commit id is fine after a commit word (`head <sha>`, `base <sha>`) or in a GitHub
+  commit link, and so are branch, session and dated path names; a word mixing letters and digits inside a long name
+  (`pr1714-...`) reads as secret-shaped, so write it apart (`pr-1714-...`).
+- The parent's history records "Handed to <bot> in a private subtask"; the subtask's records who filed it.
+- When the subtask is done, the parent's owner is woken on the parent, as for any subtask. Its words do not reach the
+  parent's other readers.
+- The other bot may file its own review or QA subtasks under the sealed one by the same rule.
+- Comments and files from the private run to the subtask, and any company-visible work, stay refused, except the
+  company-visible task below.
+
+### A private task with no person on it: a company-visible task from private work
+
+When the work belongs to the company (a repair anyone may pick up, see and follow), the same owning bot (or its
+manager), from its own run, files it **from private work**: `hub task create --from-private --owner <bot> --parent
+<task>` (or with no `--parent`). The task is company-visible and carries only its own title, body and acceptance
+criteria; the private task stays sealed.
+
+- The filer must own (or manage the owner of) the parent and every private task the run carries; a bot that is only a
+  reader or guest of one is refused. A person on any of them, or on a private task above one, gets the same refusal
+  as a sealed subtask, naming them and the route to them. The task is for a bot; the parent, when given, is private.
+- Its words are checked before it is written, and a failed check is refused naming the check, never the text: no
+  secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private
+  task the run carries (title, body, note, acceptance criteria or comments), and no file, attachment or link of a private task. The checks
+  read everything the task keeps: title, body, acceptance criteria, labels, links (a secret-shaped value in a link is
+  refused too), public title and summary, change paths, blocker and the names of its roles (as sent and as stored).
+  Rewrite it and file again; it does not count toward quarantine. Nobody signs off on the words.
+- The title of the parent, or of any private task the run carries, is refused anywhere in that text, in any case.
+- The copy check catches only 12 or more words copied in a row. A short name that is not a private task's title (a
+  vendor, a person, a project) is not caught: that rests on the filing bot's judgement. So does the rest of the run's
+  context: its messages that are not on a private task, the files it read and its tools' output are not compared, and
+  a copy broken up with a word every few words passes. The checks catch careless copying, not a bot set on leaking.
+- A company task under a private parent never sends the parent's state to the stale-work review.
+- It is related to no private task but its parent (no blocker, related or duplicate link to one).
+- A reader who cannot read the parent sees it as "a private task", with no title or id; its own readers see it as usual.
+- History: the private task records "Filed a company-visible task from this private task: <title>"; the new task
+  records "Filed from a private task", without the private task's title.
+- Filed under the private task, it is a subtask: the private task waits on it, and when it is done the private task's
+  owner gets its result, as for any subtask.
+- Without `--from-private`, a company-visible create from private work is refused, and the refusal names this route.
 
 Task-linked messages, files and previews, execution output, SQL results, search context and saved
 responses apply the same current-participant boundary. Retained room grants and attachment

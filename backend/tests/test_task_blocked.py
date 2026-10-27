@@ -384,7 +384,7 @@ def test_undecided_approval_blocks_and_decision_resumes_the_previous_step(api):
         task_blocked.sweep(c, H.now())
         blocked = H.task(c, task['id'])
         assert blocked['status'] == 'waiting' and blocked['blocked_kind'] == 'dependency'
-        assert 'undecided approval' in blocked['blocked_reason'] and blocked['blocked_from_step'] == review_step
+        assert blocked['blocked_reason'] == 'Waiting on Ana: a merge approval' and blocked['blocked_from_step'] == review_step
         task_blocked.sweep(c, H.now())
         assert H.task(c, task['id'])['status'] == 'waiting', 'an undecided approval keeps holding'
         H.approval_decide(c, 'human:ana', ask['id'], 'approved')

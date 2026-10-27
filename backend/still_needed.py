@@ -87,6 +87,11 @@ def send_back(conn, bot, items):
             # The wait was for this answer: the next move is the bot's, and the task leaves the person's Needs you,
             # unless another question to them is still open on it.
             H.drop_asked_waits(conn, task["id"], [asked["id"]], "Still needed? went to the bot")
+            # The question shows it went back unanswered, and a bot's task left with nothing to wait on goes back to
+            # open; the one notice below is the bot's word of it (backend/task_holds.py).
+            from . import task_holds
+            task_holds.withdrawn(conn, task["id"], [asked["id"]], "no answer in two business days (still needed?)",
+                                 told=False)
     lines = [_line(asked, task) for asked, task in items[:LISTED]]
     if len(items) > LISTED:
         lines.append(f"- and {len(items) - LISTED} more")

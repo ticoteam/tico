@@ -26,9 +26,15 @@ def save(c, key, value):
 
 def levels(c):
     # Guests have no roster sign-in. Hidden/departed people and disabled sign-ins do not count.
-    from .views import roster
-    people = max(1, sum(bool(p['email']) and not p['hidden'] and not p['directory_left'] and p['sign_in']
-                        for p in roster(c)['people']))
+    # Count people without building the full roster chart (groups/teams): admission calls this on
+    # every claim, and a full roster normalize was only used for this headcount.
+    from . import people as P
+    from . import read_cache
+    def count():
+        row = read_cache.metadata(c, 'people')
+        doc = json.loads(row[0]) if row else {'people': H.humans(c)}
+        return P.signed_in_count(doc)
+    people = max(1, read_cache.value(c, ('signed_in_people',), count))
     configured = {'warning_per_person': 40, 'stop_per_person': 100, **saved(c, LEVELS)}
     return {**configured, 'people': people, 'warning': people * configured['warning_per_person'],
             'stop': people * configured['stop_per_person']}
@@ -57,10 +63,14 @@ def admission(c):
 
 
 def snapshot(c, settings):
+    """Classify every computer's queue once for a finding or the turn-levels settings view. Share one company
+    Default so each claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding it per bot."""
+    from . import usage_limits
     from .start_places import summary
+    default = usage_limits.company(c)
     counts = dict(running=0, starting=0, waiting=0, queued=0)
     for row in c.execute('SELECT id FROM runners'):
-        here = summary(c, row['id'], settings)
+        here = summary(c, row['id'], settings, default)
         for key in counts:
             counts[key] += here[key]
     return {**admission(c), **counts}

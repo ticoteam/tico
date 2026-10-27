@@ -259,9 +259,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
     hub settings show <key> [--bot B|--computer C|--person P|--id I]
                                            its value, who may change it and the link to its card
-    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I]
-                                           change it as yourself (BotOps: as the person who asked; a confirm one is
-                                           their Confirm card, a person-only one says why and links the card)
+    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I] [--on-behalf-of turn]
+                                           change it as yourself (BotOps, the Assistant: as the person who asked; a
+                                           confirm one is their Confirm card, a person-only one says why and links the
+                                           card; the Assistant cites their words for a direct one)
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -943,6 +944,9 @@ def parser():
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
     s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
     s.add_argument("--private", action="store_true", default=None, help="only requester and assignee may read")
+    s.add_argument("--from-private", dest="from_private", action="store_true",
+                   help="from a run on your private task: a company-visible task for a bot, in your own words (no "
+                        "12 words copied from the private work, no secret-shaped value, no file or link of it)")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
@@ -1901,11 +1905,12 @@ def parser():
     s.add_argument("words")
     s.set_defaults(fn="settings find")
     for leaf, text in (("show", "one setting: its value, who may change it and its card"),
-                       ("set", "change one setting as yourself, or BotOps as the person who asked")):
+                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked")):
         s = catalogue.add_parser(leaf, help=text)
         s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
         if leaf == "set":
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
+            s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
         target = s.add_mutually_exclusive_group()
         target.add_argument("--bot", help="the bot, for a setting set per bot")
         target.add_argument("--computer", help="the computer, for a setting set per computer")
@@ -2454,8 +2459,8 @@ def parser():
     modes = s.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true")
     modes.add_argument("--own", action="store_true")
-    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write|:write+actions|:write-actions]",
-                       help="+actions lets the bot run workflows there (Owner or admin)")
+    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
+                       help="+actions lets the bot run workflows there, +edit edit workflow files (Owner or admin)")
     s.set_defaults(fn="bot repos")
     repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
     s = repos.add_parser("list")

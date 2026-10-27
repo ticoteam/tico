@@ -56,8 +56,35 @@ def since_time(value):
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+ATTEMPT_DETAIL_SQL = "SELECT state,result_json,finished FROM attempts WHERE id=?"
+
+
+def prime_attempt_details(c, ids):
+    """Read the rows attempt_details asks for, one table at a time, before a page walks each turn."""
+    if read_cache.cache(c) is None:
+        return
+    wanted = [aid for aid in dict.fromkeys(ids) if aid]
+    for start in range(0, len(wanted), 250):
+        chunk = wanted[start:start + 250]
+        marks = ",".join("?" * len(chunk))
+        attempts = {row["id"]: row for row in c.execute(
+            f"SELECT id,state,result_json,finished FROM attempts WHERE id IN ({marks})", chunk)}
+        read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
+        diags = {row["attempt_id"]: row for row in c.execute(
+            "SELECT attempt_id,end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
+            f"FROM attempt_diagnostics WHERE attempt_id IN ({marks})", chunk)}
+        read_cache.prime(c, "SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
+                         "FROM attempt_diagnostics WHERE attempt_id=?",
+                         {(aid,): diags.get(aid) for aid in chunk})
+        snaps = {row["attempt_id"]: row for row in c.execute(
+            f"SELECT attempt_id,start_json,end_json FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
+            chunk)}
+        read_cache.prime(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?",
+                         {(aid,): snaps.get(aid) for aid in chunk})
+
+
 def attempt_details(c, turn):
-    attempt = c.execute("SELECT state,result_json,finished FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+    attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
     from .performance import attempt_snapshots
@@ -78,12 +105,17 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     readable = auth.bot_accesses(c, who)
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
-    for row in c.execute(
+    found = list(c.execute(
             "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
             "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
             "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
-            ((bot,) if bot is not None else ()) + (since, since, limit)):
+            ((bot,) if bot is not None else ()) + (since, since, limit)))
+    stored = H.prime_messages(c, [row["message_id"] for row in found])
+    privacy.prime_messages(c, list(stored.values()))
+    privacy.prime_attempts(c, [row["id"] for row in found])
+    prime_attempt_details(c, [row["id"] for row in found])
+    for row in found:
         if not (readable.get(row["bot"]) or {}).get("read"):
             continue
         message = H.message(c, row["message_id"])
@@ -113,9 +145,7 @@ def computer_details(c, row, who, auth):
     value = dict(row)
     readiness = readiness_document(value.get("readiness_json"))
     access = auth.bot_accesses(c, who)
-    assigned = {r[0] for r in c.execute(
-        "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-        "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+    assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
     shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {bot: {k: v for k, v in report.items() if k != "tools"}
                          for bot, report in readiness.get("bots", {}).items()
@@ -125,8 +155,8 @@ def computer_details(c, row, who, auth):
         without_accounts(readiness.get("runtimes") or {}, windows=True)
     update = runner_versions.view(runner_versions.load(c).get(row["id"]))
     update["wanted_release"] = runner_versions.desired()["version"]
-    from .repositories import metadata
-    return {"repositories": metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown"),
+    from .repositories import computer_repositories
+    return {"repositories": computer_repositories(c).get(row["id"], "unknown"),
             "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
             "services": [], "services_scope": "team", "shared_logins": shared}
@@ -142,13 +172,39 @@ def subscription_login(runtime, detail):
             and not re.search(r"(?i)api[ _-]?key", detail))
 
 
-def shared_logins(c, runner_id, readiness, assigned, access):
+def assignments_by_runner(c):
+    """One pass of assignments: {runner_id: [bot, ...]} ordered, and {runner_id: {non-archived bots}}.
+
+    Operations and Computers listing used to SELECT assignments once (or twice) per computer. Cached for the read
+    snapshot (`computer_details` asks once per computer); callers only read it.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is not None and "views.assignments_by_runner" in values:
+        return values["views.assignments_by_runner"]
+    ordered, active = {}, {}
+    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "ORDER BY a.bot"):
+        ordered.setdefault(row["runner_id"], []).append(row["bot"])
+        if row["state"] != "archived":
+            active.setdefault(row["runner_id"], set()).add(row["bot"])
+    if values is not None:
+        values["views.assignments_by_runner"] = (ordered, active)
+    return ordered, active
+
+
+def shared_logins(c, runner_id, readiness, assigned, access, names=None):
     """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
     at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
     omitted: its bots run concurrently on one ChatGPT login. One row per login: its
     runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
-    it and the ones this reader may see. A key login runs its bots side by side and is left out."""
+    it and the ones this reader may see. A key login runs its bots side by side and is left out.
+
+    `names` is `{connection_id: display_name}` from `subscription_identity.display_names` when the caller already
+    loaded every rename (Operations listing).
+    """
     from .harnesses import harness_caps
+    from .subscription_identity import connection_id, identity
     runtimes = readiness.get("runtimes") or {}
     logins = {}
     for bot, report in (readiness.get("bots") or {}).items():
@@ -162,11 +218,19 @@ def shared_logins(c, runner_id, readiness, assigned, access):
         if not subscription_login(runtime, login.get("detail")):
             continue
         logins.setdefault((runtime, profile), []).append(bot)
-    from .subscription_identity import identity
-    return [{"runtime": runtime, "profile": profile,
-             "display_name": identity(c, runner_id, profile)["display_name"] if profile else "",
-             "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))}
-            for (runtime, profile), bots in sorted(logins.items()) if len(bots) > 1]
+    rows = []
+    for (runtime, profile), bots in sorted(logins.items()):
+        if len(bots) <= 1:
+            continue
+        if not profile:
+            label = ""
+        elif names is not None:
+            label = names.get(connection_id(runner_id, profile)) or profile
+        else:
+            label = identity(c, runner_id, profile)["display_name"]
+        rows.append({"runtime": runtime, "profile": profile, "display_name": label,
+                     "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))})
+    return rows
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -429,8 +493,9 @@ def operation_issues(c, who, auth):
         if bot["state"] == "archived":
             # An archived bot whose agent still holds a working credential goes on reporting in to nobody; it fails
             # quietly on its own box, so Health says it.
-            if still_reporting(c, slug):
-                add("agent", bot["display_name"] + "'s " + ("OpenClaw" if still_reporting(c, slug)["harness"] == "openclaw" else "Hermes")
+            reporting = still_reporting(c, slug)
+            if reporting:
+                add("agent", bot["display_name"] + "'s " + ("OpenClaw" if reporting["harness"] == "openclaw" else "Hermes")
                     + " agent is still reporting in, but the bot is archived",
                     "Restore it, or revoke its credential.", bot=slug, severity="warning",
                     needs_person=bool(auth.bot_manager(c, who, slug)),
@@ -513,10 +578,13 @@ def operation_issues(c, who, auth):
         queued = jobs["queued"]
         if location.get("agent"):
             # A synced agent is handed its messages at a sync, which marks them delivered; it never reads them in Tico.
+            # Batch the privacy check (readable_messages primes once); a per-row message_readable re-fetched each
+            # message and scaled with the agent's unread inbox on every /status and /operations poll.
             unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
-            queued = sum(privacy.message_readable(c, privacy.actor(who), m) for m in c.execute(
-                "SELECT * FROM messages WHERE to_actor=? AND " + unread + " "
-                "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now())))
+            waiting = [{"id": row["id"]} for row in c.execute(
+                "SELECT id FROM messages WHERE to_actor=? AND " + unread + " "
+                "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
+            queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
         if uncertain and not mac_offline:
             noun = "run" if uncertain == 1 else "runs"
@@ -766,7 +834,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
-    elif settings and org_turns.snapshot(c, settings)['at_stop']:
+    elif settings and org_turns.admission(c)['at_stop']:
+        # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
     elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
             c, location["machine"]["runner_id"])["overloaded"]:
@@ -1051,7 +1120,7 @@ def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing
 # What a card takes, as the groups Needs you shows in this order: a yes/no or a pick, money, an account to sign in to
 # or connect, something written to read and let go out, and everything else. Read from the card's own words, so the
 # same card always lands in the same group.
-NEED_GROUPS = ("decide", "pay", "connect", "review", "do")
+NEED_GROUPS = ("decide", "pay", "connect", "review", "hands", "do")     # hands: chores the ask filter grouped
 _NEED_PAY = re.compile(r"\b(pay|paid|payment|invoices?|billing|bills|subscription|renew(al)?|refund|purchase|"
                        r"top[- ]up|credit card|card on file|company card)\b", re.I)
 # Words that are about money only next to an amount: "spend $400", not "spend an hour"; "buy" but not "buy-in".
@@ -1307,17 +1376,18 @@ def recent_bots(c, auth, who, since, limit, needs):
     def touch(slug, ts):
         if slug and access.get(slug, auth.FULL)["see"] and ts and ts > seen.get(slug, ""):
             seen[slug] = ts
-    for row in c.execute("SELECT * FROM messages WHERE created>=? AND "
-                         "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
-                         (since, me, me)):
-        if not privacy.message_readable(c, privacy.actor(who), row):
-            continue
+    # Discovery window: one readable_messages prime (not message_readable per row), then task_sql for tasks.
+    recent_msgs = [dict(r) for r in c.execute(
+        "SELECT id, from_actor, to_actor, created FROM messages WHERE created>=? AND "
+        "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
+        (since, me, me))]
+    for row in privacy.readable_messages(c, privacy.actor(who), recent_msgs):
         touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created"])
-    for row in c.execute("SELECT * FROM tasks WHERE updated>=? AND "
-                         "((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%'))",
-                         (since, me, me)):
-        if not privacy.task_readable(c, who, dict(row)):
-            continue
+    visible = auth.task_sql(c, who)
+    for row in c.execute(
+            "SELECT id, owner, requester, updated FROM tasks WHERE updated>=? AND "
+            f"((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%')) AND ({visible})",
+            (since, me, me)):
         touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated"])
     waiting = {}
     for item in needs:
@@ -1337,6 +1407,8 @@ def recent_bots(c, auth, who, since, limit, needs):
         # to them, not what it is doing.
         status = (privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}) if access.get(slug, auth.FULL)["read"] else {}
         actor = H.bot_actor(slug)
+        # Newest readable line each way. Lazy, not a fixed window: deleted or unreadable newest rows must not
+        # hide an older readable one, and the first row is readable almost always.
         mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
                     "ORDER BY created DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
         theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
@@ -1481,6 +1553,21 @@ def card_why(item):
     return line
 
 
+def _readable_task_ids(c, visible, ids):
+    """Task ids among `ids` that pass `visible` (`auth.task_sql`), in one IN-chunked pass.
+
+    Needs you used to call `auth.task` once per card (and again for merged / approval / stale
+    ids); the SQL predicate is the same rule lists elsewhere use.
+    """
+    out = set()
+    wanted = [tid for tid in dict.fromkeys(ids) if tid]
+    for part in H.chunks(wanted):
+        marks = ",".join("?" * len(part))
+        out.update(r[0] for r in c.execute(
+            f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({visible})", part))
+    return out
+
+
 def needs_items(c, auth, who, task_view, older=None, count_only=False):
     """The person's queue. A question unanswered for two business days stays, marked stale, until the weekday-morning
     batch sends it back to its bot (backend/still_needed.py); `older`, a list the caller passes, stays empty.
@@ -1491,35 +1578,41 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     raw = H.needs_you(c, who.actor)
     from . import assigned_start
     listed = {row['id'] for key in ('tasks', 'waiting', 'declined') for row in raw[key]}
-    for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor):
-        if (assigned_start.manager(c, row) == who.actor and row['id'] not in listed
-                and _readable(auth, c, who, row['id'])):
-            raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
-                                 'note': assigned_start.description(c, row, auth.settings)})
+    overdue = [row for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor)
+               if assigned_start.manager(c, row) == who.actor and row['id'] not in listed]
+    can_see_overdue = _readable_task_ids(c, visible, [row['id'] for row in overdue])
+    for row in overdue:
+        if row['id'] not in can_see_overdue:
+            continue
+        raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
+                             'note': assigned_start.description(c, row, auth.settings)})
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
     from . import ceo_merge
     merged = ceo_merge.hidden_by_item(c, who.actor)
     # Each card reads its task, its open asks, its origin and the chain of tasks above it. Those rows are read here
-    # for every card together, in this snapshot; each card is still checked one at a time by the same rules.
+    # for every card together, in this snapshot; readability of the cards themselves is one task_sql pass.
     cards = raw["tasks"] + raw["waiting"] + raw["declined"]
     chain = TR.prime_ancestry(c, [row["id"] for row in cards])
     chain |= {row["task_id"] for row in raw["approvals"] if row.get("task_id")}
     H.prime_tasks(c, chain)
-    H.prime_messages(c, [row["message_id"] for row in raw["approvals"]])
+    # H.needs_you already read every pending approval's message for this snapshot.
     privacy.prime_messages(c, [m for row in raw["approvals"]
                                if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
     _prime_person_origins(c, visible, chain)
     pipelines = H.type_list(c)
     asks_of = H.open_tasks_asks(c, cards, actor=privacy.actor(who))
+    can_see = _readable_task_ids(
+        c, visible,
+        [row["id"] for row in cards]
+        + [tid for originals in merged.values() for tid in originals]
+        + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
-            try:
-                auth.task(c, who, row["id"])
-            except Problem:
+            if row["id"] not in can_see:
                 continue
             open_asks = asks_of[row["id"]]
             ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
@@ -1540,7 +1633,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
-                item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
+                item["merged"] = [t for t in merged[row["id"]] if t in can_see]
             if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
@@ -1561,14 +1654,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         msg = H.message(c, row["message_id"])
         if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
-            try:
-                task = auth.task(c, who, row["task_id"]) if row.get("task_id") else None
-            except Problem:
-                task = None
+            task = (H.task(c, row["task_id"])
+                    if row.get("task_id") and row["task_id"] in can_see else None)
             item = {**row, "kind": "approval", "what": row["kind"],
                     "title": approval_title(row["kind"], row.get("payload"), (task or {}).get("title")),
                     "requester": row["requested_by"], "conversation_id": msg["conversation_id"],
-                    "from_person": person_origin(c, H.task(c, row["task_id"]) if row.get("task_id") else None, visible)}
+                    "from_person": person_origin(c, task, visible)}
             if row["kind"] == "send":
                 item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
             if row["kind"] == "support":
@@ -1581,7 +1672,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
         # The one card for the person's stale ticket suggestions (backend/stale_review.py): a row per task they may read.
-        stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
+        stale_ok = _readable_task_ids(c, visible, [r["task"] for r in stale["rows"]])
+        stale["rows"] = [r for r in stale["rows"] if r["task"] in stale_ok]
         if stale["rows"]:
             items.append(stale_review.retitle(stale))
     if who.role == "owner":
@@ -1595,9 +1687,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         return items
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
+    from . import ask_ingest
+    # The chores the ask filter let through under their own budget (backend/ask_ingest.py) group as Hands needed.
+    hands = ask_ingest.hands_ids(c, who.actor) if H.is_human(who.actor) else set()
     for item in items:
         item["pressing"] = pressing(item, at)
-        item["need"] = need_of(item)
+        item["need"] = "hands" if item.get("id") in hands else need_of(item)
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
@@ -1722,6 +1817,17 @@ def fleet_snapshot(c, auth, identity, task_view):
                 index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
             queued[m["bot"]] = queued.get(m["bot"], 0) + 1
+    # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
+    now = H.now()
+    live_by_bot = {}
+    for row in c.execute(
+            "SELECT id,bot,state,started,lease_until,created FROM attempts "
+            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
+        live_by_bot.setdefault(row["bot"], []).append(row)
+    # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
+    shown = [row["slug"] for row in bot_rows
+             if row["slug"] in allowed and access.get(row["slug"], auth.FULL)["read"]]
+    prime_machines(c, shown)
     bots = []
     for row in bot_rows:
         slug = row["slug"]
@@ -1738,17 +1844,14 @@ def fleet_snapshot(c, auth, identity, task_view):
         status = privacy.status(c, principal, source, tasks=bot_tasks.get(slug, [])) or {}
         location = machine(c, slug)
         # A bot with task lanes can have several turns out; the newest is the one shown, beside the count.
-        active = [a for a in c.execute(
-            "SELECT id,state,started,lease_until FROM attempts WHERE bot=? "
-            "AND state IN ('leased','running') AND lease_until>? ORDER BY created DESC",
-            (slug, H.now())).fetchall() if index.attempt(a["id"])]
+        active = [a for a in live_by_bot.get(slug, ()) if index.attempt(a["id"])]
         attempt = active[0] if active else None
         bots.append({"slug": slug, "name": row["display_name"],
                      "state": status.get("state") or row["state"],
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
                      "queued": queued.get(slug, 0),
-                     "active_attempt": dict(attempt) if attempt else None,
+                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started", "lease_until")} if attempt else None,
                      "active_attempts": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
@@ -2056,7 +2159,7 @@ def install_views(app, store, auth, mutate, task_view):
     def operations(request: Request):
         who = request.state.identity
         human_only(who)
-        with store.read() as c:
+        with store.read_transaction() as c:
             machines, fleet = [], runner_versions.load(c)
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
@@ -2064,6 +2167,10 @@ def install_views(app, store, auth, mutate, task_view):
             from . import subscriptions, inbox_isolation
             from .computer_keys import serving, shared_listing
             subscription_context = subscriptions.context(c, store.settings)
+            # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
+            connections_map = subscriptions.connections_by_runner(c, store.settings, subscription_context)
+            # One pass for every computer's subscription profiles (not per-runner SELECTs + metadata).
+            profiles_map = subscriptions.profiles_by_runner(c)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = serving(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
@@ -2073,9 +2180,35 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
-            for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
-                                 "FROM runners ORDER BY created"):
+            from .harness_actions import choices_by_runner, recent_by_runner
+            # One pass each for every computer's harness choices and owner action history (not once per runner).
+            harness_choice = choices_by_runner(c)
+            harness_recent = recent_by_runner(c) if who.role == "owner" else {}
+            # One pass for every computer's assignments (not two SELECTs per runner).
+            placed, active_placed = assignments_by_runner(c)
+            from .model_login import cleared_by_runner, key_cleared_by_runner
+            # One pass each for signed-out logins and cleared keys (not two SELECTs per computer).
+            signed_out, key_cleared = cleared_by_runner(c), key_cleared_by_runner(c)
+            from .repositories import computer_repositories
+            # One pass for every computer's repository status (not one registry_metadata lookup per runner).
+            repo_status = computer_repositories(c)
+            from .computer_keys import listing_by_runner
+            # One pass for every computer's own keys (not one SELECT per runner).
+            keys_by_runner = listing_by_runner(c)
+            from .subscription_identity import display_names
+            # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
+            login_names = display_names(c)
+            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
+                                      "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
+                                      "FROM runners ORDER BY created"))
+            from . import usage_limits
+            from .start_places import summaries
+            # One company Default for every computer's queue classify: without it each summary rebuilds
+            # pools/groups/spend for every queued bot (same waste Health's snapshot already dropped).
+            limits = usage_limits.company(c)
+            # One pass for every computer's turn counts (not one start_places.summary per runner).
+            turn_counts = summaries(c, [row["id"] for row in runners], store.settings, limits)
+            for row in runners:
                 # Every person sees every working computer; only an admin or its operator may change it, and only
                 # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
                 # Another member gets the bots they may see on it.
@@ -2083,11 +2216,10 @@ def install_views(app, store, auth, mutate, task_view):
                 if not manage and row["revoked_at"]:
                     continue
                 hidden = set() if manage else unseen
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
-                        if a[0] not in hidden]
+                bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
-                from .start_places import summary, describe
-                value["turn_counts"] = summary(c, row["id"], store.settings)
+                from .start_places import describe
+                value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
@@ -2099,16 +2231,12 @@ def install_views(app, store, auth, mutate, task_view):
                 value.update(performance_listing(value))
                 value.pop("capabilities_json")
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
-                from .repositories import metadata
-                value["repositories"] = metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown")
-                assigned_here = {a[0] for a in c.execute(
-                    "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-                    "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+                value["repositories"] = repo_status.get(row["id"], "unknown")
+                assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
                                              if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
-                from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
@@ -2118,10 +2246,12 @@ def install_views(app, store, auth, mutate, task_view):
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
-                from .model_login import cleared_logins, key_cleared_logins
-                from .computer_keys import listing as computer_key_listing
-                profiles = subscriptions.computer_profiles(c, row, True)
-                keys = computer_key_listing(c, row["id"])
+                # Copy per computer so stripping accounts for non-operators does not mutate the shared batch map.
+                profiles = [{**p, "runtimes": {k: dict(v) if isinstance(v, dict) else v
+                                               for k, v in (p.get("runtimes") or {}).items()}}
+                            for p in (profiles_map.get(row["id"]) or [])]
+                # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
+                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
                 # name, whether it is the "Every computer" one, and every computer it serves.
                 served = shared_keys.get(row["id"]) or {}
@@ -2143,10 +2273,10 @@ def install_views(app, store, auth, mutate, task_view):
                         key.pop("id", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "may_manage": manage, "profiles": profiles,
-                                 "bot_connections": [link for link in subscriptions.connections(
-                                     c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
-                                 "signed_out": cleared_logins(c, row["id"]),
-                                 "key_cleared": key_cleared_logins(c, row["id"]),
+                                 "bot_connections": [link for link in (connections_map.get(row["id"]) or [])
+                                                     if link["bot"] not in hidden],
+                                 "signed_out": signed_out.get(row["id"]) or {},
+                                 "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
@@ -2155,11 +2285,12 @@ def install_views(app, store, auth, mutate, task_view):
                                  "shared_keys": shared, "shared_with": shared_with,
                                  # The sign-ins several of its bots share, which they take turns on (counting only
                                  # the bots this reader may see).
-                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden,
+                                                               access, names=login_names),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
-                                 "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
-                                 "harness_choices": choices(c, row["id"])})
+                                 "harness_actions": harness_recent.get(row["id"]) or [],
+                                 "harness_choices": harness_choice.get(row["id"]) or {}})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
                       for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
             from .agents import listing as agent_listing
@@ -2267,17 +2398,15 @@ def install_views(app, store, auth, mutate, task_view):
             read = CL.read_ids(c, who.actor)
             products = [{**row, "unread": row["id"] not in read} for row in CL.products(c, store.settings)]
             entries = []
-            # The newest bot-owned done tasks with a note long enough, in shipped_at order; 400 leaves room for unreadable ones.
+            # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
+            # (not auth.task per candidate); 120 is the activity cap beside product releases.
             activity = [dict(r) for r in c.execute(
                 "SELECT id,title,owner,note,done_at,updated FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
-                "AND length(note)>=20 ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 400")] \
+                f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
+                "ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 120")] \
                 if kind != "product" and not unread and since_version is None else []
             for task in activity:
                 if len((task.get("note") or "").strip()) < 20:
-                    continue
-                try:
-                    auth.task(c, who, task["id"])
-                except Problem:
                     continue
                 note = re.sub(r"\s+", " ", task["note"]).strip()
                 entries.append({"id": "activity-" + task["id"], "title": task["title"],
@@ -2285,7 +2414,7 @@ def install_views(app, store, auth, mutate, task_view):
                                 "shipped_at": task.get("done_at") or task["updated"], "task_id": task["id"]})
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             # Busy bot activity cannot push shipped releases out of the product view.
-            entries = products + entries[:120]
+            entries = products + entries
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             if kind != "all":
                 entries = [row for row in entries if row["kind"] == kind]

@@ -254,7 +254,8 @@ def prime_attempts(c, aids):
 
 def _parent_ids(message, refs):
     """The messages a provenance walk reads next from `message`: the one it replies to and those it answers."""
-    out = {message.get("in_reply_to")}
+    parent = message.get("in_reply_to")
+    out = {parent} if isinstance(parent, str) else set()
     for key in ("answers", "inputs"):
         if isinstance(refs, dict) and isinstance(refs.get(key), list):
             out.update(v for v in refs[key] if isinstance(v, str))
@@ -308,9 +309,14 @@ def prime_messages(c, messages):
         meeting_sources(c).prime_conversations(rooms)
     runs = set()
     for ref in refs + ancestry:
-        if isinstance(ref, dict):
-            run = ref.get("run")
-            runs.add(ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+        if not isinstance(ref, dict):
+            continue
+        run = ref.get("run")
+        # Only a string run id can be primed. A list or object here used to be reached only when that
+        # message was checked; a deleted or past-the-page row must not abort the whole page.
+        aid = ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
     prime_attempts(c, runs)
     about = {H.message_task_id({**m, "refs": r}, H.conversation(c, m["conversation_id"])
                               if m.get("conversation_id") else None)
@@ -402,29 +408,53 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             clauses.append("id IN (SELECT value FROM json_each(?))")
             args.append(json.dumps(sorted(ids)))
     visible, reader, size, full = [], actor(who), 0, False
-    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
-        # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
-        # task's message before its privacy check, so a read costs the room once, not twice.
-        stored = dict(row)
+
+    def consider(stored):
+        """The same skip rules as one row of the old loop. True once the page must stop."""
+        nonlocal size, full
         if stored.get("deleted_at") or stored.get("deleted"):
-            continue
+            return False
         try:
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
-                continue
+                return False
             if not readable(c, reader, tasks):
-                continue
+                return False
         except Problem:
-            continue
-        message = {**stored, "refs": H._json(row["refs_json"], {}) or {}}
+            return False
+        message = {**stored, "refs": H._json(stored["refs_json"], {}) or {}}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
                 full = True
-                break
+                return True
         visible.append(message)
-        if len(visible) > limit:
+        return len(visible) > limit
+
+    window = []
+
+    def flush():
+        """Prime this window, then apply the same visibility rules. A hidden message is still skipped."""
+        if not window:
+            return False
+        prime_messages(c, window)
+        stop = False
+        for stored in window:
+            if consider(stored):
+                stop = True
+                break
+        window.clear()
+        return stop
+
+    # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
+    # task's message before its privacy check, so a read costs the room once, not twice. The window is
+    # primed before those checks, so rooms, replies, inputs and runs are not one query per message.
+    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
+        window.append(dict(row))
+        if len(window) >= 80 and flush():
             break
+    else:
+        flush()
     more = full or len(visible) > limit
     messages = list(reversed(visible[:limit]))
     return {"messages": messages, "has_more": more,
@@ -645,16 +675,265 @@ def guest_for(c, who, person, parent):
     return None
 
 
-def require_create(c, who, private, owner, parent, actor=None):
+# ----------------------------------------------------------------------------- a sealed subtask for another bot
+# A private task with no person on it could hand nothing to a bot outside its parties: every create from its runs was
+# refused, so a repair its owner found stranded (Dev 632). Its owning bot (or that bot's manager) may file one private
+# subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
+# or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
+# widen: the refusal names them and the route to them.
+SEALED_ROUTE = "ask them with `hub task question`, or have them file the subtask"
+COPIED_WORDS = 12
+
+
+def _person_on(row):
+    return next((row[k] for k in ("requester", "owner", "guest") if row.get(k) and H.is_human(row[k])), None)
+
+
+def _person_name(c, person):
+    return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
+
+
+def sealed_for(c, who, owner, parent):
+    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (each one the
+    run carries that `owner` cannot read, the parent among them when the run carries it), when that create is a sealed
+    hand-off; None when it is not one, so the create is judged as before. Problem when one of them, or a private task
+    above it, has a person on it: the words name them and the route to them."""
+    if not (parent and who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
+            and H.is_bot(owner or "") and owner != who.actor and H.task_private(c, parent)
+            and H.task_represents(c, who.actor, parent["owner"])):
+        return None
+    kept = {}
+    for tid in attempt_tasks(c, who.attempt_id):
+        row = _task(c, tid)
+        if row and H.task_private(c, row) and not H.task_private_readable(c, owner, row):
+            kept.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
+    _no_person(c, who, kept.values())
+    return list(kept.values()) or None
+
+
+def _no_person(c, who, rows):
+    """Problem naming the person on one of `rows`, or on a private task above one, and the route to them."""
+    from . import task_relations as TR
+    for row in rows:
+        if person := _person_on(row):
+            raise Problem("privacy", f"{_person_name(c, person)} is on this private task: {SEALED_ROUTE}", 403)
+        for above in TR.ancestors(c, row["id"]):
+            above = H.task(c, above)
+            if above and H.task_private(c, above) and (person := _person_on(above)):
+                # A task above that the filer cannot read keeps its person's name, and the route goes through the
+                # filer's own requester, who can reach it.
+                if not H.task_private_readable(c, who.actor, above):
+                    raise Problem("privacy", "A person is on a private task above this one: ask "
+                                  f"{row['requester']}, who gave you this task, to file the subtask", 403)
+                raise Problem("privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}",
+                              403)
+
+
+def _words(text):
+    # Letters and digits only, any case: words joined by `_` (a path, a label) are still the words they copy.
+    return re.findall(r"[^\W_]+", str(text or "").lower())
+
+
+def _copied_runs(text):
+    words = _words(text)
+    return {tuple(words[i:i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
+
+
+# A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
+# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as
+# the commit, tree or blob segment of a GitHub link (whose other segments are then judged one by one). A bare hex run,
+# one after a common word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
+SHA = r"[0-9a-f]{40}"
+COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision)\b)[\s:=#@`*]*\b" + SHA + r"\b")
+GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
+
+
+def _without_commits(text):
+    def link(m):
+        parts = m.group(1).split("/")
+        return " ".join(part for i, part in enumerate(parts)
+                        if not (re.fullmatch(SHA, part) and i and parts[i - 1] in ("commit", "commits", "tree", "blob")))
+    return GITHUB_PATH.sub(link, COMMIT_REF.sub(" ", text))
+
+
+# The preview's long run reaches across `/`, `_` and `-`, so a branch, a session or a dated path would read as a secret.
+# A run is let through only when it reads as one of those: each piece between the separators a word, a number or a short
+# token (a word is lowercase or capitalised and a number at most eight digits, as a key's pieces are neither), with at
+# most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
+# A base64 or base64url value split by a separator has long mixed pieces, so it is still judged whole.
+REF_UUID = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")
+REF_PIECE = re.compile(r"[a-z]{0,16}|[A-Z][a-z]{0,15}|[0-9]{0,8}|[A-Za-z0-9]{1,4}")
+REF_ID = re.compile(r"[0-9a-f]{7,12}")
+
+
+def _workflow_ref(run):
+    pieces = re.split(r"[/_-]", REF_UUID.sub("", run))
+    ids = [piece for piece in pieces if not REF_PIECE.fullmatch(piece)]
+    return (len(ids) <= 1 and all(REF_ID.fullmatch(piece) for piece in ids)
+            and any(re.fullmatch(r"[A-Za-z]{3,}", piece) for piece in pieces))
+
+
+def secret_shaped(text):
+    """Whether `text` holds a credential-shaped value: the token patterns and secret fields that mask one in a refusal
+    preview, or a long mixed run that is not a workflow reference (a branch, a session, a dated path)."""
+    from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
+    text = str(text or "")
+    return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
+            or any(_looks_secret(m.group(0)) and not _workflow_ref(m.group(0))
+                   for m in LONG.finditer(_without_commits(text))))
+
+
+def sealed_words(kept, title, body):
+    """Refuse a sealed subtask whose words carry what the other bot may not read: a secret-shaped value, or 12 or more
+    words in a row copied from a private task it is kept from. The refusal names the check, never the text; it is a
+    writing correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
+    text = f"{title or ''}\n{body or ''}"
+    if secret_shaped(text):
+        raise Problem("lint", "This subtask holds a secret-shaped value: take it out, and say only what the repair "
+                              "needs", 422)
+    runs = _copied_runs(text)
+    if runs and any(runs & _copied_runs(f"{r.get('title') or ''}\n{r.get('body') or ''}\n{r.get('note') or ''}")
+                    for r in kept):
+        raise Problem("lint", f"This subtask copies {COPIED_WORDS} or more words in a row from private work the other "
+                              "bot cannot read: say only what the repair needs, in your own words", 422)
+
+
+# ----------------------------------------------------------------------------- a company-visible task from private work
+# A repair a private task's owner found may belong in the company's work: filed sealed, nobody else could pick it up or
+# see it done. The owning bot (or that bot's manager), from its own run, with no person on the work, files a
+# company-visible task "from private work" for any bot. Its own words are all it carries, so they are checked before it
+# is written: no secret-shaped value, no 12 words in a row from the private work, no file or link of a private task.
+# Filed under the private task, its owner is told when it is done, as for any subtask; the private task stays sealed.
+FROM_PRIVATE = True
+COMPANY_REFUSAL = ("Private task work cannot create company-visible tasks: its owning bot may file one from private "
+                   "work, in its own words (`hub task create --from-private`)")
+FILE_ID = re.compile(r"\bfile-[0-9a-f]{24}\b")
+
+
+def from_private(c, who, owner, parent):
+    """The private tasks a company-visible task filed from private work must keep out of its words: its parent and every
+    private task the run carries. Problem when the route is not open to this create: switched off, not a bot's own
+    run on private task work, a parent that is not private, a private task the filer neither owns nor manages the owner
+    of (a guest or reader only), or a person on one or above it (named, with the route to them, as for a sealed one)."""
+    if not FROM_PRIVATE:
+        raise Problem("privacy", COMPANY_REFUSAL, 403)
+    if not (who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
+            and private_execution(c, who)):
+        raise Problem("privacy", "Only a bot's own run on private work files a task from it", 403)
+    if private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
+        raise Problem("privacy", "Private meeting work cannot create company-visible tasks", 403)
+    if not H.is_bot(owner or ""):
+        raise Problem("privacy", "A task from private work is for a bot: ask a person with `hub task question`", 403)
+    if parent and not H.task_private(c, parent):
+        raise Problem("privacy", "File a task from private work under the private task it comes from, or with no "
+                                 "parent", 403)
+    rows = {parent["id"]: parent} if parent else {}
+    for tid in attempt_tasks(c, who.attempt_id):
+        row = _task(c, tid)
+        if row and H.task_private(c, row):
+            rows.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
+    if any(not H.task_represents(c, who.actor, row["owner"]) for row in rows.values()):
+        raise Problem("privacy", "Only a private task's owning bot, or its manager, files a task from its work", 403)
+    _no_person(c, who, rows.values())
+    return list(rows.values())
+
+
+def _private_words(c, row):
+    criteria = H._json(row.get("acceptance_json"), []) or []
+    return "\n".join([row.get("title") or "", row.get("body") or "", row.get("note") or "",
+                       *(str(item or "") for item in (criteria if isinstance(criteria, list) else [])),
+                       *(m.get("body") or "" for m in H.task_comments(c, row["id"]))])
+
+
+def _carries_private_file_or_link(c, kept, text):
+    """Whether `text` names a link on one of `kept`, a file of a private task or made by a run on one, or an
+    attachment of one of `kept` or of its comments."""
+    ids = [row["id"] for row in kept]
+    marks = ",".join("?" * len(ids))
+    if ids:
+        for row in c.execute(f"SELECT url FROM task_links WHERE task_id IN ({marks})", ids):
+            if row["url"] and row["url"] in text:
+                return True
+        for row in c.execute(f"SELECT blob_id FROM task_assets WHERE task_id IN ({marks})", ids):
+            if row["blob_id"] in text:
+                return True
+        for row in kept:
+            for m in H.task_comments(c, row["id"]):
+                for asset in c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (m["id"],)):
+                    if asset["blob_id"] in text:
+                        return True
+    for fid in set(FILE_ID.findall(text)):
+        found = c.execute("SELECT task_id,scope FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not found:
+            continue
+        tasks = {found["task_id"], found["scope"][5:] if found["scope"].startswith("task:") else None} - {None, ""}
+        if any(H.task_private(c, _task(c, tid)) for tid in tasks):
+            return True
+        for version in c.execute("SELECT attempt_id FROM bot_file_versions WHERE file_id=?", (fid,)):
+            if version["attempt_id"] and any(H.task_private(c, _task(c, tid))
+                                             for tid in attempt_tasks(c, version["attempt_id"])):
+                return True
+    return False
+
+
+def create_texts(body):
+    """Every text a task create keeps besides its title and body (models.TaskCreate): what a task from private work
+    could otherwise carry past the words checks."""
+    from .task_roles import role_name
+    blocker = body.blocker
+    # A role's name is checked as sent and as stored (task_roles.role_name): the store lower-cases and trims it.
+    roles = [name for raw in (body.roles or {}) for name in (str(raw), role_name(raw) or "")]
+    return [*body.acceptance_criteria, *body.labels, *body.change_paths, *body.links, body.public_title or "",
+            body.public_summary or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ()),
+            *roles]
+
+
+def from_private_words(c, kept, title, body, texts=()):
+    """Refuse a task from private work whose words carry it: a secret-shaped value, 12 or more words in a row copied
+    from one of `kept` (its title, body, note or comments), or a file or link from a private task, in its title, body or
+    any other text it keeps (`texts`, create_texts). The refusal names the check, never the text; it is a writing
+    correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
+    text = "\n".join([title or "", body or "", *(t for t in texts or () if t)])
+    if secret_shaped(text):
+        raise Problem("lint", "This task holds a secret-shaped value: take it out, and say only what the work needs", 422)
+    runs = _copied_runs(text)
+    if runs and any(runs & _copied_runs(_private_words(c, row)) for row in kept):
+        raise Problem("lint", f"This task copies {COPIED_WORDS} or more words in a row from private work: say only what "
+                              "the work needs, in your own words", 422)
+    # A private task's title is shorter than a copied run yet names it outright; a false hit costs a rewrite.
+    words = " " + " ".join(_words(text)) + " "
+    if any((name := " ".join(_words(row.get("title")))) and f" {name} " in words for row in kept):
+        raise Problem("lint", "This task names a private task by its title: describe the work without it", 422)
+    if _carries_private_file_or_link(c, kept, text):
+        raise Problem("lint", "This task carries a file or link from a private task: take it out, and say in your own "
+                              "words what the work needs", 422)
+
+
+def require_create(c, who, private, owner, parent, actor=None, title=None, body=None, from_private_work=False,
+                   texts=(), related=()):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
-    Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None."""
+    Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
+    `from_private_work`: a company-visible task filed from private work (from_private), whose words (`texts`, every
+    other text it keeps) are checked here; `related` are the ids of the tasks it is related to besides its parent."""
+    if from_private_work:
+        if private:
+            raise Problem("privacy", "A task from private work is company-visible: leave out --private", 422)
+        kept = from_private(c, who, owner, parent)
+        if any(H.task_private(c, _task(c, tid)) for tid in related):
+            # Related, blocked by or a duplicate of a private task, it would say so to that task's readers and wait on it.
+            raise Problem("privacy", "A task from private work is related to no private task but its parent", 403)
+        from_private_words(c, kept, title, body, texts)
+        return None
     execution = private_execution(c, who)
     if execution and private is False:
-        raise Problem("privacy", "Private task work cannot create company-visible tasks", 403)
+        raise Problem("privacy", COMPANY_REFUSAL, 403)
     guest = guest_for(c, who, owner, parent)
     if execution:
-        require_destination(c, who, owner, None, {}, guest=guest)
+        kept = None if guest else sealed_for(c, who, owner, parent)
+        if kept is not None:
+            sealed_words(kept, title, body)
+        require_destination(c, who, owner, None, {}, guest=guest, sealed={r["id"] for r in kept or ()})
         require_destination(c, who, actor or who.actor, None, {}, guest=guest)
     return guest
 
@@ -746,9 +1025,10 @@ def tag_readable(c, who, row):
             any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
+def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
     """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
     write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+    `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
     (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
     ids = references(c, refs)
@@ -774,7 +1054,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, guest) for actor in audience):
+        if all(_reads(c, actor, row, guest) for actor in audience if not (actor == to and row["id"] in sealed)):
             continue
         if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)
