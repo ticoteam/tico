@@ -164,8 +164,16 @@ def _add_usage(c, runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max,
 LOAD_FRESH_S = 120
 
 
-def _status_from_points(points, now):
-    """latest_sample / overloaded from up to six newest load samples (newest first)."""
+def load_status(c, runner_id, now=None):
+    """Numbers only, readable by every company bot. Six consecutive readings span five full minutes.
+
+    A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
+    """
+    if not on(c, runner_id):
+        return {"latest_sample": None, "overloaded": False}
+    now = int(time.time() if now is None else now)
+    points = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=? AND ts>=? ORDER BY ts DESC LIMIT 6",
+                       (runner_id, now - 48 * 3600)).fetchall()
     if not points:
         return {"latest_sample": None, "overloaded": False}
     p = points[0]
@@ -177,48 +185,10 @@ def _status_from_points(points, now):
               "running_turns": p["running_turns"], "stale": not fresh}
     loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
     overloaded = (fresh and len(points) == 6
-                  and all(points[i]["ts"] - points[i + 1]["ts"] == 60 for i in range(5))
+                  and all(points[i]["ts"] - points[i+1]["ts"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
                   and all(loaded(x) for x in points))
     return {"latest_sample": latest, "overloaded": bool(overloaded)}
-
-
-def load_status_by_runner(c, now=None):
-    """{runner_id: load_status(...)} for every live computer. One samples scan instead of per-runner
-    (Operations /computers, Health, and claim paths call load_status once per machine)."""
-    from . import read_cache
-    now = int(time.time() if now is None else now)
-    values = read_cache.cache(c)
-    key = ("load_status_by_runner", now)
-    if values is not None and key in values:
-        return values[key]
-    modes = {r["id"]: r["performance"] for r in c.execute(
-        "SELECT id, performance FROM runners WHERE revoked_at IS NULL")}
-    by_points = {}
-    # Newest six samples per computer in one pass (not one LIMIT 6 query each).
-    for p in c.execute(
-            "SELECT runner_id, ts, sampled_at, cpu_pct, mem_used, mem_total, swap_used, swap_total, running_turns "
-            "FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY runner_id ORDER BY ts DESC) AS rn "
-            "FROM runner_load_samples WHERE ts>=?) WHERE rn<=6 ORDER BY runner_id, ts DESC",
-            (now - 48 * 3600,)):
-        by_points.setdefault(p["runner_id"], []).append(p)
-    out = {}
-    for rid, mode in modes.items():
-        if mode != "on":
-            out[rid] = {"latest_sample": None, "overloaded": False}
-        else:
-            out[rid] = _status_from_points(by_points.get(rid) or [], now)
-    if values is not None:
-        values[key] = out
-    return out
-
-
-def load_status(c, runner_id, now=None):
-    """Numbers only, readable by every company bot. Six consecutive readings span five full minutes.
-
-    A missing minute, a calm reading, a stale sample or diagnostics being off clears the current flag.
-    """
-    return load_status_by_runner(c, now).get(runner_id) or {"latest_sample": None, "overloaded": False}
 
 
 def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
