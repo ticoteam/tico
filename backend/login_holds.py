@@ -375,7 +375,8 @@ def fallback_reset_notice(c, attempt_id):
     if not row or not result.get('fallback'):
         return None
     _, notice, limited = turn_steps(c, attempt_id, row['handed_runtime'], result)[-1]
-    notice = notice or result.get('text') or ''
+    # A reply may quote a reset without being the provider error that stopped this login.
+    notice = notice or ''
     match = _FALLBACK_RESET_RE.search(notice)
     if not limited or not match:
         return None

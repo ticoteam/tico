@@ -291,3 +291,33 @@ def test_fallback_limit_reason_on_job_health_and_review(api, monkeypatch, writes
                 job = views.conversation_execution(c, first['message']['conversation_id'],
                                                    settings=api.app.state.store.settings)
             assert 'resumes ~11:50 UTC' not in job['label']
+
+
+@pytest.mark.parametrize('limited', [False, True])
+def test_fallback_limit_reason_never_attributes_reply_text_to_provider(api, monkeypatch, limited):
+    machine = two_bots(api, monkeypatch)
+    at(monkeypatch, '2026-10-26T10:53:00.000000Z', api)
+    post(api, 'chat/ops', {'text': 'Finish the queued work'})
+    first = claim(api, machine, bot='ops')
+    limit(api, machine, first, errors=('Usage limit',), limit_resets_at='2026-10-26T12:50:00Z')
+    at(monkeypatch, '2026-10-26T10:54:00.000000Z', api)
+    signed_in(api, machine, ['ops', 'finance'], ['codex'])
+    fallback = claim(api, machine, bot='ops')
+    post(api, f"attempts/{fallback['id']}/started", {'thread_id': 'fallback'}, machine['token'])
+    rows = [('status', {'tool_events': True}),
+            ('tool', {'tool': 'mcp__hub__hub_webhook_send', 'status': 'started'}),
+            ('diagnostic', {'interruption_complete': True})]
+    post(api, f"attempts/{fallback['id']}/events", {'events': [
+        {'seq': n, 'kind': kind, 'payload': payload} for n, (kind, payload) in enumerate(rows, 1)]}, machine['token'])
+    post(api, f"attempts/{fallback['id']}/complete", {
+        'outcome': 'interrupted', 'last_seq': len(rows), 'limited': limited,
+        'primary_held': True, 'fallback': 'codex', 'text': OBSERVED_LIMIT}, machine['token'])
+    assert job_state(api, fallback['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs']
+    assert len(review) == 1
+    assert 'Provider limit:' not in review[0]['reason']
+    assert 'Quota reset ~11:50 UTC' not in review[0]['reason']
+    from backend import views
+    with api.app.state.store.read() as c:
+        job = views.conversation_execution(c, first['message']['conversation_id'], settings=api.app.state.store.settings)
+    assert 'resumes ~11:50 UTC' not in job['label']

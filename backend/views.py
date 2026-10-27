@@ -888,9 +888,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                                (cid, job["bot"])).fetchone()
             label, readiness_reason = queued_label(c, job["bot"], location, settings,
                                                    human=H.is_human(message.get("from_actor") or ""), behind=bool(behind))
-            from .login_holds import fallback_resume_reason
             if ((H.status(c, job['bot']) or {}).get('state') == 'limited'
-                    and (reason := fallback_resume_reason(c, job['attempt_id']))):
+                    and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
                 label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
