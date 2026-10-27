@@ -20476,6 +20476,68 @@
         ]
       }
     },
+    "/api/v2/usage/queues/purge": {
+      "post": {
+        "summary": "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it (scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own act, stay queued. A run that has already started finishes (owner and bot administrators)",
+        "operationId": "purgeAutomaticQueue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueuePurge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuePurgeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/webhooks": {
       "get": {
         "summary": "Your outgoing endpoints (an admin sees all) with 7-day delivered, failed and pending counts; paged",
@@ -31888,6 +31950,45 @@
           "label"
         ],
         "title": "QuestionOption"
+      },
+      "QueuePurge": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Scope",
+            "default": "company"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QueuePurge",
+        "description": "`company`, or `group:<id>` for that group and the groups nested under it."
+      },
+      "QueuePurgeResult": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "company, or group:<id>"
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "kept_people": {
+            "type": "integer"
+          },
+          "still_running": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cancelled",
+          "kept_people",
+          "scope",
+          "still_running"
+        ],
+        "additionalProperties": true
       },
       "RanOn": {
         "type": "object",

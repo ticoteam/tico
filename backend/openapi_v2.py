@@ -544,6 +544,10 @@ STABLE = [
     ("/api/v2/usage/pools/groups/{group}", "put", "Usage", "setGroupUsageLimit",
      "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none "
      "of them takes a new job (owner and bot administrators)", "UsagePoolLimit"),
+    ("/api/v2/usage/queues/purge", "post", "Usage", "purgeAutomaticQueue",
+     "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it "
+     "(scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own "
+     "act, stay queued. A run that has already started finishes (owner and bot administrators)", "QueuePurgeResult"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -1207,6 +1211,8 @@ SCHEMAS = {
                                   "groups, {id: UsagePoolView with name and parent}", "additionalProperties": True},
                         "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
+    "QueuePurgeResult": obj({"scope": {"type": "string", "description": "company, or group:<id>"},
+                             "cancelled": "i", "kept_people": "i", "still_running": "i"}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),
 }

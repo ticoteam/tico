@@ -163,6 +163,44 @@ def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
     assert get(api, "usage/limits")["pools"]["company"]["hourly_usd"] == 10
 
 
+def _jobs(api, bot="ops"):
+    with api.app.state.store.read() as c:
+        return [dict(row) for row in c.execute(
+            """SELECT j.id, j.state, m.from_actor, json_extract(m.refs_json,'$.caused_by') AS caused_by
+               FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?""", (bot,))]
+
+
+def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
+    from backend.store import H
+    r = fleet(api)
+    groups(api, "product")                                                        # ops is in Product, under Engineering
+    running = start(api, r)
+    post(api, "chat/ops", {"text": "Please keep this."})
+    made = post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})
+    task = made["task"] if isinstance(made, dict) and made.get("task") else made
+    with api.app.state.store.transaction() as c:
+        row = H.task(c, task["id"])
+        before_status = row["status"]
+        H._wake(c, row, row["owner"], "Review 1 gave approve at head abcdef1.", {"handoff": "verdict"})
+        H._wake(c, row, row["owner"], "Ana asked about this.", {"caused_by": "human:ana"})
+    post(api, "usage/queues/purge", {"scope": "group:missing"}, expected=404)
+    result = post(api, "usage/queues/purge", {"scope": "group:eng"})
+    jobs = _jobs(api)
+    assert result["scope"] == "group:eng" and result["cancelled"] >= 1
+    assert result["kept_people"] >= 1 and result["still_running"] >= 1
+    assert any(j["state"] == "queued" and str(j["from_actor"]).startswith("human:") for j in jobs)
+    assert any(j["state"] == "queued" and j["caused_by"] == "human:ana" for j in jobs)
+    assert all(j["state"] != "queued" or str(j["from_actor"]).startswith("human:") or j["caused_by"] == "human:ana"
+               for j in jobs)
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == before_status
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (running["id"],)).fetchone()[0] in ("leased", "running")
+    again = post(api, "usage/queues/purge", {"scope": "company"})
+    assert again["cancelled"] == 0
+    as_member(api, "ben@acme.example")
+    post(api, "usage/queues/purge", {"scope": "company"}, "ben-test", expected=403)
+
+
 def test_subscription_runs_count_unless_the_team_turns_that_off(api):
     assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
     assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False

@@ -16,7 +16,7 @@ from fastapi import Request
 
 from . import bot_access as A
 from . import models as M
-from . import providers, usage_limits, views
+from . import providers, queue_purge, usage_limits, views
 from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
@@ -210,6 +210,23 @@ def install(app, store, auth, mutate, settings):
     def set_group_pool(request: Request, group: str, body: M.UsageLimit):
         """A limit on the spend of a group's bots together, nested groups included: over it, none of them takes a new job."""
         return set_pool(request, "group:" + group, body)
+
+    @app.post("/api/v2/usage/queues/purge")
+    def purge_queue(request: Request, body: M.QueuePurge):
+        """Cancel queued automatic wakes and waits for the team or one group. Tasks stay. Messages from people stay
+        queued. A run that has already started finishes."""
+        who = request.state.identity
+        auth.domain(who)
+
+        def work(c):
+            if not auth.bot_admin(who):
+                raise Problem("forbidden", "Only the owner and administrators clear the automatic queue", 403)
+            scope = (body.scope or usage_limits.COMPANY).strip()
+            bots = queue_purge.bots_for(c, scope)
+            result = queue_purge.apply(c, bots)
+            H.event(c, who.actor, "usage.queue-purged", scope, result)
+            return {"scope": scope, **result}
+        return mutate(request, body, work)
 
     @app.put("/api/v2/usage/limits/{bot}")
     def set_limit(request: Request, bot: str, body: M.UsageLimit):
