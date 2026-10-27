@@ -301,9 +301,13 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
 
 def test_the_assistant_may_card_every_catalogue_route_botops_may():
     for e in ENTRIES:
-        path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+        path = settings_catalog.probe(e)
         if e.kind != "person":
             assert valid_operation(e.method, path, None, "assistant") == valid_operation(e.method, path, None, "botops"), e.key
+        if "/{" in e.route and e.route.split("/{")[0] + "/" in settings_catalog.ID_SHAPES:
+            # A repository (`owner/name`) or a pool (`groups/<id>`): probed as the two segments the route takes, so
+            # the equality above is about a path BotOps really cards, not one neither could.
+            assert path[len("/api/v2/"):].count("/") == e.route.count("/") + 1 and valid_operation(e.method, path, None, "botops"), e.key
 
 
 @pytest.mark.parametrize("role", ["owner", "admin", "member"])

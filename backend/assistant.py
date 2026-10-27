@@ -451,6 +451,17 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
+    # Settings a person may change only with a yes (backend/settings_entries.py, confirm): none hands back a secret, and
+    # each route takes the person's tap as their own click.
+    ("POST", r"/api/v2/assistant/turn-on"), ("POST", r"/api/v2/system/usage-count/reset"),
+    ("DELETE", r"/api/v2/company/server-connection"), ("DELETE", r"/api/v2/system/storage"),
+    ("POST", r"/api/v2/system/storage/move"), ("DELETE", r"/api/v2/(?:people|humans)/[^/]+"),
+    ("POST", r"/api/v2/settings/turn-levels"), ("POST", r"/api/v2/me/tokens/[^/]+/revoke"),
+    ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/ceo-bot/(checks|level)"),
+    ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/rules(/[^/]+)?"),
+    ("PUT", r"/api/v2/listening/destinations/[^/]+"), ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
+    ("POST", r"/api/v2/roadmaps/settings"), ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
+    ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
 )]
 _SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
 
@@ -668,7 +679,8 @@ def describe(c, method, path, body):
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
         (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
             "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
-        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Edit person {who(g[0])}: " + fields(body)),
+        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Delete {who('human:' + g[0])} from the team for good"
+         if method == "DELETE" else f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
          "to the roster, and let them sign in" + "".join(f"; {k} {body[k]}" for k in ("team", "reports_to", "title") if body.get(k))),
         (r"/api/v2/access/(?:people|humans)/([^/]+)", lambda g: "Change " + who("human:" + g[0]) + ": "
@@ -691,6 +703,37 @@ def describe(c, method, path, body):
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
         (r"/api/v2/files/([^/]+)", lambda g: "Change a file's listing"),
+        (r"/api/v2/assistant/turn-on", lambda g: "Turn the Assistant on for the team"),
+        (r"/api/v2/system/usage-count/reset", lambda g: "Reset this Tico's install ID for the usage count"),
+        (r"/api/v2/company/server-connection", lambda g: "Disconnect this Tico from the Tico company server"),
+        (r"/api/v2/system/storage", lambda g: "Stop storing new files in company storage (files already there are "
+         "still read from it)"),
+        (r"/api/v2/system/storage/move", lambda g: "Copy every file into company storage"
+         + (f", about {format(body['expect_bytes'] / 1e9, '.2g')} GB" if isinstance(body.get("expect_bytes"), int)
+            else "") + "; nothing is deleted where it was"),
+        (r"/api/v2/settings/turn-levels", lambda g: "Change the company's turn levels: " + values(body)),
+        (r"/api/v2/me/tokens/([^/]+)/revoke", lambda g: "Revoke the API token “" + ((c.execute(
+            "SELECT label FROM human_tokens WHERE id=?", (g[0],)).fetchone() or {"label": g[0]})["label"]) + "”"),
+        (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),
+        (r"/api/v2/ceo-bot/checks", lambda g: ("Turn the CEO bot's regular checks on" if body.get("on")
+                                               else "Turn the CEO bot's regular checks off")),
+        (r"/api/v2/ceo-bot/level", lambda g: "Set how much the CEO bot does: " + {
+            1: "passive", 2: "suggests actions", 3: "acts on its own"}.get(body.get("level"), "a level")),
+        (r"/api/v2/github/product-repos", lambda g: f"Create the private, empty GitHub repository "
+         f"{body.get('org', '')}/{body.get('name', '')}"),
+        (r"/api/v2/rules", lambda g: "Add a wake rule: " + values(body)),
+        (r"/api/v2/rules/([^/]+)", lambda g: "Change a wake rule: " + values(body)),
+        (r"/api/v2/listening/destinations/([^/]+)", lambda g: f"Change the listening destination “{g[0]}”: "
+         + values(body)),
+        (r"/api/v2/listening/destinations/([^/]+)/remove", lambda g: f"Remove the listening destination “{g[0]}”"),
+        (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
+        (r"/api/v2/inbound/inboxes/([^/]+)/release", lambda g: "Release the inbox " + ((c.execute(
+            "SELECT address FROM inbound_inboxes WHERE inbox_id=?", (g[0],)).fetchone()
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='inbound_inboxes'").fetchone() else None)
+            or {"address": g[0]})["address"]),
+        (r"/api/v2/inbound/phone-requests", lambda g: f"Ask for a phone number named “{body.get('name') or 'Mobile number'}”"),
+        (r"/api/v2/inbound/phone-requests/([^/]+)/accept", lambda g: "Accept the phone number's price: "
+         + (f"${body['price_micros'] / 1e6:,.2f}" if isinstance(body.get("price_micros"), int) else "the price shown")),
     )
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
@@ -1574,7 +1617,9 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
-        who = own(request)
+        who = person(request)
+        if who.via and not who.confirmed:      # the owner's own click, or their tap on a Confirm card
+            raise Problem("forbidden", "Only the person can do this, not the " + settings.assistant_name, 403)
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))

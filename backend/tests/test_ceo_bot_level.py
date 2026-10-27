@@ -20,10 +20,12 @@ def level(api, n, token="ana-test", expected=200):
     return post(api, "ceo-bot/level", {"level": n}, token=token, expected=expected)
 
 
-def via_assistant(api):
-    api.app.state.store.settings.test_identities["ana-via"] = Identity(OWNER, "owner", "ana@acme.example",
-                                                                       via="assistant", confirmed=True)
-    return "ana-via"
+def via_assistant(api, confirmed=False, via="assistant"):
+    """The owner as the Assistant (or BotOps) acting for them; `confirmed`: their own tap on a Confirm card it made."""
+    token = f"ana-via-{via}" + ("-tap" if confirmed else "")
+    api.app.state.store.settings.test_identities[token] = Identity(OWNER, "owner", "ana@acme.example",
+                                                                   via=via, confirmed=confirmed)
+    return token
 
 
 def review_routine(api):
@@ -73,6 +75,19 @@ def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
     assert len(level(api, 3)["level_history"]) == 2
     level(api, 4, expected=422)
     level(api, 0, expected=422)
+
+
+def test_the_owners_tap_on_a_confirm_card_sets_the_level_and_the_checks(api):
+    """Settings stage 3: BotOps or the owner's Assistant puts the level and the regular checks on a Confirm card; the
+    owner's tap on it is their own click. Acting for them without the tap still changes neither."""
+    with_ceo_bot(api)
+    for via in ("assistant", "botops"):
+        level(api, 3, token=via_assistant(api, via=via), expected=403)
+        post(api, "ceo-bot/checks", {"on": False}, token=via_assistant(api, via=via), expected=403)
+    assert get(api, "ceo-bot")["level"] == 1
+    tapped = level(api, 2, token=via_assistant(api, confirmed=True, via="botops"))
+    assert tapped["level"] == 2 and tapped["level_changed_by"] == OWNER
+    assert post(api, "ceo-bot/checks", {"on": False}, token=via_assistant(api, confirmed=True))["regular_checks"] is False
 
 
 def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api):

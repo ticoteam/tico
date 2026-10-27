@@ -530,10 +530,13 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
   ownership, the CEO bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
   confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
-  `hub settings set` runs at once. A confirm entry whose route BotOps can't yet put on a card is person-only until it
-  can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
-- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
-  answers with a one-line reason and the card's link.
+  `hub settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
+  CEO bot's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
+  put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
+  goes back to confirm).
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail, and a
+  new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): BotOps answers with
+  a one-line reason and the card's link.
 
 The Assistant's Confirm card is in the person's own Assistant chat (the owner's CEO Bot chat), and it may card every
 catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat

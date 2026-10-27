@@ -85,14 +85,14 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind != "person" or e.why, e.key
         # A Confirm card can only carry a route a person may confirm from BotOps.
         if e.kind == "confirm":
-            path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+            path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
 
 
 def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
     for e in ENTRIES:
-        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
         if e.key in NO_CARD_YET:
             assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
             assert e.kind == "person" or e.when_held == "person", e.key
@@ -117,13 +117,12 @@ def test_a_wake_rule_that_sends_outside_is_not_direct():
     quiet = {"scope_kind": "team", "event": "task.created", "then": "wake"}
     assert "run" in settings_catalog.plan(None, None, _owner(), e, quiet, propose=card)
     for action in ("send_webhook", "forward"):
-        with pytest.raises(Problem) as refused:
-            settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
-                                  propose=card)
-        assert refused.value.code == "person_only", action
+        # Settings stage 3: a Confirm card, where it was the person's own in Settings before BotOps could make one.
+        assert settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
+                                     propose=card) == {"needs_confirm": True}, action
 
 
-def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api, botops):
+def test_botops_puts_a_partial_edit_of_a_stored_outbound_wake_rule_on_a_card_and_changes_nothing(api, botops):
     # These are synthetic rows in the test database; no webhook delivery worker runs here.
     hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook",
                                    "events": ["*"]})["webhook"]
@@ -138,7 +137,8 @@ def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api,
                   {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}}):
         err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value},
                            ana["token"])
-        assert err and refused.get("error") == "person_only", refused
+        # The partial update is classed with the stored rule read in: it sends outside, so it waits for the tap.
+        assert not err and refused.get("needs_confirm"), refused
         with api.app.state.store.read() as c:
             stored = c.execute("SELECT enabled,then_outcome,params_json,revision FROM rules WHERE id=?",
                                (rule["id"],)).fetchone()
