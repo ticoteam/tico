@@ -1058,6 +1058,26 @@ class WaitingWithDependency(HubCase):
                                               "The checks failed three times today and we still need to understand "
                                               "what caused that. If yes, I will run the tests today."),
                          ("Approve PR #1555 so QA can test it? If yes, I will run the tests today.", ""))
+        # An outcome that lists the bot's next actions is one outcome, not more asks.
+        context = "The vendor needs our answer today because the pricing offer ends tomorrow morning. " * 3
+        for outcome in ("If yes, I'll sign it, send it and close this task.",
+                        "If approved, I'll merge it, then deploy to production.",
+                        "Then I'll book the venue, send invites and order food."):
+            self.assertEqual(H.person_ask_rewrite(f"Approve the $5,000 budget for Acme? {context}{outcome}"),
+                             (f"Approve the $5,000 budget for Acme? {outcome}", ""))
+
+    def test_negative_conditions_do_not_replace_the_affirmative_outcome(self):
+        request = "Approve PR #1555 so QA can test it?"
+        outcome = "If yes, I will run the tests today."
+        context = "The checks failed three times today and we still need to understand what caused that."
+        for negative in ("If you do not approve, I will keep it parked.",
+                         "If you agree not to merge, I will close it.",
+                         "If you don't approve, I will keep it parked."):
+            text = f"{request} {negative} {context} {outcome}"
+            self.assertTrue(H.lint_person_ask(text))
+            rewrite, repair = H.person_ask_rewrite(text)
+            self.assertEqual((rewrite, repair), (f"{request} {outcome}", ""))
+            self.assertEqual(H.lint_person_ask(rewrite), [])
 
     def test_shortening_keeps_indirect_and_conditional_requests(self):
         task = H.task_create(self.conn, CMO, 'Get the decisions', 'All the original details.', CMO, private=False)
@@ -1069,6 +1089,12 @@ class WaitingWithDependency(HubCase):
             "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
             "If yes, I will run the tests today.",
             "Approve PR #1555 so QA can test it? Once approved, sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? If approved, I'll merge it; sign the vendor contract too. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? And sign the vendor contract before Friday. "
             "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
             "If yes, I will run the tests today.",
         ]

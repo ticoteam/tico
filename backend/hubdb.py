@@ -1679,10 +1679,16 @@ def lint_person_ask(text):
 # A sentence that answers the request ("If yes, ...") is the outcome over one that only opens like one ("Then the
 # runner failed."), wherever it comes after the request.
 LINT_IF_YES = re.compile(r"if (?:yes|so|approved|you (?:agree|approve|do|say yes))\b", re.I)
+# A matching opener can still decline the request ("If you do not approve", "If you agree not to merge").
+# Inspect only the condition: a negation in what the bot does afterward does not change the person's answer.
+LINT_NEGATIVE_CONDITION = re.compile(r"\b(?:no|not|never)\b|\b\w+n['’]t\b", re.I)
 LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|if (?:not|no)\b|then\b|once\b"
                           r"|after (?:that|you|it)\b|i(?:'ll|\s+will|\s+can|\s+then)\b|we(?:'ll|\s+will)\b"
                           r"|th(?:at|is) (?:lets|unblocks|means)\b)", re.I)
 LINT_REQUEST = re.compile(r"\b(?:please|(?:need|want|would like) you to|you (?:must|should|need to|have to))\b", re.I)
+# Words that open a condition or a time ("If yes", "Once approved", "After you approve"): the clause after one leads.
+LINT_LEAD_IN = {"if", "once", "after", "when", "whenever", "before", "as", "unless", "until", "since", "because",
+                "while", "assuming", "given"}
 
 
 def _asks_for_something(sentence):
@@ -1693,10 +1699,23 @@ def _asks_for_something(sentence):
     # still asks for a second decision. Treat possible requests conservatively rather than silently losing them.
     if LINT_REQUEST.search(sentence):
         return True
-    clauses = [re.sub(r"^(?:(?:please|also|then)\s+)+", "", clause, flags=re.I)
-               for clause in re.split(r"[,;]\s*", sentence)]
-    return any(re.split(r"[\s,;:]+", s.strip(), 1)[0].strip("\"'*_()").lower() in LINT_VERBS
-               for s in clauses)
+
+    def first_word(clause):
+        clause = re.sub(r"^(?:(?:and|please|also|then)\s+)+", "", clause.strip(), flags=re.I)
+        return re.split(r"[\s,;:]+", clause, 1)[0].strip("\"'*_()").lower()
+
+    if not LINT_OUTCOME.match(sentence):
+        return any(first_word(clause) in LINT_VERBS for clause in re.split(r"[,;]\s*", sentence))
+    # An outcome lists what happens ("If yes, I'll sign it, send it and close this task."), so only the clause that
+    # leads each part, past its condition, can tell the person to do something ("Once approved, sign the contract.").
+    for part in sentence.split(";"):
+        for clause in part.split(","):
+            word = first_word(clause)
+            if word in LINT_VERBS:
+                return True
+            if word not in LINT_LEAD_IN:
+                break
+    return False
 
 
 def person_ask_rewrite(text):
@@ -1717,7 +1736,9 @@ def person_ask_rewrite(text):
                     "ask any other separately, and put the reasons in the details")
     i = asks[0]
     after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
-    outcome = next((s for s in after if LINT_IF_YES.match(s)), after[0] if after else None)
+    outcome = next((s for s in after if LINT_IF_YES.match(s)
+                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, 1)[0])),
+                   after[0] if after else None)
     kept = [sentences[i], *([outcome] if outcome else [])]
     rewrite = " ".join(kept)
     n = len(rewrite.split())
