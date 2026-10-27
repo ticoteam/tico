@@ -124,19 +124,26 @@ def _stored_card(api, card):
                               (card["action"]["id"],)).fetchone())
 
 
+CARDS = [("run_workflows", "may run workflows in product: it can start CI there, and CI uses that repository's secrets"),
+         ("edit_workflows", "may edit workflow files in product: a workflow it pushes on a branch runs with that "
+                            "repository's secrets before review")]
+
+
+@pytest.mark.parametrize("option,words", CARDS)
 @pytest.mark.parametrize("person,name", [("ana-test", "ana"), ("ben-test", "ben")])
-def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_card(api, botops, repos, person, name):
+def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_card(api, botops, repos, person, name,
+                                                                                   option, words):
     """Chris, Oct 27: BotOps refused to tick Run workflows for him. The owner or an admin gets a Confirm card in their
     BotOps chat naming the bot, the repository and what running workflows allows; their tap turns it on."""
-    asked = turn(api, botops, person=person, text="Tick Run workflows on product for ops")
+    FLAG = {"full_name": "Acme/product", "access": "write", option: True}
+    asked = turn(api, botops, person=person, text="Tick " + option + " on product for ops")
     for _ in range(2):
         card = act(api, asked, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [FLAG]})
         assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
     assert effective(api) == [{"full_name": "Acme/product", "access": "write"}]
     row = _stored_card(api, card.json())
     assert (row["owner"], row["method"], row["path"]) == ("human:" + name, "PUT", "/api/v2/bots/ops/repositories")
-    assert row["description"] == ("ops: may run workflows in product: it can start CI there, and CI uses that "
-                                  "repository's secrets."), row
+    assert row["description"] == "ops: " + words + ".", row
     done = post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token=person)
     assert done["action"]["status"] == "done", done
     assert effective(api) == [FLAG]
