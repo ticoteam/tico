@@ -694,12 +694,26 @@ def _copied_runs(text):
     return {tuple(words[i:i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
 
 
+# A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
+# shape heuristic lets one through, and only where it reads as a commit: after a commit word, or as a path segment of a
+# GitHub link (whose other segments are then judged one by one). A bare hex run stays secret-shaped, as old tokens were.
+SHA = r"[0-9a-f]{40}(?:[0-9a-f]{24})?"
+COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision|at)\b)[\s:=#@]*\b" + SHA + r"\b")
+GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
+
+
+def _without_commits(text):
+    text = COMMIT_REF.sub(" ", text)
+    return GITHUB_PATH.sub(lambda m: " ".join(part for part in m.group(1).split("/") if not re.fullmatch(SHA, part)),
+                           text)
+
+
 def secret_shaped(text):
     """Whether `text` holds a credential-shaped value, by the detectors that mask one in a refusal preview."""
     from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
     text = str(text or "")
     return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
-            or any(_looks_secret(m.group(0)) for m in LONG.finditer(text)))
+            or any(_looks_secret(m.group(0)) for m in LONG.finditer(_without_commits(text))))
 
 
 def sealed_words(kept, title, body):
