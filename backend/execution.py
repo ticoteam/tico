@@ -1581,9 +1581,21 @@ def in_scope(c, scope, task_id):
 def live_tasks(c):
     """{(bot, task)} with a turn out now. A later wake for that bot about that task waits for the turn even when its
     lane is another one: a task moved under another of the bot's tasks mid-turn keys a new lane (session_root), and
-    one task never has two turns of the same bot at once."""
-    return {(r[0], r[1]) for r in c.execute("SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
-                                             "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
+    one task never has two turns of the same bot at once.
+
+    Cached for the read snapshot: Health `_waiting` / `queued_reasons` and claim paths asked once per slow bot.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "execution.live_tasks"
+    if values is not None and key in values:
+        return values[key]
+    out = {(r[0], r[1]) for r in c.execute(
+        "SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
+        "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
+    if values is not None:
+        values[key] = out
+    return out
 
 
 FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot reads the rest in its room
