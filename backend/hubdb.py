@@ -6337,10 +6337,12 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     if (status if status is not None else row["status"]) != "waiting":
         refuse(conn, actor, "kind", "--on names who a waiting task waits on: set --status waiting with it")
     person = resolve_actor(conn, value)
+    if person and is_bot(person):
+        return _waiting_bot(conn, actor, row, person)
     if not person or not is_human(person):
         refuse(conn, actor, "waiting_on",
-               f"{value} is not a person on the team: a task waits on a person with --on, or on another "
-               "task with hub task relate <task> <other> --kind blocked_by")
+               f"{value} is not a person or an active bot on the team: a task waits on a person with --on, or on "
+               "another task with hub task wait <task> --on task:<other> (then --on bot:<its owner> names that bot)")
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
         # A private task with no person on it can take one, its guest, when its owning bot waits on them.
         if private is not None or not bot_only(row) and not row.get("guest"):
@@ -6351,6 +6353,33 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
             refuse(conn, actor, "private", refusal)
         task_reach(conn, actor, row, person)
     return person
+
+
+def _waiting_bot(conn, actor, row, bot_actor_id):
+    """`--status waiting --on bot:<slug>`: the task waits on that bot's prerequisite work, or the write is refused.
+
+    A bot alone does not say which of its work must finish, so the wait is the open blocker it owns (`hub task wait
+    <task> --on task:<other>`, a blocked_by relation): that holds the task's work while it is open and wakes its owner
+    with the outcome when it is done, declined or closed (_unblock). Nothing more is stored, so `waiting_on` stays the
+    person a task waits on (their Needs you); the note is the reason shown beside the bot's name."""
+    slug = actor_id(bot_actor_id)
+    if (bot(conn, slug) or {}).get("state") != "active":
+        refuse(conn, actor, "waiting_on",
+               f"{slug} is not an active bot on the team, so nothing it does can resume this task: wait on a person "
+               "with --on, or on an active bot's task with hub task wait <task> --on task:<other>")
+    # The first open blocker, in the order the task's relations are served (TR.grouped), is the one its views name,
+    # so the bot named here must own that one: naming a bot behind it would show another owner's name.
+    first = (TR.live_blockers(conn, row["id"], ACTIVE_STATUSES) or [None])[0]
+    if not first:
+        refuse(conn, actor, "waiting_on",
+               f"Nothing {slug} owns blocks this task, so Tico cannot tell which of its work resumes it: link that "
+               f"task first with hub task wait {row['id']} --on task:<its task>, then --on {bot_actor_id}")
+    if first["owner"] != bot_actor_id:
+        # Keep diagnostics independent of the blocker's read audience.
+        refuse(conn, actor, "waiting_on",
+               f"This task's first open blocker belongs to another owner, so its views would not name {slug}: wait on that "
+               f"blocker's owner, or take it off with hub task wait {row['id']} --on task:<it> --remove first")
+    return ""
 
 
 def _task_party(conn, actor, row):

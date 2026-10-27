@@ -41,11 +41,16 @@ function taskBoardShows(it, state) {
 const taskOpenBlockers = t => taskBlockers(t).filter(r => !['done', 'closed', 'declined'].includes(String(r.status || '')));
 function taskBlockedStrip(it) {
   const t = it.task;
-  const hold = t.blocked_since ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
+  // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
+  const bot = taskBotWait(t);
+  const hold = t.blocked_since && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
   const open = taskOpenBlockers(t); if (!open.length) return hold;
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
-  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}" title="${esc(`Blocked by ${all}`)}"><span>Blocked by ${esc(name)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  // A bot's prerequisite work names the bot; the reason, its age and what blocks it are the tooltip.
+  const label = bot ? `Waiting on ${clipLine(bot.name, 48)}` : `Blocked by ${name}`;
+  const tip = bot ? `${taskWaitLine(t)}\nBlocked by ${all}` : `Blocked by ${all}`;
+  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}"><span>${esc(label)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;

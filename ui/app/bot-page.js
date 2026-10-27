@@ -210,7 +210,7 @@ function botAlertHTML(slug) {
   // Tico stopped it (failed runs, or over its run budget): the words are the server's, Release lifts it.
   if (s?.stopped) return `<span class="bot-alert" role="status" title="${esc(s.focus || '')}" data-bot-stopped="${esc(s.stopped)}"><span aria-hidden="true">⚠</span> Stopped</span>${botReleaseButton(slug, 'primary bot-alert-resume')}`;
   if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) {
-    word = s.state === 'crashed' ? 'Last run stopped' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';
+    word = s.state === 'crashed' ? 'Last run stopped' : s.state === 'quarantined' && s.quarantine?.auto ? 'Quarantined' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';
   }
   else if (!s && stateOf(slug) === 'failed') word = 'Last run failed';
   else if (e.agent?.synced && !e.online) { word = agentPresenceLabel(e.agent, false); why = 'Imported history needs a sync.'; }
@@ -227,7 +227,7 @@ function botQuarantineCard(slug) {
   if (s?.bot_state !== 'quarantined' || !e || botLimited(e) || !settingsCanManageBot(e)) return '';
   const r = s.quarantine?.review || {};
   return `
-    <section class="card" id="bot-quarantine"><header><h2>Paused for review</h2>
+    <section class="card" id="bot-quarantine"><header><h2>${s.quarantine?.auto ? 'Quarantined for repeated refused writes' : 'Paused for review'}</h2>
         <button class="primary" type="button" data-quarantine-resume>Resume bot</button></header>
       <p>${esc(quarantineWhy(slug))} ${esc(QUARANTINE_RESUME_NOTE)}</p>
       ${r.preview ? `<blockquote class="bot-quarantine-text">${esc(r.preview)}</blockquote>` : ''}
