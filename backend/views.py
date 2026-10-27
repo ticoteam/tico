@@ -2096,6 +2096,9 @@ def install_views(app, store, auth, mutate, task_view):
             harness_recent = recent_by_runner(c) if who.role == "owner" else {}
             # One pass for every computer's assignments (not two SELECTs per runner).
             placed, active_placed = assignments_by_runner(c)
+            from .model_login import cleared_by_runner, key_cleared_by_runner
+            # One pass each for signed-out logins and cleared keys (not two SELECTs per computer).
+            signed_out, key_cleared = cleared_by_runner(c), key_cleared_by_runner(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2137,7 +2140,6 @@ def install_views(app, store, auth, mutate, task_view):
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
-                from .model_login import cleared_logins, key_cleared_logins
                 from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
                 keys = computer_key_listing(c, row["id"])
@@ -2164,8 +2166,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  "may_manage": manage, "profiles": profiles,
                                  "bot_connections": [link for link in subscriptions.connections(
                                      c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
-                                 "signed_out": cleared_logins(c, row["id"]),
-                                 "key_cleared": key_cleared_logins(c, row["id"]),
+                                 "signed_out": signed_out.get(row["id"]) or {},
+                                 "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
                                  # {runtime: {env, preview}}: its own keys stored from here, and the company's shared
                                  # ones, for the rows a key signs in (backend/computer_keys.py). Never a value, and a
