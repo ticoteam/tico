@@ -2081,6 +2081,8 @@ def install_views(app, store, auth, mutate, task_view):
             from . import subscriptions, inbox_isolation
             from .computer_keys import serving, shared_listing
             subscription_context = subscriptions.context(c, store.settings)
+            # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
+            connections_map = subscriptions.connections_by_runner(c, store.settings, subscription_context)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = serving(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
@@ -2169,8 +2171,8 @@ def install_views(app, store, auth, mutate, task_view):
                         key.pop("id", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "may_manage": manage, "profiles": profiles,
-                                 "bot_connections": [link for link in subscriptions.connections(
-                                     c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
+                                 "bot_connections": [link for link in (connections_map.get(row["id"]) or [])
+                                                     if link["bot"] not in hidden],
                                  "signed_out": signed_out.get(row["id"]) or {},
                                  "key_cleared": key_cleared.get(row["id"]) or [],
                                  "inbox_only": row["id"] in kept_for_inbox,
