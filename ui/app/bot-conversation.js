@@ -14,7 +14,7 @@ function convStop() {
 }
 async function loadConversation(slug, keep) {
   convStop();
-  const state = CONV = {slug, runs: [], active: null, older: false, pending: keep?.pending || [], replyFor: null, tail: 0, poll: 0, busy: false};
+  const state = CONV = {slug, runs: [], active: null, older: false, pending: keep?.pending || [], replyFor: null, tail: 0, poll: 0, busy: false, loadedAt: Date.now()};
   let d;
   try { d = await get(`/employees/${slug}/conversation`); }
   catch (err) {
@@ -36,6 +36,10 @@ function convSchedule(state) {
   // Idle replay used to reload every 30 s even from a background tab; the live tail already skips when hidden.
   else state.poll = setInterval(() => { if (!document.hidden) loadConversation(state.slug, state); }, 30000);
 }
+// A tab shown again catches up on the idle reloads it skipped, so a run that started meanwhile gets its tail.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && CONV && !CONV.active && Date.now() - CONV.loadedAt >= 30000) loadConversation(CONV.slug, CONV);
+});
 async function convTail(state) {
   if (CONV !== state || state.busy || !state.active) return;
   state.busy = true;

@@ -81,15 +81,20 @@
     load();
     // Background tabs used to keep hitting the Files list every minute; that endpoint is
     // statement-heavy (#1659) and multiplies across open bot pages. Resume when the tab is shown again.
+    // A tab shown again reloads only when its last load is about an interval old (a little under, so timer jitter
+    // never skips a minute): switching tabs often must not
+    // ask more than the minute timer did.
+    let loadedAt = Date.now();
+    const due = () => { if (!document.hidden && Date.now() - loadedAt >= 55000) { loadedAt = Date.now(); load(); } };
     const onVis = () => {
       if (!host.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
-      if (!document.hidden) load();
+      due();
     };
     const timer = setInterval(() => {
       if (!host.isConnected) {
         clearInterval(timer); document.removeEventListener('visibilitychange', onVis); return;
       }
-      if (!document.hidden) load();
+      due();
     }, 60000);
     document.addEventListener('visibilitychange', onVis);
   }
