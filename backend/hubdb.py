@@ -2050,23 +2050,23 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     counted, last, total, calls, again = [], {}, 0, set(), False
     for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY ts, id", (actor, since))):
-        detail = _json(refused["detail_json"], {}) or {}
+        facts = _json(refused["detail_json"], {}) or {}
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
-            about = detail.get("task")
+            about = facts.get("task")
             if about in last and parse_ts(refused["ts"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
                 continue
             last[about] = parse_ts(refused["ts"])
         key = refused["detail_json"]
-        if call := detail.get("bulk"):
+        if call := facts.get("bulk"):
             # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
             # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
             if call in calls:
                 again = again or call == BULK_CALL.get()
                 continue
             calls.add(call)
-            key = _dump({k: v for k, v in detail.items() if k != "bulk"})
+            key = _dump({k: v for k, v in facts.items() if k != "bulk"})
         total += 1
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.

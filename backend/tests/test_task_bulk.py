@@ -206,3 +206,8 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
         row = get(api, "tasks/" + owned[0]["id"])["task"]
         post(api, "tasks/" + row["id"], {"version": row["version"], "close": True}, token=token, expected=403)
     assert state() == "quarantined"
+    # What the bot is told when it is back quotes the refused words, never the stored refusal or its call.
+    with api.app.state.store.read() as c:
+        stopped = next(e["detail"]["refusal"] for e in H.events(c, actor=H.KEEPER) if e["action"] == "quarantine")
+        words = H.refusals_for(c, actor="bot:ops")[-1]["detail"]
+    assert stopped == {"rule": "close", "detail": words}
