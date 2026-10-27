@@ -1481,6 +1481,21 @@ def card_why(item):
     return line
 
 
+def _readable_task_ids(c, visible, ids):
+    """Task ids among `ids` that pass `visible` (`auth.task_sql`), in one IN-chunked pass.
+
+    Needs you used to call `auth.task` once per card (and again for merged / approval / stale
+    ids); the SQL predicate is the same rule lists elsewhere use.
+    """
+    out = set()
+    wanted = [tid for tid in dict.fromkeys(ids) if tid]
+    for part in H.chunks(wanted):
+        marks = ",".join("?" * len(part))
+        out.update(r[0] for r in c.execute(
+            f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({visible})", part))
+    return out
+
+
 def needs_items(c, auth, who, task_view, older=None, count_only=False):
     """The person's queue. A question unanswered for two business days stays, marked stale, until the weekday-morning
     batch sends it back to its bot (backend/still_needed.py); `older`, a list the caller passes, stays empty.
@@ -1491,18 +1506,21 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     raw = H.needs_you(c, who.actor)
     from . import assigned_start
     listed = {row['id'] for key in ('tasks', 'waiting', 'declined') for row in raw[key]}
-    for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor):
-        if (assigned_start.manager(c, row) == who.actor and row['id'] not in listed
-                and _readable(auth, c, who, row['id'])):
-            raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
-                                 'note': assigned_start.description(c, row, auth.settings)})
+    overdue = [row for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor)
+               if assigned_start.manager(c, row) == who.actor and row['id'] not in listed]
+    can_see_overdue = _readable_task_ids(c, visible, [row['id'] for row in overdue])
+    for row in overdue:
+        if row['id'] not in can_see_overdue:
+            continue
+        raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
+                             'note': assigned_start.description(c, row, auth.settings)})
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
     from . import ceo_merge
     merged = ceo_merge.hidden_by_item(c, who.actor)
     # Each card reads its task, its open asks, its origin and the chain of tasks above it. Those rows are read here
-    # for every card together, in this snapshot; each card is still checked one at a time by the same rules.
+    # for every card together, in this snapshot; readability of the cards themselves is one task_sql pass.
     cards = raw["tasks"] + raw["waiting"] + raw["declined"]
     chain = TR.prime_ancestry(c, [row["id"] for row in cards])
     chain |= {row["task_id"] for row in raw["approvals"] if row.get("task_id")}
@@ -1514,12 +1532,15 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     _prime_person_origins(c, visible, chain)
     pipelines = H.type_list(c)
     asks_of = H.open_tasks_asks(c, cards, actor=privacy.actor(who))
+    can_see = _readable_task_ids(
+        c, visible,
+        [row["id"] for row in cards]
+        + [tid for originals in merged.values() for tid in originals]
+        + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
-            try:
-                auth.task(c, who, row["id"])
-            except Problem:
+            if row["id"] not in can_see:
                 continue
             open_asks = asks_of[row["id"]]
             ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
@@ -1540,7 +1561,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
-                item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
+                item["merged"] = [t for t in merged[row["id"]] if t in can_see]
             if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
@@ -1560,14 +1581,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         msg = H.message(c, row["message_id"])
         if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
-            try:
-                task = auth.task(c, who, row["task_id"]) if row.get("task_id") else None
-            except Problem:
-                task = None
+            task = (H.task(c, row["task_id"])
+                    if row.get("task_id") and row["task_id"] in can_see else None)
             item = {**row, "kind": "approval", "what": row["kind"],
                     "title": approval_title(row["kind"], row.get("payload"), (task or {}).get("title")),
                     "requester": row["requested_by"], "conversation_id": msg["conversation_id"],
-                    "from_person": person_origin(c, H.task(c, row["task_id"]) if row.get("task_id") else None, visible)}
+                    "from_person": person_origin(c, task, visible)}
             if row["kind"] == "send":
                 item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
             if row["kind"] == "support":
@@ -1580,7 +1599,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
         # The one card for the person's stale ticket suggestions (backend/stale_review.py): a row per task they may read.
-        stale["rows"] = [r for r in stale["rows"] if _readable(auth, c, who, r["task"])]
+        stale_ok = _readable_task_ids(c, visible, [r["task"] for r in stale["rows"]])
+        stale["rows"] = [r for r in stale["rows"] if r["task"] in stale_ok]
         if stale["rows"]:
             items.append(stale_review.retitle(stale))
     if who.role == "owner":
