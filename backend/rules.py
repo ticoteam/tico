@@ -655,6 +655,10 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(IGNORE, "same_state", "same_state")
     if held == "own_write":
         return Decision(IGNORE, held, HOLD_IGNORED)    # the bot's own run already knows what it wrote
+    if held == "parked":
+        urgent = urgent_rule(conn, actor, target, refs, conv, event)
+        if urgent:
+            return Decision(WAKE, urgent)
     if held:
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
