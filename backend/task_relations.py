@@ -310,8 +310,9 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
     for here, field, other in ((from_id, out_field, to_id), (to_id, in_field, from_id)):
         H._task_event(conn, here, actor, field, None if added else other, other if added else None, note)
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, here))
-    if kind in ("parent", "blocks"):
-        # A child or blocker added or taken off changes what the task waits on (backend/task_holds.py).
+    if added and kind in ("parent", "blocks"):
+        # A child or blocker added changes what the task waits on (backend/task_holds.py). One taken off is
+        # recomputed by its caller after reconcile, which releases a task it no longer holds.
         from . import task_holds
         task_holds.refresh(conn, to_id)
 
@@ -593,6 +594,8 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
     reconcile(conn, task_id)
+    from . import task_holds
+    task_holds.refresh(conn, task_id)
     from .check_blocked import changed
     changed(conn, task_id)
     from .blocker_asks import unjoined
