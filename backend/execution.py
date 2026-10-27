@@ -2622,11 +2622,14 @@ class Execution:
         record of lanes the attempts table does not show, and an empty list from a silent computer is not "free"."""
         from .models import Claim
         from .performance import load_status
+        from .read_cache import one
         for queued in c.execute("SELECT w.job_id,a.runner_id FROM org_turn_waits w JOIN jobs j ON j.id=w.job_id "
                                  "JOIN assignments a ON a.bot=j.bot WHERE j.state='queued' ORDER BY w.created,w.job_id"):
             rid = queued['runner_id']
             remote = rid != runner['id']
-            target = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (rid,)).fetchone() if remote else runner
+            # Share RUNNER_SQL with bot_claimable for the snapshot; skip revoked computers in Python.
+            found = one(c, RUNNER_SQL, (rid,)) if remote else runner
+            target = found if found and not found["revoked_at"] else None
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
