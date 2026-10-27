@@ -10,6 +10,7 @@ import secrets
 import re
 from email.parser import BytesParser
 from email.policy import HTTP
+from types import SimpleNamespace
 
 from fastapi import Request
 
@@ -454,6 +455,31 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         human_only(request.state.identity)
         return write_upload(store, request, body, uploads, fn)
 
+    def chat_uploads(c, who, bot, message, uploads, titles):
+        """Store a person's uploads on their message to `bot`: blobs linked to it, and each one also a versioned file in
+        its conversation, so a picture, video or audio a person sends is a visual like a bot's (backend/visuals.py);
+        `id` and `url` stay the blob's for older clients. Returns the message as `who` reads it."""
+        items = [register(c, who, **upload) for upload in uploads]
+        for item in items:
+            c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+        for index, (item, upload) in enumerate(zip(items, uploads)):
+            cid = message["conversation_id"]
+            row, _, _ = files.add_version(
+                c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
+                identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
+                mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
+            title = titles[index] if index < len(titles) else ""
+            item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
+                        kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
+        if items:
+            refs = {**message["refs"], "attachments": items}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+        return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
+
+    # The owner's CEO Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
+    app.state.uploads = SimpleNamespace(form=lambda request, model: form(request, model, blobs, store), attach=chat_uploads,
+                                        write=write)
+
     @app.post("/api/v2/uploads/chat/{bot}", openapi_extra=upload_contract(M.ChatCreate))
     async def chat_upload(request: Request, bot: str):
         who = request.state.identity
@@ -461,25 +487,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         body, uploads = await form(request, M.ChatCreate, blobs, store)
         def work(c):
             message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs))
-            items = [register(c, who, **upload) for upload in uploads]
-            for item in items:
-                c.execute("INSERT INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
-            for index, (item, upload) in enumerate(zip(items, uploads)):
-                # Each is also a versioned file in this conversation, so a picture, video or audio a person sends
-                # is a visual like a bot's (backend/visuals.py); `id` and `url` stay the blob's for older clients.
-                cid = message["conversation_id"]
-                row, _, _ = files.add_version(
-                    c, bot=bot, actor=who.actor, scope="conversation:" + cid, task=None, conversation=cid, attempt="",
-                    identity="chat-file:" + item["id"], title=item["name"], name=item["name"],
-                    mime=item["content_type"], blob_id=item["id"], digest=upload["digest"], size=item["size"])
-                title = body.titles[index] if index < len(body.titles) else ""
-                item.update(file_id=row["id"], version=row["current_version"], title=title or item["name"],
-                            kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
-            if items:
-                refs = {**message["refs"], "attachments": items}
-                c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
             return {"conversation": H.conversation(c, message["conversation_id"]),
-                    "message": visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]}
+                    "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.post("/api/v2/uploads/tasks", openapi_extra=upload_contract(M.TaskCreate))

@@ -232,3 +232,46 @@ def test_the_ceo_bot_chat_stays_with_the_owner_seat_and_the_old_owner_gets_their
     with api.app.state.store.read() as c:
         assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "cancelled"
         assert c.execute("SELECT count(*) FROM events WHERE action='ceo_bot.chat_moved'").fetchone()[0] == 1
+
+
+def png():
+    import io
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(image, format="PNG")
+    return image.getvalue()
+
+
+def test_the_owner_pastes_a_screenshot_into_the_ceo_bot_chat_and_its_turn_reads_it(api):
+    """Chris, Oct 27: a pasted screenshot attaches in the CEO Bot chat as in any bot chat; an Assistant takes text only."""
+    ceo(api)
+    data = png()
+    sent = api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
+                    files={"files": ("image.png", data, "image/png")},
+                    headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
+    assert sent.status_code == 200, sent.text
+    message = sent.json()["message"]
+    room = get(api, "assistant")["room_id"]
+    assert (message["to_actor"], message["conversation_id"], message["refs"]["assistant"]) == \
+        ("bot:goal-manager", room, True)
+    attachment, = message["refs"]["attachments"]
+    assert (attachment["name"], attachment["title"], attachment["kind"]) == ("image.png", "Screenshot", "image")
+    assert sent.json()["fast"] is False                      # a picture always goes to the CEO Bot's turn
+    # The CEO Bot's turn for that message can open the picture.
+    r = runner(api)
+    assign(api, r, "goal-manager")
+    ready(api, r, ["goal-manager"])
+    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    assert turn_message(api, attempt) == message["id"]
+    downloaded = api.get(attachment["url"], headers=headers(attempt["token"]))
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == data
+    # Ben (an admin) talks to his Assistant, whose room stays text only: refused, and nothing is said.
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    refused = api.post("/api/v2/uploads/assistant/messages", data={"text": "Look"},
+                       files={"files": ("image.png", data, "image/png")},
+                       headers={**headers("ben-test"), "Idempotency-Key": "paste-2"})
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
