@@ -238,9 +238,10 @@ def snapshot(service, prs):
             cause = mint_failure(exc, repo)
             out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
                              "retryable": cause["retryable"], "auth": cause["auth"]}
-    from . import source_outages
-    with service.store.transaction() as c:
-        source_outages.github_read(c, prs, out)
+    if any(r.get("head_sha") and not r.get("error") for r in out.values()):
+        from . import source_outages
+        with service.store.transaction() as c:
+            source_outages.github_read(c, prs, out)
     return out
 
 

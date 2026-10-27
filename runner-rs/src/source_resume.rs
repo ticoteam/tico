@@ -13,8 +13,15 @@ pub struct Saved {
     pub epoch: Option<(String, i64)>,
 }
 
-pub fn scope(attempt: &Value) -> String {
-    format!("source:{}", crate::util::text_of(&attempt["job_id"]))
+pub fn scope(attempt: &Value, profile: Option<&crate::profiles::Profile>, worktree: bool) -> String {
+    let mut key = format!("source:{}", crate::util::text_of(&attempt["job_id"]));
+    if let Some(profile) = profile {
+        key.push_str(&format!(":profile:{}:{}", profile.name, profile.binding()));
+    }
+    if worktree {
+        key.push_str(":worktree");
+    }
+    key
 }
 
 pub fn apply(attempt: &mut Value) -> Option<Saved> {

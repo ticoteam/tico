@@ -1153,7 +1153,7 @@ impl Runner {
         // A harness that keeps one process per conversation between turns (crate::warm) has sessions of its own.
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = if persistent { format!("{runtime}:{}", text_of(&config["harness"])) } else { runtime.clone() };
-        let mut conv = source_resume.as_ref().map_or_else(|| key.clone(), |_| crate::source_resume::scope(&attempt));
+        let mut conv = key.clone();
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
         let mut execution_path: PathBuf = crate::sessions::local_path(&self.config, &bot, &config);
@@ -1316,6 +1316,10 @@ impl Runner {
                 self.refresh_checkout(p, &mut attempt, &env).await;
             }
             conv.push_str(self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)?);
+            if source_resume.is_some() {
+                // Save and lookup share the actual login binding and confirmed checkout placement.
+                conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
+            }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
@@ -1778,7 +1782,8 @@ impl Runner {
                 let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
                     format!("{}:{}", hop.runtime, hop.harness)
                 } else { hop.runtime.clone() };
-                let scope = crate::source_resume::scope(&attempt);
+                let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
+                    place.as_ref().is_some_and(|p| p.session_path.is_some()));
                 let fallback_fresh = if live_source {
                     // Fence the old primary identity before this side session can do any work.
                     self.client.post(&format!("attempts/{aid}/thread"), &json!({"thread_id": th, "source_pending": true}),
@@ -1838,7 +1843,8 @@ impl Runner {
                     let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
                         format!("{}:{}", hop.runtime, hop.harness)
                     } else { hop.runtime.clone() };
-                    let scope = crate::source_resume::scope(&attempt);
+                    let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
+                        place.as_ref().is_some_and(|p| p.session_path.is_some()));
                     if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
                         self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
                     }
@@ -4256,6 +4262,7 @@ else:
     #[tokio::test]
     async fn quota_capacity_or_computer_stopped_fallback_survives_a_runner_restart_in_its_own_session() {
         for mode in ["quota", "capacity", "computer"] {
+          for (worktree, named) in [(false, false), (true, false), (false, true), (true, true)] {
             let quota = mode == "quota";
             let _controls = RunControls;
             SOURCE_CONTINUE.with(|on| on.set(Some(true)));
@@ -4264,6 +4271,31 @@ else:
             let (url, seen, server) = recording_server().await;
             let (runner, dir) = runner_at(&url, "fallback-quota");
             std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            let runner = if named {
+                let mut config = runner.config.clone();
+                let login_dir = dir.join("lab-login");
+                std::fs::create_dir_all(&login_dir).unwrap();
+                config.data.insert("profiles".into(), json!({"lab": {"dir": login_dir, "share_operator": true}}));
+                config.data.insert("default_profile".into(), json!("lab"));
+                config.save().unwrap();
+                Arc::new(Runner::new(config, runner.client.clone(), runner.state.clone()))
+            } else { runner };
+            if worktree {
+                // A real isolated checkout exercises place_turn's worktree suffix, not a fabricated session key.
+                let main = dir.join("projects/bot-ops");
+                let remote = dir.join("synthetic-origin.git");
+                for args in [
+                    vec!["init".into(), "--bare".into(), "--initial-branch=main".into(), remote.display().to_string()],
+                    vec!["init".into(), "--initial-branch=main".into(), main.display().to_string()],
+                    vec!["-C".into(), main.display().to_string(), "-c".into(), "user.name=Acme".into(),
+                         "-c".into(), "user.email=bot@acme.example".into(), "commit".into(), "--allow-empty".into(), "-m".into(), "Synthetic fixture".into()],
+                    vec!["-C".into(), main.display().to_string(), "remote".into(), "add".into(), "origin".into(), remote.display().to_string()],
+                    vec!["-C".into(), main.display().to_string(), "push".into(), "-u".into(), "origin".into(), "main".into()],
+                ] {
+                    let out = std::process::Command::new("git").args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
+                    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+                }
+            }
             capacity_host(&dir);
             let script = dir.join("synthetic_claude.py");
             let code = std::fs::read_to_string(&script).unwrap().replace(
@@ -4276,16 +4308,21 @@ else:
                     "    import time; time.sleep(5)\n    print(json.dumps({'type':'result','subtype':'error_during_execution'");
                 std::fs::write(&script, code).unwrap();
             }
-            // The saved primary already belongs to this clear epoch; a later clear must still discard it.
-            runner.state.epoch_moved("ops", "", "bot", 3).unwrap();
-            runner.state.save_session("ops", "bot", "codex", "primary-untouched").unwrap();
             let mut first = capacity_attempt("a-side", None);
+            if worktree { first["task"] = json!({"id": "fallback-task", "status": "doing"}); }
+            let profile = runner.turn_profile(&first).unwrap();
+            assert_eq!(profile.as_ref().map(|p| p.name.as_str()), named.then_some("lab"));
+            let profile_suffix = profile.as_ref().map_or(String::new(), |p| format!(":profile:{}:{}", p.name, p.binding()));
+            let primary_scope = format!("bot{profile_suffix}{}", if worktree { ":worktree" } else { "" });
+            // The primary's qualified identity belongs to this epoch and must remain separate from the fallback.
+            runner.state.epoch_moved("ops", "", &primary_scope, 3).unwrap();
+            runner.state.save_session("ops", &primary_scope, "codex", "primary-untouched").unwrap();
             first["job_id"] = json!("job-side");
             first["bot_session_epoch"] = json!(3);
             first["config"]["primary_held"] = json!("2099-01-01T07:00:00Z");
             let observe = async {
                 if mode != "computer" { return; }
-                tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::time::timeout(Duration::from_secs(20), async {
                     loop {
                         let handed = seen.lock().unwrap().iter().any(|(_, path, body)|
                             path.ends_with("/attempts/a-side/thread") && body["source_continuation"].is_object());
@@ -4298,7 +4335,7 @@ else:
                 runner.shut_down();
             };
             let run = runner.clone();
-            let (ran, _) = tokio::join!(tokio::time::timeout(Duration::from_secs(12), run.execute(first.clone())), observe);
+            let (ran, _) = tokio::join!(tokio::time::timeout(Duration::from_secs(30), run.execute(first.clone())), observe);
             ran.unwrap().unwrap();
             let done = completion(&seen, "a-side");
             if quota { assert_eq!(done["limited"], true, "{done}"); }
@@ -4309,20 +4346,28 @@ else:
                     .then(|| body["source_continuation"].clone())).expect("confirmed source persisted while live");
             assert_eq!(saved["thread_id"], "capacity-session", "{done}");
             assert_eq!(saved["runtime"], "claude", "{done}");
-            assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("primary-untouched"));
+            let expected_scope = format!("source:job-side{profile_suffix}{}", if worktree { ":worktree" } else { "" });
+            assert_eq!(runner.state.session("ops", &expected_scope, "claude").unwrap().as_deref(), Some("capacity-session"),
+                       "{mode}: worktree={worktree}, named={named}");
+            if worktree {
+                let path = crate::sessions::path_for(&runner.config.projects_dir(), "ops", "fallback-task");
+                assert!(path.join(".git").is_file(), "the task used its real worktree");
+            }
+            assert_eq!(runner.state.session("ops", &primary_scope, "codex").unwrap().as_deref(), Some("primary-untouched"));
             let next = Arc::new(Runner::new(runner.config.clone(), runner.client.clone(), runner.state.clone()));
             first["id"] = json!("a-side-again");
             first["source_continuation"] = saved;
             first["continue_thread"] = json!("capacity-session");
-            tokio::time::timeout(Duration::from_secs(12), next.execute(first)).await.unwrap().unwrap();
+            tokio::time::timeout(Duration::from_secs(30), next.execute(first)).await.unwrap().unwrap();
             assert_eq!(completion(&seen, "a-side-again")["outcome"], "completed");
             let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
             assert_eq!(args.len(), 2, "no primary or fresh replay: {args:?}");
             let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
             assert!(resumed.windows(2).any(|p| p == ["--resume", "capacity-session"]), "{args:?}");
-            assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("primary-untouched"));
+            assert_eq!(runner.state.session("ops", &primary_scope, "codex").unwrap().as_deref(), Some("primary-untouched"));
             server.abort();
             std::fs::remove_dir_all(dir).ok();
+          }
         }
     }
 
