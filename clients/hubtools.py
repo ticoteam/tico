@@ -4508,7 +4508,8 @@ def turns(api, args):
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
       "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).",
+      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
+      "- exceptions[] (engineering manager only): ticket (id, number, title, current step), cause and since; a failed merge also includes pr and head. One row per ticket and cause.",
       {"type": _s("Task type id or name; default the engineering board"),
        "owner": _s("Only tickets this person or bot owns"),
        "label": _s("Only tickets with this label"),

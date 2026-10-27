@@ -697,6 +697,11 @@ again the decision is history (`current` false, no `state`: "Resumed by BotOps a
 only; no titles or bodies, except that a decision's note, which can name the task, is shown to a reader who may open
 the run's conversation.
 
+For the engineering type's manager, the same response includes `exceptions[]`: one current row per ticket and cause,
+with the ticket, cause and `since`. It reads factory records for tickets without a job for 45 minutes, failed or cut
+runs, empty builder or review pools, repeated refusals and failed merges. A failed merge includes its PR number and
+head. The list is a read only view; it does not route work or wake the manager for ordinary tickets.
+
 Type create and update also accept `bots` (`parties`, `read` or `work`). With `work`, any bot may
 change a task of that type and close it once it is in a ready step, so a deploy bot can move shipped
 tickets to Done; moving a task into ready stays with people.

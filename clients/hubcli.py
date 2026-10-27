@@ -2016,7 +2016,7 @@ def parser():
     s.set_defaults(fn="webhook example")
 
     s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
-                       "running, queued, held and dead jobs, and failed runs by cause")
+                       "running, queued, held and dead jobs, failed runs by cause, and the engineering manager's exceptions")
     s.add_argument("--type", help="task type id or name; default the engineering board")
     s.add_argument("--owner")
     s.add_argument("--label")
