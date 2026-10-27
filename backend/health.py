@@ -536,9 +536,10 @@ def _waiting(c, online_ids, settings=None, limits=None):
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
-    from .execution import turns_here
+    from . import start_places
+    held_now = start_places.held_totals(c)
     full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if sum(turns_here(c, r["id"]).values()) >= (r["capacity"] or 1)}
+            if held_now.get(r["id"], 0) >= (r["capacity"] or 1)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(

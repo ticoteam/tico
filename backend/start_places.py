@@ -40,6 +40,17 @@ def held(c, runner_id):
         (runner_id, now, now))}
 
 
+def held_totals(c):
+    """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
+    `held` once per runner while already walking the fleet."""
+    now = H.now()
+    return {r[0]: r[1] for r in c.execute(
+        "SELECT a.runner_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
+        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id",
+        (now, now))}
+
+
 def claim(c, aid):
     c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
               (aid, H.shift(H.now(), seconds=START_SECONDS)))

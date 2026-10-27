@@ -388,3 +388,18 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     with api.app.state.store.read() as c:
         assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE m.from_actor='bot:ops'").fetchone()[0] == 'queued'
+
+
+def test_held_totals_match_each_computers_held_counts(api):
+    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+    from backend import start_places
+    from backend.tests.test_api import runner
+
+    first = waiters(api, n=2, running=1)
+    second = runner(api, label='Other capacity computer')
+    assign(api, second, 'finance')
+    ready(api, second, ['finance'])
+    with api.app.state.store.read() as c:
+        totals = start_places.held_totals(c)
+        for rid in (first['runner_id'], second['runner_id']):
+            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
