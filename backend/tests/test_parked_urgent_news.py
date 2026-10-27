@@ -199,3 +199,16 @@ def test_urgent_notice_keeps_real_dependency_move_refusals(api):
             assert H.task(c, task['id'])['status'] == 'waiting'
             assert any('remains Blocked' in warning for warning in moved.get('warnings', []))
             still_blocked(c, task, blocker)
+
+
+def test_new_urgent_override_does_not_release_a_pull_request_notice_hold(api):
+    with api.app.state.store.transaction() as c:
+        task, _ = parked(c, incident=True)
+        c.execute("DELETE FROM task_relations WHERE to_task=? AND kind='blocks'", (task['id'],))
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+                  "VALUES('pr-hold',?,'pr','https://github.com/acme/app/pull/1','PR','open','human:ana',?,?)",
+                  (task['id'], H.now(), json.dumps({'wake_once': True})))
+        assert wake_rules.parked(c, H.task(c, task['id'])) == 'wake_once'
+        msg, job = sent_job(c, task, 'bot:cpo', 'Incident step news', {'news': 'step_entered'})
+        assert job is None and msg['refs']['rule'] == 'parked'
+        assert R.PARKED_NOTICE not in msg['refs']
