@@ -200,8 +200,9 @@ ENTRIES = TEAM_RULES + [
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
       value="json", card=_card("repos", "set-repos"), words="run workflows actions ci product",
       confirm_when=(("chosen.run_workflows", (True,)), ("create_product_repositories", (True,))),
-      why="A Run workflows tick, or turning Create product repositories back on (the owner only), needs a Confirm "
-          "card: running workflows starts CI, which uses the repository's secrets"),
+      why="A Run workflows tick (a kept one coming back too), turning Create product repositories back on (the owner "
+          "only), or taking access away needs a Confirm card: running workflows starts CI, which uses the repository's "
+          "secrets"),
     # CEO bot
     S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
       card=_card("ceo")),
