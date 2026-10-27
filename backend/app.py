@@ -28,7 +28,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
-from . import ceo_bot, invites, owner_link
+from . import ask_ingest, ceo_bot, invites, owner_link
 from . import login_holds
 from . import step_age
 from . import bot_stops, turn_budgets
@@ -3472,7 +3472,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3545,6 +3545,13 @@ def create_app(settings=None):
                 joins = blocker_asks.open_ask(c, blocker_key, owner, parent_id)
             if joins:
                 owner, check, unchecked = who.actor, None, None
+        # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
+        # with the filter on, it stays the bot's own task; the reply says why.
+        gate = None
+        if ingest and not joins and owner == ingest["person"]:
+            gate = ask_ingest.apply(c, ingest)
+            if gate["acts"]:
+                owner, check, unchecked = who.actor, None, None
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
@@ -3585,8 +3592,11 @@ def create_app(settings=None):
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
-                            qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins))
+                            qa_not_checkable_live=body.qa_not_checkable_live,
+                            quiet_notice=bool(joins) or bool(gate and gate["acts"]))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if gate:
+            ask_ingest.record(c, ingest, gate, row["id"])
         if sealed:
             # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
             H._task_event(c, parent_id, who.actor, "handed", None, owner,
@@ -3641,6 +3651,7 @@ def create_app(settings=None):
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
                 **({"joined": {"task": joins["id"], "title": joins["title"], "owner": joins["owner"]}} if joins else {}),
+                **({"ingest": ask_ingest.reply(gate)} if gate else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
@@ -3692,7 +3703,20 @@ def create_app(settings=None):
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots))
+        ingest = ingest_preflight(request.state.identity, body.owner, body.title, body.body)
+        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
+                                                           ingest=ingest))
+
+    def ingest_preflight(who, owner, title, text, kind="task"):
+        """Ask ingest's one call for a bot's item to a person, outside the write (backend/ask_ingest.py); None when
+        the write is not gated."""
+        if not ask_ingest.gated(who, settings.assistant_bot):
+            return None
+        with store.read() as c:
+            person = H.resolve_actor(c, owner) if owner else None
+        if not person or not H.is_human(person):
+            return None
+        return ask_ingest.preflight(store, app.state.judge, who, person, title, text, kind=kind)
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -6618,6 +6642,7 @@ def create_app(settings=None):
     install_sql(app, store, auth)
     from .judge import install_judge
     install_judge(app, store, auth)
+    ask_ingest.install(app, store, auth)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
