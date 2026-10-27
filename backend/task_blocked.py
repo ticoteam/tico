@@ -143,8 +143,10 @@ def reconciliation(c, row, snapshots=None):
     the linked PRs (review_gate.snapshot): only from one do all-green hosted checks at the current head clear a gate
     hold without a receipt (fresh())."""
     from . import hubdb as H, review_gate
-    if (not row or not row.get('blocked_since') or row.get('blocked_kind') in ('manual', 'stranded')
-            or not review_gate.engineering(c, row)):
+    if not row or not row.get('blocked_since') or row.get('blocked_kind') in ('manual', 'stranded'):
+        return None
+    # A board move can retain a worktree hold; its pushes must still be linked before it resumes.
+    if row.get('blocked_kind') != 'worktree' and not review_gate.engineering(c, row):
         return None
     waiting = wait(c, row)
     if row.get('blocked_kind') == 'gate':
@@ -194,6 +196,12 @@ def reconcile(c, task_id, snapshots=None):
     # Back at a check step: a verdict given there during the hold moves the ticket now.
     from . import verdict_moves
     verdict_moves.resumed(c, task_id)
+    from . import review_gate
+    if row.get('blocked_kind') == 'worktree' and not review_gate.engineering(c, row):
+        # General tasks have no Engineering step rule to wake their owner when the hold clears.
+        resumed = H.task(c, task_id)
+        H._wake(c, resumed, resumed['owner'], f"Worktree hold cleared: {resumed['title']}",
+                refs={'news': 'assignment'})
 
 
 FRESH_EVERY_S = 60                  # how often fresh() looks
@@ -257,8 +265,8 @@ def alert_target(c, row, at):
     if not row.get('blocked_since') or seconds(row['blocked_since'], at) < 4 * 3600:
         return None
     from . import review_gate
-    # The same scope as hold() and reconciliation(): an ordinary waiting task on another board is no engineering
-    # hold, while a refused move into Engineering (a gate hold) still is.
+    # Age alerts stay scoped to Engineering and refused moves into it; a retained worktree hold on another
+    # board still clears through reconciliation, without an Engineering age alert.
     if row.get('blocked_kind') != 'gate' and not review_gate.engineering(c, row):
         return None
     manager = H.type_manager(c, row)

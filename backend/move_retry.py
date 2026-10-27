@@ -3,10 +3,11 @@
 The review gate (backend/review_gate.py) refuses a move to Review 1 or Review 2 while CI fails or cannot be read, or
 while no passing receipt names the current head. Each of those clears on its own: the checks finish, a receipt is
 posted, GitHub comes back. So the refusal is remembered on the ticket (task_events field `move_retry`, with the step it
-was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
-fingerprint changes: a PR link's head or checks, the ticket's note, a new message on the ticket, or another wait
-beside a Blocked hold ending. An unreadable GitHub is retried on a timer while the ticket keeps its step. Source-level notices describe the
-outage once, without creating a DevOps or manager task.
+was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass
+retries the same move as Tico when that fingerprint changes: a PR link's head or checks, the ticket's note, a new
+message on the ticket, or another wait beside a Blocked hold ending. An unreadable GitHub is retried on a timer
+while the ticket keeps its step. Source-level notices describe the outage once, without creating a DevOps or
+manager task.
 
 A retry stops when the ticket leaves the step it was refused at, closes, or RETRY_FOR after the first refusal: each
 retry that is refused again carries that first time forward (`since`), so a long outage still ends."""
@@ -94,7 +95,8 @@ def remember(c, actor, notice):
     step = notice.get("step")
     if not row or not step or row["status"] in ("done", "closed", "declined"):
         return
-    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
+    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"),
+              "by": str(notice.get("by") or actor),
               "outage": outage(notice.get("text")), "seen": fingerprint(c, row), "at": H.now(),
               "since": notice.get("since") or H.now(),
               "tries": int(notice.get("tries") or 0), "state": "waiting",
