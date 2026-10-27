@@ -71,6 +71,11 @@ def listed(c, typ, kind=None):
     return [e for e in PE.build(c, typ) if kind is None or e["kind"] == kind]
 
 
+def late_notices(c, row):
+    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs_json,'$.task')=? "
+                     "AND json_extract(refs_json,'$.step_late')", (row["id"],)).fetchone()[0]
+
+
 def unheld_jobs(c, slug):
     return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued' AND coalesce(held,0)=0",
                      (slug,)).fetchone()[0]
@@ -212,12 +217,14 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         late = routine(c, typ, "Fix Cursor")
         assert unheld_jobs(c, "coo") > before, "control: the Lead profile is woken for the blocker and the late one"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner"]) == ["bot:coo"]
+        assert late_notices(c, late) == 1
 
         typ = board(c, profile="manager")
         settled(c)
         late = routine(c, typ, "Fix Muse")
         assert unheld_jobs(c, "coo") == 0, "no routine event woke the manager"
         assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner"]) == []
+        assert late_notices(c, late) == 0, "not even a held note: the list carries it"
         settled(c)      # its owner's status check ran and left it as it was
         assert any(e["key"] == "ticket:" + late["id"] + ":stuck" for e in listed(c, typ)), "it is on the list instead"
         # Entering a check step with no linked pull request files no review.
