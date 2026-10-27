@@ -181,8 +181,13 @@ def drain_progress(c, runner_id):
 
 
 def paused(c, runner_id):
-    """Why this computer must not claim work, or "" when it may."""
-    row = c.execute("SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    """Why this computer must not claim work, or "" when it may.
+
+    Claim waiter order asks once per candidate computer; reuse the release row for the
+    current read snapshot via `read_cache.one`.
+    """
+    from .read_cache import one
+    row = one(c, "SELECT release FROM runner_versions WHERE runner_id=?", (runner_id,))
     if not row or not incompatible(row["release"]):
         return ""
     return (f"This computer runs Tico {row['release']}, which this server ({releases.version()}) cannot work with; "
