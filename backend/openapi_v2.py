@@ -1314,7 +1314,8 @@ SCHEMAS.update({
     "BotRepositories": obj({"mode": {"enum": ["own", "all", "chosen"]}, "all_access": {"enum": ["read", "write"]},
                             "chosen": items(ref("RepositoryGrant")), "all_repos": items(ref("TickedRepository")),
                             "effective": items(ref("RepositoryGrant"))}),
-    "TickedRepository": obj({"full_name": "s", "run_workflows": "b", "edit_workflows": "b"}),
+    # Only the options that are on are present.
+    "TickedRepository": obj({"full_name": "s", "run_workflows": "b", "edit_workflows": "b"}, required=["full_name"]),
 })
 TAGS['Roadmaps'] = "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
 STABLE.extend([

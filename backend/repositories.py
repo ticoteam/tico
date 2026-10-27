@@ -25,6 +25,7 @@ WORKFLOW_EDITS = 'repository-workflow-edit-grants'
 FLAGS = (('run_workflows', WORKFLOWS, 'Running workflows', 'run workflows', 'workflows_stopped'),
          ('edit_workflows', WORKFLOW_EDITS, 'Editing workflow files', 'edit workflow files', 'workflow_edits_stopped'))
 STORED = {flag: key for flag, key, *_ in FLAGS}
+STARTED = {flag: key.replace('_stopped', '_started') for flag, *_, key in FLAGS}
 # The same opt-ins on All ticked repos, per repository, kept apart from the chosen grants' so each mode keeps its own
 # (as a switch to own keeps the chosen rows): {bot: [owner/name, ...]}. They apply while All ticked repos is Write.
 ALL_STORED = {flag: key + ':all' for flag, key in STORED.items()}
@@ -405,7 +406,7 @@ def started(before, after):
             names += [r['full_name'] for r in after[kind] if r.get(flag)
                       and r['full_name'].lower() not in had and r['full_name'] not in names]
         if names:
-            out[key.replace('_stopped', '_started')] = names
+            out[STARTED[flag]] = names
     if not before.get('create_product_repositories') and after.get('create_product_repositories'):
         out['product_creation_started'] = True
     return out
@@ -507,12 +508,20 @@ def plain_change(name, before, result):
     lines = ['; '.join(changed)] if changed else []
     if gained:
         lines.append('gets ' + _and(gained))
-    if result.get('workflows_started'):
-        lines.append('may run workflows in ' + _and(_short(n) for n in result['workflows_started'])
-                     + ": it can start CI there, and CI uses that repository's secrets")
-    if result.get('workflow_edits_started'):
-        lines.append('may edit workflow files in ' + _and(_short(n) for n in result['workflow_edits_started'])
-                     + ": a workflow it pushes on a branch runs with that repository's secrets before review")
+    # A tick kept for a grant not in effect yet (another mode, or All ticked repos on Read) says when it starts.
+    for flag, verb, risk in (('run_workflows', 'run workflows', "it can start CI there, and CI uses that repository's "
+                              "secrets"),
+                             ('edit_workflows', 'edit workflow files', "a workflow it pushes on a branch runs with that "
+                              "repository's secrets before review")):
+        names = result.get(STARTED[flag]) or []
+        ticked = {r['full_name'].lower() for r in result.get('all_repos') or () if r.get(flag)}
+        groups = {'': [], ' once All ticked repos is on with Write': [], ' once Chosen repos is on with Write there': []}
+        for n in names:
+            groups['' if now.get(n.lower(), {}).get(flag) else ' once All ticked repos is on with Write'
+                   if n.lower() in ticked else ' once Chosen repos is on with Write there'].append(n)
+        for when, group in groups.items():
+            if group:
+                lines.append('may ' + verb + ' in ' + _and(_short(n) for n in group) + when + ': ' + risk)
     if result.get('product_creation_started'):
         lines.append('may create product repositories again')
     if lost:

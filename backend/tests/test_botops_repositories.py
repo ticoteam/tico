@@ -178,12 +178,24 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
     later = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "all_repos": [
         {"full_name": "Acme/docs", option: True}]})
     assert later.json()["needs_confirm"] is True, later.text
+    assert _stored_card(api, later.json())["description"] == \
+        "ops: " + words.replace(" in product:", " in docs once All ticked repos is on with Write:") + ".", later.text
+    # The kept tick coming back with All ticked repos is a card too, though the body holds no tick.
+    back = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "all"})
+    assert back.json()["needs_confirm"] is True, back.text
+    assert {"full_name": "Acme/product", "access": "write", option: True} not in effective(api)
     assert get(api, "bots/ops/repositories", "ana-test")["all_repos"] == [{"full_name": "Acme/product", option: True}]
     # Changing its own repositories in the person's turn, BotOps never ticks one for itself, not even for later.
     itself = act(api, ana, "PUT", "bots/botops/repositories", {"mode": "chosen", "all_repos": [
         {"full_name": "Acme/docs", option: True}]})
     assert itself.status_code == 403 and "Only an Owner or admin lets a bot" in itself.text, itself.text
     assert get(api, "bots/botops/repositories", "ana-test")["all_repos"] == []
+    # Nor does it bring back a tick the person kept for it: switching itself to All ticked repos is refused.
+    put(api, "bots/botops/repositories", {"mode": "chosen", "all_access": "write", "all_repos": [
+        {"full_name": "Acme/docs", option: True}]}, token="ana-test")
+    switched = act(api, ana, "PUT", "bots/botops/repositories", {"mode": "all"})
+    assert switched.status_code == 403 and "Only an Owner or admin lets a bot" in switched.text, switched.text
+    assert get(api, "bots/botops/repositories", "ana-test")["mode"] == "chosen"
 
 
 def test_a_declined_run_workflows_card_changes_nothing(api, botops, repos):

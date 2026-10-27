@@ -37299,9 +37299,7 @@
           }
         },
         "required": [
-          "edit_workflows",
-          "full_name",
-          "run_workflows"
+          "full_name"
         ],
         "additionalProperties": true
       },

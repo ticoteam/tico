@@ -60,7 +60,8 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
 1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Workflows** to
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
+   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Workflows: write. A grant
