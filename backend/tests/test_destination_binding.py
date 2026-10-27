@@ -508,3 +508,105 @@ def test_a_confirm_card_is_refused_at_the_tap_once_anything_it_was_bound_to_chan
     assert r.status_code != 200 or status == "failed", r.text
     assert shown(api, made["id"])["url"] == url_before != "https://other.acme.example/tico"
     finish(api, botops, ben)
+
+
+# ------------------------------------------------------------------------------- what a send reads (test 12, race)
+def interleave(monkeypatch, cipher, write):
+    """Run `write` on its own connection, once, the moment a send has read the saved row and starts unsealing its key:
+    a save that commits between the send's reads."""
+    unseal, done = cipher.unseal, []
+
+    def paused(c, context, sealed):
+        if context == gateway_connection.CONTEXT and not done:
+            done.append(True)
+            write()
+        return unseal(c, context, sealed)
+    monkeypatch.setattr(cipher, "unseal", paused)
+    return done
+
+
+@pytest.mark.parametrize("edit", ["clear", "replace"])
+def test_a_check_never_sends_the_key_to_an_address_saved_while_it_read(api, monkeypatch, edit):
+    """The key read for address A never goes to B, which a save made while the check was reading (with Clear, or with
+    a newly typed key): the check takes key and address from one read, and its answer about A's key is not kept."""
+    setup(api, monkeypatch)
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
+    store, vault, settings = api.app.state.store, api.app.state.vault, api.app.state.store.settings
+    with fake_gateway() as fake, fake_gateway() as elsewhere:
+        fake.active(KEY, 0.1)
+        elsewhere.active(KEY, 0.1)
+        elsewhere.active(OTHER, 0.1)
+        save(api, fake)
+        fake.calls.clear()
+
+        def move():
+            with store.transaction() as w:
+                gateway_connection.save(w, vault, as_ana(""), {
+                    "url": elsewhere.url, "expected_revision": gateway_connection.revision(w),
+                    **({"credentials": "clear"} if edit == "clear" else {"key": OTHER})}, H.now())
+        done = interleave(monkeypatch, vault.cipher, move)
+        gateway_connection.check_now(store, vault, settings)
+        assert done and gateway(api)["url"] == elsewhere.url
+        assert all(key != KEY for _, key in elsewhere.calls), elsewhere.calls
+        assert fake.calls == [("/v1/gateway/key", KEY)]          # where it was kept, as read
+        assert "check" not in gateway(api)                        # and its answer is not B's
+
+
+def test_an_automatic_rotation_never_sends_the_key_to_an_address_saved_while_it_read(api, monkeypatch):
+    """The same for automatic rotation: the key it rotates goes only to the address it was kept for."""
+    import datetime
+    from clients import gateway as G
+    setup(api, monkeypatch)
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
+    store, vault, settings = api.app.state.store, api.app.state.vault, api.app.state.store.settings
+    with fake_gateway() as fake, fake_gateway() as elsewhere:
+        with store.transaction() as c:
+            gateway_connection._write(c, {
+                "url": fake.url, "revision": 1, "key": vault.cipher.seal(c, gateway_connection.CONTEXT, KEY),
+                "preview": "tgw…042", "origin": gateway_connection.AUTOMATIC, "key_id": "gk_synthetic",
+                "rotate_after": "2026-01-01T00:00:00Z", "install": "gi_" + "a" * 24,
+                "install_secret": vault.cipher.seal(c, gateway_connection.INSTALL_CONTEXT, "gis_" + "b" * 43)})
+        sent = []
+        monkeypatch.setattr(G, "rotate", lambda base, key, opener=None: sent.append((base, key)) or (0, {}, "unreachable"))
+
+        def move():
+            with store.transaction() as w:
+                gateway_connection.save(w, vault, as_ana(""), {"url": elsewhere.url, "credentials": "clear",
+                                                              "expected_revision": 1}, H.now())
+        done, linked = [], gateway_connection._linked
+
+        def paused(c, settings):                          # read right after the record, before anything else
+            if not done:
+                done.append(True)
+                move()
+            return linked(c, settings)
+        monkeypatch.setattr(gateway_connection, "_linked", paused)
+        gateway_connection.auto_tick(store, vault, settings, now=datetime.datetime.now(datetime.timezone.utc))
+        assert done and gateway(api)["url"] == elsewhere.url and "key" not in gateway(api)
+        assert sent == [(fake.url, KEY)]
+
+
+def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(api, monkeypatch, botops):
+    """Tests 4 and 10 on the forced card: a path on the same origin needs no keep-or-clear, but the card the saved key
+    still forces shows the destination by scheme, host and port, never the path; the tap runs the real address."""
+    setup(api, monkeypatch)
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        private = fake.url.replace("/v1/gateway", "/private-tenant-q7/v2")
+        ana = turn(api, botops, person="ana-test", text="Point the Gateway at our tenant path")
+        card = act(api, ana, "PUT", "providers/gateway", {"url": private, "expected_revision": gateway(api)["revision"]})
+        assert card.status_code == 200 and card.json()["needs_confirm"], card.text
+        action, address = card.json()["action"], f"http://127.0.0.1:{fake.server.server_port}"
+        assert {"field": "destination", "old": address, "new": address} in action["diff"]
+        assert {"field": "path", "new": destinations.PATH_CHANGED} in action["diff"]
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT description, diff_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
+        for text in (json.dumps(action["diff"]), action["description"], row["description"], row["diff_json"],
+                     everything(api, receipts=False).replace(json.dumps(private)[1:-1], "")):
+            assert "private-tenant" not in text and "/v1/gateway" not in text, text
+        assert gateway(api)["url"] == fake.url
+        assert confirm(api, card.json(), "ana-test")["action"]["status"] == "done"
+        assert gateway(api)["url"] == private and gateway(api).get("key")
+        finish(api, botops, ana)

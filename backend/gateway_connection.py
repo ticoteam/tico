@@ -113,9 +113,10 @@ def revision(c):
     return int(_row(c).get("revision") or 0)
 
 
-def source(c, settings=None):
-    """Where the key comes from: "environment", "settings" or "" when there is none."""
-    return "environment" if env_key(settings) else "settings" if _row(c).get("key") else ""
+def source(c, settings=None, record=None):
+    """Where the key comes from: "environment", "settings" or "" when there is none. `record`: the saved connection
+    already read (`target`)."""
+    return "environment" if env_key(settings) else "settings" if (_row(c) if record is None else record).get("key") else ""
 
 
 def connected(c, settings=None):
@@ -123,16 +124,30 @@ def connected(c, settings=None):
 
 
 def key(c, vault, settings=None):
-    """The gateway key, for a call to the Gateway or a run that makes one; '' when none is set. Never logged."""
+    """The gateway key; '' when none is set. Never logged. A call to the Gateway takes it with its address from
+    `target`."""
     if env_key(settings):
         return env_key(settings)
     sealed = _row(c).get("key")
     return vault.cipher.unseal(c, CONTEXT, sealed) if sealed else ""
 
 
-def url(c, settings=None):
-    """The Gateway's base URL: the environment's, else the saved one, else Tico HQ's."""
-    return G.base_url(env_url(settings) or _row(c).get("url") or "")
+def url(c, settings=None, record=None):
+    """The Gateway's base URL: the environment's, else the saved one, else Tico HQ's. Not for a send: `target`."""
+    return G.base_url(env_url(settings) or (_row(c) if record is None else record).get("url") or "")
+
+
+def target(c, vault, settings=None):
+    """(key, base URL, `_fingerprint`) for a call to the Gateway, all from one read of the saved connection; key '' when
+    none is set. Every send takes its key and address from here, never from `key` and `url` one by one: outside a
+    transaction each read sees the newest save, so a save in between (a new address with Clear, or with a newly typed
+    key) would pair the key it took away with an address it was never kept for."""
+    record = _row(c)
+    if env_key(settings):
+        secret = env_key(settings)
+    else:
+        secret = vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""
+    return secret, url(c, settings, record), _fingerprint(c, settings, record)
 
 
 def view(c, settings=None, *, manage=False):
@@ -162,23 +177,24 @@ def view(c, settings=None, *, manage=False):
             "checked": fresh.get("at", "")}
 
 
-def _fingerprint(c, settings=None):
+def _fingerprint(c, settings=None, record=None):
     """Which key a check was made with, without keeping it: the source and the saved revision, or for the
     environment's key (which a restart can replace with no revision) a short one-way digest of it and its URL."""
-    where = source(c, settings)
+    record = _row(c) if record is None else record
+    where = source(c, settings, record)
     if where == "environment":
         digest = hashlib.sha256(f"tico-gateway-check\n{env_key(settings)}\n{env_url(settings)}".encode()).hexdigest()
         return f"{where}:{digest[:16]}"
-    return f"{where}:{_row(c).get('revision', 0)}" if where else ""
+    return f"{where}:{record.get('revision', 0)}" if where else ""
 
 
-def key_id(c, settings=None):
+def key_id(c, settings=None, record=None):
     """A non-secret id of the gateway key in use, for usage records: the Gateway's own id of an automatic key (`gk_`),
     else `_fingerprint`. Never the key; '' with none."""
-    record = _row(c)
-    if source(c, settings) == "settings" and record.get("origin") == AUTOMATIC and record.get("key_id"):
+    record = _row(c) if record is None else record
+    if source(c, settings, record) == "settings" and record.get("origin") == AUTOMATIC and record.get("key_id"):
         return str(record["key_id"])
-    return _fingerprint(c, settings)
+    return _fingerprint(c, settings, record)
 
 
 def owner_only(who):
@@ -322,7 +338,7 @@ def record_check(c, result, fingerprint, now, settings=None):
 def check_now(store, vault, settings=None, opener=None):
     """Ask the Gateway about the key now (outside any transaction: it is a network call) and keep the answer."""
     with store.read() as c:
-        secret, base, fingerprint = key(c, vault, settings), url(c, settings), _fingerprint(c, settings)
+        secret, base, fingerprint = target(c, vault, settings)
     if not secret:
         return None
     result = G.check(secret, base, opener=opener)
@@ -451,9 +467,9 @@ def run_credentials(c, vault, settings, model):
     set, else nothing. Shaped like `GET credential-runtime`'s items."""
     if not is_tico(model):
         return []
-    secret = key(c, vault, settings)
+    secret, base, _ = target(c, vault, settings)
     try:
-        base = G.safe_base(url(c, settings))
+        base = G.safe_base(base)
     except ValueError:
         return []                                     # an environment URL the key may not go to (the page says so)
     if not secret:
@@ -595,7 +611,7 @@ def _auto_tick(store, vault, settings, opener, now):
         action = _due(record, settings, now, linked)
         if not action:
             return None
-        base = url(c, settings)
+        base = url(c, settings, record)                   # the address this record's key was kept for (`target`)
         current = vault.cipher.unseal(c, CONTEXT, record["key"]) if action == "rotate" else ""
         install = str(record.get("install") or "")
         secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"]) if install and record.get(

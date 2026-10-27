@@ -101,6 +101,13 @@ def change(old, new, *, path_counts=False, key=b""):
     return out
 
 
+def shown(old, new):
+    """What a card for an address edit that moves no saved credential shows (a same-service edit, or one with nothing
+    saved): the old and new destination (`safe`) and whether the path is the same, never the path itself."""
+    a, b = identity(old), identity(new)
+    return {"old": safe(old), "new": safe(new), "path": SAME_PATH if a and b and a[3:] == b[3:] else PATH_CHANGED}
+
+
 def choice(value):
     """The editor's answer to a held save: KEEP, CLEAR or '' when none was given. Anything else is refused."""
     value = str(value or "").strip().lower()

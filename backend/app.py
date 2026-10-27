@@ -1595,8 +1595,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Search is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1617,8 +1616,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Fetch is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1713,7 +1711,7 @@ def create_app(settings=None):
         """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""
         admin_only(who, does)
         with store.read() as c:
-            return gateway_connection.key(c, app.state.vault, settings), gateway_connection.url(c, settings)
+            return gateway_connection.target(c, app.state.vault, settings)[:2]
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
@@ -4998,22 +4996,36 @@ def create_app(settings=None):
 
     def destination_card(c, acting, method, path, body):
         """For BotOps acting for a person: (change, card lines, card title, refusal) when `body` moves saved credentials
-        to another service (backend/destinations.py), else Nones. It always waits for the person's own tap; until BotOps
+        to another service (backend/destinations.py). It always waits for the person's own tap; until BotOps
         says which (`credentials` "keep" or "clear") and names the revision it read, it is refused at once (`refusal`,
         raised once the person's role is checked) with what the person must decide, so no card keeps or clears
-        anything without their word."""
+        anything without their word. An address edit that moves nothing saved gets no change and no refusal, but still
+        its card lines and title, so no card for either integration shows an address as typed. Else Nones."""
         from . import destinations, webhooks
         from .assistant import spoken
         if method == "PUT" and path == botops_act.API + "providers/gateway":
             moved, labels = gateway_connection.destination_change(c, body, settings), [gateway_connection.LABEL_KEY]
             current, integration, name = gateway_connection.revision(c), "gateway", gateway_client.LABEL
+            old_url, new_url = gateway_connection.url(c, settings), gateway_client.base_url(str(body.get("url") or ""))
         elif method == "POST" and (hook := webhooks.UPDATE_PATH.fullmatch(path)):
             row, moved, labels = webhooks.pending_change(c, acting, hook.group(1), body, app.state.vault)
             current, integration, name = row["revision"], "webhook", row["name"]
+            old_url, new_url = row["url"], body.get("url") or row["url"]
         else:
             return None, None, None, None
+        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
+        # only as its safe destination, never as typed).
+        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
+        and_also = f", and change {', '.join(spoken(k) for k in also)}" if also else ""
+        others = [{"field": k, "new": shown_value(body[k])} for k in also]
         if not moved:
-            return None, None, None, None
+            if "url" not in body:
+                return None, None, None, None
+            seen = destinations.shown(old_url, new_url)
+            old, new = seen["old"]["address"], seen["new"]["address"] or "an address that is not a URL"
+            what = f"Change {name}'s address to {new} ({seen['path']}; nothing saved moves to another service)"
+            return None, [{"field": "destination", "old": old, "new": new}, {"field": "path", "new": seen["path"]},
+                          *others], (what + and_also)[:300], None
         option = destinations.choice(body.get("credentials"))
         if not option:
             return moved, None, None, destinations.held(integration, moved, labels, current, name)
@@ -5023,17 +5035,13 @@ def create_app(settings=None):
         if not isinstance(body["expected_revision"], int) or body["expected_revision"] != int(current):
             return moved, None, None, Problem("version_conflict", name + " changed since you read it; read it again", 409)
         old, new, listed = moved["old"]["address"], moved["new"]["address"], ", ".join(labels)
-        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
-        # only as its safe destination above, never as typed).
-        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
         what = (f"Send {name}'s saved {listed} to {new} instead of {old}" if option == destinations.KEEP
                 else f"Move {name} to {new} and clear its saved {listed}")
-        what += f", and change {', '.join(spoken(k) for k in also)}" if also else ""
         shown = [{"field": "destination", "old": old, "new": new},
                  *([{"field": "path", "new": moved["path"]}] if "path" in moved else []),
                  {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed},
-                 *({"field": k, "new": shown_value(body[k])} for k in also)]
-        return moved, shown, what[:300], None
+                 *others]
+        return moved, shown, (what + and_also)[:300], None
 
     def shown_value(value):
         """A short card value for a field that changes alongside a destination: a scalar as itself, a header list as
