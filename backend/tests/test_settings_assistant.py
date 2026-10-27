@@ -132,6 +132,11 @@ def test_a_member_asking_for_an_admin_setting_changes_nothing_and_is_told_who_ca
 def test_the_assistant_never_runs_two_settings_at_once_nor_cards_a_person_only_one(api):
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30 and turn it off")
     token = attempt["token"]
+    # A list or a bare value is no setting's body (New incoming trigger takes any object): never read as `{}`.
+    for body in ([], [{"times": ["09:30"]}], "09:30"):
+        listed = api.post("/api/v2/triggers", json=body,
+                          headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
+        assert listed.status_code == 403 and listed.json()["error"]["code"] == "confirm_required", listed.text
     both = api.patch("/api/v2/release-schedule", json={"times": ["09:30"], "on": False},
                      headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
     assert both.status_code == 403 and both.json()["error"]["code"] == "confirm_required", both.text
@@ -185,6 +190,7 @@ def test_the_assistant_cannot_partially_enable_or_edit_a_stored_outbound_wake_ru
         assert err and refused["error"] == "person_only", refused
         raw = api.post(f"/api/v2/rules/{rule['id']}", json=value, headers=cited)
         assert raw.status_code == 403 and raw.json()["error"]["code"] == "person_only", raw.text
+        assert api.app.state.store.settings.public_url.rstrip("/") + "/#/settings/" in raw.json()["error"]["detail"]
         assert stored_rule(api, rule["id"]) == before == (0, "action", "send_webhook", 1)
     # A stored rule that keeps to Tico turns on at once on their words.
     raw = api.post(f"/api/v2/rules/{quiet['id']}", json={"expected_revision": 1, "on": True}, headers=cited)

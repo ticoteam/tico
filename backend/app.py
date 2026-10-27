@@ -702,7 +702,8 @@ def create_app(settings=None):
                                     with store.transaction() as tc:
                                         return repositories.card_words(tc, settings, auth, request.state.identity,
                                                                        target["bot"], body)[0]
-                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial)
+                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial,
+                                                                    settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.

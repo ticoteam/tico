@@ -185,20 +185,28 @@ def instructed_setting(method, path, body=None):
     person-only one, or anything the catalogue does not list stays a card."""
     from . import settings_catalog
     path = normalize_path(path)
-    found = path and settings_catalog.matched(method, path, _fields(body))
+    if isinstance(body, (bytes, str)):
+        try:
+            body = json.loads(body or b"{}")
+        except ValueError:
+            return False
+    if not isinstance(body, dict):
+        return False           # a list or a bare value is no catalogue entry's body: never read as an empty one
+    found = path and settings_catalog.matched(method, path, body)
     return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
 
 
-def require_direct_setting(c, method, path, body, trial=None):
+def require_direct_setting(c, method, path, body, trial=None, base=""):
     """403 unless the setting this cited write changes is direct once read against what is stored (a wake-rule update
     keeps the stored rule's action; a repository change is tried as the person's own click, `trial`): the same class
-    `plan` gave it."""
+    `plan` gave it, with the same full link (`base`, the public URL)."""
     from . import settings_catalog
     found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
     if not found or found[2] != "direct":
         e = found[0] if found else None
+        link = e and ((base.rstrip("/") + "/" + e.card) if base else e.card)
         raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
-                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + e.card
+                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + link
                       if e else "That setting needs the person's own yes", 403)
 
 
