@@ -3128,6 +3128,10 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     about = message_task_id(asked, conv)
     if about:                               # an answered question on a task changes the task
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), about))
+        if asked.get("kind") == "ask":
+            from . import task_holds
+            held = (task(conn, about) or {}).get("owner") == asked["from_actor"]
+            task_holds.refresh(conn, about, f"{task_holds.name(conn, actor)} answered your question" if held else None)
     _recount(conn, asked["from_actor"])     # it no longer waits on whoever answered
     if is_human(actor) and asked.get("kind") == "ask":
         hook(conn, "needs_you.answered", message_id, lambda: {"id": message_id, "to": actor, "from": asked["from_actor"],
@@ -3762,12 +3766,18 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
             # A finished task's open questions to people are moot, every kind, and so are those on every task below it.
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
             supersede_asks(conn, row["id"])
+            from . import task_holds
             for below in descendants(conn, row["id"]):
                 why = f"A task above it was {TASK_ENDED[effective]}"
-                drop_asked_waits(conn, below["id"], supersede_asks(conn, below["id"], why=why), why)
+                gone = supersede_asks(conn, below["id"], why=why)
+                drop_asked_waits(conn, below["id"], gone, why)
+                # Its asker is told in this transaction, and a bot's task left with nothing to wait on goes back to open.
+                task_holds.withdrawn(conn, below["id"], gone, f"{why} ({_clip(row.get('title') or '', 120)})")
             supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
+            # Its parent and the tasks it blocked lose a hold: their reason follows, and the last one clearing frees them.
+            task_holds.ended(conn, {**row, "status": effective}, effective)
     from .roadmap_flow import changed as roadmap_changed
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
@@ -6133,6 +6143,13 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
     if person and status == "waiting":
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
+    if (task(conn, task_id) or {}).get("status") == "waiting":
+        # Its reason follows what holds it after any change: a person wait set or cleared, a note, a status
+        # (backend/task_holds.py). Someone else clearing the person it waited on clears that hold.
+        from . import task_holds
+        gone = row.get("waiting_on") if (not person and row.get("waiting_on") and row["status"] == "waiting"
+                                         and status in (None, "waiting") and actor != row["owner"]) else None
+        task_holds.refresh(conn, task_id, f"No longer waiting on {task_holds.name(conn, gone)}" if gone else None)
     if roles:
         # After the rest is saved, so who may be added is checked against the new owner and privacy;
         # the checks above already said this actor may change the task.
@@ -6735,8 +6752,12 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     cutoff = shift(at, hours=-grace_hours)
     moved = []
     from . import move_retry, review_gate
+    # Its clock runs from when its last hold cleared, else from when its wait began (backend/task_holds.py): a note
+    # written while it waits on nothing does not hold it back.
+    clock = "coalesce(holds_cleared_at, blocked_since, updated)" if "holds_cleared_at" in {
+        r[1] for r in conn.execute("PRAGMA table_info(tasks)")} else "updated"
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
-                                  "AND updated<=? ORDER BY updated", (cutoff,))):
+                                  f"AND {clock}<=? ORDER BY {clock}", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
@@ -7939,6 +7960,9 @@ def approval_withdraw(conn, approval_id, note):
                         "WHERE id=? AND decision IS NULL", (KEEPER, now(), approval_id)).rowcount:
         return None
     event(conn, KEEPER, "approval.withdraw", approval_id, {"decision": "withdrawn", "note": note})
+    if row.get("task_id"):
+        from . import task_holds
+        task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was withdrawn")
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
     if conv and _actor_exists(conn, row["requested_by"]):
@@ -8059,6 +8083,9 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
                                 _dump(delegated) if delegated else None, approval_id))
     event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note})
     after = approval(conn, approval_id)
+    if row.get("task_id"):
+        from . import task_holds
+        task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was {decision}")
     conv = conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id")) \
         if row.get("message_id") else None
     if conv:
