@@ -419,3 +419,18 @@ def test_operations_and_computers_share_one_company_default_across_runners(api, 
     assert ids <= {m['id'] for m in computers}
     assert ops_calls == 1, ops_calls
     assert computer_calls == 1, computer_calls
+
+
+def test_held_totals_match_each_computers_held_counts(api):
+    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+    from backend import start_places
+    from backend.tests.test_api import runner
+
+    first = waiters(api, n=2, running=1)
+    second = runner(api, label='Other capacity computer')
+    assign(api, second, 'finance')
+    ready(api, second, ['finance'])
+    with api.app.state.store.read() as c:
+        totals = start_places.held_totals(c)
+        for rid in (first['runner_id'], second['runner_id']):
+            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
