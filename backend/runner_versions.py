@@ -198,7 +198,18 @@ def paused(c, runner_id):
 
 
 def load(c):
-    return {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    """{runner_id: row} for every computer. Cached for the current read snapshot so Health /
+    `/computers` / Operations callers that ask once per machine (via `computer_details`) do not
+    re-SELECT the whole table each time."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "runner_versions.load"
+    if values is not None and key in values:
+        return values[key]
+    out = {r["runner_id"]: dict(r) for r in c.execute("SELECT * FROM runner_versions")}
+    if values is not None:
+        values[key] = out
+    return out
 
 
 # What a runner before this release said when nothing supervised it; the line now says how to fix that.
