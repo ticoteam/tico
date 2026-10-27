@@ -232,9 +232,10 @@ def maker(c, slug):
 RECENT_TURNS = 3
 
 
-def makers(c, slug):
+def makers(c, slug, known_only=False):
     """Every model company a checker may run on: its own model, and what its last few runs actually ran on (a bot whose
-    model is not signed in runs on its fallback, which is the company that would do the check)."""
+    model is not signed in runs on its fallback, which is the company that would do the check). A run with an unknown
+    segment makes the answer empty, or with `known_only` adds nothing, leaving what is known."""
     from .usage_records import ran_on
     turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
                                      (slug, RECENT_TURNS))]
@@ -242,22 +243,10 @@ def makers(c, slug):
     found = set()
     for run in recent:
         segments = run["segments"]
-        if not segments or any(not segment.get("family") for segment in segments):
+        if not known_only and (not segments or any(not segment.get("family") for segment in segments)):
             return set()
-        found.update(segment["family"] for segment in segments)
+        found.update(segment["family"] for segment in segments if segment.get("family"))
     return (found | {maker(c, slug)}) - {""}
-
-
-def known_makers(c, slug):
-    """Every model company a bot is known to run on: its configured model's, and each one its last few runs ran on. An
-    unknown run adds nothing here, where `makers` reads it as no answer at all."""
-    from .usage_records import ran_on
-    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
-                                     (slug, RECENT_TURNS))]
-    found = {maker(c, slug)}
-    for run in ran_on(c, turns).values():
-        found.update(segment["family"] for segment in run["segments"] if segment.get("family"))
-    return found - {""}
 
 
 def builder_makers(c, ticket):
@@ -333,7 +322,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     for slug in slugs:
         if slug in excluded or "bot:" + slug == ticket["owner"]:
             continue
-        if builder and known_makers(c, slug) & builder:
+        if builder and makers(c, slug, known_only=True) & builder:
             why.add("family")
             continue
         decision = assess(c, ticket, slug)

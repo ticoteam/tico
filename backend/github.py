@@ -469,8 +469,8 @@ STUCK_SUITE_MINUTES = 10
 
 def read_checks(service, headers, repo, head):
     """The checks on `head` as GitHub has them now, keyed as `pr_signal` keys them: each check run (the latest per name),
-    each commit status (the latest per context) and each check suite, except a suite with no check run that has sat
-    `STUCK_SUITE_MINUTES`, which is not pending. None when GitHub's answer is incomplete or there is nothing on the head
+    each commit status (the latest per context) and each check suite, except a suite not completed with no check run
+    that has sat `STUCK_SUITE_MINUTES`, which is not pending (a completed one keeps its conclusion, failed or not). None when GitHub's answer is incomplete or there is nothing on the head
     (a fresh read never turns a head with no checks green)."""
     base = f"/repos/{quote(repo, safe='/')}/commits/{quote(head, safe='')}"
     def pages(path, field):
@@ -491,7 +491,8 @@ def read_checks(service, headers, repo, head):
     checks = {}
     for suite in suites:
         created = H.parse_ts(suite.get("created_at"))
-        if not suite.get("latest_check_runs_count") and created and created <= stuck_before:
+        if (suite.get("status") != "completed" and not suite.get("latest_check_runs_count")
+                and created and created <= stuck_before):
             continue
         checks[_suite_key(suite, suite)] = _check_state(suite.get("conclusion") or suite.get("status") or "pending")
     for run in runs:
@@ -561,10 +562,11 @@ def apply_checks(c, link_id, head, checks):
     task = link and H.task(c, link["task_id"])
     if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
+    checks = dict(list(checks.items())[-100:])
     state = _overall(checks)
     if detail.get("checks") == checks and link.get("checks") == state:
         return state
-    detail["checks"] = dict(list(checks.items())[-100:])
+    detail["checks"] = checks
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail)

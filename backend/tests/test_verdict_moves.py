@@ -655,3 +655,15 @@ def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
         note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='round_skipped'",
                          (task["id"],)).fetchone()[0]
     assert "no usable verdict" not in note and f"pass at head {HEAD[:12]}" in note, note
+
+
+def test_a_finished_suite_with_no_check_run_keeps_its_failure(api, monkeypatch):
+    """Only a suite still waiting to start is left out: one GitHub finished as failed, runs or none, still fails."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "completed", "failure")], GREEN_RUNS)
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
+    assert _link(api, task)["checks"] == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
