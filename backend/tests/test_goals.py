@@ -8,26 +8,27 @@ def company_goal(api, title="Grow revenue 30% this year"):
     return post(api, "goals", {"title": title, "owner": "company"})["goal"]
 
 
-def test_company_goals_are_the_owners_and_a_proposal_is_accepted_by_the_parents_owner(api):
+def test_company_goals_are_the_owners_and_a_sub_goal_gets_its_first_colour_from_its_owner(api):
     top = company_goal(api)
     assert top["status"] is None and top["parent_id"] is None and top["owner"] == "company"
     # Only the owner of the environment sets a company goal, and it supports nothing.
     post(api, "goals", {"title": "Ship faster", "owner": "company"}, token="ben-test", expected=403)
     post(api, "goals", {"title": "Nested", "owner": "company", "parent_id": top["id"]}, expected=422)
-    # Ben proposes his own goal under it: proposed, no colour yet.
+    # Ben sets his own goal under it: no colour yet.
     mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
                 token="ben-test")["goal"]
     assert mine["owner"] == "human:ben" and mine["status"] is None and mine["chain"][0]["id"] == top["id"]
-    # He cannot accept it himself; Ana, who owns the parent, does, and a colour needs a sentence.
-    post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "on track"}, token="ben-test", expected=403)
-    post(api, f"goals/{mine['id']}/status", {"status": "green"}, expected=422)
-    accepted = post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Design is done, build starts Monday."})["goal"]
-    assert accepted["status"] == "green" and accepted["status_by"] == "human:ana" and accepted["status_at"]
+    # Its owner gives it the first colour by hand, with a sentence; no one above has to agree first.
+    post(api, f"goals/{mine['id']}/status", {"status": "green"}, token="ben-test", expected=422)
+    first = post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Design is done, build starts Monday."},
+                 token="ben-test")["goal"]
+    assert first["status"] == "green" and first["status_by"] == "human:ben" and first["status_at"]
     # From then on the owner sets the colour, and the history says who said what.
     yellow = post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test")["goal"]
     assert yellow["status"] == "yellow"
     assert [e["new"] for e in yellow["events"] if e["field"] == "status"] == ["green", "yellow"]
-    # Cara is neither the owner nor above him.
+    # Ana owns the parent, so she may still set it; Cara is neither the owner nor above him.
+    post(api, f"goals/{mine['id']}/status", {"status": "red", "note": "Ana's call."}, expected=200)
     post(api, f"goals/{mine['id']}/status", {"status": "red", "note": "Nope."}, token="cara-test", expected=403)
 
 
@@ -80,28 +81,35 @@ def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts
     post(api, f"goals/{mine['id']}/reopen", {"undo": True}, token="ben-test", expected=422)
 
 
-def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_one(api):
+def test_a_sub_goal_with_no_colour_is_reopened_with_one_by_its_owner(api):
     top = company_goal(api)
-    proposed = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-                    token="ben-test")["goal"]
-    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
-    # Dropping and reopening is not a way round the acceptance: Ben's own colour is refused, Ana's is the acceptance.
-    post(api, f"goals/{proposed['id']}/reopen", {"status": "green", "note": "Accept it"}, token="ben-test",
-         expected=403)
-    # Undo gives a proposal no colour, whatever the page sends: it is still a proposal.
-    back = post(api, f"goals/{proposed['id']}/reopen", {"status": "green", "note": "Accept it", "undo": True},
+    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
+                token="ben-test")["goal"]
+    post(api, f"goals/{mine['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    # Its owner brings it back with its first colour and a reason; nobody above has to accept it first.
+    back = post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Back on"}, token="ben-test")["goal"]
+    assert back["status"] == "green" and back["status_source"] == "person" and back["status_by"] == "human:ben"
+
+
+def test_reopening_with_auto_puts_back_the_colour_it_had_and_undo_gives_none_when_it_never_had_one(api):
+    top = company_goal(api)
+    sub = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
+               token="ben-test")["goal"]
+    post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    # Undo gives a goal that never had a colour none, whatever the page sends.
+    back = post(api, f"goals/{sub['id']}/reopen", {"status": "green", "note": "Back on", "undo": True},
                 token="ben-test")["goal"]
     assert back["status"] is None and back["status_source"] == "auto"
     # A goal the CEO Bot coloured gets that colour back when the arithmetic has nothing new to say.
-    post(api, f"goals/{proposed['id']}/status", {"status": "green", "note": "Accepted."})
-    post(api, f"goals/{proposed['id']}/status/auto", {})
-    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
-    auto = post(api, f"goals/{proposed['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
+    post(api, f"goals/{sub['id']}/status", {"status": "green", "note": "Set by hand."})
+    post(api, f"goals/{sub['id']}/status/auto", {})
+    post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    auto = post(api, f"goals/{sub['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
                 token="ben-test")["goal"]
     assert auto["status_source"] == "auto" and auto["status"] is not None and auto["status"] != "dropped"
     # A colour handed back to the CEO Bot before the removal comes back automatic, not as the hand-set one.
-    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
-    undone = post(api, f"goals/{proposed['id']}/reopen", {"undo": True}, token="ben-test")["goal"]
+    post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    undone = post(api, f"goals/{sub['id']}/reopen", {"undo": True}, token="ben-test")["goal"]
     assert (undone["status"], undone["status_source"]) == (auto["status"], "auto")
 
 
