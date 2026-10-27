@@ -1348,8 +1348,14 @@ def private_task_write(fn):
                             private_tasks_default(conn, actor) or private_tasks_default(conn, target))
                            or parent and task_private(conn, parent))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
+        from . import task_trigger_rules
         try:
-            return fn(*args, **kwargs)
+            with task_trigger_rules.pending(conn):
+                result = fn(*args, **kwargs)
+            # Actions may have changed the task after the original write completed.
+            if fn.__name__ in ('task_create', 'task_update', 'task_close') and isinstance(result, dict) and result.get('id'):
+                result = {**result, **(task(conn, result['id']) or {})}
+            return result
         except Refused as exc:
             exc.private = PRIVATE_WRITE.get()
             raise
@@ -5691,6 +5697,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    from . import task_trigger_rules
+    task_trigger_rules.created(conn, row["id"], actor)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts
     # current-message refs in its prompt, so the bot can reuse or reconcile overlapping work
     # without making the human-facing notice noisy or merging distinct deliverables automatically.
@@ -6876,6 +6884,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
         name = "task.reopened"
     else:
         name = "task.state_changed"
+    from . import task_trigger_rules
+    task_trigger_rules.enqueue(conn, name, task_id, actor, revision, field=field, new=new)
     # The owner column is written just after its event, so a new owner is said from `new`.
     hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
                                        **({"owner": new} if field == "owner" else {})}, actor, revision=revision)
