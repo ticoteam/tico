@@ -1382,6 +1382,7 @@ impl Runner {
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
+                cache_ttl: hosts::cache_ttl(attempt.get("task").and_then(|t| t.get("cache_ttl")).unwrap_or(&Value::Null)),
             };
             let mut resumed = false;
             if side_run {
@@ -1722,6 +1723,7 @@ impl Runner {
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
+                    cache_ttl: hosts::cache_ttl(attempt.get("task").and_then(|t| t.get("cache_ttl")).unwrap_or(&Value::Null)),
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());

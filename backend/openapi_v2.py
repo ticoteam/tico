@@ -664,6 +664,8 @@ SCHEMAS = {
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created": "s",
+                 "cache_ttl": {"type": ["string", "null"], "enum": ["5m", "1h", None],
+                               "description": "Claude prompt-cache lifetime of this task's session. Null leaves the harness default. A subtask that continues the session uses the session root's value. Subagents inside the session stay at five minutes"},
                  "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"})},
                 required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],

@@ -159,7 +159,7 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
             .as_object()
             .map(|m| {
                 m.iter()
-                    .filter(|(k, _)| !["checkpoint", "checkpoint_at", "checkpoint_by", "checkpoint_blocked", "goal"].contains(&k.as_str()))
+                    .filter(|(k, _)| !["checkpoint", "checkpoint_at", "checkpoint_by", "checkpoint_blocked", "goal", "cache_ttl"].contains(&k.as_str()))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect()
             })

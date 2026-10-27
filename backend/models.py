@@ -251,6 +251,8 @@ class TaskUpdate(Contract):
     # A review or QA subtask's verdict and the pull request head it judged; its parent's owner is woken with both.
     verdict: Literal["approve", "changes", "pass", "fail"] | None = None
     verdict_head: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")
+    # Claude prompt-cache lifetime for this task's session. "" leaves the harness default.
+    cache_ttl: Literal["5m", "1h", ""] | None = None
     # Replace the people in the roles named: {role: [actors]}; [] clears one.
     roles: dict[str, list[str]] | None = None
     # BotOps applying a person's own request to a task they own or requested (backend/app.py

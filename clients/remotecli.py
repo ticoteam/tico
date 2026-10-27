@@ -591,6 +591,8 @@ def run(args, who=None):
                 for field in ("title", "type", "step", "step_rank", "number"):
                     if getattr(args, field, None) is not None:
                         body[field] = getattr(args, field)
+                if getattr(args, "cache_ttl", None) is not None:
+                    body["cache_ttl"] = "" if args.cache_ttl == "default" else args.cache_ttl
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
             links = s3links.apply(client, body, ("note",))

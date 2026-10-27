@@ -883,6 +883,10 @@ def task_question(api, args):
        "verdict": _s("A review or QA subtask's verdict; the task that asked for it is woken with it",
                      enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
+       "cache_ttl": _s("Claude prompt-cache lifetime for this task's session. default leaves the harness default. "
+                       "A subtask that continues this session uses the session root's value. Subagents inside the "
+                       "session stay at five minutes",
+                       enum=["5m", "1h", "default"]),
        "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_update(api, args):
@@ -897,6 +901,8 @@ def task_update(api, args):
                   "verdict", "verdict_head"):
         if args.get(field) is not None:
             body[field] = args[field]
+    if args.get("cache_ttl") is not None:
+        body["cache_ttl"] = "" if args["cache_ttl"] == "default" else args["cache_ttl"]
     if args.get("private") is not None:
         body["private"] = args["private"]
     if args.get("waiting_on") is not None:

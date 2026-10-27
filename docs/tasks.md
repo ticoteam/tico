@@ -915,6 +915,7 @@ and the bot's other tasks, up to the bot's turn limit. A parent owned by someone
 bot's subtask under a person's task is its own root. The primary session, the Copy session
 ID and the checkpoint all live on the root, and a fresh session on such a subtask starts from the root's checkpoint;
 such a subtask shows no session.
+A task can set the Claude prompt-cache lifetime of its own session: `hub task update <id> --cache-ttl 1h` (or `5m`, or `default`). A builder task that is resumed after a review is the usual `1h`. A review or QA check is its own session and stays on the harness default until that check sets its own. A subtask that continues its parent's session uses the parent's lifetime. Subagents the session starts inside the turn stay at Claude's five-minute default; this setting does not change them.
 `subtask_session: own` on a bot (`hub bot update <slug> --subtask-session own`, `hub_bot_update`, or the bot
 definition API) keeps every subtask its own session; unset or `parent` is the default. A runner from before this
 change keys every task, subtasks included, on its own session, and Tico gives it lanes the same way.
