@@ -684,6 +684,11 @@ def sealed_for(c, who, owner, parent):
         for above in TR.ancestors(c, row["id"]):
             above = H.task(c, above)
             if above and H.task_private(c, above) and (person := _person_on(above)):
+                # A task above that the filer cannot read keeps its person's name, and the route goes through the
+                # filer's own requester, who can reach it.
+                if not H.task_private_readable(c, who.actor, above):
+                    raise Problem("privacy", "A person is on a private task above this one: ask "
+                                  f"{row['requester']}, who gave you this task, to file the subtask", 403)
                 raise Problem("privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}",
                               403)
     return list(kept.values()) or None
@@ -710,11 +715,14 @@ def _without_commits(text):
 
 
 def secret_shaped(text):
-    """Whether `text` holds a credential-shaped value, by the detectors that mask one in a refusal preview."""
+    """Whether `text` holds a credential-shaped value: the token patterns and secret fields that mask one in a refusal
+    preview, or a long mixed run. The preview's run reaches across `/`, `_` and `-`, so a branch, a dated path or a
+    slug would read as a secret; here each piece between them is judged on its own."""
     from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
     text = str(text or "")
     return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
-            or any(_looks_secret(m.group(0)) for m in LONG.finditer(_without_commits(text))))
+            or any(len(piece) >= 32 and _looks_secret(piece) for m in LONG.finditer(_without_commits(text))
+                   for piece in re.split(r"[/_-]", m.group(0))))
 
 
 def sealed_words(kept, title, body):

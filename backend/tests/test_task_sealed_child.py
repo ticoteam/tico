@@ -114,6 +114,8 @@ def test_a_review_subtask_may_name_the_exact_head_and_its_commit_links(api):
         f"Review PR #1714 at head `{HEAD}`, base {'789aedce94db5d20f7d263f5b4873cb6521d0d4b'}.\n"
         f"https://github.com/acme/acme-services/commit/{HEAD}\n"
         f"https://github.com/acme/acme-services/pull/1714/commits/{HEAD}\n"
+        "Branch tico/c0642a6a-private-bot-work-can-hand-a-repair-to-a-builder-in, session "
+        "tico-session/3c5c9932-7767-49bb-99a5-fb346c21c624, notes in reports/2026-10-27-pr-1714-review-notes.md.\n"
         f"End with VERDICT: approve PR #1714 head {HEAD}"))
     assert not [p for p in dry_run(api, body, built["token"]) if "secret-shaped" in p]
     assert post(api, "tasks", body, built["token"])["owner"] == "bot:doc-updater"
@@ -154,11 +156,17 @@ def test_a_private_task_with_a_person_on_it_names_them_and_the_route(api, on):
         assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
 
 
-def test_a_person_above_the_parent_is_named_too(api):
+def test_a_person_above_the_parent_is_named_only_to_a_filer_that_reads_that_task(api):
     above = task(api, "human:cara", "bot:cpo", "Cara's vendor dispute")
     row = task(api, "bot:cpo", "bot:ops", "Dispute triage", parent=above["id"])
     attempt = run_on(api)
     body = repair(row["id"])
+    words = refused(api, body, attempt["token"])
+    assert words == "A person is on a private task above this one: ask bot:cpo, who gave you this task, to file the " \
+                    "subtask", words
+    assert "Cara" not in words and words in dry_run(api, body, attempt["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='bot:ops' WHERE id=?", (above["id"],))
     words = refused(api, body, attempt["token"])
     assert words == f"Cara is on a private task above this one: {ROUTE}", words
     assert words in dry_run(api, body, attempt["token"])
@@ -199,6 +207,7 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
     ("Review at head " + HEAD + " with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "secret-shaped"),
     ("The vendor key is at 9f2c4e6a8b0d" + "1f3e5c7a9b2d4f6e8a0c1b3d5f7e, rotate it", "secret-shaped"),
     ("Review at head " + HEAD + "9f2c4e6a8b0d1f3e5c7a9b2d", "secret-shaped"),
+    ("Push with keys/a1B2c3D4e5F6g7H8i9J0" + "k1L2m3N4o5P6q7R8s9/main", "secret-shaped"),
 ])
 def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
