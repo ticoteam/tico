@@ -174,6 +174,9 @@ binaries are built, and product waits for the image builds; without `--part`, th
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
 (`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
 install the update. It does not cover the macOS or Windows installers.
+Beside the gate, four `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into four
+groups of about three minutes each by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
+(tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
 architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must

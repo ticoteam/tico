@@ -293,6 +293,21 @@ class Rule5Tasks(HubCase):
         self.assertEqual(len(self.finished(secret, SEO)), 1)
         self.assertFalse(self.finished(secret, ANALYTICS))
 
+    def test_a_person_finishing_a_bots_task_with_nothing_said_does_not_wake_it(self):
+        row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
+        H.task_update(self.conn, ANA, row["id"], status="done")
+        [told] = self.finished(row, SEO)
+        self.assertTrue(json.loads(told["refs_json"]).get("quiet"), "no run for a finished task with no note")
+
+    def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
+        quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
+        H.task_close(self.conn, ANA, quiet["id"])
+        H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
+        refs = {row["id"]: [json.loads(m["refs_json"]) for m in H.messages(self.conn, row["conversation_id"])
+                            if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
+        self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
+        self.assertFalse(refs[noted["id"]][0].get("quiet"), "a note may change what the bot does next")
+
     def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")

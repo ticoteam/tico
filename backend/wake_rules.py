@@ -47,6 +47,7 @@ ALWAYS_WAKE = (
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
     ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
     ("gate", "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security"),
+    ("handoff", "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or a merge"),
 )
 ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
 # References that make a message more than news: a decision, a question, an instruction.
@@ -127,6 +128,8 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
         return "needs_action"
     if VERDICT.search(str(body or "")):
         return "gate"
+    if actor == "keeper" and refs.get("handoff"):
+        return "handoff"        # only Tico marks one (backend/verdict_moves.py)
     if in_reply_to and _awaited_reply(conn, target, in_reply_to):
         return "reply"
     return None

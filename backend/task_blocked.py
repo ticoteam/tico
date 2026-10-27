@@ -122,6 +122,9 @@ def hold(c, task_id, reason, kind='dependency'):
     if (not row or row['status'] not in (*H.ACTIVE_STATUSES, 'review')
             or kind != 'gate' and not review_gate.engineering(c, row)):
         return
+    from . import step_flow
+    if step_flow._ready(c) and not step_flow.can_hold(c, row.get('step_id')):
+        return        # a step no ticket is held from (its flow's can_hold): a merged change is reverted or fixed forward
     if row.get('blocked_since'):
         # Retain the first hold time and resume step when another gate also holds it.
         if (kind == 'gate' and row.get('blocked_kind') != 'manual'
@@ -188,6 +191,9 @@ def reconcile(c, task_id, snapshots=None):
     H._set_status(c, H.KEEPER, row, row.get('blocked_from_status') or 'open',
                   step=previous['id'] if previous else None, note='Hold cleared')
     bump(c, row)
+    # Back at a check step: a verdict given there during the hold moves the ticket now.
+    from . import verdict_moves
+    verdict_moves.resumed(c, task_id)
 
 
 FRESH_EVERY_S = 60                  # how often fresh() looks

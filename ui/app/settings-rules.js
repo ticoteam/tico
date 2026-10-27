@@ -18,11 +18,13 @@ const RULE_BUILTIN_GROUPS = {always: 'Always wakes', awaited: 'Awaited', filter:
   pr_checks: 'Pull requests', system: 'System'};
 const RULE_OUTCOMES = {wake: 'wake the bot', note: 'leave a note for its next run', batch: 'batch it', ignore: 'drop it', ask: 'ask a person', action: 'do an action'};
 const RULE_ACTIONS = {close: 'close the task', move_step: 'move the step', set_wait: 'set a wait', relate: 'relate tasks', note: 'add a note',
+  assign: 'assign it', add_tag: 'add a tag', remove_tag: 'remove a tag',
   wake_bot: 'wake a bot', send_webhook: 'send a webhook', create_task: 'make a task', forward: 'forward the call'};
 // The actions that need no task (backend/rules.py EVENT_ACTIONS): the only ones an event with no task can run. The
 // last two (ONCE_ACTIONS) run only on such an event, and forward only on webhook.received.
 const RULE_EVENT_ACTIONS = ['wake_bot', 'send_webhook', 'create_task', 'forward'];
 const RULE_ONCE_ACTIONS = ['create_task', 'forward'];
+const RULE_TAG_ACTIONS = ['add_tag', 'remove_tag'];
 const RULE_ACTORS = {human: 'a person', bot: 'a bot', keeper: 'Tico'};
 const RULE_ROLES = {owner: 'owns the task', requester: 'requested the task', qa: "is the task's QA", release_manager: 'is the Release Manager',
   other: 'neither owns nor requested it'};
@@ -64,6 +66,9 @@ function ruleThenWords(r) {
   if (p.action === 'send_webhook' && p.webhook) return `send ${p.type || 'an event'} to ${ruleHookName(p.webhook)}`;
   if (p.action === 'create_task' && p.owner) return `give ${empName(p.owner)} a task`;
   if (p.action === 'forward' && p.webhook) return `forward it to ${ruleHookName(p.webhook)}`;
+  if (p.action === 'assign' && p.owner) return 'assign it to ' + actorLabel(p.owner);
+  if (p.action === 'add_tag' && p.tag) return 'tag it ' + ruleList(p.tag).join(', ');
+  if (p.action === 'remove_tag' && p.tag) return 'take off ' + ruleList(p.tag).join(', ');
   const what = RULE_ACTIONS[p.action] || 'do an action';
   return p.action === 'move_step' && p.step ? `move it to ${p.step}` : p.action === 'set_wait' && p.waiting_on ? `set it waiting on ${p.waiting_on}` : what;
 }
@@ -325,12 +330,17 @@ function ruleStepHTML(field, label, value, steps, extra = '') {
 function ruleParams(v, before) {
   const action = String(v.get('action')), out = before.action === action ? {...before} : {};
   out.action = action;
+  // create_task's owner is a bot; assign's is a bot or a person, picked from its own list.
+  const owner = action === 'assign' ? 'param_assignee' : 'param_owner';
   for (const [field, key] of [['param_step', 'step'], ['param_waiting_on', 'waiting_on'], ['param_task', 'task'], ['param_note', 'note'],
-    ['param_bot', 'bot'], ['param_text', 'text'], ['param_webhook', 'webhook'], ['param_type', 'type'], ['param_owner', 'owner'],
-    ['param_title', 'title'], ['param_body', 'body']]) {
+    ['param_bot', 'bot'], ['param_text', 'text'], ['param_webhook', 'webhook'], ['param_type', 'type'], [owner, 'owner'],
+    ['param_title', 'title'], ['param_body', 'body'], ['param_tag', 'tag']]) {
     const text = String(v.get(field) || '').trim();
     if (text) out[key] = text; else delete out[key];
   }
+  // Tags are typed comma-separated; the server takes one or a list.
+  if (RULE_TAG_ACTIONS.includes(action) && out.tag) out.tag = out.tag.split(',').map(t => t.trim()).filter(Boolean);
+  else delete out.tag;
   if (action !== 'move_step') delete out.step;
   if (action !== 'set_wait') delete out.waiting_on;
   if (action !== 'relate') delete out.task;
@@ -338,7 +348,8 @@ function ruleParams(v, before) {
   if (action !== 'send_webhook' && action !== 'forward') delete out.webhook;
   if (action !== 'send_webhook') { delete out.type; delete out.data; }
   else out.data = ruleDataParse(v.get('param_data'));
-  if (action !== 'create_task') { delete out.owner; delete out.title; delete out.body; }
+  if (action !== 'create_task' && action !== 'assign') delete out.owner;
+  if (action !== 'create_task') { delete out.title; delete out.body; }
   if (RULE_EVENT_ACTIONS.includes(action)) delete out.note;
   return out;
 }
@@ -357,8 +368,10 @@ function ruleDataParse(text) {
 // call's type), its own scopes (team, department, bot), and acts only with wake_bot or send_webhook; a wake or note
 // on it at a team or department names the bot to tell.
 async function ruleEditor(rule, preset = null) {
+  let tagKeys = [];
   const [listing] = await Promise.all([RULES || get('/v2/rules?scope_kind=builtin').catch(() => ({})), eventTypesLoad().catch(() => []),
-    ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad()]);
+    ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad(),
+    get('/v2/tags?is_template=false').then(d => { tagKeys = (d.tags || []).map(t => t.key); }).catch(() => {})]);
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog';
   const base = rule || preset || {};
@@ -386,6 +399,13 @@ async function ruleEditor(rule, preset = null) {
     const mine = (S.emps || []).filter(e => e.status !== 'archived' && settingsCanManageBot(e)).map(e => e.name);
     if (cur && !mine.includes(cur)) mine.push(cur);
     return `<option value="">Choose</option>${mine.map(n => [n, empName(n)]).sort((a, b) => a[1].localeCompare(b[1])).map(([n, w]) => opt(n, w, cur)).join('')}`;
+  };
+  // An assign rule hands the task to a bot or a person: both are offered, by the actor id the server stores.
+  const owners = cur => {
+    const list = [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
+      ...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)])];
+    if (cur && !list.some(([a]) => a === cur)) list.push([cur, actorLabel(cur)]);
+    return `<option value="">Choose</option>${list.sort((a, b) => a[1].localeCompare(b[1])).map(([a, w]) => opt(a, w, cur)).join('')}`;
   };
   const triggers = (ROUTINE_TRIGGERS || []).map(t => opt(t.id, t.name, first(when.trigger))).join('');
   const hooks = (WH_HOOKS || []).map(h => opt(h.id, h.name, params.webhook || '')).join('');
@@ -417,7 +437,10 @@ async function ruleEditor(rule, preset = null) {
       <span class="wr-field" data-rule-param="move_step">${ruleStepHTML('param_step', 'To step', params.step || '', steps(), ' required')}</span>
       <label data-rule-param="set_wait">Waits on<input name="param_waiting_on" maxlength="120" ${params.blocked_by ? '' : ' required'} value="${esc(params.waiting_on || '')}"></label>
       <label data-rule-param="relate">Task ID<input name="param_task" maxlength="120" required value="${esc(params.task || '')}"></label>
-      <label data-rule-param="close move_step set_wait relate note">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
+      <label data-rule-param="assign">Owner<select name="param_assignee" required>${owners(params.action === 'assign' ? params.owner || '' : '')}</select></label>
+      <label data-rule-param="add_tag remove_tag">Tags<input name="param_tag" list="rule-tag-keys" maxlength="400" required spellcheck="false" placeholder="urgent, billing" value="${esc(RULE_TAG_ACTIONS.includes(params.action) ? ruleList(params.tag).join(', ') : '')}"></label>
+      <datalist id="rule-tag-keys">${tagKeys.map(k => `<option value="${esc(k)}">`).join('')}</datalist>
+      <label data-rule-param="close move_step set_wait relate note assign add_tag remove_tag">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
       <label data-rule-param="wake_bot">Bot<select name="param_bot" required>${bots(params.action === 'wake_bot' ? params.bot || '' : '')}</select></label>
       <label data-rule-param="wake_bot">Text<input name="param_text" maxlength="1000" value="${esc(params.action === 'wake_bot' ? params.text || '' : '')}"></label>
       <label data-rule-param="create_task">Bot<select name="param_owner" required>${bots(params.action === 'create_task' ? params.owner || '' : '')}</select></label>

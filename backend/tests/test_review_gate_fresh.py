@@ -68,6 +68,22 @@ def held(api, task):
     return current
 
 
+def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatch):
+    task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
+    with api.app.state.store.transaction() as c:
+        typ = H.type_get(c, task['type_id'])
+        H.type_update(c, H.KEEPER, typ['id'], steps=[
+            {'id': s['id'], 'name': 'Code review' if s['name'] == 'Review 1' else s['name'],
+             'status': s['status']} for s in typ['steps']])
+    reads = github(api, monkeypatch, {'python': 'failure'})
+    response = move(api, task, 'Code review')
+    assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'the renamed step reads GitHub afresh'
+    assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
+    assert 'python' in response.text
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step']['name'] == 'Blocked' and 'CI failing' in current['blocked_reason']
+
+
 def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
     task = ticket(api, STALE)
     token = bot_token(api)

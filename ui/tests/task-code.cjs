@@ -222,6 +222,15 @@ async function desktop(browser) {
     return out;
   });
   assert.match(bare.text, /^unknown repo\s*·\s*tico\/t-check-misc/);
+  // A check waiting for a free reviewer (backend/check_pools.py) shows under Code, even on a task with no links yet.
+  const waiting = await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.innerHTML = taskCodeHTML({links: [], check_waits: [{id: 'cw1', title: 'Review 1: PR #212', label: 'Waiting for a reviewer',
+      reason: 'every reviewer in the pool is at its limit of open checks', since: new Date().toISOString()}]});
+    return {text: host.textContent, title: host.querySelector('[data-check-wait] .code-main')?.title};
+  });
+  assert.match(waiting.text, /Review 1: PR #212\s*·\s*Waiting for a reviewer/);
+  assert.match(waiting.title, /at its limit/);
   assert.equal(bare.cls, 'code-repo unknown');
   assert.equal(bare.color, bare.muted, 'unknown repo is muted');
   // A branch name is never taken for a repo (fix-api in the web repo is not "api"); only the folder says.
