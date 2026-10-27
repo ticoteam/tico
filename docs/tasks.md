@@ -1392,13 +1392,16 @@ criteria; the private task stays sealed.
   as a sealed subtask, naming them and the route to them. The task is for a bot; the parent, when given, is private.
 - Its words are checked before it is written, and a failed check is refused naming the check, never the text: no
   secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private
-  task the run carries (title, body, note or comments), and no file, attachment or link of a private task. The checks
+  task the run carries (title, body, note, acceptance criteria or comments), and no file, attachment or link of a private task. The checks
   read everything the task keeps: title, body, acceptance criteria, labels, links (a secret-shaped value in a link is
   refused too), public title and summary, change paths, blocker and the names of its roles (as sent and as stored).
   Rewrite it and file again; it does not count toward quarantine. Nobody signs off on the words.
 - The title of the parent, or of any private task the run carries, is refused anywhere in that text, in any case.
 - The copy check catches only 12 or more words copied in a row. A short name that is not a private task's title (a
-  vendor, a person, a project) is not caught: that rests on the filing bot's judgement.
+  vendor, a person, a project) is not caught: that rests on the filing bot's judgement. So does the rest of the run's
+  context: its messages that are not on a private task, the files it read and its tools' output are not compared, and
+  a copy broken up with a word every few words passes. The checks catch careless copying, not a bot set on leaking.
+- A company task under a private parent never sends the parent's state to the stale-work review.
 - It is related to no private task but its parent (no blocker, related or duplicate link to one).
 - A reader who cannot read the parent sees it as "a private task", with no title or id; its own readers see it as usual.
 - History: the private task records "Filed a company-visible task from this private task: <title>"; the new task
