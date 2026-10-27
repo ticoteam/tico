@@ -310,14 +310,15 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/ceo-bot/level")
     def ceo_bot_level(request: Request, body: M.CeoBotLevel):
         """Settings > CEO Bot, "How much your CEO Bot does": the owner picks Passive (1), Suggests actions (2) or Acts
-        on its own (3) on their own click; each change is kept with who and when. An admin or a member never does, nor
-        a bot, the CEO Bot included, nor the Assistant acting for the owner."""
+        on its own (3) on their own click, or their tap on a Confirm card for it; each change is kept with who and when.
+        An admin or a member never does, nor a bot, the CEO Bot included, nor BotOps or the Assistant acting for the
+        owner without that tap."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
             if not company_editor(who, tap=True):
                 raise Problem("forbidden", f"Only the owner chooses how much the {ceo_bot.name(c)} does, on their own "
-                              "click; no admin or bot changes it, the CEO Bot included", 403)
+                              "click or Confirm-card tap; no admin or bot changes it, the CEO Bot included", 403)
             ceo_bot.set_level(c, who.actor, body.level)
             return ceo_bot.named(c, ceo_bot.view(c))
         return mutate(request, body, work)
@@ -325,13 +326,14 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/ceo-bot/checks")
     def ceo_bot_checks(request: Request, body: M.CeoBotChecks):
         """Settings > CEO Bot, "Regular checks": the owner turns the KPI pass and the automatic goal colours on or off,
-        on their own click. Off, neither runs until they turn them back on; their chat with the CEO Bot still works."""
+        on their own click or their tap on a Confirm card for it. Off, neither runs until they turn them back on; their
+        chat with the CEO Bot still works."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
             if not company_editor(who, tap=True):
                 raise Problem("forbidden", f"Only the owner turns the {ceo_bot.name(c)}'s regular checks on or off, "
-                              "on their own click", 403)
+                              "on their own click or Confirm-card tap", 403)
             ceo_bot.set_checks(c, who.actor, body.on)
             return ceo_bot.named(c, ceo_bot.view(c))
         return mutate(request, body, work)

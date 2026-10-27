@@ -33,6 +33,7 @@ from . import models as M
 from . import visuals
 from .media import upload_contract
 from . import rooms
+from . import settings_asks
 from .store import H, Problem, digest
 
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
@@ -53,7 +54,8 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff_json", "proposer"):
+    # ask_json: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
+    for column in ("confirm_hash", "running_since", "description", "diff_json", "proposer", "ask_json"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
@@ -90,6 +92,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
+        return True
+    # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
+    # may, and the route itself requires the person's cited words.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
         return True
     try:
         fields = json.loads(body or b"{}")
@@ -1774,6 +1780,7 @@ def install(app, store, auth, mutate, onboarding):
             c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result_json=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)
+            settings_asks.settled(c, row, status, result)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
@@ -1792,6 +1799,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.cancelled", aid, {})
+            settings_asks.settled(c, row, "cancelled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
 
@@ -1811,6 +1819,7 @@ def install(app, store, auth, mutate, onboarding):
                 if row["created"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
+                    settings_asks.settled(c, row, "expired")
                     return None
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute("UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "

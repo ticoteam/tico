@@ -20,8 +20,8 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
 # Cara neither runs nor owns finance, made nothing below and operates no computer: "the bot's owners", "the person who
-# made it" and "the computer's operator" are Ana's and Ben's (as an admin) here.
-MANAGERS = ("bot", "creator", "operator")
+# made it", "the computer's operator" and the managers of a team rule's scope are Ana's and Ben's (as an admin) here.
+MANAGERS = ("bot", "creator", "operator", "scope")
 
 # A value each entry's route takes. An entry left out sends `{}` (json) or the type's plain sample; a route that does
 # not take it says so with a 422, which the test reports as not proven rather than passing.
@@ -107,21 +107,10 @@ NOT_PROVEN = {
     "inbound.phone_request": "tap 409: inbound is not configured",
     "inbound.phone_request.accept": "422: needs the price shown (and inbound is not configured)",
 }
-# Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
-# here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it
-# out) or a new one appears.
-KNOWN_GAPS = {
-    # "The person who made it" / "the computer's operator": the catalogue leaves it to the route, so a member who made
-    # none of these gets a Confirm card, and the route refuses their tap.
-    ("computer.revoke", "member"): "card, then refused", ("webhooks.incoming.rotate", "member"): "card, then refused",
-    ("webhooks.incoming.delete", "member"): "card, then refused",
-    ("webhooks.gateway.wake", "member"): "card, then refused", ("webhooks.outgoing", "member"): "card, then refused",
-    # "Anyone", but the route keeps a team rule to the people who manage it.
-    ("rules.wake", "member"): "refused",
-    # An admin changes a person's role, but only the owner makes or removes admins (Review 2 of PR #1700 had the sweep
-    # tap its cards, which found it).
-    ("people.person.role", "admin"): "card, then refused",
-}
+# Where the route and the catalogue disagree: (entry, person) -> what the route does. None now (settings stage 3 made
+# the who-may of creator and operator entries, wake rules and a person's role match their routes); the test fails when
+# a new one appears, or one here is fixed (take it out).
+KNOWN_GAPS = {}
 
 
 def _sample(e):

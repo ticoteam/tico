@@ -52,6 +52,10 @@ and repair the bots that do it.
    (what the person clicks) and `link` (the exact setting). Ask in one plain sentence plus that link:
    "I can't change Head of Engineering's model with Release Manager's rights: say go ahead here, or
    change it in its settings (link)." Never ask for "the supported permission path".
+   A setting the person may not change (`hub settings set` refused, naming who may) needs no trip to
+   Settings either: offer "Shall I ask an admin?" ("the owner" when only the owner may) and stop. On
+   their yes, `hub settings ask <key> <value>` sends one person who may the Confirm card and a request;
+   say who was asked, and that they'll hear here when it is confirmed or declined.
 8. Every tool uses the requester's rights by default. A human request uses that human's full rights
    for as long as its task is open (up to 30 days after they last spoke on it; a task you reopen lends
    nothing); their own comment on that task is them asking. A bot's message or task uses only that bot's

@@ -53,6 +53,7 @@ from . import fast_json
 from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
+from . import route_renames, settings_catalog
 from . import updates
 from clients import gateway as gateway_client
 from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
@@ -434,10 +435,26 @@ def create_app(settings=None):
                 with store.read() as c:
                     names = actor_names.lookup(c, [acting.actor] + (["bot:" + parts[4]] if parts[3:4] == ["bots"]
                                                                      and len(parts) > 4 else []))
+                if exc.status == 403 and H.is_human(acting.actor):
+                    # A setting's own route said no to the person: say who may, as `hub settings` does.
+                    path = route_renames.new_path(request.url.path) or request.url.path
+                    said = settings_catalog.raw_refusal(request.method, path, botops_act.parse_body(
+                        getattr(request, "_body", b"")), settings.public_url)
+                    if said:
+                        return said
                 return botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
             found = await asyncio.get_running_loop().run_in_executor(None, hint)
             if found:
                 exc.extra = {**getattr(exc, "extra", {}), **found}
+        acting = getattr(request.state, "identity", None)
+        if (exc.status == 403 and getattr(acting, "via", None) == "assistant" and H.is_human(acting.actor)
+                and "fix" not in getattr(exc, "extra", {})):
+            # The person's Assistant wrote for them and the setting's route said no: who may, as `hub settings` says.
+            said = settings_catalog.raw_refusal(request.method, route_renames.new_path(request.url.path)
+                                                or request.url.path, botops_act.parse_body(
+                                                    getattr(request, "_body", b"")), settings.public_url)
+            if said:
+                exc.extra = {**getattr(exc, "extra", {}), **said}
         if getattr(exc, "extra", None) and str(exc.extra.get("link") or "").startswith("#/"):
             exc.extra = absolute_link(exc.extra, settings.public_url)
         return JSONResponse({"error": {"code": exc.code, "detail": exc.detail,

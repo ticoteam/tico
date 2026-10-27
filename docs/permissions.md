@@ -545,7 +545,20 @@ a direct entry is a card too. A card or a cited write from the Assistant is exac
 once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
-The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
+"Whose it is" is read from the thing itself: a trigger's or an outgoing webhook's maker, a computer's operator, and the
+people who manage a wake rule's scope (the owner or an admin for a team rule); a person's role is the owner's alone.
+The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
+made for a person (`hub api`), the refusal carries the same who-may line (`fix`, `who_may`).
+
+**Ask someone who can.** BotOps or the Assistant then offers "Shall I ask an admin?" ("the owner" for the owner's
+settings). On the person's yes, `hub settings ask <key> <value>` (`--to <person>` names one) sends one request to one
+person who may: the setting's Confirm card in their BotOps chat and a task on their list that the asker requested. Only
+their tap changes it, with their rights; their tap or cancel (or the card expiring after a day) settles the task, done
+or declined, and the asker is told in the chat they asked from. The Assistant cites the person's words for it; a bot on
+its own rights never asks, a person-only setting can't be asked for (it is typed in Settings), and someone who may change
+it is told to set it. A person has at most five asks waiting at once.
+
+`backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
 in `NOT_SETTINGS` with the reason it needs none.
 
