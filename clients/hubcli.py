@@ -1185,6 +1185,26 @@ def parser():
     s.add_argument("--note")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task close")
+    s = task.add_parser("bulk", help="one change to every task a filter selects (at most 200): step, status, owner, "
+                                     "tags or close; --dry-run counts first. Each task changes as its own update would")
+    s.add_argument("action", choices=["step", "status", "owner", "tags", "close"])
+    s.add_argument("value", nargs="?", help="the step, status or owner to set (none for tags or close)")
+    s.add_argument("--add", action="append", help="with tags: a tag to add; repeat for more")
+    s.add_argument("--remove", action="append", help="with tags: a tag to take off; repeat for more")
+    s.add_argument("--note", help="what changed, or why; goes with each task's change")
+    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would change; change nothing")
+    for name, word in (("owner", "owner (a bot slug, a human id or me)"), ("requester", "requester"),
+                       ("label", "tag"), ("type", "type (id or name)"), ("step", "step (id or name)"),
+                       ("updated-since", "changed after this ISO-8601 time"), ("member", "person or bot on it by role"),
+                       ("role", "role, with --where-member")):
+        s.add_argument("--where-" + name, dest="where_" + name.replace("-", "_"), help="only tasks with this " + word)
+    s.add_argument("--where-status", dest="where_status", action="append", choices=list(TASK_STATUSES),
+                   help="only tasks with this status; repeat for more")
+    s.add_argument("--where-lane", dest="where_lane", choices=["company", "product"])
+    s.add_argument("--where-number", dest="where_number", type=int, help="only this task number")
+    s.add_argument("--where-snoozed", dest="where_snoozed", choices=["hide", "only", "all"])
+    s.add_argument("--where-id", dest="where_ids", action="append", help="only this task (id or number); repeat for more")
+    s.set_defaults(fn="task bulk")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
     s.add_argument("id")
     s.add_argument("file")
@@ -2658,7 +2678,8 @@ def parser():
                        help="wake starts a run, note and ignore wait; ask raises a Needs-you; action runs params.action")
         s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}; '
                                       'for a webhook event only {"trigger":"shop","type":"order.*"}')
-        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
+        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"assign","owner":"ops"}, '
+                                        '{"action":"add_tag","tag":"urgent"} or {"action":"remove_tag","tag":["triage"]}; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
                                         'or {"action":"send_webhook","webhook":"<id>","type":"custom.order","data":{"id":"{{data.order}}"}}; '
                                         '{"action":"create_task","owner":"ops","title":"Order {{data.order}}","body":"..."} or '
                                         '{"action":"forward","webhook":"<id>"} (webhook.received only); '

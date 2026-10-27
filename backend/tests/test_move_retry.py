@@ -93,7 +93,7 @@ def test_hint_names_what_clears_each_refusal():
     assert move_retry.hint('other') == ''
 
 
-def unreadable(api, monkeypatch, mode):
+def unreadable(api, monkeypatch, mode, response=None):
     """GitHub cannot be read at a review move through the real snapshot and refusal path. `mode` is what the
     read reports: 'temporary' (the token mint times out), 'permission' (the mint is refused for access), or a
     read failure with no cause ('read-422', 'read-boom'). Only the HTTP boundary is stubbed; snapshot,
@@ -106,15 +106,24 @@ def unreadable(api, monkeypatch, mode):
     service = api.app.state.github_app
     # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
     monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})
+    real_mint = service.mint
+    if mode == 'mint-403':
+        monkeypatch.setattr(service, 'installation', lambda: 77)
+        monkeypatch.setattr(service, '_jwt', lambda: 'synthetic-jwt')
 
     def mint(repos, scopes):
         if state['down'] and mode == 'temporary':
             raise TimeoutError('synthetic GitHub timeout')
         if state['down'] and mode == 'permission':
             raise Problem('github_app_permissions', 'synthetic permission refusal', 409)
+        if state['down'] and mode == 'mint-403':
+            return real_mint(repos, scopes)
         return ('synthetic-token', '2030-01-01T00:00:00Z')
 
     def call(method, path, **kw):
+        if state['down'] and (mode == 'mint-403' and path.endswith('/access_tokens')
+                              or mode == 'read-403' and path.startswith('/repos/')):
+            return response
         if state['down'] and mode == 'read-422':
             return SimpleNamespace(status_code=422, json=lambda: {})
         if state['down'] and mode == 'read-boom':
@@ -141,6 +150,15 @@ def devops_tasks(api):
     return owned_by(api, 'devops-engineer')
 
 
+def owner_woken(api, task):
+    """Per gate notice to the ticket's owner, whether it queued a turn for them."""
+    with api.app.state.store.read() as c:
+        return [bool(r[0]) for r in c.execute(
+            "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.to_actor=? "
+            "AND json_extract(m.refs_json,'$.task')=? AND json_extract(m.refs_json,'$.review_gate') IS NOT NULL",
+            (task['owner'], task['id']))]
+
+
 def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api, monkeypatch):
     task = ticket(api, RECEIPT)
     back = unreadable(api, monkeypatch, 'temporary')
@@ -149,6 +167,7 @@ def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api
     for minutes in (6, 12):
         assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
     assert step(api, task) == 'Blocked' and devops_tasks(api) == []
+    assert owner_woken(api, task) == [False]        # told on the ticket, not woken: Tico retries, nobody acts
     remembered = retries(api, task)[-1]
     assert remembered['temporary'] is True and remembered['devops'] is False
     back()
@@ -161,6 +180,7 @@ def test_permission_failure_asks_devops_once_and_moves_when_github_reads_again(a
     back = unreadable(api, monkeypatch, 'permission')
     assert move(api, task).status_code == 422
     assert devops_tasks(api) == ['GitHub cannot be read for review moves']    # on the first refusal
+    assert owner_woken(api, task) == [True]
     assert retries(api, task)[0]['devops'] is True
     fresh = get(api, 'tasks/' + task['id'])['task']
     assert move(api, fresh).status_code == 422                                # the builder tries again
@@ -168,6 +188,40 @@ def test_permission_failure_asks_devops_once_and_moves_when_github_reads_again(a
     assert len(devops_tasks(api)) == 1                                        # the same ask, reused
     back()
     assert move_retry.tick(api.app.state.github_app, at=later(12), force=True) == [task['id']]
+    assert step(api, task) == 'Review 1'
+
+
+@pytest.mark.parametrize('mode', ['mint-403', 'read-403'])
+@pytest.mark.parametrize('response_headers,message,temporary', [
+    pytest.param({'X-RateLimit-Remaining': '0'}, 'Permission unavailable', True, id='primary-limit'),
+    pytest.param({'Retry-After': '60'}, 'Try later', True, id='secondary-retry-after'),
+    pytest.param({}, 'API RATE LIMIT exceeded', True, id='secondary-rate-message'),
+    pytest.param({}, 'ABUSE detection triggered', True, id='secondary-abuse-message'),
+    pytest.param({}, 'Resource not accessible', False, id='plain-forbidden'),
+])
+def test_github_403_rate_limits_retry_quietly_but_plain_403_needs_access(
+        api, monkeypatch, mode, response_headers, message, temporary):
+    import httpx
+    task = ticket(api, RECEIPT)
+    response = httpx.Response(403, headers=response_headers, json={'message': 'private-remote-detail: ' + message})
+    back = unreadable(api, monkeypatch, mode, response)
+    refused = move(api, task)
+    assert refused.status_code == 422, refused.text
+    assert 'private-remote-detail' not in refused.text
+    remembered = retries(api, task)[-1]
+    assert remembered['temporary'] is temporary
+    assert remembered['devops'] is not temporary
+    assert owner_woken(api, task) == [not temporary]
+    assert len(devops_tasks(api)) == (0 if temporary else 1)
+    assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == []
+    assert len(retries(api, task)) == 1
+    for minutes in (6, 12):
+        assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
+    assert len(retries(api, task)) == 3
+    assert len(devops_tasks(api)) == (0 if temporary else 1)
+    assert owner_woken(api, task) == [not temporary]
+    back()
+    assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == [task['id']]
     assert step(api, task) == 'Review 1'
 
 

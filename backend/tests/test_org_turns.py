@@ -290,3 +290,54 @@ def test_waiters_are_dropped_below_the_warning_so_claims_stop_taking_the_write_l
     monkeypatch.setattr(api.app.state.execution, 'claim', lambda *a, **k: wrote.append(1) or {'attempt': None})
     assert claim(api, machine, 'finance') is None
     assert not wrote                # answered on the read connection
+
+
+def test_claim_admission_and_quiet_fixer_do_not_classify_the_queued_backlog(api, monkeypatch):
+    """Detailed queue explanations must not run inside each claim's writer transaction."""
+    from backend import start_places, turn_fixer
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    post(api, 'chat/ops', {'text': 'A synthetic request still starts while the backlog is large.'})
+
+    def detailed(*args, **kwargs):
+        raise AssertionError('Admission must not classify every queued bot')
+
+    monkeypatch.setattr(start_places, 'summary', detailed)
+    attempt = claim(api, machine, 'ops')
+    assert attempt is not None
+    assert post(api, 'attempts/' + attempt['id'] + '/start-place', {}, machine['token'])['reserved']
+    with api.app.state.store.transaction() as c:
+        assert not turn_fixer.tend(c, api.app.state.store.settings).get('active')
+
+
+def test_lightweight_observation_keeps_full_counts_only_on_warning_crossings(api, monkeypatch):
+    from backend import org_turns, start_places
+    one_person(api)
+    machine = waiters(api, n=1, running=1)
+    store = api.app.state.store
+    with store.transaction() as c:
+        org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 2, 'stop_per_person': 3})
+    summaries = []
+    original = start_places.summary
+
+    def detailed(c, rid, *args, **kwargs):
+        summaries.append(rid)
+        return original(c, rid, *args, **kwargs)
+
+    monkeypatch.setattr(start_places, 'summary', detailed)
+    with store.transaction() as c:
+        first = org_turns.observe(c, store.settings, detailed=False)
+        assert first['in_use'] == 2 and first['at_warning'] and not first['at_stop']
+        assert set(('running', 'starting', 'waiting', 'queued')) <= first.keys()
+        assert summaries == [machine['runner_id']]
+        again = org_turns.observe(c, store.settings, detailed=False)
+        assert again['in_use'] == 2 and summaries == [machine['runner_id']]
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-1'")
+        cleared = org_turns.observe(c, store.settings, detailed=False)
+        assert cleared['in_use'] == 1 and not cleared['at_warning']
+        assert summaries == [machine['runner_id'], machine['runner_id']]
+        incident = org_turns.saved(c, org_turns.INCIDENT)
+        assert not incident['active'] and incident['counts']['in_use'] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='turns.warning_crossed'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='turns.warning_cleared'").fetchone()[0] == 1
