@@ -3685,12 +3685,12 @@ def bot_budget(api, args):
     return who.post(path, {**body, "expected_revision": current["revision"]}, key=_key(args))
 
 
-_PROFILES = ["doer", "reviewer", "lead", "responder", "monitor", "custom"]
+_PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
 
 
 @tool("hub_bot_profile", "Read or set a bot's profile, as the person who asked you: what wakes the bot and which tasks it takes. "
       "doer works its tasks (news batched); reviewer takes review and QA requests only; lead hears the rest once a day; "
-      "responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
+      "manager runs on its schedule over its exceptions list and hears ticket news only then; responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
       "rules on the Rules page. With no profile it reads the bot's and the choices. Leaving custom deletes the wake rules "
       "it copied into the rules table, so say confirm_drop_rules.",
       {"bot": _s("Bot slug"), "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
@@ -4582,7 +4582,8 @@ def turns(api, args):
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
       "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).",
+      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
+      "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
       {"type": _s("Task type id or name; default the engineering board"),
        "owner": _s("Only tickets this person or bot owns"),
        "label": _s("Only tickets with this label"),

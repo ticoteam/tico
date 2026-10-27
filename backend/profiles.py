@@ -1,6 +1,6 @@
 """Bot profiles: how a bot is woken and what work it takes (quiet task flow, section 5).
 
-`bot_config.profile` is `doer`, `reviewer`, `lead`, `responder`, `monitor` or `custom`. A profile is a fixed set of
+`bot_config.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
@@ -8,6 +8,8 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
+    manager    people, work given to it, its timers,   note                 no                no      any
+               its exceptions list
     responder  people                                  note                 no                no      none
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
@@ -37,8 +39,9 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 
-DOER, REVIEWER, LEAD, RESPONDER, MONITOR, CUSTOM = "doer", "reviewer", "lead", "responder", "monitor", "custom"
-NAMES = (DOER, REVIEWER, LEAD, RESPONDER, MONITOR, CUSTOM)
+DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
+    "doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
+NAMES = (DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM)
 MAX_SECONDS = 7 * 86400
 TOKEN_SAVER_SECONDS = 30 * 60           # a window this long or longer is what older clients call Token saver
 DIGEST_HOUR = 9                         # a lead's digest, in the team's time zone
@@ -61,6 +64,11 @@ SPEC = {
                               "takes review and QA tasks only."},
     LEAD: {**BASE, "label": "Lead", "pulls": "none", "sweeps": False, "digest_hour": DIGEST_HOUR, "batch_scope": "bot",
            "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day."},
+    # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
+    MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": False, "batch_scope": "bot",
+              "description": "Works from one exceptions list, sent about hourly when it has a new entry. Wakes for people, "
+                             "work given to it and its own timers; ticket news, verdicts and subtask results wait for "
+                             "its next run."},
     RESPONDER: {**BASE, "label": "Responder", "pulls": "none", "sweeps": False, "takes": "none",
                 "description": "Answers people in chat. Wakes for people only and takes no tasks."},
     MONITOR: {**BASE, "label": "Monitor", "sweeps": False, "takes": "watcher",
@@ -263,7 +271,7 @@ class BotProfile(Contract):
     """Set a bot's profile. A named profile takes its own values (send only the numbers to change); the numbers
     set again each time. `pulls`, `sweeps` and `takes` are for `custom`, whose rows are edited on the Rules page.
     Leaving `custom` for a named profile drops the rows it copied into the rules table: `confirm_drop_rules`."""
-    profile: Literal["doer", "reviewer", "lead", "responder", "monitor", "custom"]
+    profile: Literal["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
     expected_revision: int = Field(ge=1)
     batch_seconds: int | None = Field(default=None, ge=0, le=MAX_SECONDS)
     batch_scope: Literal["bot", "conversation"] | None = None
