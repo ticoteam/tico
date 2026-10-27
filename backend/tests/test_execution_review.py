@@ -371,7 +371,7 @@ def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
     else:
         with api.app.state.store.transaction() as c:
             c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
-                      (H.new_id(), 'spend', attempt['message_id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)))
+                      (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)))
     post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
 
