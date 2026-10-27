@@ -6,8 +6,8 @@ posted, GitHub comes back. So the refusal is remembered on the ticket (task_even
 was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass
 retries the same move as Tico when that fingerprint changes: a PR link's head or checks, the ticket's note, a new
 message on the ticket, or another wait beside a Blocked hold ending. An unreadable GitHub is retried on a timer
-instead, and if it is still unreadable it goes
-to DevOps (backend/blockers.py). Nobody has to ask for the retry, and Head of Engineering hears nothing about it.
+instead, and if it is still unreadable it goes to DevOps (backend/blockers.py). Nobody has to ask for the retry,
+and Head of Engineering hears nothing about it.
 
 A retry stops when the ticket leaves the step it was refused at, closes, or RETRY_FOR after the first refusal: each
 retry that is refused again carries that first time forward (`since`), so a long outage still ends."""

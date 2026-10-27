@@ -207,6 +207,62 @@ def test_stranded_sweep_preserves_general_worktree_hold(api):
             assert after[field] == held[field], field
 
 
+@pytest.mark.parametrize('with_dependency', [False, True])
+def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, with_dependency):
+    from backend import review_gate, task_blocked, task_relations as TR
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        branch = f"tico/{task['id'][:8]}-offsite-plan"
+        tree = H.new_id()
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,detail_json) "
+                  "VALUES(?,?,'worktree',?,'present',?,?,'Acme/product',?,?)",
+                  (tree, task['id'], 'worktree:' + tree, task['owner'], H.now(), branch,
+                   json.dumps({'pushed': 'd' * 40, 'expected_head': 'b' * 40})))
+        assert H.unlinked_pushes(c, task['id'])
+        task_blocked.hold(c, task['id'], 'Waiting for unlinked pushes', 'worktree')
+        held = H.task(c, task['id'])
+        if with_dependency:
+            dependency = H.task_create(c, 'human:ana', 'Choose the venue', 'Choose one.', 'human:ana')
+            TR.add_blocker(c, 'human:ana', task['id'], dependency['id'])
+        H.task_update(c, 'human:ana', task['id'], type=H.GENERAL_TYPE)
+        moved = H.task(c, task['id'])
+        assert moved['status'] == 'waiting' and moved['blocked_kind'] == 'worktree'
+        assert moved['blocked_from_step'] == held['blocked_from_step']
+        assert not review_gate.engineering(c, moved)
+        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
+        task_blocked.sweep(c, H.now())
+        assert H.task(c, task['id'])['version'] == moved['version']
+        assert H.task(c, task['id'])['note'] == moved['note']
+        link = H.task_link(c, 'human:ana', task['id'], 'https://github.com/Acme/product/pull/88')
+        assert link['kind'] == 'pr'
+        assert H.unlinked_pushes(c, task['id']) == []
+        if with_dependency:
+            task_blocked.sweep(c, H.now())
+            assert H.task(c, task['id'])['status'] == 'waiting'
+            assert H.task(c, task['id'])['version'] == moved['version']
+            # Isolate the scheduled recovery from the dependency-completion path's own wake.
+            c.execute("UPDATE tasks SET status='done' WHERE id=?", (dependency['id'],))
+        candidates = task_blocked.candidates(c, H.now())
+        assert task['id'] in candidates
+        task_blocked.sweep(c, H.now(), candidates)
+        resumed = H.task(c, task['id'])
+        assert resumed['status'] == held['blocked_from_status'] == 'doing'
+        assert resumed['step_id'] != held['blocked_from_step']
+        if resumed['step_id']:
+            assert H._one(c, 'SELECT type_id FROM task_steps WHERE id=?',
+                          (resumed['step_id'],))['type_id'] == H.GENERAL_TYPE
+        for field in ('blocked_since', 'blocked_kind', 'blocked_reason', 'blocked_from_step', 'blocked_from_status'):
+            assert resumed[field] is None, field
+        assert resumed['version'] > moved['version']
+        task_blocked.sweep(c, H.now())
+        assert H.task(c, task['id'])['version'] == resumed['version']
+        wakes = H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? "
+                                  "AND json_extract(refs_json,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
+                                  (task['owner'], task['id'])))
+        assert len(wakes) == 1
+        assert json.loads(wakes[0]['refs_json'])['news'] == 'assignment'
+
+
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
     from backend import task_blocked
     task = ticket(api)
