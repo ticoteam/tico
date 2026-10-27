@@ -34,6 +34,14 @@ def save_metadata(c, key, value):
               (key, json.dumps(value)))
 
 
+def release_cleared_overrides(c):
+    """Hand rows whose Settings command was cleared before a clear released them back to their tico.json /
+    conductor.json: they kept setup_source 'settings' with no command, so every sync skipped them. A save can no longer
+    make such a row, so this runs on every start and only ever matches rows from before."""
+    c.execute("UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
+              "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''")
+
+
 def migrate(c):
     if metadata(c, 'repositories-access-migrated').get('done'):
         return
