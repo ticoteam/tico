@@ -8945,6 +8945,8 @@ def needs_you(conn, who):
     requester's list, as does a declined one on a steps-only type."""
     actor = who if actor_kind(who) else human_actor(who)
     pending = _rows(conn.execute("SELECT * FROM approvals WHERE decision IS NULL ORDER BY created"))
+    # approval_wait may resolve decision_owner via message(); prime those rows once for Needs you.
+    prime_messages(conn, [row["message_id"] for row in pending if row.get("message_id")])
     at = now()
     for row in pending:
         row["payload"] = _json(row.get("payload_json"), {}) or {}
