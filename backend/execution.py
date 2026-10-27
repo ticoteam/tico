@@ -846,28 +846,34 @@ def held_back(c, who, auth, bot, limit=3):
     """The bot's queued work the claim's interrupted-work fence (unfenced_sql) passes over, as `who` may read it:
     (count, titles of up to `limit` tasks it is on). A saved recovery choice is already a review, so its lane wait
     must not be turned into another choice prompt; count jobs only when an unresolved stopped run still blocks them."""
+    actor = privacy.actor(who)
     fence, count, titles = auth.task_sql(c, who), 0, []
     task_sql = queued_task_sql()
     held_task_sql = task_sql.replace("m.", "um.").replace("cv.", "uc.")
-    for row in c.execute(f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
-                         "AND EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
-                         "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot "
-                         "AND u.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
-                         "WHERE r.job_id=u.id AND r.attempt_id=u.attempt_id) AND (("
-                         f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
-                         f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
-                         "ORDER BY j.created", (bot,)).fetchall():
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+    rows = list(c.execute(
+        f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
+        "AND EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
+        "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot "
+        "AND u.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
+        "WHERE r.job_id=u.id AND r.attempt_id=u.attempt_id) AND (("
+        f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
+        f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
+        "ORDER BY j.created", (bot,)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    for row in rows:
+        if row["id"] not in shown:
+            continue
+        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
             continue
         count += 1
         message = H.message(c, row["id"])
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
         task = H.task(c, task_id) if task_id else None
         if (task and task["title"] not in titles and len(titles) < limit
-                and H.task_private_readable(c, privacy.actor(who), task)
+                and H.task_private_readable(c, actor, task)
                 and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()):
             titles.append(task["title"])
     return count, titles
@@ -877,15 +883,21 @@ def unreviewed(c, who, bot):
     """The bot's held runs `who` may read that have waited HELD_UNREVIEWED or longer with no saved decision:
     (count, whole hours the oldest has waited). A run waits from when it stopped (the job's creation when it never
     started); a saved decision that waits for its lane is a review already."""
+    actor = privacy.actor(who)
     cutoff = H.shift(H.now(), seconds=-HELD_UNREVIEWED)
     count, oldest = 0, None
-    for row in c.execute("SELECT m.*,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
-                         "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
-                         "WHERE j.bot=? AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
-                         "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
-                         "ORDER BY since", (bot, cutoff)).fetchall():
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
+        "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
+        "WHERE j.bot=? AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
+        "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
+        "ORDER BY since", (bot, cutoff)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    for row in rows:
+        if row["id"] not in shown:
+            continue
+        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
             continue
         count += 1
         oldest = oldest or row["since"]
