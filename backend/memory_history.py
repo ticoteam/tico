@@ -34,12 +34,17 @@ CREATE TABLE IF NOT EXISTS bot_memory_updates(
 CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
 CREATE TABLE IF NOT EXISTS bot_memory_documents(
  bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(bot, path));
+CREATE TABLE IF NOT EXISTS bot_memory_oversized(
+ bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_seen(
  actor TEXT NOT NULL, bot TEXT NOT NULL, seen TEXT NOT NULL, PRIMARY KEY(actor, bot));
 """
 
 FOLDERS = ("memory/", "knowledge/")
 DOCUMENTS = ("memory/learnings.md", "memory/decisions.md")
+MAX_DOCUMENT_BYTES = 4_000_000
+# Two documents escaped at up to six bytes per byte, plus 50 escaped MAX_DIFF diffs and metadata.
+MAX_REPORT_BYTES = 64_000_000
 MAX_DIFF = 20_000
 PAGE = 20
 NEW_DAYS = 3
@@ -62,6 +67,7 @@ class MemoryReport(M.Contract):
     model_config = M.ConfigDict(extra="forbid", str_strip_whitespace=False)
     commits: list[MemoryCommit] = Field(default_factory=list, max_length=50)
     documents: dict[str, str] = Field(default_factory=dict, max_length=len(DOCUMENTS))
+    oversized: list[str] = Field(default_factory=list, max_length=len(DOCUMENTS))
 
 
 def family(c, bot):
@@ -106,11 +112,19 @@ def record(c, who, bot, report):
                   (bot, commit.sha, commit.subject, commit.author, committed, json.dumps(files),
                    commit.diff, int(commit.truncated), attempt, int(commit.shared), who.runner_id, now))
         changed += 1
+    oversized = {path for path in report.oversized if path in DOCUMENTS}
     for path, content in report.documents.items():
-        if path in DOCUMENTS and len(content) <= 100_000:
+        if path not in DOCUMENTS:
+            continue
+        if len(content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
+            oversized.add(path)
+        elif path not in oversized:
             c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated) VALUES(?,?,?,?) "
                       "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated=excluded.updated "
                       "WHERE bot_memory_documents.content<>excluded.content", (bot, path, content, now))
+            c.execute("DELETE FROM bot_memory_oversized WHERE bot=? AND path=?", (bot, path))
+    for path in oversized:
+        c.execute("INSERT OR IGNORE INTO bot_memory_oversized(bot,path) VALUES(?,?)", (bot, path))
     return changed
 
 
@@ -126,6 +140,14 @@ def commit_base(c, bot, github_owner=""):
 def documents(c, bot):
     return {row["path"]: row["content"] for row in
             c.execute("SELECT path,content FROM bot_memory_documents WHERE bot=?", (bot,))}
+
+
+def document_status(c, bot):
+    saved = {r["path"]: r["updated"] for r in
+             c.execute("SELECT path,updated FROM bot_memory_documents WHERE bot=?", (bot,))}
+    oversized = {r["path"] for r in c.execute("SELECT path FROM bot_memory_oversized WHERE bot=?", (bot,))}
+    return {path: {"oversized": path in oversized, "updated": saved.get(path, "")}
+            for path in DOCUMENTS if path in saved or path in oversized}
 
 
 def source(c, auth, who, attempt):
@@ -187,6 +209,7 @@ def install_memory_history(app, store, auth, mutate):
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]
             return {"updates": updates, "unseen": unseen, "documents": documents(c, bot),
+                    "document_status": document_status(c, bot),
                     "next_before": rows[limit - 1]["committed"] if len(rows) > limit else None}
 
     @app.post("/api/v2/bots/{bot}/memory/seen")
