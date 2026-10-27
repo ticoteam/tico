@@ -43,6 +43,34 @@ HELD_UNREVIEWED = 2 * 3600
 # A failed turn whose only events are these produced nothing and touched nothing.
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
+
+
+def positive_effect(c, aid, body):
+    """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
+
+    Stream-kind silence alone used to requeue such a run as `attempt.no_effect_retry` despite recorded hub writes,
+    usage, partial text, pushes or consumed approvals. Those mean a blind retry is unsafe; hold for review instead.
+    """
+    if (getattr(body, "text", None) or "").strip():
+        return True
+    if getattr(body, "pushes", None):
+        return True
+    if getattr(body, "tokens_in", None) or getattr(body, "tokens_out", None):
+        return True
+    usage = getattr(body, "usage", None)
+    if usage is not None:
+        parts = [usage, *list(getattr(usage, "segments", None) or [])]
+        if any(getattr(part, "input_tokens", 0) or getattr(part, "cached_tokens", 0)
+               or getattr(part, "output_tokens", 0) for part in parts):
+            return True
+    if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
+        return True
+    row = c.execute("SELECT bot,coalesce(started,created) began FROM attempts WHERE id=?", (aid,)).fetchone()
+    if row and c.execute(
+            "SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL AND consumed_at>=? LIMIT 1",
+            ("bot:" + row["bot"], row["began"])).fetchone():
+        return True
+    return False
 PRE_START_TRIES = 10        # lapsed leases before start: a broken computer must not retry forever
 # A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
 # bot first waits this long, doubled for each try: an outage is not asked again every few seconds.
@@ -4037,6 +4065,8 @@ class Execution:
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
             silent = (kinds <= SILENT_KINDS and (quick or tico_code == gateway.UNAVAILABLE) and tries < NO_EFFECT_TRIES
                       and tico_code not in gateway.FINAL)
+            if silent and positive_effect(c, aid, body):
+                silent = False
         # A refused key or sign-in blocks this profile until its credential changes.
         # Only runs with no evidence of actions may wait queued rather than held for review.
         rejected = body.outcome == "failed" and body.auth_rejected is not None and not stopped
