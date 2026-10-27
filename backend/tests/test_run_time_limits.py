@@ -45,12 +45,12 @@ def next_attempt(api, machine, first):
 
 def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(api):
     """A session fence delays recovery without changing the cause to a computer restart."""
-    machine, _, first = running(api)
+    machine, task, first = running(api)
     new_task(api, 'Finish other session work')
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'other-session-work'}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET lane=? WHERE id=?', (first['lane'], other['id']))
+        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], other['id']))
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
