@@ -308,6 +308,8 @@ services:
       TICO_IMAGE: ${TICO_IMAGE:-ghcr.io/ticoteam/tico}
       DOCKER_CONFIG: /tmp/.docker
       TICO_UPDATER_BUNDLE: ${TICO_UPDATER_BUNDLE:-always}   # never: releases that exist only as local tags (docker/smoke.sh)
+      # Seconds for the pre-update database snapshot (default 900). Set in .env when a large hub needs more.
+      TICO_UPDATER_SNAPSHOT_SECONDS: ${TICO_UPDATER_SNAPSHOT_SECONDS:-900}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - tico-control:/control:ro
