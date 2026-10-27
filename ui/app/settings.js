@@ -580,6 +580,8 @@ function renderSettingsIssues() {
 // not retried unless the person knows better.
 const STOPPED_PICK = {
   read: {retry: true, what: () => 'before changing anything', say: () => 'Try again: it only read, so nothing repeats.'},
+  restarted: {retry: true, what: () => 'when its computer restarted',
+    say: () => 'Try again: check what already happened first, then continue.'},
   changed: {retry: false, what: tools => `after using ${tools || 'an approval or a tool that can change things'}`,
     say: tools => `Don’t retry unless you know ${tools || 'that action'} didn’t finish. It could run twice.`},
   twice: {retry: false, what: () => 'the same way more than once',

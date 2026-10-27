@@ -125,7 +125,7 @@ LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not dec
 # one goes to its type's closed step (`_task_state`, `retire_held_steps`). The Product roadmap keeps its public Declined.
 HELD_STATUSES = ("waiting", "declined")
 STEP_STATUSES = tuple(s for s in TASK_STATUSES if s not in HELD_STATUSES)
-OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set
+OWNER_STATUSES = ("open", "doing", "waiting", "review", "done", "declined")  # what the owner may set
 # `ready` is a fact the hub learns (the PR merged), not a claim a bot makes: movers and the
 # keeper set it, an owning bot does not.
 # The product lane is retired. Old rows may still say 'product' (so it is
@@ -1357,6 +1357,8 @@ def private_task_write(fn):
 
 def event(conn, actor, action, target="", detail=None):
     """Append the audit row every write leaves behind."""
+    if action == "approval.consume" and RUN.get():
+        detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
         if VIA.get() in ("botops", "assistant") and DELEGATION.get():
@@ -2611,7 +2613,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             # questions. A done task still asks its requester to accept what it delivered, with structured questions.
             if ended and ended["status"] in TASK_ENDED and not (ended["status"] == "done" and refs.get("questions")
                                                                and target == ended["requester"]):
-                refuse(conn, actor, "lint", f"task {ended['id']} is {ended['status']}; reopen it or ask on an open task")
+                refuse(conn, actor, "lint", f"task {ended['id']} is {ended['status']}; {task_reopen_hint(actor, ended)}")
 
     # rules 4 and 7: what a person has to read
     if is_bot(actor) and is_human(target) and kind in ("say", "notice"):
@@ -3049,13 +3051,28 @@ def type_get(conn, value):
     if row:
         row["numbered"] = bool(row.get("numbered"))
         row["steps_only"] = bool(row.get("steps_only"))
-        row["steps"] = _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id", (row["id"],)))
+        row["steps"] = _step_views(conn, _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id",
+                                                            (row["id"],))))
     return row
+
+
+def _step_views(conn, steps):
+    """Steps as callers read them: a check step's pool as a list and its limit (backend/check_pools.py), and its flow
+    with step names (backend/step_flow.py)."""
+    from . import check_pools, step_flow
+    steps = [check_pools.view(step) for step in steps] if steps and "check_pool" in steps[0] else steps
+    if not steps or "flow_json" not in steps[0]:
+        return steps
+    by_type = {}
+    for step in steps:
+        by_type.setdefault(step["type_id"], []).append(step)
+    shown = {s["id"]: s for group in by_type.values() for s in step_flow.view(conn, group)}
+    return [shown[step["id"]] for step in steps]
 
 
 def type_list(conn):
     rows = _rows(conn.execute("SELECT * FROM task_types ORDER BY id<>?,name", (GENERAL_TYPE,)))
-    steps = _rows(conn.execute("SELECT * FROM task_steps ORDER BY position,id"))
+    steps = _step_views(conn, _rows(conn.execute("SELECT * FROM task_steps ORDER BY position,id")))
     for row in rows:
         row["numbered"] = bool(row.get("numbered"))
         row["steps_only"] = bool(row.get("steps_only"))
@@ -3319,8 +3336,11 @@ def _type_name(conn, actor, name, type_id=None):
 
 
 def _type_steps(conn, actor, type_id, steps):
+    from . import check_pools, step_flow
     typ = type_get(conn, type_id) or {}
-    existing = {row["id"]: row for row in typ.get("steps", [])}
+    existing = {row["id"]: row for row in _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=?", (type_id,)))}
+    pools = check_pools._ready(conn)
+    flows = step_flow._ready(conn)
     # A new step's public name is its name only on a type whose tasks are public by default; on a private one (the
     # Product roadmap) an internal step name does not go public unless someone gives it a public name.
     unnamed = "" if typ.get("default_visibility", "private") != "public" else None
@@ -3339,7 +3359,10 @@ def _type_steps(conn, actor, type_id, steps):
             refuse(conn, actor, "kind", f"A step can't be {status}: a waiting task keeps its step, and a declined one "
                                         f"goes to the closed step. A step status is {'|'.join(STEP_STATUSES)}")
         names.add(name); ids.add(ident)
-        clean.append({"id": ident, "type_id": type_id, "name": name,
+        pool, limit = check_pools.clean(conn, actor, raw, existing.get(ident)) if pools else (None, None)
+        flow = step_flow.clean(conn, actor, raw, existing.get(ident)) if flows else {}
+        clean.append({"id": ident, "type_id": type_id, "name": name, "check_pool": pool, "check_limit": limit,
+                      "flow": flow,
                       "position": raw.get("position") if raw.get("position") is not None else position,
                       "status": status, "public_name": str(raw.get("public_name") if raw.get("public_name") is not None else
                           existing.get(ident, {}).get("public_name", name if unnamed is None else unnamed)).strip()})
@@ -3349,6 +3372,8 @@ def _type_steps(conn, actor, type_id, steps):
                     "SELECT 1 FROM task_trash WHERE purged_at IS NULL "
                     "AND json_extract(rows_json,'$.rows.tasks[0].step_id')=? LIMIT 1", (ident,)))
 
+    if flows:
+        step_flow.resolve(conn, actor, clean)
     for row in clean:
         if (row["id"] in existing and row["status"] != existing[row["id"]]["status"]
                 and in_use(row["id"])):
@@ -3366,6 +3391,11 @@ def _type_steps(conn, actor, type_id, steps):
         conn.execute("INSERT INTO task_steps(id,type_id,name,position,status,public_name) "
                      "VALUES(:id,:type_id,:name,:position,:status,:public_name) ON CONFLICT(id) DO UPDATE SET "
                      "name=excluded.name,position=excluded.position,status=excluded.status,public_name=excluded.public_name", row)
+        if pools:
+            conn.execute("UPDATE task_steps SET check_pool=:check_pool,check_limit=:check_limit WHERE id=:id", row)
+        if flows:
+            conn.execute("UPDATE task_steps SET flow_json=? WHERE id=?",
+                         (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]))
 
 
 def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=False, steps_only=False, default_visibility='private'):
@@ -3381,6 +3411,8 @@ def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=Fal
     _type_steps(conn, actor, ident, steps)
     from .roadmap_flow import claim as claim_roles
     claim_roles(conn)
+    from . import step_flow
+    step_flow.seed(conn)        # a new Dev tickets type starts with the Dev board's flow
     row = type_get(conn, ident)
     event(conn, actor, "task_type.create", ident, row)
     return row
@@ -3408,6 +3440,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
         conn.execute("UPDATE task_types SET steps_only=? WHERE id=?", (int(bool(steps_only)), row["id"]))
     if steps is not None:
         _type_steps(conn, actor, row["id"], steps)
+        from . import check_pools
+        check_pools.safely(conn, check_pools.drain)     # a pool that grew may take a check that waits
         from .task_blocked import ensure_steps
         ensure_steps(conn)
     if bots is not None:
@@ -3433,6 +3467,16 @@ def type_delete(conn, actor, type_id, mover=None):
     return row
 
 
+def task_reopen_hint(actor, row):
+    """Name a next move the caller is allowed to make; closure retains its own authority."""
+    closer = row.get('closed_by') or row['requester']
+    if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester'] or is_human(closer)):
+        return f"ask {actor_id(closer)} to reopen it, or file a new task"
+    if actor == row['owner'] or is_human(actor) or (actor == row['requester'] and row['status'] == 'closed'):
+        return f"reopen it with `hub task update {row['id']} --status doing`, or file a new task"
+    return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
+
+
 def _task_state(conn, actor, row, status=None, type=None, step=None):
     """Resolve the step before checking permissions on its effective status."""
     typ = type_get(conn, type if type is not None else row.get("type_id") or GENERAL_TYPE)
@@ -3453,7 +3497,7 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
     elif effective == "waiting" and typ.get("role") == "engineering" and (blocked := next(
             (s for s in typ["steps"] if s["name"] == "Blocked" and s["status"] == "waiting"), None)):
         chosen = blocked
-    elif typ.get("role") == "engineering" and row.get("blocked_from_step") and effective in ("open", "doing") and (resume := next(
+    elif typ.get("role") == "engineering" and row.get("blocked_from_step") and status != "open" and effective in ("open", "doing") and (resume := next(
             (s for s in typ["steps"] if s["id"] == row["blocked_from_step"]), None)):
         chosen, effective = resume, resume["status"]
     elif current and current["status"] == effective:
@@ -3463,6 +3507,10 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = next((s for s in reversed(typ["steps"]) if s["status"] == "closed"), None)
     else:
         chosen = next((s for s in typ["steps"] if s["status"] == effective), None)
+        if effective == 'open' and row.get('status') in ('doing', 'waiting', 'review', 'done'):
+            from .review_gate import engineering
+            if engineering(conn, {**row, 'type_id': typ['id']}):
+                chosen = next((s for s in typ['steps'] if s['name'] == 'On Deck' and s['status'] == 'open'), chosen)
         if not chosen and effective == "waiting":
             # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
             chosen = (current if current and current["status"] in ACTIVE_STATUSES
@@ -3482,9 +3530,11 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
     # done or reopen would land it in whichever step shares that status. Working statuses (an ask's
     # waiting, a turn's doing) still change, as do filing onto the type and the keeper's own automation.
     # A person can always close one: closing takes it off the board, whatever its type.
+    # Its owner may also reopen a Done one with doing or open, which lands on that status's working step.
     if (typ.get("steps_only") and step is None and actor != KEEPER and row.get("status")
             and typ["id"] == (row.get("type_id") or GENERAL_TYPE) and effective != row["status"]
             and not (effective in ACTIVE_STATUSES and row["status"] in ACTIVE_STATUSES)
+            and not (actor == row.get('owner') and row['status'] == 'done' and effective in ('open', 'doing'))
             and not (effective == "closed" and _closes_by_hand(actor))):
         # Naming the task keeps a bot's refusals on different tickets distinct, so working a board is not
         # counted as retrying one refused write (rule 8); a retry on the same task still is.
@@ -3606,6 +3656,10 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
     if row.get("status") != effective and row.get("status") is not None:
         from .check_blocked import changed as check_changed
         check_changed(conn, row["id"])      # a Review or QA check's ticket shows it blocked (Dev 553)
+    if row.get("status") in ACTIVE_STATUSES and effective not in ACTIVE_STATUSES:
+        # A checker that finished a check takes the oldest one waiting in its pools (backend/check_pools.py).
+        from . import check_pools
+        check_pools.safely(conn, check_pools.freed, row)
     return effective
 
 
@@ -4049,7 +4103,14 @@ def _answered(conn, actor, task_id, card, told=None):
         TR.remove_blocker(conn, KEEPER, row["id"], card["id"], keeper_note=f"answered: {card['title']}")
     row = task(conn, row["id"])
     if row["status"] == "waiting" and not waiting_for(conn, row):
-        _set_status(conn, KEEPER, row, "open", note=note)
+        # A board ticket held on the ask goes back to the step it left, as any hold that clears does; opening it would
+        # send it to the board's first open step and drop its place (a review it waited at, its verdict).
+        from . import task_blocked
+        if row.get("blocked_since"):
+            task_blocked.reconcile(conn, row["id"])
+            row = task(conn, row["id"])
+        if row["status"] == "waiting":
+            _set_status(conn, KEEPER, row, "open", note=note)
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
     _task_event(conn, row["id"], KEEPER, "note", row.get("note"), note, "")
     if row["owner"] != told or TR.parent_of(conn, card["id"]) != row["id"]:
@@ -4614,6 +4675,9 @@ def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
         return False
     conn.execute("UPDATE tasks SET verdict=?, verdict_head=? WHERE id=?", (verdict, head, row["id"]))
     _task_event(conn, row["id"], actor, "verdict", row.get("verdict"), verdict + (f" {head}" if head else ""), "")
+    # The verdict moves its Dev ticket, as Tico, the moment it is recorded (backend/verdict_moves.py).
+    from . import verdict_moves
+    verdict_moves.after_verdict(conn, row)
     return True
 
 
@@ -4638,6 +4702,15 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
             refs["inputs"] = [source]
             refs.update({k: v for k, v in original["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
+    # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
+    # step or a merge to do, which goes first in the builder's queue (backend/verdict_moves.py).
+    from . import verdict_moves
+    moved = verdict_moves.delivery(conn, judged) if verdict_moves._verdict(judged) else None
+    if moved:
+        text = moved["say"] + "\n\n" + text
+        silent = silent or moved["quiet"]
+        if moved.get("handoff") and not silent:
+            refs[verdict_moves.HANDOFF] = moved["handoff"]
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
@@ -5501,8 +5574,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, review_reader=None, receipt_owner=None):
-    """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
+                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None):
+    """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
     keeper always is). A parent or a blocker is a relation: task_relations.relate.
@@ -5568,8 +5641,17 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                    f"your verdict (hub task done {check['id']} --verdict approve|changes --head <sha>); the Builder "
                    "moves the ticket.")
     if not mine and not mover and actor != KEEPER:
-        refuse(conn, actor, "identity", f"{task_id} is changed by its owner, requester, their managers, delegates or task movers")
+        # A closed task's closer reopens it, so an outsider's hint names the closer.
+        refuse(conn, actor, "identity",
+               f"{task_id} is changed by its owner, requester, their managers, delegates or task movers; " + (
+                   f"ask {actor_id(row.get('closed_by') or row['requester'])} to reopen it, or file a new task"
+                   if row['status'] == 'closed' else "ask the owner to set doing or open, or file a new task"))
     type_id = row.get("type_id") or GENERAL_TYPE
+    queue_return = (requested_status == 'open' and step is None and actor == row['owner']
+                    and row['status'] in ('doing', 'waiting', 'review', 'done'))
+    if queue_return and is_bot(actor) and not str(note or '').strip():
+        refuse(conn, actor, 'lint', 'Putting your task back to open requires a note: '
+               f'hub task update {task_id} --status open --note "why it goes back"')
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
@@ -5598,7 +5680,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                             record_verdict(conn, row["owner"], row, text=source["text"])
                             row = task(conn, task_id)
                             break
-                if not (row.get("verdict") or supplied):
+                from . import step_flow
+                # On a step with a flow, a check finished with no verdict is feedback: it goes to the step's on_fail.
+                if not (row.get("verdict") or supplied or step_flow.check_step(conn, row)):
                     refuse(conn, actor, "verdict",
                            "Finish a review or QA check with --verdict approve|changes|pass|fail "
                            "and --head <sha>, or record a VERDICT: clause in its note, comment or final reply")
@@ -5614,7 +5698,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     exc.task_hold = {"task": task_id, "reason": exc.detail, "kind": "worktree"}
                     raise
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
-        if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
+        from . import step_flow
+        if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate
             try:
                 review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, reader=review_reader,
@@ -5649,7 +5734,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             and (status is not None and status != "closed" or note is not None and note != row.get("note")
                  or owner is not None)):
         refuse(conn, actor, "close",
-               f"{actor_id(closer)} closed this task, so it stays closed unless they reopen it; "
+               f"{actor_id(closer)} closed this task, so it stays closed; {task_reopen_hint(actor, row)}; "
                "add anything new as a comment (hub task comment)")
     if (row["status"] == "closed" and is_human(actor) and status is not None and status != "closed" and not mover
             and not _task_close_party(conn, actor, row)):
@@ -5860,7 +5945,18 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if closing_step:
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
-        _set_status(conn, actor, row, status, type, step, note or "")
+        _set_status(conn, actor, row, status, type, step, note or "", skip_step_wake=skip_step_wake)
+    if queue_return:
+        returned = task(conn, task_id)
+        if returned.get('blocked_since'):
+            # Keep the live hold, but clearing it returns to the queue the owner selected.
+            steps = type_get(conn, returned['type_id'])['steps']
+            deck = next((s for s in steps if s['name'] == 'On Deck' and s['status'] == 'open'), None)
+            deck = deck or next((s for s in steps if s['status'] == 'open'), None)
+            conn.execute('UPDATE tasks SET blocked_from_step=?,blocked_from_status=? WHERE id=?',
+                         (deck['id'] if deck else None, 'open', task_id))
+        # A derived Blocked state can hide the requested open transition from status history.
+        _task_event(conn, task_id, actor, 'queue_return', row['status'], 'open', note or '')
     if reopening:
         verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
     args["id"] = task_id
@@ -5926,6 +6022,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if note is not None and not notify_requester and not quiet:
         _mirror_task_note(conn, actor, after, note)
     # A person finishing a subtask under a bot's task: the bot hears it once, on the parent.
+    if after["status"] == "done" and row["status"] != "done" and not after.get("verdict"):
+        # A check finished with no verdict moves its ticket like one with changes (backend/verdict_moves.py).
+        from . import check_pools, step_flow, verdict_moves
+        if step_flow.check_step(conn, after):
+            check_pools.safely(conn, verdict_moves.after_verdict, after)
     subtask_told = None if closing_step else _subtask_wake(conn, actor, after, row["status"], note, quiet)
     if subtask_told == after["requester"]:
         notify_requester = False
@@ -5980,9 +6081,13 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             if not who or who in told or not is_bot(who) or not bot_reads_task(conn, who, after):
                 continue
             told.add(who)
+            # A bot's own task finished with nothing said asks nothing of it: it hears quietly, with no run. A note
+            # is the person talking to it, and a bot that asked on it or owns its parent has work waiting on it.
+            idle = (who == after["owner"] and not (note and not quiet) and who not in askers
+                    and who != (parent or {}).get("owner"))
             _wake(conn, after, who, _marked_done(conn, actor, after["title"]) + (f"\n{note}" if note and not quiet else "")
                   + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), {"news": "task_done"},
-                  quiet_bots=True)
+                  quiet_bots=True, quiet=idle)
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
@@ -6002,6 +6107,14 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               and (row["status"] != "waiting" or row.get("waiting_on") != after["waiting_on"])):
             task_report(conn, after, "blocked", f"Waiting on {actor_id(after['waiting_on'])}"
                         + (f": {after['note']}" if after.get("note") else ""))
+    if after.get("step_id") != row.get("step_id") and not closing_step:
+        # A check step with a pool files its check for the current head, as Tico (backend/check_pools.py).
+        # A step the ticket's tag skips sends it straight on instead (backend/step_flow.py, skip_tag).
+        from . import check_pools, step_flow, verdict_moves
+        if step_flow.skip_target(conn, after, step_flow.step(conn, after.get("step_id"))):
+            check_pools.safely(conn, verdict_moves.skip, after)
+        else:
+            check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
     recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor, told=subtask_told)
@@ -6299,6 +6412,8 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     # A note from a person, or a close before the work was done, still wakes: that may change
     # what the bot does next.
     accepted = row["status"] in ("done", "declined") and (actor == KEEPER or not str(note or "").strip())
+    # Work not started yet, closed with nothing said, asks nothing of its bot either: it never starts it.
+    accepted = accepted or (row["status"] == "open" and not str(note or "").strip())
     # A next-run task closed before any run carried it is a cancel: the bot never saw it, so
     # there is nothing to tell it and no run to spend telling it.
     accepted = quiet or accepted or next_run_waiting(conn, row)
@@ -7426,7 +7541,7 @@ def task_run_now(conn, actor, task_id):
     if not is_bot(row["owner"]):
         refuse(conn, actor, "run-now", "only a bot's task runs; a person does it themselves")
     if row["status"] not in ACTIVE_STATUSES:
-        refuse(conn, actor, "run-now", f"the task is {row['status']}; reopen it first")
+        refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(actor, row)}")
     if why := setup_hold(conn, row["owner"]):
         raise Refused("run-now", why)       # not a refused write: nothing to count against the caller
     if row.get("next_run"):
@@ -7676,7 +7791,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
         row = task(conn, task_id)
         if row and row["status"] in TASK_ENDED:
             # It would only be withdrawn: nothing acts on an ended task's approvals.
-            refuse(conn, actor, "lint", f"task {task_id} is {row['status']}; reopen it or ask on an open task")
+            refuse(conn, actor, "lint", f"task {task_id} is {row['status']}; {task_reopen_hint(actor, row)}")
         if row and is_human(row["owner"]):
             owner = row["owner"]
     if kind == "support" and is_human(actor):
@@ -8026,6 +8141,8 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     from . import run_diagnostics
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
         run_diagnostics.finish(conn, turn_id, exit_code, summary)
+    from . import check_pools
+    check_pools.capture_attempt(conn, turn_id)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
     return row
 

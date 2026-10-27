@@ -196,7 +196,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
         found = hubtools.run_export_full(client, args.attempt)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree"):
+    if fn in ("task child create", "task tree", "task bulk"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):

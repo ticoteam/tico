@@ -2870,6 +2870,10 @@ for line in sys.stdin:
         // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
         assert!(drove.yielded && drove.outcome == "interrupted", "{}", drove.outcome);
         assert!(goal.failure.is_none());
+        let terminal: i64 = runner.state.with(|c| c.query_row(
+            "SELECT count(*) FROM events WHERE attempt_id='a-ops' AND kind='diagnostic' AND json_extract(payload,'$.interruption_complete')=1",
+            [], |r| r.get(0))).unwrap();
+        assert_eq!(terminal, 0, "a forced grace expiry must not claim the host acknowledged its end");
         assert!(std::fs::read_to_string(&interrupts).unwrap().contains("t1"), "the turn was never interrupted");
         drop(held);
         drop(tokio::time::timeout(Duration::from_secs(5), review).await.expect("the waiter got the login").unwrap());

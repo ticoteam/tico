@@ -174,6 +174,106 @@ def test_botops_direct_off_turns_the_gateway_off_and_automatic_into_cards(api, b
         assert "auto" not in record()
 
 
+def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, botops, monkeypatch):
+    from backend import gateway_connection
+    from backend.tests.test_gateway_connection import KEY, fake_gateway, save, setup
+    setup(api, monkeypatch)
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
+
+    def record():
+        with api.app.state.store.read() as c:
+            return gateway_connection._row(c)
+
+    with fake_gateway() as original, fake_gateway() as proposed:
+        original.active(KEY, 0.1)
+        proposed.active(KEY, 0.2)
+        save(api, original)
+        original.calls.clear()  # exclude the setup probe; count only calls caused by BotOps or the owner's tap
+        put(api, "access/rules", {"botops_direct": False})
+        ana = turn(api, botops, person="ana-test", text="Change the Gateway address")
+        current = get(api, "providers/gateway")
+        request = {"url": proposed.url, "expected_revision": current["revision"]}
+
+        secret = act(api, ana, "PUT", "providers/gateway", {**request, "key": KEY})
+        assert secret.status_code == 422 and secret.json()["error"]["code"] == "secret_in_request", secret.text
+        assert KEY not in secret.text and proposed.calls == []
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
+
+        pending = act(api, ana, "PUT", "providers/gateway", request)
+        assert pending.status_code == 200 and pending.json()["needs_confirm"], pending.text
+        card = pending.json()
+        card_in_chat(api, card, "ana")
+        # The owner sees the address the key would go to before tapping.
+        assert {"field": "url", "new": proposed.url} in card["action"]["diff"], card["action"]
+        assert proposed.calls == []                         # the saved key has not reached the new address
+        assert get(api, "providers/gateway")["url"] == original.url
+        assert KEY not in json.dumps(card)
+
+        cancelled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
+        assert cancelled["action"]["status"] == "cancelled"
+        assert get(api, "providers/gateway")["url"] == original.url
+        assert proposed.calls == []
+
+        # Retrying creates one new card; the exact same URL-only request runs once on the owner's tap.
+        pending = act(api, ana, "PUT", "providers/gateway", request)
+        card = pending.json()
+        assert card["needs_confirm"] and card["action"]["id"] != cancelled["action"]["id"]
+        approved = confirm(api, card, "ana-test")
+        assert approved["action"]["status"] == "done"
+        assert get(api, "providers/gateway")["url"] == proposed.url
+        assert proposed.calls == [("/v1/gateway/key", KEY)]
+        assert KEY not in json.dumps(approved)
+        post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test", expected=409)
+        assert proposed.calls == [("/v1/gateway/key", KEY)]
+
+        # A saved key makes every address change a card, even when direct provider changes are enabled.
+        put(api, "access/rules", {"botops_direct": True})
+        current = get(api, "providers/gateway")
+        direct_rule_card = act(api, ana, "PUT", "providers/gateway",
+                               {"url": original.url, "expected_revision": current["revision"]})
+        assert direct_rule_card.status_code == 200 and direct_rule_card.json()["needs_confirm"], direct_rule_card.text
+        assert {"field": "url", "new": original.url} in direct_rule_card.json()["action"]["diff"]
+        assert get(api, "providers/gateway")["url"] == proposed.url
+        assert original.calls == []
+        assert confirm(api, direct_rule_card.json(), "ana-test")["action"]["status"] == "done"
+        assert get(api, "providers/gateway")["url"] == original.url
+        assert original.calls == [("/v1/gateway/key", KEY)]
+
+        # A non-owner cannot use the card path even when direct changes are disabled.
+        finish(api, botops, ana)
+        put(api, "access/rules", {"botops_direct": False})
+        ben = turn(api, botops, person="ben-test", text="Change the Gateway address")
+        current = get(api, "providers/gateway")
+        refused = act(api, ben, "PUT", "providers/gateway",
+                      {"url": proposed.url, "expected_revision": current["revision"]})
+        assert refused.status_code == 403 and "Only the owner" in refused.json()["error"]["detail"]
+        assert get(api, "providers/gateway")["url"] == original.url
+        with api.app.state.store.read() as c:            # refused outright: no card in Ben's chat
+            assert c.execute("SELECT count(*) FROM assistant_actions WHERE owner='human:ben'").fetchone()[0] == 0
+        assert proposed.calls == [("/v1/gateway/key", KEY)]
+        with api.app.state.store.read() as c:
+            visible = json.dumps([dict(r) for r in c.execute("SELECT body_json,result_json FROM assistant_actions")]
+                                 + [dict(r) for r in c.execute("SELECT body,refs_json FROM messages")])
+        assert KEY not in visible
+
+
+def test_gateway_address_change_with_an_environment_key_is_refused_at_once(api, botops, monkeypatch):
+    from backend.tests.test_gateway_connection import KEY, fake_gateway, setup
+    setup(api, monkeypatch)
+    with fake_gateway() as proposed:
+        monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
+        put(api, "access/rules", {"botops_direct": True})
+        ana = turn(api, botops, person="ana-test", text="Change the Gateway address")
+        current = get(api, "providers/gateway")
+        answer = act(api, ana, "PUT", "providers/gateway", {"url": proposed.url, "expected_revision": current["revision"]})
+        # Told at once, not handed a card that fails on the tap; the key never reaches the address.
+        assert answer.status_code == 409 and answer.json()["error"]["code"] == "environment", answer.text
+        assert KEY not in answer.text and proposed.calls == []
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
+
+
 def test_a_computers_code_is_only_on_the_persons_card(api, botops):
     ana = turn(api, botops, person="ana-test", text="Add a computer for me")
     answer = act(api, ana, "POST", "enrollments", {"operator": "ana"})

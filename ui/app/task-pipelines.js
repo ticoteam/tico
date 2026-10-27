@@ -104,7 +104,7 @@ function taskPipelineBoard(items, state, head = '') {
   while (lead < working.length && working[lead].status === 'open') lead++;
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step)});
+  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];
@@ -188,7 +188,7 @@ async function renderTaskTypes() {
     if (!host.isConnected) return;
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
-      <div>${type.steps.map(step => `<span class="tlabel">${esc(step.name)}</span>`).join(' ')}</div>
+      <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
@@ -212,17 +212,41 @@ function taskTypeEditor(type = null) {
   dialog.addEventListener('close', () => dialog.remove());
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   const rows = dialog.querySelector('[data-steps]');
+  const poolHints = async row => {
+    const target = row.querySelector('[data-pool-models]'), value = row.querySelector('[aria-label="Check pool"]').value;
+    const bots = [...new Set(value.split(',').map(slug => slug.trim()).filter(Boolean))].slice(0, 40);
+    const request = (row._poolHintsRequest || 0) + 1;
+    row._poolHintsRequest = request;
+    if (!bots.length) { target.textContent = 'Enter bot slugs to see each configured model and provider.'; return; }
+    target.textContent = 'Loading model details…';
+    try {
+      const data = await get('/v2/check-pool-candidates?bots=' + encodeURIComponent(bots.join(',')));
+      if (request !== row._poolHintsRequest || !target.isConnected) return;
+      target.innerHTML = (data.candidates || []).map(bot => {
+        const configured = `${bot.configured.model} (${bot.configured.provider})`;
+        const runtime = bot.runtime ? ` · latest run: ${bot.runtime.model} (${bot.runtime.provider}); next run may differ` : '';
+        return `<span>${esc(bot.name)}: ${esc(configured + runtime)}</span>`;
+      }).join('') || 'No visible bots found for these slugs.';
+    } catch (error) {
+      if (request === row._poolHintsRequest && target.isConnected) target.textContent = `Model details unavailable: ${error.message}`;
+    }
+  };
   const addStep = step => {
     const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || '';
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
       <input aria-label="Public step name" value="${esc(step?.public_name ?? '')}" placeholder="Public step (blank: not shown)" title="What a public roadmap shows for this step; blank shows none">
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
+      <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
+      <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
+      <small class="task-step-models muted" data-pool-models role="status">Enter bot slugs to see each configured model and provider.</small>
       <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
       <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
     row.querySelector('[data-up]').onclick = () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); };
     row.querySelector('[data-down]').onclick = () => { if (row.nextElementSibling) rows.insertBefore(row.nextElementSibling, row); };
     row.querySelector('[data-remove]').onclick = () => row.remove();
+    row.querySelector('[aria-label="Check pool"]').addEventListener('input', () => { void poolHints(row); });
     rows.append(row);
+    if (step?.check_pool?.length) void poolHints(row);
   };
   (type?.steps || [{name: 'Open', status: 'open'}]).forEach(addStep);
   dialog.querySelector('[data-add-step]').onclick = () => addStep();
@@ -241,7 +265,9 @@ function taskTypeEditor(type = null) {
     const steps = [...rows.children].map((row, position) => {
       const shown = row.querySelector('[aria-label="Public step name"]').value.trim();
       return {...(row.dataset.stepId ? {id: row.dataset.stepId} : {}), name: row.querySelector('input').value,
-        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector('select').value, position};
+        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector('select').value, position,
+        check_pool: row.querySelector('[aria-label="Check pool"]').value.split(',').map(slug => slug.trim()).filter(Boolean),
+        check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector('[aria-label="Open checks each"]').value, 10) || 2))};
     });
     void saved({name: dialog.querySelector('[name=typeName]').value, steps, bots: dialog.querySelector('[name=typeBots]').value, default_visibility: dialog.querySelector('[name=defaultVisibility]').value});
   };

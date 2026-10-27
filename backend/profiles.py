@@ -207,7 +207,7 @@ def is_review_task(c, row, *, parent_id=None):
 
 
 def is_check(c, row):
-    """A check that finishes only with a verdict: titled Review 1/2, QA or Security under a ticket another owner
+    """A check that finishes only with a verdict: titled Review 1/2, QA, Security or Post Release QA under a ticket another owner
     holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
     and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
     child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
@@ -217,7 +217,9 @@ def is_check(c, row):
     if H.is_human(owner):
         return False
     parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-    return bool(parent and parent["owner"] != owner and REVIEW_TITLE.match(str(row.get("title") or "").strip()))
+    title = str(row.get("title") or "").strip()
+    return bool(parent and parent["owner"] != owner and
+                (REVIEW_TITLE.match(title) or RELEASE_QA_TITLE.match(title)))
 
 
 def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):

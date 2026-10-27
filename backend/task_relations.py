@@ -561,6 +561,8 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
     H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
                                                   **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {})})
+    from .auto_tasks import back_off
+    back_off(conn, H.task(conn, task_id))
     from .roadmap_flow import sync
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too

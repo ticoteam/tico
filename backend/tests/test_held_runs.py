@@ -19,9 +19,14 @@ def botops(api):
 
 
 def held(api):
-    """One run of ops that used a shell and was cut off by a restart: held for BotOps, with its review task filed."""
+    """One run of ops that merged a pull request from a shell and was cut off by a restart: held for BotOps, with its
+    review task filed. A shell alone resumes after a restart; a named outside action is what holds it."""
     botops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary','gh pr merge 42 --squash') "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.tool')='Bash' "
+                  "AND json_extract(payload_json,'$.status')='started'", (attempt['id'],))
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     return machine, message, attempt
@@ -43,7 +48,7 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     """Acceptance 8. The hold used to be raised once per run: a closed review left the run with nobody on it."""
     machine, message, attempt = held(api)
     [first] = reviews(api)
-    assert first['status'] == 'open' and 'used Bash' in first['body']
+    assert first['status'] == 'open' and 'merge pull request' in first['body']
     assert sweep(api) == [] and len(reviews(api)) == 1             # one open review per bot, not one per sweep
     backdate(api, first['id'], 60)
     with api.app.state.store.transaction() as c:
@@ -55,7 +60,7 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     [second] = reviews(api)
     assert second['id'] == first['id'] and second['status'] == 'open'
-    assert 'used Bash' in second['body']
+    assert 'merge pull request' in second['body']
     assert message['body'] not in second['body']                # the request's words stay in their own chat
     # Decided: nothing is held, so a closed review stays closed.
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
@@ -145,15 +150,15 @@ def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(a
         kept = c.execute("SELECT json_extract(detail_json,'$.kept_open') FROM events "
                          "WHERE action='task.stall_escalated' AND target=?", (review['id'],)).fetchall()
         assert [k[0] for k in kept] == ['runs still held']
-    # Its positive twin: once the run is decided, the same check closes it with the cause, as before.
+    # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves
+    # it be: nothing is held, so nothing keeps it open.
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM events WHERE action='task.stall_escalated' AND target=?", (review['id'],))
-        capped(c, H.task(c, review['id']))
-        assert review['id'] in H.wake_stalled(c)['escalated']
-        closed = H.task(c, review['id'])
-        assert closed['status'] == 'closed' and 'cannot diagnose itself' in closed['note']
+        assert H.task(c, review['id'])['status'] == 'done'
+        assert review['id'] not in H.wake_stalled(c)['escalated']
+        assert H.task(c, review['id'])['status'] == 'done'
 
 
 def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_it(api):
