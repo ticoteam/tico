@@ -254,7 +254,8 @@ def prime_attempts(c, aids):
 
 def _parent_ids(message, refs):
     """The messages a provenance walk reads next from `message`: the one it replies to and those it answers."""
-    out = {message.get("in_reply_to")}
+    parent = message.get("in_reply_to")
+    out = {parent} if isinstance(parent, str) else set()
     for key in ("answers", "inputs"):
         if isinstance(refs, dict) and isinstance(refs.get(key), list):
             out.update(v for v in refs[key] if isinstance(v, str))
@@ -308,9 +309,14 @@ def prime_messages(c, messages):
         meeting_sources(c).prime_conversations(rooms)
     runs = set()
     for ref in refs + ancestry:
-        if isinstance(ref, dict):
-            run = ref.get("run")
-            runs.add(ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+        if not isinstance(ref, dict):
+            continue
+        run = ref.get("run")
+        # Only a string run id can be primed. A list or object here used to be reached only when that
+        # message was checked; a deleted or past-the-page row must not abort the whole page.
+        aid = ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
     prime_attempts(c, runs)
     about = {H.message_task_id({**m, "refs": r}, H.conversation(c, m["conversation_id"])
                               if m.get("conversation_id") else None)
@@ -402,29 +408,53 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             clauses.append("id IN (SELECT value FROM json_each(?))")
             args.append(json.dumps(sorted(ids)))
     visible, reader, size, full = [], actor(who), 0, False
-    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
-        # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
-        # task's message before its privacy check, so a read costs the room once, not twice.
-        stored = dict(row)
+
+    def consider(stored):
+        """The same skip rules as one row of the old loop. True once the page must stop."""
+        nonlocal size, full
         if stored.get("deleted_at") or stored.get("deleted"):
-            continue
+            return False
         try:
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
-                continue
+                return False
             if not readable(c, reader, tasks):
-                continue
+                return False
         except Problem:
-            continue
-        message = {**stored, "refs": H._json(row["refs_json"], {}) or {}}
+            return False
+        message = {**stored, "refs": H._json(stored["refs_json"], {}) or {}}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
                 full = True
-                break
+                return True
         visible.append(message)
-        if len(visible) > limit:
+        return len(visible) > limit
+
+    window = []
+
+    def flush():
+        """Prime this window, then apply the same visibility rules. A hidden message is still skipped."""
+        if not window:
+            return False
+        prime_messages(c, window)
+        stop = False
+        for stored in window:
+            if consider(stored):
+                stop = True
+                break
+        window.clear()
+        return stop
+
+    # message_readable's own steps, with the row's tasks worked out once: a task's page skips another
+    # task's message before its privacy check, so a read costs the room once, not twice. The window is
+    # primed before those checks, so rooms, replies, inputs and runs are not one query per message.
+    for row in c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC", args):
+        window.append(dict(row))
+        if len(window) >= 80 and flush():
             break
+    else:
+        flush()
     more = full or len(visible) > limit
     messages = list(reversed(visible[:limit]))
     return {"messages": messages, "has_more": more,

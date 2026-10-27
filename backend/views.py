@@ -56,8 +56,35 @@ def since_time(value):
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+ATTEMPT_DETAIL_SQL = "SELECT state,result_json,finished FROM attempts WHERE id=?"
+
+
+def prime_attempt_details(c, ids):
+    """Read the rows attempt_details asks for, one table at a time, before a page walks each turn."""
+    if read_cache.cache(c) is None:
+        return
+    wanted = [aid for aid in dict.fromkeys(ids) if aid]
+    for start in range(0, len(wanted), 250):
+        chunk = wanted[start:start + 250]
+        marks = ",".join("?" * len(chunk))
+        attempts = {row["id"]: row for row in c.execute(
+            f"SELECT id,state,result_json,finished FROM attempts WHERE id IN ({marks})", chunk)}
+        read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
+        diags = {row["attempt_id"]: row for row in c.execute(
+            "SELECT attempt_id,end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
+            f"FROM attempt_diagnostics WHERE attempt_id IN ({marks})", chunk)}
+        read_cache.prime(c, "SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
+                         "FROM attempt_diagnostics WHERE attempt_id=?",
+                         {(aid,): diags.get(aid) for aid in chunk})
+        snaps = {row["attempt_id"]: row for row in c.execute(
+            f"SELECT attempt_id,start_json,end_json FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
+            chunk)}
+        read_cache.prime(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?",
+                         {(aid,): snaps.get(aid) for aid in chunk})
+
+
 def attempt_details(c, turn):
-    attempt = c.execute("SELECT state,result_json,finished FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+    attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
     from .performance import attempt_snapshots
@@ -78,12 +105,17 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     readable = auth.bot_accesses(c, who)
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
-    for row in c.execute(
+    found = list(c.execute(
             "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
             "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
             "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
-            ((bot,) if bot is not None else ()) + (since, since, limit)):
+            ((bot,) if bot is not None else ()) + (since, since, limit)))
+    stored = H.prime_messages(c, [row["message_id"] for row in found])
+    privacy.prime_messages(c, list(stored.values()))
+    privacy.prime_attempts(c, [row["id"] for row in found])
+    prime_attempt_details(c, [row["id"] for row in found])
+    for row in found:
         if not (readable.get(row["bot"]) or {}).get("read"):
             continue
         message = H.message(c, row["message_id"])
@@ -2048,7 +2080,7 @@ def install_views(app, store, auth, mutate, task_view):
     def operations(request: Request):
         who = request.state.identity
         human_only(who)
-        with store.read() as c:
+        with store.read_transaction() as c:
             machines, fleet = [], runner_versions.load(c)
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
@@ -2065,9 +2097,26 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
-            for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
-                                 "FROM runners ORDER BY created"):
+            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
+                                      "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
+                                      "FROM runners ORDER BY created"))
+            from .start_places import summaries
+            turn_counts = summaries(c, [row["id"] for row in runners], store.settings)
+            # One lookup for every computer's repository report. metadata() reads the same row by key.
+            repo_keys = ["computer-repositories:" + row["id"] for row in runners]
+            if repo_keys:
+                marks = ",".join("?" * len(repo_keys))
+                stored = {row["key"]: row for row in c.execute(
+                    f"SELECT value_json,key FROM registry_metadata WHERE key IN ({marks})", repo_keys)}
+                read_cache.prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
+                                      {(key,): ((stored[key],) if key in stored else ()) for key in repo_keys})
+            bots_of, live_of = {}, {}
+            for item in c.execute("SELECT a.runner_id,a.bot,b.state FROM assignments a "
+                                  "LEFT JOIN bots b ON b.slug=a.bot ORDER BY a.bot"):
+                bots_of.setdefault(item["runner_id"], []).append(item["bot"])
+                if item["state"] not in (None, "archived"):
+                    live_of.setdefault(item["runner_id"], set()).add(item["bot"])
+            for row in runners:
                 # Every person sees every working computer; only an admin or its operator may change it, and only
                 # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
                 # Another member gets the bots they may see on it.
@@ -2075,11 +2124,10 @@ def install_views(app, store, auth, mutate, task_view):
                 if not manage and row["revoked_at"]:
                     continue
                 hidden = set() if manage else unseen
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
-                        if a[0] not in hidden]
+                bots = [bot for bot in bots_of.get(row["id"], []) if bot not in hidden]
                 value = dict(row)
-                from .start_places import summary, describe
-                value["turn_counts"] = summary(c, row["id"], store.settings)
+                from .start_places import describe
+                value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
@@ -2093,9 +2141,7 @@ def install_views(app, store, auth, mutate, task_view):
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
                 from .repositories import metadata
                 value["repositories"] = metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown")
-                assigned_here = {a[0] for a in c.execute(
-                    "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-                    "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+                assigned_here = set(live_of.get(row["id"], ()))
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
                                              if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():

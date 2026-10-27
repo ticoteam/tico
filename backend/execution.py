@@ -1566,8 +1566,9 @@ def queued_jobs_sql(bots=None):
 
 def prime_claimables(c, bots, first=3):
     """What bot_claimable reads for each of these bots with queued work, one table at a time: the computer's row, the
-    bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. Outside a
-    snapshot nothing is kept."""
+    bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. `first`
+    None reads every queued job's message: Health walks the whole queue (`queued_reasons`), and the first few are
+    only enough for the claim's next job. Outside a snapshot nothing is kept."""
     from . import readiness
     from .read_cache import cache, prime, prime_rows
     if cache(c) is None:
@@ -1584,7 +1585,8 @@ def prime_claimables(c, bots, first=3):
             jobs[row["bot"]].append(row)
         prime_rows(c, queued_jobs_sql(), {(s,): queue for s, queue in jobs.items()})
         privacy.snapshot(c)
-        waiting = [job["message_id"] for queue in jobs.values() for job in queue[:first]]
+        waiting = [job["message_id"] for queue in jobs.values()
+                   for job in (queue if first is None else queue[:first])]
         privacy.prime_queued(c, H.prime_messages(c, waiting).values())
 
 

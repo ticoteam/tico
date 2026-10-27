@@ -1135,9 +1135,18 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL")
     # When a run that carried a next-run task without doing it picks it up again (backend/quiet_work.py).
     add_column(conn, "tasks", "resume_json", "TEXT")
-    if "private" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}:
+    task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    if "private" in task_columns:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
         conn.execute("CREATE INDEX IF NOT EXISTS tasks_private ON tasks(id) WHERE private IS NOT 0")
+        if "guest" in task_columns:
+            # That id-only index still fetches each private task's body. privacy_index reads only these
+            # columns, and the predicate matches its query word for word, so the scan never opens a body.
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
+                         "id, requester, owner, guest, private) WHERE private IS NOT 0")
+    # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
+    # The conversation row holds participants_json, and the primary key scan reads those pages.
+    conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
     # Status and provenance reads stay indexed as question and task history grows.
     conn.execute("CREATE INDEX IF NOT EXISTS messages_reply_kind ON messages(in_reply_to, kind)")
     conn.execute("CREATE INDEX IF NOT EXISTS messages_from_kind ON messages(from_actor, kind)")
@@ -4636,7 +4645,9 @@ def task_tree(conn, task_id, visible_ids=None):
     links = {}
     if nodes:
         marks = ",".join("?" * len(nodes))
-        for link in _rows(conn.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks})", list(nodes))):
+        for link in _rows(conn.execute(
+                f"SELECT task_id,kind,state,checks,mergeable,review_state FROM task_links "
+                f"WHERE task_id IN ({marks})", list(nodes))):
             links.setdefault(link["task_id"], []).append(link)
     for row in rows:
         node = nodes[row["id"]]
@@ -8845,13 +8856,17 @@ def unanswered_ask(conn, task_row, *, actor=None):
 
 def tasks_asked_of(conn, actor):
     """Live tasks with an unanswered ask addressed to this actor, even if they do not own them. A done task stays
-    while it asks its requester to accept what it delivered (ACCEPTANCE_ASK_SQL)."""
+    while it asks its requester to accept what it delivered (ACCEPTANCE_ASK_SQL).
+
+    The ask is the small side: start from messages addressed to this actor, then the task that message is in.
+    The join is the same one as reading every task's room first (`m.conversation_id=t.conversation_id` and
+    `MESSAGE_TASK_SQL=t.id`), so an ask in some other room still does not attach."""
     return _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
-        f"JOIN messages m ON m.conversation_id=t.conversation_id AND {MESSAGE_TASK_SQL}=t.id "
-        f"WHERE (t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
+        "SELECT t.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        f"JOIN tasks t ON t.conversation_id=m.conversation_id AND t.id={MESSAGE_TASK_SQL} "
+        f"WHERE m.kind='ask' AND m.to_actor=? AND {OPEN_ASK_SQL} "
+        f"AND (t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
         f"OR ({ACCEPTANCE_ASK_SQL})) "
-        f"AND m.kind='ask' AND m.to_actor=? AND {OPEN_ASK_SQL} "
         "GROUP BY t.id ORDER BY t.created", (actor,)))
 
 
