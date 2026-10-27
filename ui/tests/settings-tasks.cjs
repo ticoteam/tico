@@ -22,6 +22,14 @@ const CATALOG = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['
 const TASK_BUILTINS = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
   "import json,sqlite3; from backend.task_settings import builtins; c=sqlite3.connect(':memory:'); c.execute('create table task_types(id,name,role)'); c.execute(\"insert into task_types values ('dev','Dev tickets','engineering')\"); print(json.dumps(builtins(c)))"],
   {cwd: path.join(__dirname, '../..')}).toString());
+// The listing's Task Trigger vocabulary and the shipped close after 24 hours, as the server describes them.
+const TASK_VOCAB = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
+  "import json; from backend import task_trigger_rules as T; print(json.dumps({'task_triggers': T.TRIGGERS, 'task_when_keys': T.CONDITIONS, 'task_actions': T.ACTIONS}))"],
+  {cwd: path.join(__dirname, '../..')}).toString());
+const CLOSE_JOB = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
+  "import json; from backend.task_settings import describe_job; print(json.dumps(describe_job({'key': 'task-rule-close-after-done', 'kind': 'task_rule', 'name': 'Close 24h after done', 'switch': True, 'on': True, 'schedule': 'Every 15 minutes', 'department': {'id': 'engineering', 'name': 'Engineering'}, 'triggers': [{'key': 'done_untouched', 'hours': 24}]})))"],
+  {cwd: path.join(__dirname, '../..')}).toString());
+const FAILED_AT = '2026-10-27T09:15:00Z';
 const FLOOR_422 = 'Person message always wakes the bot: a rule cannot make it wait';
 const builtins = [
   {id: 'builtin:person_message', built_in: true, scope_kind: 'builtin', scope_id: '', group: 'always', event: 'person_message',
@@ -64,7 +72,12 @@ async function open(browser, role, hash = '#/settings/tasks', viewport = {width:
     {id: 'r-qa', scope_kind: 'type', scope_id: 'dev', event: 'step_entered', when: {step: 'In QA', role: 'qa'}, then: 'wake', params: {}, enabled: true, revision: 1, can_change: role === 'owner', runs_7d: 12, no_op_7d: 9},
     {id: 'r-release', scope_kind: 'type', scope_id: 'dev', event: 'step_entered', when: {step: 'Pending Release', role: 'release_manager'}, then: 'note', params: {}, enabled: true, revision: 1, can_change: role === 'owner'},
     {id: 'r-due', scope_kind: 'bot', scope_id: 'ops', event: 'due', when: {}, then: 'wake', params: {}, enabled: true, revision: 1, can_change: role === 'owner', created_by: 'profile', note: 'From the doer profile: due.'},
-    ...['routine', 'schedule', 'next_run', 'background_done', '*'].map((event,i) => ({id: 'r-other-' + i, scope_kind: 'bot', scope_id: 'ops', event, when: {}, then: 'note', params: {}, enabled: true, can_change: role === 'owner'}))
+    ...['routine', 'schedule', 'next_run', 'background_done', '*'].map((event,i) => ({id: 'r-other-' + i, scope_kind: 'bot', scope_id: 'ops', event, when: {}, then: 'note', params: {}, enabled: true, can_change: role === 'owner'})),
+    // Task Trigger rows (backend/rules.py view + task_settings.describe_rule): one whose last Action failed, one paused.
+    {id: 'r-failed', scope_kind: 'type', scope_id: 'dev', event: 'task.done', when: {}, then: 'action', params: {action: 'send_webhook', webhook: 'wh1', type: 'custom.done'},
+      enabled: true, revision: 1, can_change: role === 'owner', task_trigger: 'finished', runs_7d: 0, paused: false, last_error: 'Action: webhook delivery failed (HTTP 500)', last_error_at: FAILED_AT},
+    {id: 'r-paused', scope_kind: 'team', scope_id: '', event: 'task.created', when: {}, then: 'action', params: {action: 'wake_bot', bot: 'ops'},
+      enabled: true, revision: 1, can_change: role === 'owner', task_trigger: 'created', runs_7d: 0, paused: true, pause_reason: 'Paused: too many runs', paused_at: FAILED_AT}
   );
   page.on('pageerror' , e => errors.push(e.stack || e.message));
   await page.route('**/*', route => {
@@ -80,9 +93,10 @@ async function open(browser, role, hash = '#/settings/tasks', viewport = {width:
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', mover: role === 'owner',
       name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', role: 'owner'}]});
-    if (p === '/api/v2/system-routines') return json({jobs: [], task_rule_departments: []});
+    if (p === '/api/v2/system-routines') return json({jobs: [{...CLOSE_JOB, can_change: role === 'owner'}], task_rule_departments: []});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_manage: role === 'owner'}]);
+    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_manage: role === 'owner'},
+      {name: 'pr-reviewer', display_name: 'PR Reviewer', status: 'active', can_manage: role === 'owner'}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/ceo-bot') return json({name: 'CEO', level: 1, regular_checks: true,
@@ -110,14 +124,17 @@ async function open(browser, role, hash = '#/settings/tasks', viewport = {width:
       const kind = url.searchParams.get('scope_kind');
       const rows = kind === 'task' ? [{...taskRow}] : kind === 'builtin' ? builtins : kind === 'bot' ? [...profileRows, rules.find(r => r.id === 'r-bot')] : rules;
       const offset = Number(url.searchParams.get('offset') || 0), paged = !kind, pageRows = paged ? rows.slice(offset, offset + 4) : rows;
-      return json({task_builtins: TASK_BUILTINS, rules: pageRows, more: paged && offset + 4 < rows.length, next_offset: offset + 4, events: ['person_message', 'comment', 'step_entered'], outcomes: ['wake', 'note', 'batch', 'ignore'], scopes: [],
-        sourceless_events: CATALOG.filter(e => e.sourceless).map(e => e.name)});
+      return json({task_builtins: TASK_BUILTINS, rules: pageRows, more: paged && offset + 4 < rows.length, next_offset: offset + 4, events: ['person_message', 'comment', 'step_entered', ...TASK_VOCAB.task_triggers], outcomes: ['wake', 'note', 'batch', 'ignore'], scopes: [],
+        sourceless_events: CATALOG.filter(e => e.sourceless).map(e => e.name), ...TASK_VOCAB});
     }
     if (p === '/api/v2/rules') {
       const body = req.postDataJSON();
       writes.push({path: p, body});
       if (body.event === 'person_message' && body.then !== 'wake') return json({error: {detail: FLOOR_422, code: 'invalid'}}, 422);
-      return json({rule: {...body, id: 'r-new', revision: 1, enabled: body.on}});
+      const made = {...body, id: 'r-new', revision: 1, enabled: body.on};
+      // The listing reads it back with its section (describe_rule) and the viewer's rights.
+      if (body.event.startsWith('task.')) rules.push({...made, can_change: true, task_trigger: {'task.created': 'created', 'task.step_changed': 'step'}[body.event] || 'finished', paused: false});
+      return json({rule: made});
     }
     const one = p.match(/^\/api\/v2\/rules\/([^/]+)$/);
     if (one) {
@@ -178,15 +195,105 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     const newForm = page.locator('[data-rule-form]'); await newForm.waitFor();
     assert.equal(await newForm.locator('[name="scope_kind"]').inputValue(), 'type');
     assert.equal(await newForm.locator('[name="scope_id"]').inputValue(), 'dev');
-    assert.equal(await newForm.locator('[name="event"]').inputValue(), 'step_entered');
+    assert.equal(await newForm.locator('[name="event"]').inputValue(), 'task.step_changed');
     assert.equal(await newForm.locator('[name="step"]').inputValue(), 'In QA');
     await newForm.getByText('Cancel', {exact: true}).click();
     await page.locator('[data-settings-tab="tasks"]').click();
-    await card(page).locator('[data-task-trigger="created"]').getByText('Add action', {exact: true}).click();
-    await page.locator('[data-rule-form]').waitFor();
-    assert.equal(await page.locator('[data-rule-form] [name="event"]').inputValue(), 'task.created');
-    assert.equal(await page.locator('[data-rule-form] [type="submit"]').isDisabled(), true);
-    await page.locator('[data-rule-form]').getByText('Cancel', {exact: true}).click();
+
+    // 6. On a type, each opening line names it as "a task of type Dev tickets", never "a Dev tickets task".
+    const intro = key => card(page).locator(`[data-task-trigger="${key}"] > p`).first().innerText();
+    assert.equal(await intro('created'), 'Tico does these the moment a task of type Dev tickets is filed.');
+    assert.equal(await intro('step'), 'Tico does these when a task of type Dev tickets moves into a step.');
+    assert.equal(await intro('finished'), 'Tico does these when a task of type Dev tickets is done, declined or closed.');
+    assert.equal(await intro('open'), 'Tico checks open tasks of type Dev tickets on a schedule. Changes and messages also act as they happen.');
+    assert.equal(await intro('after'), 'Tico tidies finished tasks of type Dev tickets on a schedule.');
+    assert.doesNotMatch(await card(page).innerText(), /Dev tickets task|Dev ticketss/);
+
+    // 3 and 4. A failed last Action shows its detail and time; a paused row says so, on the card.
+    const failedAt = await page.evaluate(iso => fmt(iso), FAILED_AT);
+    const failed = settingRow(page, 'r-failed');
+    assert.equal(await card(page).locator('[data-task-finish="Done"] [data-task-setting="r-failed"]').count(), 1, 'a done Trigger shows under Done');
+    assert.match(await failed.innerText(), /When a task of type Dev tickets is done, send custom\.done to Zapier\./);
+    assert.equal(await failed.locator('[data-rule-last-error]').innerText(), `Action: webhook delivery failed (HTTP 500) · ${failedAt}`);
+    const paused = settingRow(page, 'r-paused');
+    assert.equal(await card(page).locator('[data-task-trigger="created"] [data-task-setting="r-paused"]').count(), 1);
+    assert.match(await paused.innerText(), /Paused: too many runs/);
+    assert.match(await paused.innerText(), /Switch on/);
+    assert.doesNotMatch(await paused.innerText(), /\bOn\b/);
+
+    // 8. The shipped close after 24 hours reads and links as it did before Task Triggers.
+    const closeRow = settingRow(page, 'task-rule-close-after-done');
+    assert.equal(await card(page).locator('[data-task-trigger="after"] [data-task-setting="task-rule-close-after-done"]').count(), 1);
+    assert.equal((await closeRow.innerText()).replace(/\s+/g, ' ').trim(), 'Action Close a done task after 24 hours untouched; skips tasks waiting on a person, snoozed, pinned, or with an open question or approval; at most 50 a pass. Trigger: Every 15 minutes Department: Engineering Quiet Run count unavailable On Switch off Edit');
+    assert.deepEqual(await closeRow.locator('a').evaluateAll(a => a.map(x => x.getAttribute('href'))), ['#/settings/rules?job=task-rule-close-after-done', '#/settings/rules?job=task-rule-close-after-done']);
+    assert.equal(await card(page).locator('[data-task-trigger="after"]').getByText('Add action', {exact: true}).count(), 0, 'After it is finished runs on a schedule: no Trigger to add');
+    assert.equal(await settingRow(page, 'task-setting-dedupe').locator('[data-rule-last-error]').count(), 0);
+
+    // 1 and 7. Add action under "created" opens the Trigger and Action form on that Trigger and this type.
+    await card(page).locator('[data-task-trigger="created"]').getByText('Add action', {exact: true}).last().click();
+    const tf = page.locator('[data-task-trigger-form]'); await tf.waitFor();
+    assert.equal(await tf.locator('[name="event"]').inputValue(), 'task.created');
+    assert.equal(await tf.locator('[name="event"] option:checked').innerText(), 'A task is created');
+    assert.equal(await tf.locator('[name="scope_kind"]').inputValue(), 'type');
+    assert.equal(await tf.locator('[name="scope_id"] option:checked').innerText(), 'Dev tickets');
+    assert.deepEqual(await tf.locator('[name="event"] option').allInnerTexts(),
+      ['A task is created', 'A task enters a step', 'A task is done', 'A task is declined', 'A task is closed']);
+    assert.deepEqual(await tf.locator('[name="action"] option').allInnerTexts(),
+      ['Add a note', 'Set a wait', 'Link a task', 'Move the step', 'Close the task', 'Wake a bot', 'Create a task', 'Send a webhook']);
+    assert.deepEqual(await tf.locator('[name="scope_kind"] option').allInnerTexts(), ['Team', 'Task type', "Bot (the task's owner)"]);
+    assert.deepEqual(await tf.locator('[data-rule-when-task] label').evaluateAll(l => l.map(x => x.firstChild.textContent.trim())), ['Type', 'Step', 'Tag', 'Owner', 'Requester']);
+    assert.doesNotMatch(await tf.innerText(), /\b(WHEN|THEN|rule)\b/i);
+
+    // 2. "Enters a step" does not save until its step is chosen.
+    await tf.locator('[name="event"]').selectOption('task.step_changed');
+    await tf.locator('[name="action"]').selectOption('note');
+    await tf.locator('[name="param_note"]:not([disabled])').fill('Entered');
+    const before = writes.length;
+    await tf.getByRole('button', {name: 'Save Action', exact: true}).click();
+    assert.equal(await tf.locator('[name="step"]').evaluate(el => el.validity.valueMissing), true);
+    await page.waitForTimeout(200);
+    assert.equal(writes.length, before, 'no step, no save');
+    assert.equal(await tf.isVisible(), true);
+    assert.deepEqual(await tf.locator('[name="step"] option').allInnerTexts(), ['Choose', 'In QA', 'QA Fixes', 'Pending Release']);
+    // Back to the section's Trigger: create a task for PR Reviewer, saved once under Dev tickets.
+    await tf.locator('[name="event"]').selectOption('task.created');
+    await tf.locator('[name="action"]').selectOption('create_task');
+    await tf.locator('[name="param_owner"]').selectOption('pr-reviewer');
+    await tf.locator('[name="param_title"]').fill('Review {{task.title}}');
+    await tf.getByRole('button', {name: 'Save Action', exact: true}).click();
+    await tf.waitFor({state: 'detached'});
+    const saved = writes.slice(before);
+    assert.equal(saved.length, 1);
+    assert.deepEqual(saved[0], {path: '/api/v2/rules', body: {event: 'task.created', then: 'action', when: {}, note: '', on: true, scope_kind: 'type', scope_id: 'dev',
+      params: {action: 'create_task', owner: 'pr-reviewer', title: 'Review {{task.title}}'}}});
+    await page.locator('[data-settings-tab="tasks"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-task-trigger="created"] [data-task-setting="r-new"]'));
+    assert.match(await settingRow(page, 'r-new').innerText(), /When a task of type Dev tickets is created, create a task for PR Reviewer\./);
+    assert.match(await settingRow(page, 'r-new').innerText(), /This type/);
+
+    // 3 and 4 in the Rules list: Trigger and Action words, the failed Action's detail and time, the paused state.
+    await page.evaluate(() => { location.hash = '#/settings/rules'; });
+    const listRow = id => page.locator(`#set-rules [data-rule="${id}"]`);
+    await listRow('r-failed').waitFor();
+    assert.equal((await listRow('r-failed').locator('[data-rule-text]').innerText()).replace(/\s+/g, ' ').split(' Action:')[0], 'Trigger a task is done Action send custom.done to Zapier');
+    assert.equal(await listRow('r-failed').locator('[data-rule-last-error]').innerText(), `Action: webhook delivery failed (HTTP 500) · ${failedAt}`);
+    assert.match(await listRow('r-paused').innerText(), /Paused: too many runs/);
+    assert.equal(await listRow('r-paused').locator('[data-rule-on]').isChecked(), false, 'a paused row runs again only when switched on');
+    // Editing a Task Trigger opens its own form, which says it is paused; the general Add rule offers the Triggers too.
+    await listRow('r-paused').getByRole('button', {name: 'Edit', exact: true}).click();
+    await tf.waitFor();
+    assert.equal(await tf.locator('[name="event"]').inputValue(), 'task.created');
+    assert.equal(await tf.locator('[name="action"]').inputValue(), 'wake_bot');
+    assert.match(await tf.locator('[data-rule-paused]').innerText(), /Paused: too many runs/);
+    await tf.getByText('Cancel', {exact: true}).click();
+    await page.locator('#set-rules [data-rule-new]').click();
+    const general = page.locator('[data-rule-form]:not([data-task-trigger-form])'); await general.waitFor();
+    assert.deepEqual(await general.locator('[name="event"] optgroup[label="Task Trigger"] option').evaluateAll(o => o.map(x => x.value)), TASK_VOCAB.task_triggers);
+    await general.locator('[name="event"]').selectOption('task.closed');
+    await tf.waitFor();
+    assert.equal(await general.count(), 0);
+    assert.equal(await tf.locator('[name="event"]').inputValue(), 'task.closed');
+    await tf.getByText('Cancel', {exact: true}).click();
     assert.deepEqual(errors, []);
     await page.close();
     const member = await open(browser, 'member', '#/settings/tasks', {width: 390, height: 844});
@@ -195,13 +302,30 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     assert.equal(await c.getByText('Edit', {exact: true}).count(), 0);
     assert.equal(await c.getByText('Add action', {exact: true}).count(), 0);
     assert.equal(await c.getByRole('switch').count(), 0);
+    // 5. Without rights to change Rules, a Task Trigger row shows its state and error but no control.
+    assert.match(await c.locator('[data-task-setting="r-paused"]').innerText(), /Paused: too many runs/);
+    assert.equal(await c.locator('[data-task-setting="r-paused"] a').count(), 0);
+    // 6. On All tasks the opening lines read as before.
+    assert.equal(await c.locator('[data-task-trigger="created"] > p').first().innerText(), 'Tico does these the moment a task is filed.');
+    assert.equal(await c.locator('[data-task-trigger="open"] > p').first().innerText(), 'Tico checks open tasks on a schedule. Changes and messages also act as they happen.');
+    assert.equal(await c.locator('[data-task-trigger="after"] > p').first().innerText(), 'Tico tidies finished tasks on a schedule.');
     assert.equal(await c.locator('[data-task-setting="r-qa"]').count(), 0, 'step section is hidden on All tasks');
     await c.locator('select').selectOption('dev');
     assert.equal(await c.locator('[data-task-setting="r-qa"]').count(), 1);
+    assert.equal(await c.getByText('Add action', {exact: true}).count(), 0);
+    assert.equal(await c.locator('[data-task-setting="r-failed"] a').count(), 0);
+    assert.match(await c.locator('[data-task-setting="r-failed"] [data-rule-last-error]').innerText(), /webhook delivery failed/);
     await c.locator('select').selectOption('general');
     assert.match(await c.locator('[data-task-step="Open"]').innerText(), /Nothing happens/);
     assert.equal(await c.locator('[data-task-setting="task-setting-roadmap"]').count(), 0);
     assert.ok(await member.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    // 5 in the Rules list: the row's state shows, with no switch or Edit.
+    await member.page.evaluate(() => { location.hash = '#/settings/rules'; });
+    const memberRow = member.page.locator('#set-rules [data-rule="r-paused"]'); await memberRow.waitFor();
+    assert.match(await memberRow.innerText(), /Trigger a task is created Action wake Ops/);
+    assert.equal(await memberRow.locator('.sysr-state').innerText(), 'Paused: too many runs');
+    assert.equal(await memberRow.locator('[data-rule-edit], [data-rule-on]').count(), 0);
+    assert.equal(await member.page.locator('#set-rules [data-rule-new]').count(), 0);
     assert.deepEqual(member.errors, []);
     await member.page.close();
     console.log('settings-tasks: lifecycle projection, pagination, permissions, editor presets and save refresh passed');

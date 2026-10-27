@@ -3,13 +3,20 @@
 let TASK_SETTINGS = null, TASK_SETTINGS_TYPE = '', TASK_SETTINGS_LOADING = null;
 let TASK_SETTINGS_VERSION = 0;
 let RULES_OPEN = null;
+// {one} is "a task" or "a task of type Dev tickets", {many} is "tasks" or "tasks of type Dev tickets": a type's name is
+// a plural label, so it is never put in front of "task".
 const TASK_SETTING_SECTIONS = [
-  ['created', "When it's created", 'Tico does these the moment a {type} is filed.'],
-  ['step', 'When it enters a step', 'Tico does these when a {type} moves into a step.'],
-  ['finished', "When it's finished", 'Tico does these when a {type} is done, declined or closed.'],
-  ['open', "While it's open", 'Tico checks open {type}s on a schedule. Changes and messages also act as they happen.'],
-  ['after', "After it's finished", 'Tico tidies finished {type}s on a schedule.']
+  ['created', "When it's created", 'Tico does these the moment {one} is filed.'],
+  ['step', 'When it enters a step', 'Tico does these when {one} moves into a step.'],
+  ['finished', "When it's finished", 'Tico does these when {one} is done, declined or closed.'],
+  ['open', "While it's open", 'Tico checks open {many} on a schedule. Changes and messages also act as they happen.'],
+  ['after', "After it's finished", 'Tico tidies finished {many} on a schedule.']
 ];
+const taskSettingsOne = type => type ? `a task of type ${type.name}` : 'a task';
+const taskSettingsMany = type => type ? `tasks of type ${type.name}` : 'tasks';
+// The Task Trigger each section's (or finished block's) Add action starts from; While it's open adds a wake rule.
+const TASK_SETTING_ADD = {created: 'task.created', step: 'task.step_changed', open: 'stall_check',
+  Done: 'task.done', Declined: 'task.declined', Closed: 'task.closed'};
 function taskSettingsLink(values) {
   return '#/settings/rules?' + new URLSearchParams(Object.entries(values).filter(([,v]) => v != null && v !== '')).toString();
 }
@@ -25,6 +32,9 @@ function taskSettingsSource(r) {
 function taskSettingsTrigger(r) {
   // Older servers still offer their normal rule list; unknown task events remain visible under open tasks.
   if ('task_trigger' in r) return r.task_trigger;
+  if (r.event === 'task.created') return 'created';
+  if (r.event === 'task.step_changed') return 'step';
+  if (['task.done', 'task.declined', 'task.closed'].includes(r.event)) return 'finished';
   if (['routine', 'schedule', 'next_run', 'background_done', '*', 'digest', 'feed', 'backlog', 'release_now'].includes(r.event) || r.event?.includes('.')) return null;
   if (r.event === 'step_entered') return 'step';
   return ['task_done', 'task_declined', 'batch_completion'].includes(r.event) ? 'finished' : 'open';
@@ -42,7 +52,11 @@ function taskSettingsSentence(r, type) {
   if (r.task_action) return r.task_action;
   if (r.scope_kind === 'type') type = TASK_TYPES.find(t => t.id === r.scope_id);
   const bot = r.scope_kind === 'bot' ? empName(r.scope_id) : '';
-  const subject = bot ? `a task of ${bot}'s` : type ? `a ${type.name} task` : 'a task';
+  const subject = bot ? `a task of ${bot}'s` : taskSettingsOne(type);
+  if (!r.built_in && ruleTaskTrigger(r.event)) {
+    const conditions = ruleTaskWhenWords(r.when || {}, r.event);
+    return `When ${ruleTaskTriggerWords(r, subject)}${conditions.length ? ', if ' + conditions.join(' and ') : ''}, ${ruleTaskActionWords(r.params)}.`;
+  }
   const role = ruleList(r.when?.role);
   let action = ruleThenWords(r);
   if (r.then === 'wake' && !r.params?.bot && role.length) action = 'wake ' + role.map(k => ({owner: 'its owner', requester: 'its requester', qa: 'QA', release_manager: 'the Release Manager'}[k] || 'the bot')).join(' or ');
@@ -56,23 +70,24 @@ function taskSettingsSentence(r, type) {
 }
 function taskSettingsRow(r, type) {
   const isJob = !!r.key, source = taskSettingsSource(r);
-  const change = !!r.can_change, on = isJob ? r.on : r.enabled;
+  const change = !!r.can_change, on = isJob ? r.on : r.enabled && !r.paused;
   const quiet = r.then !== 'wake' && !(r.then === 'action' && r.params?.action === 'wake_bot');
   const link = taskSettingsLink(isJob ? {job: r.key} : {rule: r.id, bot: r.scope_kind === 'bot' ? r.scope_id : '', type: r.scope_kind === 'type' ? r.scope_id : ''});
-  const state = (r.built_in && !change) || (isJob && !r.switch) ? 'Always on' : on === false ? 'Off' : 'On';
+  const state = (r.built_in && !change) || (isJob && !r.switch) ? 'Always on' : r.paused ? RULE_PAUSED : on === false ? 'Off' : 'On';
   const profile = r.profile || (r.created_by === 'profile' ? r.note?.match(/^From the ([^:]+) profile:/i)?.[1] : '');
   const usage = isJob || r.usage_available === false ? 'Run count unavailable' : `${r.runs_7d || 0} runs, ${r.no_op_7d ?? Math.round((r.no_op_rate_7d || 0) * (r.runs_7d || 0))} idle`;
   return `<article class="task-setting-row${on === false ? ' wr-off' : ''}" data-task-setting="${esc(r.id || r.key)}">
     <div><p class="task-setting-action"><b>Action</b> ${esc(taskSettingsSentence(r, type))}</p>
     ${isJob ? `<p class="settings-cell-note">Trigger: ${esc(r.schedule)}${r.note ? ' · ' + esc(r.note) : ''}</p>` : ''}
-    ${profile ? `<p class="settings-cell-note">From its ${esc(profile)} profile</p>` : ''}</div>
+    ${profile ? `<p class="settings-cell-note">From its ${esc(profile)} profile</p>` : ''}
+    ${isJob ? '' : ruleTaskErrorHTML(r, 'p', 'settings-cell-note err')}</div>
     <div class="task-setting-meta"><span class="pill">${esc(source)}</span><span class="pill">${esc(r.task_effect || (quiet ? 'Quiet' : 'Wakes'))}</span>
       <span title="Last 7 days">${esc(usage)}</span><span>${state}</span>
       ${change ? `<a class="ghost" aria-label="${on === false ? 'Switch on' : 'Switch off'} in the editor" href="${esc(link)}">${on === false ? 'Switch on' : 'Switch off'}</a><a class="ghost" href="${esc(link)}">Edit</a>` : ''}</div></article>`;
 }
 function taskSettingsAdd(section, step = '') {
-  if (!taskSettingsMayAdd()) return '';
-  return `<a class="ghost" href="${esc(taskSettingsLink({add: '1', type: TASK_SETTINGS_TYPE, trigger: section === 'step' ? 'step_entered' : {created: 'task.created', finished: 'task.done', open: 'stall_check', after: 'task.done'}[section], step}))}">Add action</a>`;
+  if (!taskSettingsMayAdd() || !TASK_SETTING_ADD[section]) return '';
+  return `<a class="ghost" href="${esc(taskSettingsLink({add: '1', type: TASK_SETTINGS_TYPE, trigger: TASK_SETTING_ADD[section], step}))}">Add action</a>`;
 }
 function taskSettingsPaint() {
   const el = $('#set-task-settings'); if (!el || !TASK_SETTINGS) return;
@@ -88,8 +103,9 @@ function taskSettingsPaint() {
     let body = render(mine);
     if (key === 'step') body = mine.filter(r => r.task_action && !r.when?.step).map(r => taskSettingsRow(r, type)).join('') + (type.steps || []).map(step => `<div class="task-setting-step" data-task-step="${esc(step.name)}"><h4>${esc(step.name)}</h4>${render(mine.filter(r => (!r.task_action || r.when?.step) && (!r.when?.step || ruleList(r.when.step).includes(step.name))))}${taskSettingsAdd(key, step.name)}</div>`).join('');
     // Built-in effects with no event run on all three, so they show once above the blocks.
-    if (key === 'finished') body = mine.filter(r => !r.event).map(r => taskSettingsRow(r, type)).join('') + ['Done', 'Declined', 'Closed'].map(name => `<div class="task-setting-step"><h4>${name}</h4>${render(mine.filter(r => (name === 'Declined' ? ['task_declined'] : ['task_done', 'batch_completion']).includes(r.event)))}</div>`).join('');
-    return `<section class="task-setting-section" data-task-trigger="${key}"><h3><span class="muted">Trigger</span> ${esc(title)}</h3><p>${esc(intro.replace('{type}', type ? type.name + ' task' : 'task'))}</p>${body}${key === 'step' ? '' : taskSettingsAdd(key)}</section>`;
+    const finished = {Done: ['task_done', 'batch_completion', 'task.done'], Declined: ['task_declined', 'task.declined'], Closed: ['task.closed']};
+    if (key === 'finished') body = mine.filter(r => !r.event).map(r => taskSettingsRow(r, type)).join('') + Object.entries(finished).map(([name, events]) => `<div class="task-setting-step" data-task-finish="${name}"><h4>${name}</h4>${render(mine.filter(r => events.includes(r.event)))}${taskSettingsAdd(name)}</div>`).join('');
+    return `<section class="task-setting-section" data-task-trigger="${key}"><h3><span class="muted">Trigger</span> ${esc(title)}</h3><p>${esc(intro.replace('{one}', taskSettingsOne(type)).replace('{many}', taskSettingsMany(type)))}</p>${body}${['step', 'finished'].includes(key) ? '' : taskSettingsAdd(key)}</section>`;
   };
   const footer = new Map();
   for (const r of data.rules.rules.filter(r => !r.built_in && !taskSettingsTrigger(r))) { const bot = r.scope_kind === 'bot' ? r.scope_id : ''; footer.set(bot, (footer.get(bot) || 0) + 1); }

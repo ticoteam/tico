@@ -31,10 +31,53 @@ const RULE_ROLES = {owner: 'owns the task', requester: 'requested the task', qa:
 const RULE_ROLE_LABELS = {owner: 'Owner', requester: 'Requester', qa: 'QA', release_manager: 'Release Manager', other: 'Other'};
 // The always-wake events (backend/rules.py FLOOR_EVENTS): the server refuses a row that makes one wait.
 const RULE_FLOOR = new Set(['person_message', 'ask', 'answer', 'approval', 'needs_action', 'reply', 'verdict']);
+// Task Triggers (backend/task_trigger_rules.py): a rule that acts when a task is created, enters a step, or is done,
+// declined or closed. The listing names the ones the server runs (`task_triggers`, `task_when_keys`, `task_actions`);
+// these are only their words. Each such row carries its paused state and its last failed Action and when.
+const RULE_TASK_TRIGGERS = {'task.created': 'a task is created', 'task.step_changed': 'a task enters a step', 'task.done': 'a task is done',
+  'task.declined': 'a task is declined', 'task.closed': 'a task is closed'};
+const RULE_TASK_ACTIONS = {note: 'add a note', set_wait: 'set a wait', relate: 'link a task', move_step: 'move the step', close: 'close the task',
+  wake_bot: 'wake a bot', create_task: 'create a task', send_webhook: 'send a webhook'};
+const RULE_TASK_SCOPES = ['team', 'type', 'department', 'bot'];
+const RULE_PAUSED = 'Paused: too many runs';
+const ruleTaskTrigger = event => event in RULE_TASK_TRIGGERS || (RULES?.task_triggers || []).includes(event);
+const ruleTaskTriggers = listing => (listing?.task_triggers?.length ? listing.task_triggers : Object.keys(RULE_TASK_TRIGGERS));
+const ruleTaskActions = listing => (listing?.task_actions?.length ? listing.task_actions : Object.keys(RULE_TASK_ACTIONS));
+const ruleTypeName = id => TASK_TYPES.find(t => t.id === id || t.name === id)?.name || id;
+// A Task Trigger row's conditions; on "enters a step" the step is part of the Trigger itself.
+function ruleTaskWhenWords(when, event) {
+  const out = [];
+  if (when.type) out.push('its type is ' + ruleList(when.type).map(ruleTypeName).join(' or '));
+  if (when.step && event !== 'task.step_changed') out.push('it is at ' + ruleList(when.step).join(' or '));
+  if (when.tag) out.push('it is tagged ' + ruleList(when.tag).join(' and '));
+  if (when.owner) out.push('its owner is ' + ruleList(when.owner).map(actorLabel).join(' or '));
+  if (when.requester) out.push('its requester is ' + ruleList(when.requester).map(actorLabel).join(' or '));
+  return out;
+}
+function ruleTaskTriggerWords(r, subject = 'a task') {
+  if (r.event === 'task.step_changed') return `${subject} enters ${ruleList(r.when?.step).join(' or ') || 'a step'}`;
+  return (RULE_TASK_TRIGGERS[r.event] || r.event).replace('a task', subject);
+}
+function ruleTaskActionWords(p = {}) {
+  if (p.action === 'wake_bot' && p.bot) return 'wake ' + empName(p.bot);
+  if (p.action === 'create_task' && p.owner) return 'create a task for ' + empName(p.owner);
+  if (p.action === 'send_webhook' && p.webhook) return `send ${p.type || 'an event'} to ${ruleHookName(p.webhook)}`;
+  if (p.action === 'move_step' && p.step) return 'move it to ' + p.step;
+  if (p.action === 'set_wait' && (p.waiting_on || p.blocked_by)) return 'set it waiting on ' + (p.waiting_on || p.blocked_by);
+  if (p.action === 'relate' && p.task) return 'link it to task ' + p.task;
+  if (p.action === 'close') return 'close it';
+  return RULE_TASK_ACTIONS[p.action] || 'run an Action';
+}
+// A Task Trigger row's last failed Action and when it failed (the server keeps the safe detail only).
+function ruleTaskErrorHTML(r, tag = 'span', cls = 'wr-note err') {
+  if (!r.last_error || !ruleTaskTrigger(r.event)) return '';
+  return `<${tag} class="${cls}" data-rule-last-error>${esc(r.last_error)}${r.last_error_at ? ' · ' + esc(fmt(r.last_error_at)) : ''}</${tag}>`;
+}
 
 // An event's words come from its built-in row, so a new event the backend adds reads right with no UI change.
 function ruleEventWords(event) {
   if (event === '*') return 'anything else';
+  if (ruleTaskTrigger(event)) return RULE_TASK_TRIGGERS[event] || event;
   if (ruleSourceless(event)) { const w = catalogWords(event); if (w) return w[0].toLowerCase() + w.slice(1); }
   const rank = {always: 0, wake: 1, batch: 2, awaited: 3, note: 4, pr_checks: 5};
   const found = (RULES?.rules || []).filter(r => r.built_in && r.event === event && r.group in rank)
@@ -86,15 +129,18 @@ function ruleUsageHTML(r) {
   return `<span class="tnum${r.runs_7d ? '' : ' muted'}" title="Last 7 days" data-rule-usage>${r.runs_7d} run${r.runs_7d === 1 ? '' : 's'}${rate}</span>`;
 }
 function ruleRowHTML(r) {
-  const busy = RULES_BUSY.has(r.id);
-  const and = r.built_in ? [] : ruleWhenWords(r.when || {});
-  const when = r.built_in ? r.words : ruleEventWords(r.event);
-  const text = `<b>WHEN</b> ${esc(when)}${and.map(w => ` <b class="sysr-and">AND</b> ${esc(w)}`).join('')} <b>THEN</b> ${esc(ruleThenWords(r))}`;
-  const ctl = r.can_change ? `<label class="sysr-switch">${peopleSwitch('data-rule-on', r.enabled, busy, 'Rule on')}<span>${r.enabled ? 'On' : 'Off'}</span></label>
+  const busy = RULES_BUSY.has(r.id), task = !r.built_in && ruleTaskTrigger(r.event);
+  const and = r.built_in ? [] : task ? ruleTaskWhenWords(r.when || {}, r.event) : ruleWhenWords(r.when || {});
+  const when = r.built_in ? r.words : task ? ruleTaskTriggerWords(r) : ruleEventWords(r.event);
+  const [WHEN, THEN] = task ? ['Trigger', 'Action'] : ['WHEN', 'THEN'];
+  const text = `<b>${WHEN}</b> ${esc(when)}${and.map(w => ` <b class="sysr-and">AND</b> ${esc(w)}`).join('')} <b>${THEN}</b> ${esc(task ? ruleTaskActionWords(r.params) : ruleThenWords(r))}`;
+  // A paused Task Trigger runs again only when it is switched on, so its switch reads off until then.
+  const on = r.enabled && !r.paused, state = r.paused ? RULE_PAUSED : r.enabled ? 'On' : 'Off';
+  const ctl = r.can_change ? `<label class="sysr-switch">${peopleSwitch('data-rule-on', on, busy, 'Rule on')}<span>${state}</span></label>
       <button type="button" class="ghost" data-rule-edit${busy ? ' disabled' : ''}>Edit</button>`
-    : r.built_in ? '' : `<span class="sysr-state">${r.enabled ? 'On' : 'Off'}</span>`;
-  return `<div class="wr-row${r.enabled === false ? ' wr-off' : ''}" data-rule="${esc(r.id)}">
-    <div class="wr-text" data-rule-text>${text}${r.note ? `<span class="muted wr-note">${esc(r.note)}</span>` : ''}</div>
+    : r.built_in ? '' : `<span class="sysr-state">${state}</span>`;
+  return `<div class="wr-row${on === false ? ' wr-off' : ''}" data-rule="${esc(r.id)}">
+    <div class="wr-text" data-rule-text>${text}${r.note ? `<span class="muted wr-note">${esc(r.note)}</span>` : ''}${ruleTaskErrorHTML(r)}</div>
     ${r.built_in ? '' : `<span class="pill wr-scope" data-rule-scope>${esc(ruleScopeWords(r))}</span>`}
     <span class="wr-usage">${ruleUsageHTML(r)}</span>
     <div class="wr-ctl">${ctl}<p class="settings-cell-note" role="status" data-rule-status></p></div>
@@ -104,7 +150,8 @@ function ruleMatches(r) {
   if (RULES_FOR && r.scope_kind === 'builtin') return false;   // read for their words only
   if (RULES_SCOPE && r.scope_kind !== RULES_SCOPE) return false;
   if (!RULES_Q) return true;
-  return searchIncludes([r.words, r.event, ruleEventWords(r.event), ruleThenWords(r), ruleScopeWords(r), r.note, ...ruleWhenWords(r.when || {})], RULES_Q);
+  const task = ruleTaskTrigger(r.event) ? [ruleTaskActionWords(r.params), ...ruleTaskWhenWords(r.when || {}, r.event)] : [];
+  return searchIncludes([r.words, r.event, ruleEventWords(r.event), ruleThenWords(r), ruleScopeWords(r), r.note, ...ruleWhenWords(r.when || {}), ...task], RULES_Q);
 }
 function ruleGroupsHTML() {
   const rows = (RULES?.rules || []).filter(ruleMatches);
@@ -325,6 +372,20 @@ function ruleStepHTML(field, label, value, steps, extra = '') {
   const any = field === 'step' ? `<option value="">Any</option>` : `<option value="">Choose</option>`;
   return `<label>${label}<select name="${field}"${extra}>${any}${list.map(n => `<option value="${esc(n)}"${n === value ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
 }
+const ruleOpt = (v, label, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+// The bots an action may wake or give a task: those the viewer manages (the server checks the writer again).
+function ruleBotOptions(cur) {
+  const mine = (S.emps || []).filter(e => e.status !== 'archived' && settingsCanManageBot(e)).map(e => e.name);
+  if (cur && !mine.includes(cur)) mine.push(cur);
+  return `<option value="">Choose</option>${mine.map(n => [n, empName(n)]).sort((a, b) => a[1].localeCompare(b[1])).map(([n, w]) => ruleOpt(n, w, cur)).join('')}`;
+}
+// A bot or a person, by the actor id the server stores (an assign rule's owner, a Task Trigger's owner or requester).
+function ruleActorOptions(cur, none = 'Choose') {
+  const list = [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
+    ...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)])];
+  if (cur && !list.some(([a]) => a === cur)) list.push([cur, actorLabel(cur)]);
+  return `<option value="">${esc(none)}</option>${list.sort((a, b) => a[1].localeCompare(b[1])).map(([a, w]) => ruleOpt(a, w, cur)).join('')}`;
+}
 // Only an action row reads params; any other outcome clears what an earlier action left. A field this form does not
 // show (a wait's blocked_by, a relation's kind) is kept while the action stays the same.
 function ruleParams(v, before) {
@@ -368,6 +429,7 @@ function ruleDataParse(text) {
 // call's type), its own scopes (team, department, bot), and acts only with wake_bot or send_webhook; a wake or note
 // on it at a team or department names the bot to tell.
 async function ruleEditor(rule, preset = null) {
+  if (ruleTaskTrigger((rule || preset || {}).event)) return taskTriggerEditor(rule, preset);
   let tagKeys = [];
   const [listing] = await Promise.all([RULES || get('/v2/rules?scope_kind=builtin').catch(() => ({})), eventTypesLoad().catch(() => []),
     ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad(),
@@ -389,24 +451,14 @@ async function ruleEditor(rule, preset = null) {
   const params = base.params || {};
   // Until the form exists, the steps come from the rule's own scope (or the filtered one a new rule starts in).
   let steps = () => ruleStepsFor(rule?.scope_kind || kind, base.scope_id ?? (kind === f.kind ? f.id : ''));
-  const message = ['*', ...(listing.events || [])];
-  const supportedMessageEvents = new Set(message);
-  const pendingTaskTrigger = e => e.startsWith('task.') && !supportedMessageEvents.has(e);
+  const message = ['*', ...(listing.events || []).filter(e => !ruleTaskTrigger(e))];
   if (!message.includes(event0) && !isSrc(event0)) message.push(event0);
+  // A new rule may start from a Task Trigger instead; picking one opens the Trigger and Action form.
+  const taskTriggers = rule || f.kind === 'task' ? [] : ruleTaskTriggers(listing);
   const events = message.map(e => opt(e, (RULE_FLOOR.has(e) ? 'Always: ' : '') + ruleEventWords(e), event0)).join('')
+    + (taskTriggers.length ? `<optgroup label="Task Trigger">${taskTriggers.map(e => opt(e, cap(ruleEventWords(e)), event0)).join('')}</optgroup>` : '')
     + (sourceless.length ? `<optgroup label="No task">${sourceless.map(e => opt(e, cap(ruleEventWords(e)), event0)).join('')}</optgroup>` : '');
-  const bots = cur => {
-    const mine = (S.emps || []).filter(e => e.status !== 'archived' && settingsCanManageBot(e)).map(e => e.name);
-    if (cur && !mine.includes(cur)) mine.push(cur);
-    return `<option value="">Choose</option>${mine.map(n => [n, empName(n)]).sort((a, b) => a[1].localeCompare(b[1])).map(([n, w]) => opt(n, w, cur)).join('')}`;
-  };
-  // An assign rule hands the task to a bot or a person: both are offered, by the actor id the server stores.
-  const owners = cur => {
-    const list = [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
-      ...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)])];
-    if (cur && !list.some(([a]) => a === cur)) list.push([cur, actorLabel(cur)]);
-    return `<option value="">Choose</option>${list.sort((a, b) => a[1].localeCompare(b[1])).map(([a, w]) => opt(a, w, cur)).join('')}`;
-  };
+  const bots = ruleBotOptions, owners = ruleActorOptions;
   const triggers = (ROUTINE_TRIGGERS || []).map(t => opt(t.id, t.name, first(when.trigger))).join('');
   const hooks = (WH_HOOKS || []).map(h => opt(h.id, h.name, params.webhook || '')).join('');
   const sendTypes = EVENT_TYPES.filter(t => t.outbound !== false && !t.name.includes('*')).map(t => `<option value="${esc(t.name)}">`).join('');
@@ -415,7 +467,6 @@ async function ruleEditor(rule, preset = null) {
     ${rule ? `<p class="muted">${esc(ruleScopeWords(rule))}</p>` : `<label>Scope<select name="scope_kind" data-rule-kind>${scopes.map(([k, v]) => opt(k, v, kind)).join('')}</select></label>
     <div data-rule-target>${ruleTargetHTML(kind, base.scope_id ?? (kind === f.kind ? f.id : ''))}</div>`}
     <label>WHEN<select name="event">${events}</select></label>
-    <p class="settings-cell-note" data-rule-pending-trigger hidden>This task trigger will be available in the next stage of Task settings. You can review this preset now; it cannot be saved yet.</p>
     <div class="wr-when" data-rule-when-msg>
       <label>From<select name="actor">${opt('', 'Anyone', first(when.actor))}${Object.entries(RULE_ACTORS).map(([k, v]) => opt(k, v, first(when.actor))).join('')}</select></label>
       <label>Bot's role<select name="role">${opt('', 'Any', first(when.role))}${Object.entries(RULE_ROLE_LABELS).map(([k, v]) => opt(k, v, first(when.role))).join('')}</select></label>
@@ -463,9 +514,6 @@ async function ruleEditor(rule, preset = null) {
   const scopeNow = () => rule ? rule.scope_kind : form.elements.scope_kind?.value || kind;
   // Only the fields that suit the event, outcome and action show.
   const shown = () => {
-    const pending = pendingTaskTrigger(form.elements.event.value);
-    dialog.querySelector('[data-rule-pending-trigger]').hidden = !pending;
-    form.querySelector('[type="submit"]').disabled = pending;
     const src = isSrc(form.elements.event.value);
     toggle(dialog.querySelector('[data-rule-when-msg]'), !src);
     toggle(dialog.querySelector('[data-rule-when-src]'), src);
@@ -506,7 +554,14 @@ async function ruleEditor(rule, preset = null) {
     dialog.querySelector('[data-rule-param="move_step"]').innerHTML = ruleStepHTML('param_step', 'To step', keep('param_step'), steps(), ' required');
     shown();
   };
-  form.elements.then.onchange = shown; form.elements.action.onchange = shown; form.elements.event.onchange = shown; shown();
+  form.elements.event.onchange = () => {
+    const event = form.elements.event.value;
+    if (!ruleTaskTrigger(event)) return shown();
+    const scope_kind = scopeNow();
+    dialog.close();
+    void taskTriggerEditor(null, {event, scope_kind, scope_id: String(form.elements.scope_id?.value || '')});
+  };
+  form.elements.then.onchange = shown; form.elements.action.onchange = shown; shown();
   if (form.elements.scope_kind) {
     form.elements.scope_kind.onchange = () => { dialog.querySelector('[data-rule-target]').innerHTML = ruleTargetHTML(form.elements.scope_kind.value, ''); restep(); };
     dialog.querySelector('[data-rule-target]').onchange = restep;
@@ -544,6 +599,132 @@ async function ruleEditor(rule, preset = null) {
       taskSettingsChanged();
       RULES.rules = RULES.rules.filter(r => r.id !== rule.id); done();
     } catch (e) { error.textContent = e.message || 'Could not delete the rule'; del.disabled = false; }
+  };
+  document.body.appendChild(dialog); dialog.showModal(); form.elements.event.focus();
+  return dialog;
+}
+// The Task Trigger form (backend/task_trigger_rules.py): a Trigger (a task is created, enters a step, is done, declined
+// or closed), the team, a type, a department or the task owner's bot as its scope, the conditions type, step, tag,
+// owner and requester, and one of eight Actions. "Enters a step" needs its step. The Task settings card's Add action
+// opens it with the section's Trigger and the card's type; the server checks every part again.
+async function taskTriggerEditor(rule, preset = null) {
+  const [listing] = await Promise.all([RULES || get('/v2/rules?scope_kind=builtin').catch(() => ({})), WH_HOOKS || whHooksLoad(),
+    taskTypesLoad({cached: true}).catch(() => {})]);
+  const base = rule || preset || {}, when = base.when || {}, params = base.params || {}, first = v => ruleList(v)[0] || '';
+  const opt = ruleOpt, cap = w => w ? w[0].toUpperCase() + w.slice(1) : w;
+  const scopes = ruleScopeChoices().filter(([k]) => RULE_TASK_SCOPES.includes(k))
+    .map(([k, v]) => [k, k === 'bot' ? "Bot (the task's owner)" : v]);
+  let kind = base.scope_kind && RULE_TASK_SCOPES.includes(base.scope_kind) ? base.scope_kind : scopes[0]?.[0] || 'team';
+  if (!rule && !scopes.some(([k]) => k === kind) && scopes.length) kind = scopes[0][0];
+  const scopeId0 = rule ? rule.scope_id : kind === base.scope_kind ? base.scope_id || '' : '';
+  const triggers = ruleTaskTriggers(listing), actions = ruleTaskActions(listing);
+  const event0 = triggers.includes(base.event) ? base.event : triggers[0];
+  const action0 = actions.includes(params.action) ? params.action : 'note';
+  const hooks = (WH_HOOKS || []).map(h => opt(h.id, h.name, params.webhook || '')).join('');
+  const sendTypes = EVENT_TYPES.filter(t => t.outbound !== false && !t.name.includes('*')).map(t => `<option value="${esc(t.name)}">`).join('');
+  const data = params.data && Object.keys(params.data).length ? JSON.stringify(params.data, null, 2) : '';
+  const allSteps = [...new Set(TASK_TYPES.flatMap(t => (t.steps || []).map(s => s.name)))];
+  const dialog = document.createElement('dialog');
+  dialog.className = 'tmodal task-rule-dialog';
+  dialog.innerHTML = `<form class="task-rule-form" data-rule-form data-task-trigger-form><header><h2>${rule ? 'Edit Action' : 'Add Action'}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
+    ${rule ? `<p class="muted">${esc(ruleScopeWords(rule))}</p>` : `<label>Scope<select name="scope_kind" data-rule-kind>${scopes.map(([k, v]) => opt(k, v, kind)).join('')}</select></label>
+    <div data-rule-target>${ruleTargetHTML(kind, scopeId0)}</div>`}
+    <label>Trigger<select name="event">${triggers.map(e => opt(e, cap(RULE_TASK_TRIGGERS[e] || e), event0)).join('')}</select></label>
+    <div class="wr-when" data-rule-when-task>
+      <label>Type<select name="type">${opt('', 'Any', first(when.type))}${TASK_TYPES.map(t => opt(t.id, t.name, first(when.type))).join('')}</select></label>
+      <span class="wr-field" data-rule-step></span>
+      <label>Tag<input name="tag" maxlength="80" value="${esc(first(when.tag))}"></label>
+      <label>Owner<select name="owner">${ruleActorOptions(first(when.owner), 'Anyone')}</select></label>
+      <label>Requester<select name="requester">${ruleActorOptions(first(when.requester), 'Anyone')}</select></label>
+    </div>
+    <datalist id="rule-task-steps">${allSteps.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    <div class="wr-when" data-rule-action>
+      <label>Action<select name="action">${actions.map(k => opt(k, cap(RULE_TASK_ACTIONS[k] || k), action0)).join('')}</select></label>
+      <span class="wr-field" data-rule-param="move_step"></span>
+      <label data-rule-param="set_wait">Waits on<input name="param_waiting_on" maxlength="120"${params.blocked_by ? '' : ' required'} value="${esc(params.waiting_on || '')}"></label>
+      <label data-rule-param="relate">Task ID<input name="param_task" maxlength="120" required value="${esc(params.task || '')}"></label>
+      <label data-rule-param="note">Note to add<input name="param_note" maxlength="1000" required value="${esc(params.note || params.text || '')}"></label>
+      <label data-rule-param="close move_step set_wait relate">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
+      <label data-rule-param="wake_bot">Bot<select name="param_bot" required>${ruleBotOptions(params.action === 'wake_bot' ? params.bot || '' : '')}</select></label>
+      <label data-rule-param="wake_bot">Text<input name="param_text" maxlength="1000" value="${esc(params.action === 'wake_bot' ? params.text || '' : '')}"></label>
+      <label data-rule-param="create_task">Bot<select name="param_owner" required>${ruleBotOptions(params.action === 'create_task' ? params.owner || '' : '')}</select></label>
+      <label data-rule-param="create_task">Title<input name="param_title" maxlength="300" required placeholder="Review {{task.title}}" value="${esc(params.action === 'create_task' ? params.title || '' : '')}"></label>
+      <label class="wr-wide" data-rule-param="create_task">Body<textarea name="param_body" rows="3" maxlength="4000">${esc(params.action === 'create_task' ? params.body || '' : '')}</textarea></label>
+      <label data-rule-param="send_webhook">Endpoint<select name="param_webhook" required><option value="">Choose</option>${hooks}</select></label>
+      <label data-rule-param="send_webhook">Type<input name="param_type" list="rule-send-types" maxlength="64" required spellcheck="false" placeholder="custom.name" value="${esc(params.type || '')}"></label>
+      <label class="wr-wide" data-rule-param="send_webhook">Data<textarea name="param_data" rows="4" spellcheck="false" placeholder='{"id": "{{task.id}}"}'>${esc(data)}</textarea></label>
+      <datalist id="rule-send-types">${sendTypes}</datalist>
+    </div>
+    <label>About this Action<input name="note" maxlength="500" value="${esc(rule?.note || '')}"></label>
+    <label><input type="checkbox" name="on"${rule?.enabled === false || rule?.paused ? '' : ' checked'}> On</label>
+    ${rule?.paused ? `<p class="settings-cell-note" data-rule-paused>${RULE_PAUSED}. Save with On ticked to run it again.</p>` : ''}
+    ${rule ? ruleTaskErrorHTML(rule, 'p', 'settings-cell-note err') : ''}
+    <p class="err" role="status" data-rule-error></p>
+    <footer>${rule ? '<button type="button" class="ghost danger" data-rule-delete>Delete</button>' : ''}<button type="submit" class="primary">Save Action</button></footer></form>`;
+  const form = dialog.querySelector('form'), error = dialog.querySelector('[data-rule-error]');
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove());
+  const value = name => String(form.elements[name]?.value || '').trim();
+  // The steps to pick come from the scope's type, else the type condition's; with neither, any step name is typed.
+  const steps = () => {
+    const scopeKind = rule ? rule.scope_kind : form.elements.scope_kind?.value;
+    const id = scopeKind === 'type' ? (rule ? rule.scope_id : value('scope_id')) : value('type');
+    return ruleStepsFor('type', id);
+  };
+  const stepField = (field, label, cur, required) => {
+    const list = steps();
+    if (!list) return `<label>${label}<input name="${field}" list="rule-task-steps" maxlength="80" value="${esc(cur)}"${required ? ' required' : ''}></label>`;
+    const names = cur && !list.includes(cur) ? [cur, ...list] : list;
+    return `<label>${label}<select name="${field}"${required ? ' required' : ''}><option value="">${required ? 'Choose' : 'Any'}</option>${names.map(n => opt(n, n, cur)).join('')}</select></label>`;
+  };
+  const restep = () => {
+    const needs = form.elements.event.value === 'task.step_changed';
+    dialog.querySelector('[data-rule-step]').innerHTML = stepField('step', needs ? 'Step it enters' : 'Step', value('step') || (form.dataset.painted ? '' : first(when.step)), needs);
+    dialog.querySelector('[data-rule-param="move_step"]').innerHTML = stepField('param_step', 'To step', value('param_step') || (form.dataset.painted ? '' : params.step || ''), true);
+    form.dataset.painted = '1';
+    shown();
+  };
+  // Only the chosen Action's fields show; a hidden field is disabled so its `required` does not block Save.
+  const shown = () => {
+    const pick = form.elements.action.value;
+    dialog.querySelectorAll('[data-rule-param]').forEach(el => {
+      const on = el.dataset.ruleParam.split(' ').includes(pick);
+      el.hidden = !on; el.querySelectorAll('input, select, textarea').forEach(input => { input.disabled = !on; });
+    });
+  };
+  form.elements.event.onchange = restep; form.elements.action.onchange = shown; form.elements.type.onchange = restep;
+  if (form.elements.scope_kind) {
+    form.elements.scope_kind.onchange = () => { dialog.querySelector('[data-rule-target]').innerHTML = ruleTargetHTML(form.elements.scope_kind.value, ''); restep(); };
+    dialog.querySelector('[data-rule-target]').onchange = restep;
+  }
+  restep();
+  form.onsubmit = async ev => {
+    ev.preventDefault(); const button = form.querySelector('[type="submit"]'); error.textContent = '';
+    const v = new FormData(form), event = String(v.get('event')), cond = {};
+    for (const key of ['type', 'step', 'tag', 'owner', 'requester']) if (String(v.get(key) || '').trim()) cond[key] = String(v.get(key)).trim();
+    if (event === 'task.step_changed' && !cond.step) { error.textContent = 'Trigger: choose the step a task enters'; return; }
+    button.disabled = true;
+    try {
+      const out = ruleParams(v, params);
+      const body = {event, then: 'action', when: cond, params: out, note: v.get('note') || '', on: v.has('on')};
+      if (rule) ruleReplace((await post('/v2/rules/' + encodeURIComponent(rule.id), {...body, expected_revision: rule.revision})).rule);
+      else {
+        const scope_kind = String(v.get('scope_kind') || kind);
+        ruleReplace({...(await post('/v2/rules', {...body, scope_kind, scope_id: scope_kind === 'team' ? '' : String(v.get('scope_id') || '').trim()})).rule, can_change: true});
+      }
+      dialog.close(); rulesPaint(); toast('Saved');
+    } catch (e) { error.textContent = e.message || 'Could not save the Action'; }
+    finally { button.disabled = false; }
+  };
+  const del = dialog.querySelector('[data-rule-delete]');
+  if (del) del.onclick = async () => {
+    if (!confirm('Delete this Trigger and its Action?')) return;
+    del.disabled = true; error.textContent = '';
+    try {
+      await post('/v2/rules/' + encodeURIComponent(rule.id) + '/delete', {expected_revision: rule.revision});
+      taskSettingsChanged();
+      RULES.rules = RULES.rules.filter(r => r.id !== rule.id); dialog.close(); rulesPaint(); toast('Saved');
+    } catch (e) { error.textContent = e.message || 'Could not delete the Action'; del.disabled = false; }
   };
   document.body.appendChild(dialog); dialog.showModal(); form.elements.event.focus();
   return dialog;
