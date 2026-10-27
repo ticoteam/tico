@@ -1,4 +1,4 @@
-//! Job-scoped fallback sessions never replace the conversation's primary provider session.
+//! Quota and capacity fallback sessions never replace the conversation's primary provider session.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

@@ -2244,7 +2244,7 @@ class RunSession(Contract):
 
 
 class SourceContinuation(Contract):
-    # A quota-stopped side session belongs to this job, never the primary conversation session.
+    # A source-stopped side session belongs to this job, never the primary conversation session.
     thread_id: str = Field(min_length=1, max_length=1000)
     runtime: str = Field(min_length=1, max_length=80)
     harness: str = Field(min_length=1, max_length=80)

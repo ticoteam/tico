@@ -378,7 +378,7 @@ the run is limited as above. A limit is named by the login that returned it: the
 Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
 or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
 API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
-quota never holds or extends the bot's own login, nor the reverse. A quota-stopped fallback on a runner advertising
+quota never holds or extends the bot's own login, nor the reverse. A quota- or capacity-stopped fallback on a runner advertising
 `source_continue_v1` keeps its confirmed provider thread under that job. The next claim carries `source_continuation`
 (provider, model, profile and session-clear epoch) beside `continue_thread`; the runner requires that exact session,
 even after a runner restart. A changed login, cleared epoch or missing session never starts a fresh replay. The primary

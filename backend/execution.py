@@ -853,7 +853,7 @@ def capacity_continuation(c, job_id):
 
 
 def source_continuation(c, job_id):
-    """The actual quota-stopped fallback, bound to its job instead of the primary session."""
+    """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
     row = c.execute("SELECT result_json FROM attempts WHERE job_id=? "
                     "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1",
                     (job_id,)).fetchone()
@@ -3761,11 +3761,6 @@ class Execution:
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
                            **({"check": check["runtime"]} if check else {})}), aid))
-        source = body.source_continuation
-        if source_pause and source and body.fallback and source.harness == body.fallback:
-            computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
-            if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
-                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) WHERE id=?", (aid,))
         quota_continue = False
         if source_pause and not body.fallback and row['thread_id'] and worked:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
@@ -3813,6 +3808,11 @@ class Execution:
             # Recorded as the capacity limit it is, so the bot's cooldown (last_limit) holds the job for the wait.
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
                       "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
+        source = body.source_continuation
+        if (source_pause or continues) and source and body.fallback and source.harness == body.fallback:
+            computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) WHERE id=?", (aid,))
         limited = limited and not busy_acted or continues
         if repeated_capacity:
             limited = False

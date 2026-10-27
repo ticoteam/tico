@@ -372,3 +372,26 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
     with api.app.state.store.read() as c:
         assert c.execute('SELECT thread_id FROM attempts WHERE id=?', (first['id'],)).fetchone()[0] == 'primary-thread'
         assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
+
+
+def test_saved_fallback_capacity_uses_its_own_thread_after_the_short_hold(api, monkeypatch):
+    from backend.tests.test_login_holds import two_bots
+    machine = two_bots(api, monkeypatch)
+    caps = ['capacity_continue_v1', 'source_continue_v1']
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': caps}, machine['token'])
+    post(api, 'chat/ops', {'text': 'Continue reading.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'primary-thread'}, machine['token'])
+    seq = events(api, machine, first, [('tool', 'Read'), ('error', 'Selected model is at capacity. Please try a different model.')])
+    saved = {'thread_id': 'capacity-fallback', 'runtime': 'codex', 'harness': 'codex', 'model': 'synthetic',
+             'reasoning_effort': '', 'profile': '', 'epoch': None}
+    post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'continues': True, 'fallback': 'codex',
+          'source_continuation': saved, 'last_seq': seq}, machine['token'])
+    assert claim(api, machine) is None
+    at(monkeypatch, '2026-10-19T01:50:00.000000Z', api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': caps}, machine['token'])
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id'] and again['continue_thread'] == 'capacity-fallback'
+    assert again['source_continuation'] == saved
