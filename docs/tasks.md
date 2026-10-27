@@ -530,7 +530,8 @@ links. A create-task Action accepts `owner`, `title`, optional `body`, `type` an
 the source and keeps it private when the source is private. Wake and webhook Actions retain their recipients' read checks.
 
 An Action failure preserves the triggering task save. Rule reads return `last_error` and `last_error_at`, including
-later webhook delivery failures. Shared error text contains no task content. At the 51st attempt within an hour,
+later webhook delivery failures. A later successful webhook keeps the rule's last failure visible. Shared error
+text contains no task content. At the 51st attempt within an hour,
 the Action pauses: reads return `paused`, `paused_at` and `pause_reason` (`Paused: too many runs`). It stays paused
 until an authorized editor explicitly enables it again; the hourly cap still applies. The Rules list exposes
 `task_triggers`, `task_when_keys` and `task_actions` for editor clients.

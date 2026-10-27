@@ -142,6 +142,39 @@ def test_private_source_uses_author_read_view_and_creates_private_copy(api):
         assert not T.state(c, allowed["id"])["last_error"]
 
 
+def test_wake_action_cannot_disclose_private_source_to_unreadable_bot(api):
+    made = rule(api, "task.done", "wake_bot", {"bot": "cpo", "text": "Secret {{task.body}}"})
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        task = make(c, private=True)
+        assert H.task_private_readable(c, "human:ana", task)
+        assert not H.task_private_readable(c, "bot:cpo", task)
+        H.task_update(c, "human:ana", task["id"], status="done")
+        assert not c.execute("SELECT 1 FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Secret %'").fetchone()
+        assert T.state(c, made["id"])["last_error_at"]
+        assert "Action failed" in history(c, task["id"])[0]["note"]
+        assert H.task(c, task["id"])["status"] == "done"
+
+
+def test_successful_webhook_preserves_last_failure_from_another_task(api):
+    from backend import webhook_delivery as D
+    hook = post(api, "webhooks", {"name": "CRM", "url": "https://hooks.acme.example/crm", "events": ["custom.*"]})["webhook"]
+    made = rule(api, "task.done", "send_webhook", {"webhook": hook["id"], "type": "custom.done"})
+    with api.app.state.store.transaction() as c:
+        for title in ("First work", "Other work"):
+            task = make(c, title)
+            H.task_update(c, "human:ana", task["id"], status="done")
+        sends = [dict(r) for r in c.execute("SELECT * FROM webhook_sends WHERE type='custom.done' ORDER BY rowid")]
+        assert len(sends) == 2
+        c.execute("UPDATE webhook_sends SET state='sending' WHERE type='custom.done'")
+    D.record(api.app.state.store, sends[0], H.now(), 503, "", "unavailable", False, 1)
+    before = get(api, "rules/" + made["id"])["rule"]
+    D.record(api.app.state.store, sends[1], H.now(), 200, "", "", False, 1)
+    after = get(api, "rules/" + made["id"])["rule"]
+    assert "503" in after["last_error"]
+    assert (after["last_error"], after["last_error_at"]) == (before["last_error"], before["last_error_at"])
+
+
 def test_twenty_four_hour_close_runs_closed_actions_without_redoing_done(api, monkeypatch):
     from backend import task_rules
     done_rule = rule(api, "task.done", params={"text": "Finished"})
@@ -176,6 +209,21 @@ def test_fifty_first_attempt_pauses_persistently_without_refusing_task_changes(a
     row = get(api, "rules/" + made["id"])["rule"]
     assert row["paused"] and row["paused_at"] and row["pause_reason"] == "Paused: too many runs"
     assert next(r for r in get(api, "rules")["rules"] if r["id"] == made["id"])["paused"]
+
+
+def test_explicit_enable_resumes_paused_rule_after_hourly_window(api):
+    made = rule(api, "task.done")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO rule_task_state(rule_id,paused_at,pause_reason) VALUES(?,?,?)",
+                  (made["id"], H.shift(H.now(), hours=-2), "Paused: too many runs"))
+    assert get(api, "rules/" + made["id"])["rule"]["paused"]
+    post(api, "rules/" + made["id"], {"expected_revision": made["revision"], "on": True})
+    resumed = get(api, "rules/" + made["id"])["rule"]
+    assert not resumed["paused"] and not resumed["paused_at"] and not resumed["pause_reason"]
+    with api.app.state.store.transaction() as c:
+        task = make(c)
+        H.task_update(c, "human:ana", task["id"], status="done")
+        assert [h["new"] for h in history(c, task["id"])] == [made["id"]]
 
 
 @pytest.mark.parametrize("placement", [None, "Open", "In QA"])
@@ -229,6 +277,29 @@ def test_decline_and_step_action_runs_only_after_final_task_write(api):
         after = H.task(c, task["id"])
         assert after["status"] == "review" and after["step_id"] == next(s["id"] for s in typ["steps"] if s["name"] == "In QA")
         assert moved["id"] in after["note"] and "Must not chain" not in after["note"]
+
+
+def test_department_scope_follows_human_owner_group_and_ancestors(api):
+    with api.app.state.store.transaction() as c:
+        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
+        next(p for p in roster["people"] if p["id"] == "ben")["team"] = "web"
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+    made = rule(api, scope_kind="department", scope_id="engineering")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Human work", "Synthetic body", "human:ben", lint=False, deduplicate=False)
+        other = H.task_create(c, "human:ana", "Outside department", "Synthetic body", "human:cara", lint=False, deduplicate=False)
+        assert [h["new"] for h in history(c, task["id"])] == [made["id"]]
+        assert not history(c, other["id"])
+
+
+def test_task_condition_metadata_does_not_expand_message_rule_conditions(api):
+    metadata = get(api, "rules")
+    assert not {"owner", "requester"} & set(metadata["when_keys"])
+    assert {"owner", "requester"} <= set(metadata["task_when_keys"])
+    for key in ("owner", "requester"):
+        post(api, "rules", {"scope_kind": "team", "event": "*", "then": "wake", "when": {key: "ana"}}, expected=422)
+    rule(api, when={"owner": "ops", "requester": "ana"})
 
 
 def test_invalid_task_trigger_shapes_and_missing_step_are_rejected(api):

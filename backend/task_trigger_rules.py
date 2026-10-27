@@ -88,12 +88,12 @@ def error(conn, rule_id, detail):
 
 def webhook_result(conn, event_id, status):
     """Delivery runs later, after the triggering transaction, and reports safe status only."""
+    # Keep the last failure visible; another delivery's success cannot resolve it.
+    if status is not None and 200 <= status < 300:
+        return
     for row in conn.execute("SELECT rule_id FROM rule_task_runs WHERE webhook_event_id=?", (event_id,)):
-        if status is not None and 200 <= status < 300:
-            conn.execute("UPDATE rule_task_state SET last_error=NULL,last_error_at=NULL WHERE rule_id=?", (row[0],))
-        else:
-            reason = f"HTTP {status}" if isinstance(status, int) else "connection error"
-            error(conn, row[0], f"Action: webhook delivery failed ({reason})")
+        reason = f"HTTP {status}" if isinstance(status, int) else "connection error"
+        error(conn, row[0], f"Action: webhook delivery failed ({reason})")
 
 
 def _history(conn, item, rule, action, result):

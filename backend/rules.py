@@ -161,7 +161,7 @@ WAKE_ALIASES = {"stalled": "stall", "stuck_retry": "stall", "stuck_cause": "stal
                 "held-messages": "backlog", "step_status": "status_check"}
 # `trigger` (an incoming webhook's id) and `type` (its extracted type, a trailing * matches a prefix) are read only for
 # events without a task.
-WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type", "owner", "requester")
+WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type")
 EVENT_WHEN_KEYS = ("trigger", "type")
 # The events without a task, and the only scopes a row for one can have (there is no task and no task type).
 SOURCELESS = frozenset(CAT.sourceless())
