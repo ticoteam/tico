@@ -98,11 +98,11 @@ def test_submit_forwards_exactly_what_the_form_showed_and_keeps_the_secret_on_th
     (request,) = hq.seen
     assert request.method == "POST" and str(request.url) == "https://updates.tico.team/v1/support"
     assert json.loads(request.content) == {"message": "The board will not load", "email": "ana@acme.example",
-                                           "version": "0.2.17", "install_id": form["install_id"]}
+                                           "version": "0.2.17", "install_id": form["install_id"], "source": "person"}
 
     # Without the checkbox: only the message (and the email if one is given).
     file(api, include_ids=False, app_version="0.3.47")
-    assert json.loads(hq.seen[-1].content) == {"message": "The board will not load"}
+    assert json.loads(hq.seen[-1].content) == {"message": "The board will not load", "source": "person"}
     assert file(api, include_ids=False).json()["sent"] == {}
 
 
@@ -380,7 +380,8 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     assert sent["filed_as"] == approver and sent["ticket"]["message"] == REPORT and consumed(api, approval["id"])
     assert sent["ticket"]["sent"]["version"] == "0.2.17" and "secret" not in r.text
     (request,) = hq.seen
-    assert set(json.loads(request.content)) == {"message", "version", "install_id"}    # no email, no diagnostics
+    assert set(json.loads(request.content)) == {"message", "version", "install_id", "source"}    # no email, no diagnostics
+    assert json.loads(request.content)["source"] == "bot_report"        # a bot's report a person approved
     # The approver's ticket: on their Support page, counted for them, not the bot's.
     with api.app.state.store.read() as c:
         assert [tuple(x) for x in c.execute("SELECT actor FROM support_tickets")] == [(approver,)]
@@ -398,7 +399,7 @@ def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the
     approval = draft(api, bot, include_ids=False).json()
     decide(api, approval["id"])
     assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {}
-    assert json.loads(hq.seen[-1].content) == {"message": REPORT}
+    assert json.loads(hq.seen[-1].content) == {"message": REPORT, "source": "bot_report"}
 
 
 def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):  # noqa: F811  (the fixture)
@@ -599,7 +600,7 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     r = api.post("/api/v2/support/feedback", json={"moment": "first_result", "answer": "Good so far"}, headers=signed_in())
     assert r.status_code == 200 and r.json()["answered"]
     sent = json.loads(hq.seen[-1].content)                         # only their words: no IDs, no diagnostics
-    assert sent == {"message": sent["message"], "kind": "feedback"} and sent["message"].endswith("\n\nGood so far")
+    assert sent == {"message": sent["message"], "kind": "feedback", "source": "person"} and sent["message"].endswith("\n\nGood so far")
     assert question() is None
     # A week on, the person is asked once more, but not within 3 days of their last answer.
     with store.transaction() as c:
@@ -626,3 +627,42 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     assert question(riley)["moment"] == "day_7"
     monkeypatch.setenv("TICO_SUPPORT", "off")
     assert question(riley) is None and api.get("/api/v2/config", headers=riley).json()["support_on"] is False
+
+
+def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(environment, hq):
+    """Spec ticket-source.md criteria 1, 3 and 8: the person's own app sends `person` (it never names one), BotOps'
+    `hub support file` says `botops`, nothing else may be claimed, and an HQ that refuses `source` as an unknown field
+    gets the ticket again without it, its message unchanged (BotOps' name stays at its start, which such an HQ reads)."""
+    api = environment()
+    file(api)
+    assert json.loads(hq.seen[-1].content)["source"] == "person"
+    assert "source" not in file(api).json()["sent"]                 # HQ's sorting, not something the person sent
+    file(api, message="[BotOps] Sync fails", source="botops")
+    assert json.loads(hq.seen[-1].content)["source"] == "botops"
+    for claimed in ("bot_report", "health_monitor", "hq_alert", "website", "unknown"):
+        assert file(api, source=claimed).status_code == 422
+    filed = len(hq.tickets)
+
+    hq.fields = {"message", "email", "install_id", "version", "app_version", "kind"}
+    r = file(api, message="[BotOps] Sync fails", source="botops")
+    assert r.status_code == 200, r.text
+    first, again = (json.loads(x.content) for x in hq.seen[-2:])
+    assert first["source"] == "botops" and "source" not in again and again["message"] == "[BotOps] Sync fails"
+    assert len(hq.tickets) == filed + 1
+    # Only that refusal is retried, once.
+    hq.fields, hq.refuse_field, before = None, "source", len(hq.seen)
+    assert 400 <= file(api).status_code < 500 and len(hq.seen) == before + 1
+
+
+def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
+    """Criterion 3: `hub support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+    from clients import hubtools
+    calls = []
+
+    class Api:
+        def post(self, path, body, key=None):
+            calls.append((path, body))
+            return {}
+    monkeypatch.setattr(hubtools, "_as_person", lambda api, ref=None: api)
+    hubtools.support_file(Api(), {"message": "Sync fails"})
+    assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]

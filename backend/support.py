@@ -52,6 +52,9 @@ FRESH_S = 30                 # an open ticket is asked about at most this often
 CLOSED_FRESH_S = 6 * 3600    # a closed one, in case the team reopened it
 LISTED = 50
 HQ_WAIT = 8
+# The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
+# value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
+SOURCES = ("person", "bot_report", "botops", "health_monitor")
 TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f  ‪-‮⁦-⁩]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
@@ -67,6 +70,9 @@ class SupportTicket(Contract):
     diagnostics: str = Field(default="", max_length=64)     # the digest of the bundle the person previewed (backend/diagnostics.py)
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
+    # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
+    # BotOps' `hub support file` says `botops`. It sorts tickets at HQ and grants nothing.
+    source: Literal["person", "botops"] = "person"
 
 
 class FeedbackAnswer(Contract):
@@ -330,9 +336,10 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None):
+    def file(self, who, body, key="", on_filed=None, source=""):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
-        `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it)."""
+        `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
+        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given)."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -350,7 +357,10 @@ class Support:
         # could not keep.
         with self.store.transaction() as c:
             self.vault.cipher.key(c)
-        sent, payload = {}, {"message": message}
+        source = source or body.source
+        if source not in SOURCES:
+            raise ValueError(f"not a support source: {source}")
+        sent, payload = {}, {"message": message, "source": source}
         if email:
             payload["email"] = email
         if body.include_ids:
@@ -364,10 +374,11 @@ class Support:
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
         answer = _ask_hq("POST", "/v1/support", body=payload)
-        if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
-            # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
-            # names its kind in the message instead.
-            for name in ("app_version", "kind"):
+        if answer.status_code == 422 and {"app_version", "kind", "source"} & set(payload) and _refused_field(answer) == "fields":
+            # An HQ from before app_version, kind or source refuses unknown fields; the ticket still goes without them,
+            # and names its kind in the message instead (BotOps' and the Health Monitor's messages already start with
+            # their name, which is how such an HQ reads the source).
+            for name in ("app_version", "kind", "source"):
                 payload.pop(name, None)
                 sent.pop(name, None)
             named = f"[{body.kind.capitalize()}] {message}"
@@ -419,6 +430,10 @@ class Support:
                 raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
             person = Identity(row["decided_by"], "human")
             key = "approval:" + approval_id
+            with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
+                health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
+                    and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+            source = "health_monitor" if health else "bot_report"
             if row["consumed_at"]:
                 with self.store.read() as c:
                     done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
@@ -435,7 +450,7 @@ class Support:
 
             ticket = self.file(person, SupportTicket(message=payload["message"],
                                                      include_ids=payload.get("include_ids", True) is not False),
-                               key, on_filed=spend)
+                               key, on_filed=spend, source=source)
             with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
                 spend(c)
             return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
