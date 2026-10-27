@@ -79,6 +79,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => !document.querySelector('.bcard[data-task-key="tAutomatic cooldown"] .task-builder-notice'));
     assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 1);
     statuses[0] = auto;
+    await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), auto);
     await page.goto('https://tico-ui.test/#/task/Automatic%20cooldown');
     const modal = page.locator('#task-modal');
     await modal.locator('.task-builder-notice').waitFor();
