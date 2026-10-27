@@ -652,6 +652,10 @@ class GoalProposalDecision(Contract):
     target: KpiTarget | None = None      # an Add a KPI suggestion confirmed with the person's own target on the link
 
 
+class GoalProposalReason(Contract):
+    note: str = Field(max_length=1000)   # one line; backend/goals.py add_reason caps it at REASON_MAX after trimming
+
+
 # The company at the top of Goals (backend/company.py): only the fields sent change.
 class CompanyUpdate(Contract):
     vision: str | None = Field(default=None, max_length=4000)

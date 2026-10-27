@@ -991,6 +991,35 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
     return proposal(conn, proposal_id)
 
 
+REASON_MAX = 280         # one line: a tweet's length is room for "no billing yet, don't track revenue" and its why
+
+
+def add_reason(conn, actor, proposal_id, note):
+    """The reason someone adds after turning a suggestion down ("Tell the CEO Bot why?"): theirs alone, once, while
+    the rejection has none. One line; the CEO Bot reads it before suggesting again (hub proposal list --status rejected)."""
+    H._writer(conn, actor)
+    row = proposal(conn, proposal_id)
+    if not row:
+        H.refuse(conn, actor, "not-found", f"no proposal {proposal_id}")
+    if row["status"] != "rejected":
+        H.refuse(conn, actor, "state", f"Only a suggestion that was turned down takes a reason; this one is {row['status']}")
+    if row["decided_by"] != actor:
+        H.refuse(conn, actor, "identity", "Only the person who turned the suggestion down adds its reason")
+    if row["decision_note"]:
+        H.refuse(conn, actor, "duplicate", "It already has a reason; a reason is added once")
+    text = " ".join(str(note or "").split())
+    if not text:
+        H.refuse(conn, actor, "lint", "The reason is empty; leave the box instead, and the suggestion stays turned down")
+    if len(text) > REASON_MAX:
+        H.refuse(conn, actor, "lint", f"A reason is one line of at most {REASON_MAX} characters, not {len(text)}")
+    # Checked again in the write: two Sends at once save one reason, never the second over the first.
+    if conn.execute("UPDATE goal_proposals SET decision_note=? WHERE id=? AND status='rejected' AND decided_by=? "
+                    "AND decision_note=''", (text, proposal_id, actor)).rowcount != 1:
+        H.refuse(conn, actor, "duplicate", "It already has a reason; a reason is added once")
+    H.event(conn, actor, "goal.reason", proposal_id, {"kind": row["kind"]})
+    return proposal(conn, proposal_id)
+
+
 # ----------------------------------------------------------------------------- seed
 def seed(conn, document, resolve):
     """Import `registry/goals.yaml` once per goal: a goal whose `id` is already in the table is

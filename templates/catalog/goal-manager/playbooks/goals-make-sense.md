@@ -25,8 +25,13 @@ body of the card), and a KPI that could serve as the bet's wrong-if. Say plainly
 bet and why it is still worth having.
 
 One proposal per problem, each with a one-sentence reason. Look at pending proposals first and skip a goal that
-already has one. A rejected proposal is not made again unless the goal changed. Proposals are for the goal's owner
-to confirm; you do not edit a goal, and `playbooks/README.md` has the payload shapes.
+already has one. Before suggesting on a goal, read its rejected suggestions and their reasons
+(`hub proposal list --status rejected --goal <id>`, field `decision_note`). Make no suggestion a reason rules out, even
+after the goal's words change; when a new suggestion touches it, say in its reason how it differs. A reason can rule
+a suggestion out on any goal ("no billing yet, don't track revenue"), so read them all once at the start of the pass
+(`hub proposal list --status rejected`). A rejected suggestion is never made again in the same words. A "no" the owner
+gave in chat is stored the same way (`playbooks/owner-chat.md`). Proposals are for the goal's owner to confirm; you do
+not edit a goal, and `playbooks/README.md` has the payload shapes.
 
 **Why lines** (above Passive, or at Passive when the owner asks for them): read the vision with `hub strategy show`
 (`hub goal company` answers the same). While it is empty, propose none (above Passive the server is already asking the owner for it; at Passive, tell them in chat). Otherwise, for each live goal with no `bet_id`, whose `why` is

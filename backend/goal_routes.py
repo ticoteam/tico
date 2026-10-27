@@ -195,6 +195,30 @@ def install(app, store, auth, mutate, settings):
         record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] and hidden else None
         return bool(record) and record["owner"] in hidden
 
+    def reason_hidden(c, p, hidden):
+        """Whether a turned-down suggestion's reason is kept from this reader: one who may not read a bot it is about,
+        the goal's or the measure's (kpi_hidden hides the suggestion with it), a reused measure's (whose card shows
+        "a measure you cannot see") or the owner a new measure would have."""
+        if not hidden:
+            return False
+        goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
+        if kpi_hidden(c, p, hidden) or (goal and goal["owner"] in hidden):
+            return True
+        pl = p.get("payload") or {}
+        if p["kind"] != "goal_kpi":
+            return False
+        used = K.kpi(c, pl["kpi_id"]) if pl.get("kpi_id") else None
+        named = str(pl.get("owner") or "")
+        return bool(used and used["owner"] in hidden) or bool(named) and (named in hidden or "bot:" + named in hidden)
+
+    def reason_view(c, who, p, hidden):
+        """A suggestion as this reader may read its reason: none from a bot they may not read, and `may_reason`, whether
+        they may still add one (the person who turned it down, on their own click, while it has none)."""
+        kept = p["status"] == "rejected" and reason_hidden(c, p, hidden)
+        may = (p["status"] == "rejected" and not p.get("decision_note") and p.get("decided_by") == who.actor
+               and who.role in ("owner", "human") and not who.via and not kept)
+        return {**p, **({"decision_note": ""} if kept else {}), "may_reason": may}
+
     def readable_kpis(views, hidden):
         """A goal's KPI lines without the ones whose owner the reader may not read, as kpi_or_404 hides them: a
         goal the reader sees may still be measured by a bot's KPI they may not read."""
@@ -261,6 +285,11 @@ def install(app, store, auth, mutate, settings):
             names = hidden_names(c, hidden)
             out["events"] = [e for e in out["events"] if not any(names_any(e.get(k), names) for k in ("old", "new", "note"))]
             scrub_status(out, names)
+            # The reject's history line carries the reason it was given: kept from a reader who may not read its bot.
+            kept = {p["decision_note"].strip() for p in G.proposals(c, "rejected", goal_id=row["id"])
+                    if p["decision_note"] and reason_hidden(c, p, hidden)}
+            out["events"] = [{**e, "note": ""} if e.get("field") == "proposal" and (e.get("note") or "").strip() in kept
+                             else e for e in out["events"]]
         return out
 
     def refuse_bot_why(who):
@@ -924,8 +953,9 @@ def install(app, store, auth, mutate, settings):
                 record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
                 if (goal and goal["owner"] in hidden) or (record and record["owner"] in hidden):
                     continue
-                rows.append({**p, "goal_title": goal and goal["title"], "kpi_name": record and record["name"],
-                             "card": G.card(c, p, hidden, company_editor(who)), "may_decide": decider(c, who, p)})
+                rows.append({**reason_view(c, who, p, hidden), "goal_title": goal and goal["title"],
+                             "kpi_name": record and record["name"], "card": G.card(c, p, hidden, company_editor(who)),
+                             "may_decide": decider(c, who, p)})
             return {"proposals": rows}
 
     @app.post("/api/v2/goal-proposals")
@@ -973,7 +1003,27 @@ def install(app, store, auth, mutate, settings):
                     named = (item.get("payload") or {}).get("owner")
                     named = (G.COMPANY if named == G.COMPANY else H.resolve_actor(c, named)) if named else None
                     refuse_exposed(c, goal, named or goal["owner"])
-            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
-                                         moves=body.moves,
-                                         target=body.target.model_dump() if body.target else None)}
+            done = G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
+                            moves=body.moves, target=body.target.model_dump() if body.target else None)
+            return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/goal-proposals/{pid}/note")
+    def proposal_reason(request: Request, pid: str, body: M.GoalProposalReason):
+        """After "No, leave it": the person who turned the suggestion down tells the CEO Bot why, in one line, once."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            item = G.proposal(c, pid)
+            if not item or not strategy_visible(who, item):
+                raise Problem("not_found", "Unknown proposal", 404)
+            if who.role not in ("owner", "human") or who.via:
+                raise Problem("forbidden", "The person who turned the suggestion down adds its reason, on their own click",
+                              403)
+            hidden = hidden_owners(c, who)
+            if reason_hidden(c, item, hidden):
+                # Its reason is kept from them (criterion 14), so they get no box to write one either.
+                raise Problem("forbidden", "This suggestion is about a bot you may not read, so its reason is not "
+                              "yours to add", 403)
+            return {"proposal": reason_view(c, who, G.add_reason(c, who.actor, pid, body.note), hidden)}
         return mutate(request, body, work)

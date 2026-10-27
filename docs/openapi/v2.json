@@ -12912,6 +12912,77 @@
         ]
       }
     },
+    "/api/v2/proposals/{pid}/note": {
+      "post": {
+        "summary": "After a reject, the person who turned the suggestion down adds one line on why (at most 280 characters), once, while it has none; a pending or confirmed suggestion, anyone else, a second reason or an empty one is refused. The CEO Bot reads it before suggesting again",
+        "operationId": "addGoalProposalReason",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalProposalReason"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalProposalResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
     "/api/v2/relay": {
       "get": {
         "summary": "The Gateway key, how many relay addresses exist, the last pull, the last problem and what waits at the Gateway",
@@ -26915,6 +26986,21 @@
         ],
         "additionalProperties": true
       },
+      "GoalProposalReason": {
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "note"
+        ],
+        "title": "GoalProposalReason"
+      },
       "GoalProposalResult": {
         "type": "object",
         "properties": {
@@ -27014,6 +27100,10 @@
           "may_decide": {
             "type": "boolean",
             "description": "Whether the caller may confirm or reject it"
+          },
+          "may_reason": {
+            "type": "boolean",
+            "description": "Whether the caller may still add the reason it was turned down: they turned it down, and it has none"
           }
         },
         "required": [

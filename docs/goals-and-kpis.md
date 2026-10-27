@@ -252,6 +252,9 @@ Pending proposals appear under **Needs you** on the Goals page for the human who
 waits on its goal. To confirm a Why with your own words, send `why` with the decision:
 `{"decision": "confirm", "why": "..."}`.
 
+After **No, leave it**, the card offers one optional line, "Tell the CEO Bot why?": the CEO Bot reads it before it suggests
+again, and it is shown only to people who may read the goal's bot (and the measure's).
+
 ### What needs a person is a task
 
 Each thing under **Needs you** is a task the CEO Bot asks of the person who must act, so it also shows in
@@ -389,6 +392,7 @@ The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 | `GET/POST /api/v2/kpis/{id}/readings` | the readings (`?effective=true` leaves out corrected ones); post one |
 | `GET /api/v2/bots/{bot}/kpis` | a bot's automatic KPIs |
 | `GET/POST /api/v2/proposals`, `POST .../{id}/decide` | list, propose, confirm or reject |
+| `POST /api/v2/proposals/{id}/note` | after a reject, its decider adds one line (up to 280 characters) on why, once |
 | `GET/POST /api/v2/company` | read the Vision and Description (with whether you may edit); save them (owner). Kept for older clients: the vision now lives on the [Strategy](strategy.md) page |
 | `GET /api/v2/company/history` | every change to the Vision and Description, newest first, with who and when |
 | `POST /api/v2/goals/{id}/why` | set a goal's Why (`{"why": "..."}`; empty clears it); a person who may change the goal |

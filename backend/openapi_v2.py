@@ -506,6 +506,10 @@ STABLE = [
      "An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. "
      "A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what "
      "can't be done comes back as a new recovery saying why", "GoalProposalResult"),
+    ("/api/v2/proposals/{pid}/note", "post", "Goals", "addGoalProposalReason",
+     "After a reject, the person who turned the suggestion down adds one line on why (at most 280 characters), once, "
+     "while it has none; a pending or confirmed suggestion, anyone else, a second reason or an empty one is refused. "
+     "The CEO Bot reads it before suggesting again", "GoalProposalResult"),
     ("/api/v2/kpis", "get", "KPIs", "listKpis",
      "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs", "KpiList"),
     ("/api/v2/kpis", "post", "KPIs", "createKpi",
@@ -1090,7 +1094,9 @@ SCHEMAS = {
                               "an Add a KPI suggestion's measure {name, definition, source_note, unit, direction, existing} "
                               "and target_label; a new target's now_label and target_label; a new definition's or wording's "
                               "changes [{label, now, proposed}]"},
-                        may_decide={"type": "boolean", "description": "Whether the caller may confirm or reject it"}),
+                        may_decide={"type": "boolean", "description": "Whether the caller may confirm or reject it"},
+                        may_reason={"type": "boolean", "description": "Whether the caller may still add the reason it "
+                                    "was turned down: they turned it down, and it has none"}),
     "GoalView": obj({}, required=["kpis", "children", "chain", "tasks", "events", "checkins", "proposals"],
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),
                     events=items({"type": "object"}), checkins=items(ref("GoalCheckinView")), proposals=items(ref("GoalProposalView"))),

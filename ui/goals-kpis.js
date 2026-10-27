@@ -149,9 +149,39 @@ function kpiTargetKinds(form) {
 // The yes / no row every suggestion card ends with, shared with the strategy cards: yes first, saying what it does, then
 // "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons. `decide` is what
 // the yes button sends: a one-button card that changes nothing ("Got it" on a strategy change the draft holds) rejects.
-function propDoHtml(p, {yes, no = 'No, leave it', line = '', decide = 'confirm'}) {
+// `reason`: once no has rejected it, the card offers a line on why (propLeftHtml), which the CEO Bot reads.
+function propDoHtml(p, {yes, no = 'No, leave it', line = '', decide = 'confirm', reason = false}) {
   if (!p.may_decide) return '';
-  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
+  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject"${reason ? ' data-prop-reason' : ''}>${esc(no)}</button>` : ''}</div>`;
+}
+// What a card asking a reason becomes after no (already rejected, in one click): one line, a one-line box and Send.
+// Sent, the reason is the suggestion's decision note (POST /v2/proposals/{id}/note, once, by whoever said no), read by
+// the CEO Bot before it suggests again; left, nothing more happens. The server's cap (backend/goals.py REASON_MAX).
+const PROP_REASON_MAX = 280;
+const propCeo = () => { const name = ceoBotName(); return name === 'CEO Bot' ? 'the CEO Bot' : name; };
+function propLeftHtml() {
+  return `<form class="kpi-prop-left" data-prop-left novalidate><span class="kpi-prop-left-k">Left as it is. Tell ${esc(propCeo())} why? (optional)</span>
+    <input type="text" name="note" maxlength="${PROP_REASON_MAX}" autocomplete="off" aria-label="Why you left it (optional)" placeholder="One line, e.g. no billing yet">
+    <button class="primary" type="submit">Send</button><span class="kpi-prop-left-err" role="alert" hidden></span></form>`;
+}
+function bindPropLeft(li, after) {
+  const form = li.querySelector('[data-prop-left]'), err = form.querySelector('.kpi-prop-left-err');
+  form.elements.note.focus();
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const note = form.elements.note.value.trim(), send = form.querySelector('button[type=submit]');
+    if (!note) return;                  // an empty box is a reason left out: the rejection stands as it is
+    send.disabled = true;
+    try {
+      await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/note`, {note});
+      toast(`Sent: ${propCeo()} reads it before it suggests again`);
+      await after();
+    } catch (e) {
+      // The server's refusal, in its words, beside the box (a reason already added, too long, not theirs to add).
+      err.textContent = e.message || 'Could not send the reason'; err.hidden = false;
+      toast(err.textContent, true); send.disabled = false;
+    }
+  };
 }
 // What a suggestion would change, as Now and Proposed: rows [{label, now, proposed}], a label only when there are
 // several. Long text is cut to four lines, with one "Show all" opening both.
@@ -212,7 +242,7 @@ function goalPropHtml(p, extra) {
   } else head = `<b>${esc(p.kind)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}`;
   return `<li class="kpi-prop" data-proposal="${esc(p.id)}" data-prop-kind="${esc(p.kind)}"><div class="kpi-prop-main"><span class="kpi-prop-head">${head}</span>${body}
     ${p.kind === 'flag' ? (p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : '') : why}${more}</div>
-    ${propDoHtml(p, {yes, no, line})}</li>`;
+    ${propDoHtml(p, {yes, no, line, reason: no === 'No, leave it'})}</li>`;
 }
 // ---------------------------------------------------------------- strategy proposals
 // The strategy's live bets, for the names a proposal leaves out (a retire is just {id, status}).
@@ -361,8 +391,15 @@ function bindProposals(root, after) {
       const target = propTarget(li);
       if (target) body.target = target;
     }
-    try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); await after(); }
-    catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; }
+    let out;
+    try { out = await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); }
+    catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; return; }
+    // Rejected already; the card stays as one line asking why, until something draws the list again.
+    if (b.hasAttribute('data-prop-reason') && out?.proposal?.may_reason) {
+      li.classList.add('kpi-prop-was'); li.innerHTML = propLeftHtml(); bindPropLeft(li, after);
+      return;
+    }
+    await after();
   };
 }
 

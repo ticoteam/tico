@@ -115,6 +115,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:28px}
 .kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:34px;padding-top:0;padding-bottom:0}
 .kpi-props{list-style:none;margin:0;padding:0}
+/* After "No, leave it": one line asking why, a one-line box and Send (ui/goals-kpis.js propLeftHtml). */
+.kpi-prop-left{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;width:100%}.kpi-prop-left-k{color:var(--muted)}
+.kpi-prop-left input{flex:1 1 220px;min-width:0;box-sizing:border-box;height:30px;padding:0 9px;font:inherit}.kpi-prop-left button{height:30px}
+.kpi-prop-left-err{flex-basis:100%;font-size:var(--t-sm);overflow-wrap:anywhere}
 .kpi-panel{width:min(600px,calc(100vw - 24px))}
 .kpi-panel .tmodal-body{max-height:calc(88vh - 56px)}
 /* the owner's panel: a sheet on the right (the bottom on a phone) */
@@ -181,6 +185,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .gp-goal>.linkish{margin-left:13px}
   .need-row{min-height:44px}.need-text{white-space:normal;overflow-wrap:anywhere}
   .kpi-prop{flex-direction:column;align-items:stretch}.kpi-prop-do button{flex:1;height:44px}
+  .kpi-prop-left input,.kpi-prop-left button{height:44px;font-size:16px}
   .goal-colour-row{grid-template-columns:1fr}.goal-colour-row input{height:44px;font-size:16px}
   .goal-f textarea{font-size:16px}
   .gp-actions .ghost{flex:1;height:44px}.gp-gline{min-height:44px}
