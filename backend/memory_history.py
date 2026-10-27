@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS bot_memory_seen(
 FOLDERS = ("memory/", "knowledge/")
 DOCUMENTS = ("memory/learnings.md", "memory/decisions.md")
 MAX_DOCUMENT_BYTES = 4_000_000
-# Two documents escaped at up to six bytes per byte, plus 50 escaped MAX_DIFF diffs and metadata.
+# Up to 48 MB of escaped documents + 6 MB of diffs, with 10 MB of headroom for commit metadata.
 MAX_REPORT_BYTES = 64_000_000
 MAX_DIFF = 20_000
 PAGE = 20
@@ -185,7 +185,7 @@ def install_memory_history(app, store, auth, mutate):
         return mutate(request, body, lambda c: {"recorded": record(c, who, bot, body)})
 
     @app.get("/api/v2/bots/{bot}/memory")
-    def history(request: Request, bot: str, before: str = "", limit: int = PAGE):
+    def history(request: Request, bot: str, before: str = "", limit: int = PAGE, include_documents: bool = True):
         """Newest first. `unseen` counts updates after the reader last opened the history."""
         who = request.state.identity
         human_only(who)
@@ -208,7 +208,7 @@ def install_memory_history(app, store, auth, mutate):
                         "shared": bool(r["shared"]), "new": r[column] > seen,
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]
-            return {"updates": updates, "unseen": unseen, "documents": documents(c, bot),
+            return {"updates": updates, "unseen": unseen, "documents": documents(c, bot) if include_documents else {},
                     "document_status": document_status(c, bot),
                     "next_before": rows[limit - 1]["committed"] if len(rows) > limit else None}
 

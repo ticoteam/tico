@@ -42,6 +42,34 @@ const {chromium} = require('playwright');
         await page.locator('[data-learn-close]').click();
       }
     }
+    // The button loads only status. Opening refreshes the actual file; More fetches only history.
+    await page.evaluate(async () => {
+      window.reads = [];
+      const status = {'memory/learnings.md': {oversized: false, updated: '2026-10-27T10:00:00Z'}};
+      const row = subject => ({subject, author: 'ops', when: '2026-10-27T10:00:00Z', files: ['memory/learnings.md']});
+      window.ago = () => 'today';
+      window.get = async url => {
+        reads.push(url);
+        if (url.includes('before=')) return {updates: [row('Older update')], next_before: null};
+        if (url.includes('include_documents=false')) return {documents: {}, document_status: status};
+        return {documents: {'memory/learnings.md': 'Latest copy fetched on open'}, document_status: status,
+          updates: [row('Latest update')], next_before: '2026-10-26T10:00:00Z'};
+      };
+      await botLearningsLoad('ops');
+    });
+    assert.equal((await page.evaluate(() => reads)).length, 1);
+    assert.ok((await page.evaluate(() => reads))[0].includes('include_documents=false'));
+    assert.equal(await page.locator('#bot-learn').isVisible(), true, 'saved status exposes a file without downloading it');
+    await page.locator('#bot-learn').click();
+    await page.locator('[data-learn-more]').click();
+    await page.locator('.learn-row').nth(1).waitFor();
+    const reads = await page.evaluate(() => reads);
+    assert.equal(reads.length, 3);
+    assert.ok(!reads[1].includes('include_documents=false'), 'opening requests current contents');
+    assert.ok(reads[2].includes('include_documents=false'), 'More does not re-download the documents');
+    await page.locator('[data-learn-view="memory/learnings.md"]').click();
+    assert.equal(await page.locator('.learn-body .md').innerText(), 'Latest copy fetched on open');
+    await page.locator('[data-learn-close]').click();
     // No updates and no saved text: the warning alone still exposes the button and tab.
     await page.evaluate(async () => {
       window.get = async () => ({documents: {}, document_status: {'memory/learnings.md': {oversized: true, updated: ''}}});
@@ -58,7 +86,7 @@ const {chromium} = require('playwright');
     await page.evaluate(() => learnOpen('ops', {documents: {'memory/learnings.md': 'Old server'}}));
     await page.locator('[data-learn-view="memory/learnings.md"]').click();
     assert.equal(await page.locator('.learn-warning').count(), 0);
-    console.log('bot-learnings-oversized: 4 stale/current view pairs, missing copy and old server passed');
+    console.log('bot-learnings-oversized: 4 stale/current view pairs, missing copy, old server and lazy loading/pagination passed');
   } finally {
     await browser.close();
   }

@@ -59,10 +59,16 @@ Only the computer the bot is assigned to may report for it.
 Branches of a shared bot write the same repository, so a lesson one branch pushes shows in every
 branch's history and reaches their next run after the repository syncs.
 
+Update the server before its computers ([updates](updates.md)). Computers normally follow the server's
+release. A newer runner manually connected to an older server may have large reports refused until that
+server is upgraded; the runner retains those reports for retry.
+
 ## API
 
-- `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`, `document_status`, `next_before`. Each path in `document_status` has `oversized` and
-  `updated` (the saved copy’s date, empty if none).
+- `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`,
+  `document_status`, `next_before`. Each path in `document_status` has `oversized` and
+  `updated` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
+  while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
 
 ## Nightly learning run

@@ -11,14 +11,21 @@ async function botLearningsLoad(slug) {
   const button = $('#bot-learn');
   if (!button) return;
   let data;
-  try { data = await get(learnApi(slug)); } catch { return; }          // an older server has no history: no button
+  try { data = await get(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
   if (BOT?.slug !== slug || !button.isConnected) return;
   const docs = data.documents || {};
   if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
-      !Object.values(data.document_status || {}).some(s => s.oversized)) return;
+      !Object.values(data.document_status || {}).some(s => s.oversized || s.updated)) return;
   learnBadge(button, data.unseen);
   button.hidden = false;
-  button.onclick = () => learnOpen(slug, data);
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const current = await get(learnApi(slug));
+      if (BOT?.slug === slug && button.isConnected) learnOpen(slug, current);
+    } catch (e) { toast(e.message); }
+    finally { button.disabled = false; }
+  };
 }
 
 function learnBadge(button, unseen) {
@@ -147,7 +154,7 @@ function learnOpen(slug, data) {
     else if (t.matches('[data-learn-more]')) {
       t.disabled = true;
       try {
-        const page = await get(`${learnApi(slug)}?before=${encodeURIComponent(next)}`);
+        const page = await get(`${learnApi(slug)}?before=${encodeURIComponent(next)}&include_documents=false`);
         updates = updates.concat(page.updates || []); next = page.next_before;
         show('updates');
       } catch (e) { t.disabled = false; toast(e.message); }

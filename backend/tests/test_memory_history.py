@@ -63,6 +63,12 @@ def test_large_documents_round_trip_and_report_allowance_is_runner_route_only(ap
     text = "x" * 2_200_000
     post(api, "bots/ops/memory/report", {"documents": {"memory/learnings.md": text}}, machine["token"])
     assert history(api, "ben-test")["documents"]["memory/learnings.md"] == text
+    # Button loads and history pagination keep dates/status but do not transfer multi-megabyte files.
+    small = api.get("/api/v2/bots/ops/memory?include_documents=false", headers=headers("ben-test"))
+    assert small.status_code == 200
+    assert small.json()["documents"] == {}
+    assert small.json()["document_status"]["memory/learnings.md"]["updated"]
+    assert len(small.content) < 10_000
     # Worst-case JSON escaping, both files at the byte ceiling, and all 50 diffs also fit.
     body = {"documents": {path: "\x01" * MAX_DOCUMENT_BYTES
                           for path in ("memory/learnings.md", "memory/decisions.md")},
