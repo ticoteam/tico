@@ -149,12 +149,14 @@ function tagTaskRows(tasks) {
   return (tasks || []).map(task => `<a class="tag-task" href="#/task/${encodeURIComponent(task.id)}">${esc(task.title)} <span class="muted">${esc(STATUS_WORD[task.status] || task.status)}</span></a>`).join('') || '<div class="empty">No tasks</div>';
 }
 // A new tag is a name and notes; its key (made from the name) and its metadata wait under Advanced. A tag made from a
-// template asks for its key, since that names this instance (release-2026-10-02). Keys stop at 40 characters, as the
-// server cuts them (hubdb._labels): the Key line shows the key that will be saved.
+// template asks for its key, since that names this instance (release-2026-10-02). Keys stop at 40 characters, where the
+// server cuts them (hubdb._labels), and never end in a hyphen: the server strips a posted key's edge hyphens before its
+// cut, so a key made here is saved exactly as the Key line shows it.
 const TAG_KEY_MAX = 40;
 const tagKeyOf = name => String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   .slice(0, TAG_KEY_MAX).replace(/-+$/, '');
-const tagKeyTyped = key => String(key || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/^-+|-+$/g, '').slice(0, TAG_KEY_MAX);
+const tagKeyTyped = key => String(key || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/^-+|-+$/g, '')
+  .slice(0, TAG_KEY_MAX).replace(/-+$/, '');
 const tagKeyFor = form => tagKeyTyped(form.elements.key.value) || tagKeyOf(form.elements.label?.value);
 function tagCreateForm(template = null) {
   const metadata = `<label>Metadata <textarea name="metadata" rows="2">${esc(JSON.stringify(template?.metadata || {}, null, 2))}</textarea></label>`;

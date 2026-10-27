@@ -539,12 +539,13 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/quarterly-roadmap-review-for-the-platfor');
     assert.equal(posted.at(-1).body.key, 'quarterly-roadmap-review-for-the-platfor');
-    // A cut that lands on a word gap drops the hyphen, as the server does, so the key is 39 characters.
+    // A cut that lands on a word gap drops the hyphen, so the key is 39 characters and the server keeps it as posted.
     form = await newTag();
     await form.locator('input[name="label"]').fill('Notes on the customer interviews we ran in spring 2027');
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: notes-on-the-customer-interviews-we-ran');
     await form.locator('input[name="key"]').fill('  Spring Interviews ');
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: spring-interviews', 'a typed key shows as it will be saved');
+    assert.equal(await page.evaluate(() => tagKeyTyped('a'.repeat(39) + ' b')), 'a'.repeat(39), 'a typed key cut at a gap ends without a hyphen');
     await form.locator('button[type="submit"]').click();
     await page.waitForURL('**/#/tag/spring-interviews');
     assert.equal(posted.at(-1).body.key, 'spring-interviews');
