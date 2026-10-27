@@ -724,7 +724,7 @@ def _readable_held(c, who, auth, bot):
     rows = list(c.execute(
         "SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)))
-    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     kept = [r for r in rows if r["id"] in shown
             and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"]))]
@@ -898,7 +898,7 @@ def held_back(c, who, auth, bot, limit=3):
         f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
         f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
         "ORDER BY j.created", (bot,)))
-    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     for row in rows:
         if row["id"] not in shown:
@@ -929,7 +929,7 @@ def unreviewed(c, who, bot):
         "WHERE j.bot=? AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
         "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
         "ORDER BY since", (bot, cutoff)))
-    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     for row in rows:
         if row["id"] not in shown:
@@ -954,7 +954,7 @@ def left_by_keeper(c, who, bot):
         "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
         (bot, H.KEEPER)))
     # One privacy prime (status/operations used to call message_readable per row here).
-    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     return sum(r["id"] in shown and privacy.attempt_readable(c, actor, r["attempt_id"]) for r in rows)
 
@@ -1621,15 +1621,16 @@ def live_tasks(c):
     one task never has two turns of the same bot at once.
 
     Cached for the read snapshot: Health `_waiting` / `queued_reasons` and claim paths asked once per slow bot.
+    Frozen: callers share it.
     """
     from . import read_cache
     values = read_cache.cache(c)
     key = "execution.live_tasks"
     if values is not None and key in values:
         return values[key]
-    out = {(r[0], r[1]) for r in c.execute(
+    out = frozenset((r[0], r[1]) for r in c.execute(
         "SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
-        "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
+        "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL"))
     if values is not None:
         values[key] = out
     return out
@@ -1637,14 +1638,14 @@ def live_tasks(c):
 
 def live_lanes(c):
     """{(bot, lane)} with a leased or running attempt. Claim fences and Health `_waiting` ask once per bot; reuse the
-    set for the current read snapshot instead of re-SELECTing and rebuilding it each time."""
+    set for the current read snapshot instead of re-SELECTing and rebuilding it each time. Frozen: callers share it."""
     from . import read_cache
     values = read_cache.cache(c)
     key = "execution.live_lanes"
     if values is not None and key in values:
         return values[key]
-    out = {(r[0], r[1]) for r in c.execute(
-        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    out = frozenset((r[0], r[1]) for r in c.execute(
+        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')"))
     if values is not None:
         values[key] = out
     return out
@@ -2623,7 +2624,7 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
-            if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in json.loads(runner["capabilities_json"] or "[]"):
+            if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in _capability_set(runner["capabilities_json"]):
                 continue        # old strict-primary runners cannot route a saved fallback
             if not continues and continuation_thread(c, row["id"]):
                 continue        # left queued for a runner that continues its thread: this one would start it afresh

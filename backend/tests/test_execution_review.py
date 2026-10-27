@@ -1377,6 +1377,27 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     ben = stopped_issue(api, 'ben-test')
     assert 'saved 1 stopped run for later' in ben['title'] and ben['needs_person'] is False
     assert not ben.get('held_back') and 'Ana only' not in ben['detail']
+    # Each count checks its rows' privacy in one batched pass, the one Ben may not read included.
+    from backend import execution
+    from backend import task_privacy as privacy
+    store, calls, real = api.app.state.store, [], privacy.readable_messages
+
+    def counted(c, actor, messages):
+        rows = list(messages)
+        calls.append(len(rows))
+        return real(c, actor, rows)
+
+    seen = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(privacy, 'readable_messages', counted)
+        for token in ('ana-test', 'ben-test'):
+            who = store.settings.test_identities[token]
+            calls.clear()
+            with store.read_transaction() as c:
+                seen[token] = (execution.held_back(c, who, api.app.state.auth, 'ops')[0],
+                               execution.left_by_keeper(c, who, 'ops'), execution.unreviewed(c, who, 'ops')[0])
+            assert len(calls) == 3 and calls[:2] == [1, 1], calls
+    assert seen['ana-test'][:2] == (1, 1) and seen['ben-test'][:2] == (0, 0), seen
 
 
 def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(api):

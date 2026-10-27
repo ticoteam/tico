@@ -21,16 +21,11 @@ def identity(c, runner, profile):
 
 
 def display_names(c):
-    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins)."""
-    out = {}
-    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE 'subscription:%'"):
-        try:
-            value = json.loads(row['value_json'] or '{}')
-        except ValueError:
-            value = {}
-        if isinstance(value, dict) and value.get('display_name'):
-            out[row['key']] = value['display_name']
-    return out
+    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins), from the
+    subscription rows Operations' profiles already read in this snapshot."""
+    from .subscriptions import subscription_meta
+    return {key: value['display_name'] for key, value in subscription_meta(c).items()
+            if key.startswith('subscription:') and value.get('display_name')}
 
 
 def usage_label(c, sid):

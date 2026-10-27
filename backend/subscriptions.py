@@ -60,14 +60,22 @@ def weekly_key(runner, profile, runtime):
 
 
 def subscription_meta(c):
-    """{key: dict} for every subscription* registry row in one pass (Operations profiles listing)."""
+    """{key: dict} for every subscription* registry row in one pass, once per read snapshot (Operations profiles and
+    renamed logins). A key range, not LIKE, so the primary key is used. Callers only read it."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is not None and "subscriptions.meta" in values:
+        return values["subscriptions.meta"]
     out = {}
-    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE 'subscription%'"):
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key>='subscription' "
+                         "AND key<'subscriptioo'"):
         try:
             value = json.loads(row['value_json'] or '{}')
         except ValueError:
             value = {}
         out[row['key']] = value if isinstance(value, dict) else {}
+    if values is not None:
+        values["subscriptions.meta"] = out
     return out
 
 
@@ -81,7 +89,7 @@ def reported_runtimes(c, runner, profile, raw, meta=None):
         return metadata(c, key)
 
     runtimes = json.loads(raw or '{}')
-    cutoff = lookup(f'subscription-reading-after:{runner}:{profile}')
+    cutoff = lookup(refresh.signin_key(runner, profile))
     for runtime, state in runtimes.items():
         reported = weekly_snapshot(state.get('weekly'))
         manual = weekly_snapshot(lookup(weekly_key(runner, profile, runtime)))

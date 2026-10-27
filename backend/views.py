@@ -141,30 +141,11 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     return rows
 
 
-def active_assigned_by_runner(c):
-    """{runner_id: {non-archived bot, ...}} once per read snapshot.
-
-    `computer_details` (Health / `/computers`) used to SELECT assignments once per computer.
-    """
-    from . import read_cache
-    values = read_cache.cache(c)
-    key = "views.active_assigned_by_runner"
-    if values is not None and key in values:
-        return values[key]
-    out = {}
-    for row in c.execute("SELECT a.runner_id, a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "WHERE b.state<>'archived'"):
-        out.setdefault(row["runner_id"], set()).add(row["bot"])
-    if values is not None:
-        values[key] = out
-    return out
-
-
 def computer_details(c, row, who, auth):
     value = dict(row)
     readiness = readiness_document(value.get("readiness_json"))
     access = auth.bot_accesses(c, who)
-    assigned = active_assigned_by_runner(c).get(row["id"]) or set()
+    assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
     shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {bot: {k: v for k, v in report.items() if k != "tools"}
                          for bot, report in readiness.get("bots", {}).items()
@@ -194,14 +175,21 @@ def subscription_login(runtime, detail):
 def assignments_by_runner(c):
     """One pass of assignments: {runner_id: [bot, ...]} ordered, and {runner_id: {non-archived bots}}.
 
-    Operations and Computers listing used to SELECT assignments once (or twice) per computer.
+    Operations and Computers listing used to SELECT assignments once (or twice) per computer. Cached for the read
+    snapshot (`computer_details` asks once per computer); callers only read it.
     """
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is not None and "views.assignments_by_runner" in values:
+        return values["views.assignments_by_runner"]
     ordered, active = {}, {}
     for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "ORDER BY a.bot"):
         ordered.setdefault(row["runner_id"], []).append(row["bot"])
         if row["state"] != "archived":
             active.setdefault(row["runner_id"], set()).add(row["bot"])
+    if values is not None:
+        values["views.assignments_by_runner"] = (ordered, active)
     return ordered, active
 
 
@@ -1608,7 +1596,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     chain = TR.prime_ancestry(c, [row["id"] for row in cards])
     chain |= {row["task_id"] for row in raw["approvals"] if row.get("task_id")}
     H.prime_tasks(c, chain)
-    H.prime_messages(c, [row["message_id"] for row in raw["approvals"]])
+    # H.needs_you already read every pending approval's message for this snapshot.
     privacy.prime_messages(c, [m for row in raw["approvals"]
                                if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
