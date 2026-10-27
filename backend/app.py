@@ -326,6 +326,11 @@ def create_app(settings=None):
         index_stop = threading.Event()
         index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
+        # History rows' read dependencies, settled beside the server (backend/read_deps.py); a read of a row not
+        # settled yet walks its provenance as before.
+        from . import read_deps
+        reads_stop = threading.Event()
+        reads_task = asyncio.create_task(asyncio.to_thread(read_deps.loop, store, reads_stop)) if timers else None
         demo_task = None
         if settings.demo:
             from . import demo
@@ -347,11 +352,14 @@ def create_app(settings=None):
             app.state.doc_sources.stop.set()
             copy_stop.set()
             index_stop.set()
+            reads_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
             await index_task
+            if reads_task:
+                await reads_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:
@@ -668,11 +676,16 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
+                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    setting = (not approves and request.state.identity.via == "assistant"
+                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
                     if not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and assistant_instructed(request.method, request.url.path, raw, decides=bool(approves))):
+                            and (setting or assistant_instructed(request.method, request.url.path, raw,
+                                                                 decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval or answering a bot's "
-                                      "question that the person clearly asked for in this chat runs when you cite their "
+                                      "own. A task change, comment or link, declining an approval, answering a bot's "
+                                      "question or a direct setting (`hub settings set`) that the person clearly asked "
+                                      "for in this chat runs when you cite their "
                                       "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
                                       "(or POST /api/v2/assistant/actions), several actions on one card (path "
                                       "/api/v2/assistant/batch); approving is a card unless the person lets you "
@@ -682,6 +695,15 @@ def create_app(settings=None):
                         with store.read() as c:
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
+                            if setting:
+                                def trial(e, target, body):
+                                    # The route's own rule (repositories.needs_card), tried and rolled back.
+                                    from . import repositories
+                                    with store.transaction() as tc:
+                                        return repositories.card_words(tc, settings, auth, request.state.identity,
+                                                                       target["bot"], body)[0]
+                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial,
+                                                                    settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
@@ -3476,7 +3498,10 @@ def create_app(settings=None):
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
-                                       actor=who.actor)
+                                       actor=who.actor, title=body.title, body=body.body)
+        # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
+        sealed = (not guest and privacy.private_execution(c, source)
+                  and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -3562,6 +3587,12 @@ def create_app(settings=None):
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if sealed:
+            # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
+            H._task_event(c, parent_id, who.actor, "handed", None, owner,
+                          f"Handed to {H.actor_id(owner)} in a private subtask")
+            H._task_event(c, row["id"], who.actor, "sealed", None, who.actor,
+                          f"Filed by {H.actor_id(who.actor)} from private work it does not share")
         joined = blocker_asks.record(c, who.actor, row, blocker_key, joins, asked_of) if blocker_key else None
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
@@ -3616,8 +3647,16 @@ def create_app(settings=None):
         from . import review_gate, step_flow
         # None is reserved for a genuinely unconfigured GitHub integration.
         # If a skipped preflight becomes applicable during mutation, fail closed.
-        if child_title is not None and not review_gate.REVIEW.match(child_title):
-            return {}
+        if child_title is not None:
+            # A child titled for one of the parent board's review steps; a parent this caller cannot read is
+            # refused by the create itself.
+            with store.read() as c:
+                try:
+                    parent = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    return {}
+                if not review_gate.is_review(c, parent, child_title):
+                    return {}
         if child_title is None and step is None and status is None and task_type is None:
             return {}
         with store.read() as c:

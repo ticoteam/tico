@@ -645,7 +645,120 @@ def guest_for(c, who, person, parent):
     return None
 
 
-def require_create(c, who, private, owner, parent, actor=None):
+# ----------------------------------------------------------------------------- a sealed subtask for another bot
+# A private task with no person on it could hand nothing to a bot outside its parties: every create from its runs was
+# refused, so a repair its owner found stranded (Dev 632). Its owning bot (or that bot's manager) may file one private
+# subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
+# or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
+# widen: the refusal names them and the route to them.
+SEALED_ROUTE = "ask them with `hub task question`, or have them file the subtask"
+COPIED_WORDS = 12
+
+
+def _person_on(row):
+    return next((row[k] for k in ("requester", "owner", "guest") if row.get(k) and H.is_human(row[k])), None)
+
+
+def _person_name(c, person):
+    return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
+
+
+def sealed_for(c, who, owner, parent):
+    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (each one the
+    run carries that `owner` cannot read, the parent among them when the run carries it), when that create is a sealed
+    hand-off; None when it is not one, so the create is judged as before. Problem when one of them, or a private task
+    above it, has a person on it: the words name them and the route to them."""
+    if not (parent and who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
+            and H.is_bot(owner or "") and owner != who.actor and H.task_private(c, parent)
+            and H.task_represents(c, who.actor, parent["owner"])):
+        return None
+    kept = {}
+    for tid in attempt_tasks(c, who.attempt_id):
+        row = _task(c, tid)
+        if row and H.task_private(c, row) and not H.task_private_readable(c, owner, row):
+            kept.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
+    from . import task_relations as TR
+    for row in kept.values():
+        if person := _person_on(row):
+            raise Problem("privacy", f"{_person_name(c, person)} is on this private task: {SEALED_ROUTE}", 403)
+        for above in TR.ancestors(c, row["id"]):
+            above = H.task(c, above)
+            if above and H.task_private(c, above) and (person := _person_on(above)):
+                # A task above that the filer cannot read keeps its person's name, and the route goes through the
+                # filer's own requester, who can reach it.
+                if not H.task_private_readable(c, who.actor, above):
+                    raise Problem("privacy", "A person is on a private task above this one: ask "
+                                  f"{row['requester']}, who gave you this task, to file the subtask", 403)
+                raise Problem("privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}",
+                              403)
+    return list(kept.values()) or None
+
+
+def _copied_runs(text):
+    words = re.findall(r"\w+", str(text or "").lower())
+    return {tuple(words[i:i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
+
+
+# A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
+# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as
+# the commit, tree or blob segment of a GitHub link (whose other segments are then judged one by one). A bare hex run,
+# one after a common word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
+SHA = r"[0-9a-f]{40}"
+COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision)\b)[\s:=#@`*]*\b" + SHA + r"\b")
+GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
+
+
+def _without_commits(text):
+    def link(m):
+        parts = m.group(1).split("/")
+        return " ".join(part for i, part in enumerate(parts)
+                        if not (re.fullmatch(SHA, part) and i and parts[i - 1] in ("commit", "commits", "tree", "blob")))
+    return GITHUB_PATH.sub(link, COMMIT_REF.sub(" ", text))
+
+
+# The preview's long run reaches across `/`, `_` and `-`, so a branch, a session or a dated path would read as a secret.
+# A run is let through only when it reads as one of those: each piece between the separators a word, a number or a short
+# token (a word is lowercase or capitalised and a number at most eight digits, as a key's pieces are neither), with at
+# most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
+# A base64 or base64url value split by a separator has long mixed pieces, so it is still judged whole.
+REF_UUID = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")
+REF_PIECE = re.compile(r"[a-z]{0,16}|[A-Z][a-z]{0,15}|[0-9]{0,8}|[A-Za-z0-9]{1,4}")
+REF_ID = re.compile(r"[0-9a-f]{7,12}")
+
+
+def _workflow_ref(run):
+    pieces = re.split(r"[/_-]", REF_UUID.sub("", run))
+    ids = [piece for piece in pieces if not REF_PIECE.fullmatch(piece)]
+    return (len(ids) <= 1 and all(REF_ID.fullmatch(piece) for piece in ids)
+            and any(re.fullmatch(r"[A-Za-z]{3,}", piece) for piece in pieces))
+
+
+def secret_shaped(text):
+    """Whether `text` holds a credential-shaped value: the token patterns and secret fields that mask one in a refusal
+    preview, or a long mixed run that is not a workflow reference (a branch, a session, a dated path)."""
+    from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
+    text = str(text or "")
+    return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
+            or any(_looks_secret(m.group(0)) and not _workflow_ref(m.group(0))
+                   for m in LONG.finditer(_without_commits(text))))
+
+
+def sealed_words(kept, title, body):
+    """Refuse a sealed subtask whose words carry what the other bot may not read: a secret-shaped value, or 12 or more
+    words in a row copied from a private task it is kept from. The refusal names the check, never the text; it is a
+    writing correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
+    text = f"{title or ''}\n{body or ''}"
+    if secret_shaped(text):
+        raise Problem("lint", "This subtask holds a secret-shaped value: take it out, and say only what the repair "
+                              "needs", 422)
+    runs = _copied_runs(text)
+    if runs and any(runs & _copied_runs(f"{r.get('title') or ''}\n{r.get('body') or ''}\n{r.get('note') or ''}")
+                    for r in kept):
+        raise Problem("lint", f"This subtask copies {COPIED_WORDS} or more words in a row from private work the other "
+                              "bot cannot read: say only what the repair needs, in your own words", 422)
+
+
+def require_create(c, who, private, owner, parent, actor=None, title=None, body=None):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
     Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None."""
@@ -654,7 +767,10 @@ def require_create(c, who, private, owner, parent, actor=None):
         raise Problem("privacy", "Private task work cannot create company-visible tasks", 403)
     guest = guest_for(c, who, owner, parent)
     if execution:
-        require_destination(c, who, owner, None, {}, guest=guest)
+        kept = None if guest else sealed_for(c, who, owner, parent)
+        if kept is not None:
+            sealed_words(kept, title, body)
+        require_destination(c, who, owner, None, {}, guest=guest, sealed={r["id"] for r in kept or ()})
         require_destination(c, who, actor or who.actor, None, {}, guest=guest)
     return guest
 
@@ -746,9 +862,10 @@ def tag_readable(c, who, row):
             any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
-def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
+def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
     """Refuse a write whose audience cannot read every private task it carries. `guest` is the (task id, person) the
     write itself makes a guest (guest_for), counted as already made so a dry-run refuses what the write would.
+    `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
     (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
     ids = references(c, refs)
@@ -774,7 +891,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = _task(c, target) if isinstance(target, str) else None
     for row in private:
-        if all(_reads(c, actor, row, guest) for actor in audience):
+        if all(_reads(c, actor, row, guest) for actor in audience if not (actor == to and row["id"] in sealed)):
             continue
         if not (target and H.subtask_flows_up(c, row, target) and all(_reads(c, actor, target) for actor in audience)):
             raise Problem("privacy", "Private task content stays with its requester and current owner", 403)

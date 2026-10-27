@@ -228,6 +228,32 @@ def test_botops_never_clears_or_brings_back_run_workflows_without_a_card(api, bo
     assert get(api, "bots/ops/repositories", "ana-test")["chosen"] == [{"full_name": "Acme/product", "access": "write"}]
 
 
+def test_the_catalogue_classifies_a_repository_change_by_what_it_does_not_only_by_its_body(api, botops, repos):
+    """Review 2 of PR #1700: a kept Run workflows tick comes back with `{"mode": "chosen"}`, which holds no tick; the
+    catalogue tries the change as the person's own click, so it asks for the card the route would make."""
+    from backend.tests.test_mcp import call as mcp
+
+    def ask(value):
+        err, answer = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": value},
+                          ana["token"])
+        assert not err, answer
+        return answer
+    ana = turn(api, botops, person="ana-test", text="Put ops back on its chosen repositories")
+    put(api, "bots/ops/repositories", {"mode": "chosen", "chosen": [FLAG]}, token="ana-test")
+    put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
+    back = ask({"mode": "chosen"})
+    assert back["needs_confirm"] is True and effective(api) == [], back
+    assert back["action"]["description"].startswith("ops: gets write on product. May run workflows in product"), back
+    post(api, f"assistant/actions/{back['action']['id']}/confirm", {}, token="ana-test")
+    assert effective(api) == [FLAG]
+    # Sending again a tick that is on changes nothing the route cards, so the catalogue runs it, as the route does.
+    again = ask({"mode": "chosen", "chosen": [FLAG]})
+    assert "needs_confirm" not in again and effective(api) == [FLAG], again
+    # Taking access away is the route's card too, though the body holds no tick.
+    away = ask({"mode": "own"})
+    assert away["needs_confirm"] is True and effective(api) == [FLAG], away
+
+
 def test_turning_product_repositories_back_on_is_the_owners_card_and_an_admin_is_told_only_the_owner(api, botops, repos):
     from backend.tests.test_mcp import call as mcp
     assert put(api, "bots/ops/repositories", {"mode": "chosen", "create_product_repositories": False},

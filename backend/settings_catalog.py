@@ -4,9 +4,14 @@ setting by its words, read it and change it without guessing a route or a body (
 Each entry (backend/settings_entries.py) names a stable key (`team.rules.admin_sql`), the control's plain name and
 where it sits in Settings, who may change it, its class and the route it writes:
 
-  direct       runs at once, as the person (BotOps acting for them has exactly their rights)
-  confirm      BotOps acting for a person puts it to them as a Confirm card; the person's own call runs at once
-  person       only the person themselves, in Settings: BotOps is told why, with the link to the card
+  direct       runs at once, as the person (BotOps or their Assistant acting for them has exactly their rights)
+  confirm      BotOps or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
+               runs at once
+  person       only the person themselves, in Settings: BotOps or the Assistant is told why, with the link to the card
+
+The Assistant acts for its person with the same entries and classes as BotOps (`ACTING_FOR`). A direct entry runs on the
+person's own words in their own chat (the turn cites their message, as a task action does) while the owner's rule
+"Assistant acts without asking" is on; otherwise it too is a Confirm card in their chat.
 
 `hub settings find|show|set` (clients/hubtools.py) read it here; `set` asks `plan` for the exact request and makes it
 with the requester's rights, so the route's own checks still decide. backend/tests/test_settings_catalog.py fails when a
@@ -16,6 +21,8 @@ Settings card writes to a route no entry covers.
   entry(key)                     the entry, or a 404 naming the nearest keys
   public(e, base)                what a caller sees of an entry, with its card's full link
   plan(c, auth, who, e, value, target)  {"run": {method, path, body}}, the Confirm card, or a refusal naming who may
+  matched(method, path, body)    the entry and target a request is exactly the body of, and its class
+  stored_class(c, method, path, body)  `matched`, a wake-rule update classed with the stored rule it keeps
 """
 import json
 import re
@@ -36,6 +43,8 @@ WHO = {
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")
+# Who acts for a person through the catalogue, with exactly their rights: BotOps, and the person's own Assistant.
+ACTING_FOR = ("botops", "assistant")
 
 
 @dataclass(frozen=True)
@@ -192,7 +201,14 @@ def path_for(e, target, template=None):
         raise Problem("validation", f"{e.name} is set per {e.target}: name one with --{e.target}", 422)
     path = template
     for name in TARGETS:
-        if "{" + name + "}" in path:
+        if "{" + name + "}" in path and name == "id" and path.startswith("repositories/"):
+            # A repository's id is its full name, and the route takes it as two segments: `{owner}/{repo}`.
+            owner, _, repo = str(target[name]).partition("/")
+            if not owner or not repo or "/" in repo:
+                raise Problem("validation", f"{e.name} names a repository as owner/name", 422)
+            from urllib.parse import quote
+            path = path.replace("{id}", quote(owner, safe="") + "/" + quote(repo, safe=""))
+        elif "{" + name + "}" in path:
             from urllib.parse import quote
             # Routine IDs use `<bot>:<routine-key>`; keep the colon in its path segment so Confirm cards can
             # validate the same route string the Settings API accepts without permitting a slash escape.
@@ -263,13 +279,17 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
-def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_words=None):
+def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None, card_direct=False,
+         can_card=None, card_words=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
-    make with the caller's rights; for BotOps acting for a person, a confirm entry's Confirm card (`propose`) or a
-    person-only entry's reason and link. `card_words(c, auth, who, e, body, target)`: the card's plain words, or the
-    refusal the person's own click would get (then no card is made); None when the entry has no words of its own."""
+    make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
+    (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
+    when the owner's rule is off or the turn cites no words of the person's). `can_card(method, path)`: whether that
+    card can carry the route. `card_words(c, auth, who, e, body, target)`: for an entry whose class rests on what the
+    change does to stored state, the change tried as the person's own click: (needs a card, the card's plain words),
+    or the refusal that click would get (then no card is made); None for any other entry."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
-    acting_for = who.via == "botops"
+    acting_for = who.via in ACTING_FOR
 
     def person_only():
         why = e.why or f"{e.name} is changed only by the person themselves"
@@ -302,18 +322,107 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     kind = kind_for(e, class_body)
     if kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
+    tried = card_words(c, auth, who, e, body, target) if card_words and acting_for else None
+    if tried is not None:
+        # What the route itself does with the request: a kept Run workflows tick that comes back with
+        # `{"mode": "chosen"}` needs the card though the body holds no tick, and re-sending a tick that is on doesn't.
+        kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if kind == "confirm" and acting_for:
-        if propose is None:
+    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
+        if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
-        words = card_words(c, auth, who, e, body, target) if card_words else None
+        words = tried and tried[1]
         if words:
             return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
                        f"Change {e.name} ({e.where}) to {json.dumps(parsed)}")
     return {"run": request, "setting": public(e, base), "value": parsed}
+
+
+def _pattern(route):
+    """An entry's route as a regex over the path a request names, one group per target."""
+    out, at = "", 0
+    for m in re.finditer(r"\{(" + "|".join(TARGETS) + r")\}", route):
+        # A repository's id is its full name, `owner/name`: the route takes both (PUT /api/v2/repositories/{owner}/{repo}).
+        one = "[^/]+/[^/]+" if route.startswith("repositories/") and m.group(1) == "id" else "[^/]+"
+        out += re.escape(route[at:m.start()]) + "(?P<" + m.group(1) + ">" + one + ")"
+        at = m.end()
+    return re.compile("/api/v2/" + out + re.escape(route[at:]))
+
+
+_PATTERNS = {}
+
+
+def routed(method, path):
+    """The entries whose route this request names, each with the target its path holds."""
+    from urllib.parse import unquote
+    out = []
+    for e in _entries():
+        pattern = _PATTERNS.get(e.route) or _PATTERNS.setdefault(e.route, _pattern(e.route))
+        m = e.method == method and pattern.fullmatch(str(path or ""))
+        if m:
+            out.append((e, {k: unquote(v) for k, v in m.groupdict().items()}))
+    return out
+
+
+def _without(body, dotted):
+    """The body with the value at `dotted` taken out, and parents left empty dropped; None when it holds none."""
+    if not isinstance(body, dict):
+        return None
+    head, _, rest = dotted.partition(".")
+    if head not in body:
+        return None
+    if not rest:
+        return {k: v for k, v in body.items() if k != head}
+    inner = _without(body[head], rest)
+    if inner is None:
+        return None
+    return {**{k: v for k, v in body.items() if k != head}, **({head: inner} if inner else {})}
+
+
+def matched(method, path, body):
+    """`(entry, target, class)` when this request is exactly what `plan` builds for one entry: its route, its fixed
+    keys and its value at its place, nothing else; else None. A request that sets two settings at once matches none."""
+    for e, target in routed(method, path):
+        if not isinstance(body, dict):
+            continue
+        if e.field:
+            rest = _without(body, e.field)
+            if rest is None or rest != e.extra:
+                continue
+        elif any(body.get(k) != v for k, v in e.extra.items()):
+            continue
+        if e.key in ("rules.wake", "bot.repositories"):
+            # Classed by what the change does to stored state, which this body alone does not show (`stored_class`):
+            # a wake-rule update keeps the stored action and params wherever it leaves them out or sends null
+            # (rules.update); a repository change can keep a Run workflows tick or take access away.
+            return e, target, "stored"
+        return e, target, kind_for(e, body)
+    return None
+
+
+def merged_wake(row, update):
+    """A wake-rule update as the route will save it: its action and params, where it leaves them out or sends null,
+    the stored rule's."""
+    params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
+    return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
+
+
+def stored_class(c, method, path, body, trial=None):
+    """`matched`, with a change classed by what it does to stored state, as `plan` classes it: turning on or editing
+    a stored wake rule that sends outside is person-only however little the body says, and a repository change is a
+    card when `trial(e, target, body)` (the change tried as the person's own click, `repositories.card_words`) says
+    the route would make one; with no trial, always."""
+    found = matched(method, path, body)
+    if not found or found[2] != "stored":
+        return found
+    e, target, _ = found
+    if e.key == "bot.repositories":
+        return e, target, "direct" if trial and not trial(e, target, body) else e.when_held
+    row = c.execute("SELECT then_outcome, params_json FROM rules WHERE id=?", (target["id"],)).fetchone()
+    return e, target, kind_for(e, merged_wake(row, body) if row else body)
 
 
 def install(app, store, auth, settings):
@@ -337,7 +446,7 @@ def install(app, store, auth, settings):
         e = entry(key)
         target = {"bot": bot, "computer": computer, "person": person, "id": id}
         with store.read() as c:
-            allowed = may(c, auth, who, e, target) and not (e.kind == "person" and who.via == "botops")
+            allowed = may(c, auth, who, e, target) and not (e.kind == "person" and who.via in ACTING_FOR)
         read = None
         if e.read and (not e.target or target.get(e.target)):
             route, _, pointer = e.read.partition("#")
@@ -347,12 +456,24 @@ def install(app, store, auth, settings):
     @app.post("/api/v2/settings/catalog/{key}/plan")
     def settings_plan(request: Request, key: str, body: M.SettingsPlan):
         """The request that sets this entry, checked against the caller first: `run` (make it with your rights), a Confirm
-        card for BotOps acting for a person on a confirm entry, or a refusal that names who may change it."""
+        card for BotOps or the Assistant acting for a person on a confirm entry, or a refusal that names who may change
+        it. The Assistant's direct change runs only on the person's cited words while "Assistant acts without asking" is
+        on (the same check its write then meets); otherwise it is a card in their chat."""
+        from .assistant import valid_operation
         who = request.state.identity
         auth.domain(who)
         e = entry(key)
         target = {"bot": body.bot or "", "computer": body.computer or "", "person": body.person or "", "id": body.id or ""}
-        propose = getattr(app.state, "botops_propose", None)
+        assistant = who.via == "assistant" and not who.confirmed
+        asked = request.headers.get("x-tico-on-behalf-of")
+        if assistant:
+            made = getattr(app.state, "assistant_propose", None)
+            propose = made and (lambda c, who, method, path, data, summary, what=None:
+                                made(c, who, method, path, data, summary[:300], asked, what=what))
+        else:
+            made = getattr(app.state, "botops_propose", None)
+            propose = made and (lambda c, who, method, path, data, summary, what=None:
+                                made(c, who, method, path, data, summary[:300], what=what))
         with store.transaction() as c:
             def effective_wake_update(c, auth, who, rule_id, update):
                 from . import rules
@@ -361,8 +482,16 @@ def install(app, store, auth, settings):
                 if row["revision"] != update.get("expected_revision"):
                     from .store import Problem
                     raise Problem("version_conflict", "The rule changed; refresh before saving", 409)
-                params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
-                return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
+                return merged_wake(row, update)
+
+            card_direct = False
+            if assistant:
+                from . import assistant as assistant_mod, team_rules
+                try:
+                    cited = bool(asked) and bool(assistant_mod.instruction(c, who, asked))
+                except Problem:
+                    cited = False
+                card_direct = not (cited and team_rules.load(c)["assistant_direct"])
 
             def words(c, auth, who, e, body, target):
                 if e.key == "bot.repositories":
@@ -370,7 +499,8 @@ def install(app, store, auth, settings):
                     return repositories.card_words(c, settings, auth, who, target["bot"], body)
                 return None
 
-            return plan(c, auth, who, e, body.value, target, settings.public_url,
-                        propose=propose and (lambda c, who, method, path, data, summary, what=None:
-                                             propose(c, who, method, path, data, summary[:300], what=what)),
-                        effective_update=effective_wake_update, card_words=words)
+            return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
+                        effective_update=effective_wake_update, card_direct=card_direct,
+                        can_card=lambda method, path: valid_operation(method, path, settings,
+                                                                      "assistant" if assistant else "botops"),
+                        card_words=words)

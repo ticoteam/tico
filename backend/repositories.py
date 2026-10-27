@@ -41,6 +41,14 @@ def save_metadata(c, key, value):
               (key, json.dumps(value)))
 
 
+def release_cleared_overrides(c):
+    """Hand rows whose Settings command was cleared before a clear released them back to their tico.json /
+    conductor.json: they kept setup_source 'settings' with no command, so every sync skipped them. A save can no longer
+    make such a row, so this runs on every start and only ever matches rows from before."""
+    c.execute("UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
+              "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''")
+
+
 def migrate(c):
     if metadata(c, 'repositories-access-migrated').get('done'):
         return
@@ -383,23 +391,39 @@ def preview_change(c, settings, actor, bot, body):
         return None
 
 
-def tried(c, bot, update, org, actor, name, owner=False):
+def needs_card(result):
+    """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
+    class for it): it gives what only their own click may (`started`), or takes something away."""
+    return bool(result.get('workflows_started') or result.get('workflow_edits_started')
+                or result.get('product_creation_started') or result.get('stopped') or result.get('creation_stopped')
+                or result.get('workflows_stopped') or result.get('workflow_edits_stopped')
+                or result.get('product_creation_stopped'))
+
+
+def trial(c, bot, update, org, actor, owner=False):
     """The change made as the person's own click on its card would make it (`owner`: the Owner's), then rolled back:
-    its plain words (`plain_change`), or the refusal that click would get."""
+    `access()` before it and what it did (`set_access` and `started`), or the refusal that click would get."""
     c.execute('SAVEPOINT repo_preview')
     try:
         before = access(c, bot, org)
         result = set_access(c, bot, update, org, actor, team_list=True, owner=owner)
-        return plain_change(name, before, {**result, **started(before, access(c, bot, org))})
+        return before, {**result, **started(before, access(c, bot, org))}
     finally:
         c.execute('ROLLBACK TO repo_preview')
         c.execute('RELEASE repo_preview')
 
 
+def tried(c, bot, update, org, actor, name, owner=False):
+    """`trial` in plain words (`plain_change`)."""
+    return plain_change(name, *trial(c, bot, update, org, actor, owner))
+
+
 def card_words(c, settings, auth, who, bot, body):
-    """For a catalogue Confirm card (settings_catalog.plan): the card's plain words, after trying the change as the
-    person's own click; a change that click could not make (no write access for Run workflows, an admin turning Create
-    product repositories on) is refused now, so no card is made for it."""
+    """For the settings catalogue (settings_catalog.plan), the change BotOps would make for a person tried as that
+    person's own click: (whether it needs their Confirm card, the card's plain words). It needs one exactly when
+    `bot_set` would make one, a kept Run workflows or Edit workflow files tick coming back included. A change that
+    click could not make (no write access for either tick, an admin turning Create product repositories on) is refused
+    now, so no card is made for it."""
     if auth.system_bot(bot) and who.role != 'owner':
         raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
     try:
@@ -409,7 +433,8 @@ def card_words(c, settings, auth, who, bot, body):
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
     name = (H.bot(c, bot) or {}).get('display_name') or bot
-    return tried(c, bot, update, org, who.actor, name, owner=who.role == 'owner')
+    before, result = trial(c, bot, update, org, who.actor, owner=who.role == 'owner')
+    return needs_card(result), plain_change(name, before, result)
 
 
 def plain_change(name, before, result):
@@ -792,7 +817,10 @@ def install(app, store, service):
             if body.enabled is not None:
                 c.execute('UPDATE repositories SET enabled=? WHERE full_name=?', (int(body.enabled), name))
             if 'setup_command' in body.model_fields_set:
-                c.execute("UPDATE repositories SET setup_command=?,setup_source='settings' WHERE full_name=?", (body.setup_command, name))
+                # A cleared command hands the row back to the repository's tico.json / conductor.json on the next sync.
+                command = (body.setup_command or '').strip() or None
+                c.execute('UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
+                          (command, 'settings' if command else None, name))
             c.execute('UPDATE repositories SET updated=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
@@ -843,9 +871,7 @@ def install(app, store, service):
                 raise
             gains = result.get('workflows_started') or result.get('workflow_edits_started') \
                 or result.get('product_creation_started')
-            if not gains and not result['stopped'] and not result.get('creation_stopped') \
-                    and not result.get('workflows_stopped') and not result.get('workflow_edits_stopped') \
-                    and not result.get('product_creation_stopped'):
+            if not needs_card(result):
                 c.execute('RELEASE repo_narrowing')
                 return result
             c.execute('ROLLBACK TO repo_narrowing')

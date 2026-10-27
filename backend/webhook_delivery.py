@@ -259,6 +259,8 @@ def record(store, send, timestamp, status, head, error, abort, ms):
             return                              # deleted or retried by hand while the post was out; the attempt stays logged
         attempts = now_row["attempts"] + 1
         shown = error or f"HTTP {status}"
+        from . import task_trigger_rules
+        task_trigger_rules.webhook_result(c, send["event_id"], status)
         if status is not None and 200 <= status < 300:
             c.execute("UPDATE webhook_sends SET state='delivered', attempts=?, last_status=?, last_error='', "
                       "delivered_at=?, next_attempt=?, claimed_at=NULL WHERE id=?", (attempts, status, now, now, send["id"]))

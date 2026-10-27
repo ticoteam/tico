@@ -243,7 +243,7 @@ def task_dry_run(c, auth, who, body):
         try:
             parents = [r.task for r in body.relations if r.kind == "parent"]
             parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None
-            privacy.require_create(c, who, body.private, target, parent)
+            privacy.require_create(c, who, body.private, target, parent, title=body.title, body=body.body)
         except Problem as exc:
             problems.append(exc.detail)
     if body.roles:

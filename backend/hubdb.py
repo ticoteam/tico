@@ -1348,8 +1348,14 @@ def private_task_write(fn):
                             private_tasks_default(conn, actor) or private_tasks_default(conn, target))
                            or parent and task_private(conn, parent))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
+        from . import task_trigger_rules
         try:
-            return fn(*args, **kwargs)
+            with task_trigger_rules.pending(conn):
+                result = fn(*args, **kwargs)
+            # Actions may have changed the task after the original write completed.
+            if fn.__name__ in ('task_create', 'task_update', 'task_close') and isinstance(result, dict) and result.get('id'):
+                result = {**result, **(task(conn, result['id']) or {})}
+            return result
         except Refused as exc:
             exc.private = PRIVATE_WRITE.get()
             raise
@@ -2493,11 +2499,12 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
-    watcher's for a Monitor. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
+    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2505,14 +2512,17 @@ def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
                      "WHERE b.slug=?", (actor_id(target),))
     if row and resolve_harness(_json(row["config_json"], {}) or {}) in SYNCED_HARNESSES:
         name = row["display_name"] or actor_id(target)
-        refuse(conn, actor, "external-bot", f"{name} works on another platform and only syncs its chat here, so it "
-               "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
+        return ("external-bot", f"{name} works on another platform and only syncs its chat here, so it "
+                "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
     if row:
         from . import profiles
-        found = profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
-                                 actor, title, parent, routine, owner=target)
-        if found:
-            refuse(conn, actor, *found)
+        return profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
+                                actor, title, parent, routine, owner=target)
+
+
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+        refuse(conn, actor, *found)
 
 
 def recruiting(conn, target):
@@ -3521,6 +3531,11 @@ def _type_steps(conn, actor, type_id, steps):
         if flows:
             conn.execute("UPDATE task_steps SET flow_json=? WHERE id=?",
                          (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]))
+    renamed = {existing[r["id"]]["name"]: r["name"] for r in clean
+               if r["id"] in existing and existing[r["id"]]["name"] != r["name"]}
+    if renamed:
+        from .rules import steps_renamed
+        steps_renamed(conn, type_id, renamed)       # the board's rules follow its steps' new names
 
 
 def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=False, steps_only=False, default_visibility='private'):
@@ -5488,7 +5503,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         ceo_bot.check_cap(conn, actor, target)      # at most 5 a day in one person's Needs you (backend/ceo_bot.py)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.REVIEW.match(str(title).strip()):
+    if parent and review_gate.is_review(conn, parent, title):
         review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
@@ -5642,6 +5657,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    from . import task_trigger_rules
+    task_trigger_rules.created(conn, row["id"], actor)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts
     # current-message refs in its prompt, so the bot can reuse or reconcile overlapping work
     # without making the human-facing notice noisy or merging distinct deliverables automatically.
@@ -5666,7 +5683,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     ], "guidance": "Check for overlap. Reuse shared work; keep distinct decisions and deliverables separate."} if related else None
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
-    if parent and review_gate.ONE_OPEN.match(str(title).strip()):
+    if parent and review_gate.check_of(conn, parent, title):
         review_gate.remember_heads(conn, actor, row["id"], parent, review_prs)
     # A task a bot files for itself in one of its turns starts its own turn only once that turn has ended
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
@@ -6804,6 +6821,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
         name = "task.reopened"
     else:
         name = "task.state_changed"
+    from . import task_trigger_rules
+    task_trigger_rules.enqueue(conn, name, task_id, actor, revision, field=field, new=new)
     # The owner column is written just after its event, so a new owner is said from `new`.
     hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
                                        **({"owner": new} if field == "owner" else {})}, actor, revision=revision)

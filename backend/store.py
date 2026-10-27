@@ -1375,6 +1375,10 @@ class Store:
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)
                 H.ensure_market_reads(c)
+                # Setup commands cleared in Settings before a clear released the row (backend/repositories.py).
+                # Unversioned and idempotent like the trash below: it matches nothing once those rows are released.
+                from .repositories import release_cleared_overrides
+                release_cleared_overrides(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
@@ -1599,6 +1603,9 @@ class Store:
                 raise
             from . import provenance_clock
             provenance_clock.ensure(c)
+            # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
+            from . import read_deps
+            read_deps.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
