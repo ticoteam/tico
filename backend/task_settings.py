@@ -59,6 +59,8 @@ RULE_WORDS = {
 
 
 def trigger(event):
+    if event in ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed"):
+        return "created" if event == "task.created" else "step" if event == "task.step_changed" else "finished"
     if event in NON_TASK or "." in event:
         return None
     if event in ("task_done", "task_declined", "batch_completion"):

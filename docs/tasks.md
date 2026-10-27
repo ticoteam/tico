@@ -509,6 +509,32 @@ The person who last saved a rule's action, conditions, event, or enabled it supp
 the original creator stays in its audit record. An older edited rule with no recorded action writer wakes the bot
 instead of changing a private task until someone saves its action again.
 
+**Task Triggers and Actions.** The rules API also accepts the Triggers `task.created`, `task.step_changed`,
+`task.done`, `task.declined` and `task.closed`. These run on the task change itself, including tasks owned by people.
+Scopes are team, type, department and bot; the bot scope means the task's owner. Trigger conditions are `type`,
+`step`, `tag`, `owner` and `requester`. Entering a step requires a `step` condition. Actions are `note`, `set_wait`,
+`relate`, `move_step`, `close`, `wake_bot`, `create_task` and `send_webhook`, saved as `then: "action"` with
+`params.action`. Existing Rules edit rights and Action permissions apply.
+
+Every matching task Trigger runs its Action, most specific scope first (bot, department, type, team), then by
+position. Actions run after the complete task save, inside the same transaction. Creation runs its Actions before
+the initial step Trigger, including default placement into the first step. A repeated delivery of that transition
+does nothing; reopening and finishing again is a new transition. An Action cannot start another task Trigger's
+Action, including through a different rule. The task history names the rule and explains any skipped chain.
+
+Task Actions use their existing domain checks; `set_wait` can record a `blocked_by` task, while a person wait
+retains its existing owner and question requirements. Templates can read `{{task.id}}`, `{{task.title}}`,
+`{{task.body}}`, `{{task.note}}`, `{{task.status}}`, `{{task.owner}}`, `{{task.requester}}`, `{{task.type_id}}`,
+`{{task.step_id}}`, `{{event}}` and `{{actor}}`. The Action author must be able to read the source and any task it
+links. A create-task Action accepts `owner`, `title`, optional `body`, `type` and `step`; it links the new task to
+the source and keeps it private when the source is private. Wake and webhook Actions retain their recipients' read checks.
+
+An Action failure preserves the triggering task save. Rule reads return `last_error` and `last_error_at`, including
+later webhook delivery failures. Shared error text contains no task content. At the 51st attempt within an hour,
+the Action pauses: reads return `paused`, `paused_at` and `pause_reason` (`Paused: too many runs`). It stays paused
+until an authorized editor explicitly enables it again; the hourly cap still applies. The Rules list exposes
+`task_triggers`, `task_when_keys` and `task_actions` for editor clients.
+
 **Events without a task.** Some events are not a message to a bot and have no task: `webhook.received` (an incoming
 webhook was accepted) and `tico.notice`. A rule names one as its `event`
 (or a prefix such as `webhook.*`) and `hub event-types` lists them. Rules on these events are judged by `judge_event`,
