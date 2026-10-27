@@ -3,8 +3,8 @@
 All notable changes to Tico are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/). Each release is published on
-[GitHub](https://github.com/ticoteam/tico/releases). Its section below is that version's notes;
-the GitHub release pages for v0.4.3 to v0.4.15 carry no notes yet.
+[GitHub](https://github.com/ticoteam/tico/releases), and its GitHub release page carries the section
+below word for word as its notes.
 
 ## [Unreleased]
 
