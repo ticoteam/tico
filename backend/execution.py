@@ -2232,11 +2232,15 @@ class Execution:
         subscription_context = context(c)
         held_bots = set(body.busy_bots or ()) | busy_bots
         bots = []
+        # A selected-job recheck must not classify unrelated queued bots while
+        # holding the writer. Resolve its current bot, state and hold here.
+        queued = ("a.bot=(SELECT bot FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
+                  "EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued' AND j.held=0)")
         for row in c.execute(f"SELECT a.bot,bc.config_json,{DRAINING_SQL} draining FROM assignments a "
                              "JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
-                             "AND EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued' AND j.held=0)",
-                             (who.runner_id, body.bot, body.bot)).fetchall():
+                             f"AND {queued}",
+                             (who.runner_id, body.bot, body.bot, *((job_id,) if job_id is not None else ()))).fetchall():
             bot = row["bot"]
             why, config = claim_refusal(c, self.store.settings, runner, bot, row["config_json"], row["draining"], ready,
                                         held_bots, subscription_context, default)
@@ -2358,7 +2362,7 @@ class Execution:
             return None
         if c.execute("SELECT 1 " + obsolete_notices_sql() + " LIMIT 1", (who.runner_id, H.KEEPER, now)).fetchone():
             return None
-        company = org_turns.snapshot(c, self.store.settings)
+        company = org_turns.admission(c)
         if org_turns.needs_observation(c, company):
             return None
         if company['at_stop']:
@@ -2454,7 +2458,7 @@ class Execution:
                 # Clearing the status also publishes the new header to already-open pages.
                 settle_status(c, old["bot"], "idle", "")
             H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished or acted on before keeper notice delivery','task_id':old['task_id']})
-        company = org_turns.observe(c, self.store.settings)
+        company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}
         why = runner_versions.paused(c, who.runner_id)
@@ -2554,7 +2558,7 @@ class Execution:
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
-        org_turns.observe(c, self.store.settings)
+        org_turns.observe(c, self.store.settings, detailed=False)
         # What woke this turn, the wake preset and the bot's profile, for its run record (backend/wake_presets.py).
         job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
         c.execute("UPDATE attempts SET wake_json=?,handed_runtime=?,handed_model=? WHERE id=?",

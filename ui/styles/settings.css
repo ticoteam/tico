@@ -817,7 +817,8 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .computer-add-dialog .model-login-body{padding:0}
 .computer-add-dialog .computer-add-terminal{margin:12px 0 0;overflow-wrap:anywhere}
 .computer-add-dialog .computer-add-terminal code{white-space:pre-wrap;overflow-wrap:anywhere}
-.model-login.tmodal-shell>.model-login-body{flex:1;min-height:0;overflow:auto}
+/* An auto basis gives an intrinsically sized WebKit dialog room for instructions received after it opens. */
+.model-login.tmodal-shell>.model-login-body{flex:1 1 auto;min-height:0;overflow:auto}
 .model-login.tmodal-shell>:is(.model-login-status,.model-login-actions){flex:none}
 
 /* Settings > Computers: hosted servers (ui/app/settings-hosted.js) */

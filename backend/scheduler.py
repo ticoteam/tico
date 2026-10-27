@@ -231,7 +231,7 @@ class Scheduler:
 
         def company_turns_tick(c):
             from . import org_turns
-            org_turns.observe(c, self.store.settings)
+            org_turns.observe(c, self.store.settings, detailed=False)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
         with SR.recording(self.store, "turn_fixer", failures) as run:
             from . import turn_fixer

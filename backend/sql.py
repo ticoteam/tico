@@ -440,7 +440,7 @@ RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 class Gates:
     """SQL that answers yes, without Python, for a row the privacy functions in backend/privacy_index.py allow.
 
-    A fast yes settles the row and anything else still asks the privacy function, so a
+    Each gate is `(fast OR privacy function)`: a fast yes skips the function and anything else still asks it, so a
     fast clause may only be narrower than the function, never wider. A clause reads small sets built once per request
     (the caller's denied private tasks, the rooms whose plain messages they may not read, the runs that carry a denied
     task) and allows a message only when every message its provenance reaches is settled by its own row: its parent
@@ -485,8 +485,8 @@ class Gates:
                   f"AND instr({refs},'live_meeting')=0 AND {once} "
                   f"AND {self.task(refs, 'task')} AND {self.task(refs, 'task_id')} AND {self.strings(refs)}")
         if not top:
-            return (f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 ELSE ({checks} "
-                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0) END)")
+            return (f"(coalesce({refs},'') IN ('','{{}}') OR ({checks} "
+                    f"AND instr({refs},'\"answers\"')=0 AND instr({refs},'\"inputs\"')=0))")
         turn, run_id = f"json_extract({refs},'$.turn_id')", f"json_extract({refs},'$.run.attempt_id')"
         checks += (f" AND coalesce(json_type({refs},'$.answers'),'array')='array' "
                    f"AND coalesce(json_type({refs},'$.inputs'),'array')='array' "
@@ -495,7 +495,7 @@ class Gates:
                    f"THEN json_type({refs},'$.turn_id')='text' AND {self.attempt(turn)} "
                    f"WHEN json_type({refs},'$.run.attempt_id') IS NOT NULL "
                    f"THEN json_type({refs},'$.run.attempt_id')='text' AND {self.attempt(run_id)} ELSE 1 END")
-        return f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 ELSE ({checks}) END)"
+        return f"(coalesce({refs},'') IN ('','{{}}') OR ({checks}))"
 
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
@@ -559,9 +559,7 @@ def materialize(conn, index, tables, inner, function, private):
     gates = Gates(inner, private, index.denied)
     message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
     attempt = function("attempt") + "(id)"
-    # OR does not guarantee skipping the UDF after a successful SQL gate. CASE
-    # guarantees that approved rows skip the recursive provenance function.
-    return {table: (predicate.replace(message, f"(CASE WHEN {gates.message()} THEN 1 ELSE {message} END)")
+    return {table: (predicate.replace(message, f"({gates.message()} OR {message})")
                     .replace(attempt, f"({gates.attempt('source.id')} OR {attempt})"), hidden)
             for table, (predicate, hidden) in tables.items()}
 
@@ -592,6 +590,19 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         class Source:
             def __init__(self):
                 self.statements = {}
+
+            # Provenance helpers share this request's snapshot cache through the restricted source wrapper.
+            @property
+            def read_cache(self):
+                return conn.read_cache
+
+            @property
+            def in_transaction(self):
+                return conn.in_transaction
+
+            @property
+            def total_changes(self):
+                return conn.total_changes
 
             def execute(self, statement, args=()):
                 source = self.statements.get(statement)

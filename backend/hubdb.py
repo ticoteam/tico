@@ -5034,14 +5034,49 @@ def task_comments(conn, task_id, *, actor=None):
     return out
 
 
+REVIEW_ANSWERS_SQL = (
+    "SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to=?) "
+    "OR id=(SELECT answered_by FROM messages WHERE id=?)) ORDER BY created,rowid")
+
+
+def prime_review_answers(conn, messages):
+    """Read question replies together as stored rows; each reader still filters their provenance in review_answers."""
+    from .read_cache import cache, prime_rows, rows
+    values = cache(conn)
+    if values is None:
+        return []
+    asks = {}
+    for message in messages:
+        refs = _json(message["refs_json"], {}) or {}
+        if message["kind"] == "ask" and isinstance(refs, dict) and refs.get("questions"):
+            asks[message["id"]] = message
+    wanted = {mid: m for mid, m in asks.items() if (REVIEW_ANSWERS_SQL, (mid, mid)) not in values}
+    for part in chunks(sorted(wanted)):
+        marks = ",".join("?" * len(part))
+        answered = {}
+        for mid in part:
+            if wanted[mid]["answered_by"]:
+                answered.setdefault(wanted[mid]["answered_by"], set()).add(mid)
+        found = {mid: [] for mid in part}
+        answers = conn.execute(
+            f"SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to IN ({marks})) "
+            "OR id IN (SELECT value FROM json_each(?))) ORDER BY created,rowid", (*part, _dump(list(answered))))
+        for row in answers:
+            linked = set(answered.get(row["id"], ()))
+            if row["kind"] == "answer" and row["in_reply_to"] in found:
+                linked.add(row["in_reply_to"])
+            for mid in linked:
+                found[mid].append(row)
+        prime_rows(conn, REVIEW_ANSWERS_SQL, {(mid, mid): replies for mid, replies in found.items()})
+    return [row for mid in asks for row in rows(conn, REVIEW_ANSWERS_SQL, (mid, mid))]
+
+
 def review_answers(conn, message_id, *, actor=None):
     from . import task_privacy as privacy
+    from .read_cache import rows
     out = []
-    for row in conn.execute(
-            "SELECT * FROM messages WHERE deleted_at IS NULL AND ((kind='answer' AND in_reply_to=?) "
-            "OR id=(SELECT answered_by FROM messages WHERE id=?)) ORDER BY created,rowid",
-            (message_id, message_id)):
-        if actor is not None and not privacy.message_readable(conn, actor, row):
+    for row in rows(conn, REVIEW_ANSWERS_SQL, (message_id, message_id)):
+        if actor is not None and not privacy.message_readable(conn, actor, row, current=True):
             continue
         refs = _json(row["refs_json"], {}) or {}
         out.append(refs.get("answer") or {"by": row["from_actor"], "text": row["body"], "at": row["created"]})
@@ -8216,8 +8251,12 @@ def conversation(conn, conversation_id):
 
 def prime_conversations(conn, ids):
     """Read these conversations in one query per 500 for the conversation() lookups that follow in this snapshot."""
-    from .read_cache import prime
-    for part in chunks(sorted({cid for cid in ids if cid})):
+    from .read_cache import cache, prime
+    values = cache(conn)
+    wanted = {cid for cid in ids if cid}
+    if values is not None:
+        wanted = {cid for cid in wanted if ("one", CONVERSATION_SQL, (cid,)) not in values}
+    for part in chunks(sorted(wanted)):
         found = {row["id"]: row for row in conn.execute(
             "SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part)}
         prime(conn, CONVERSATION_SQL, {(cid,): found.get(cid) for cid in part})
@@ -8262,10 +8301,14 @@ def prime_messages(conn, ids):
     """Read these messages in one query per 500 for the message() lookups that follow in this snapshot, deleted or not.
     Returns {id: stored row} of those found (empty outside a snapshot, where nothing is kept)."""
     from .read_cache import cache
-    if cache(conn) is None:
+    values = cache(conn)
+    if values is None:
         return {}
-    out = {}
-    for part in chunks(sorted({mid for mid in ids if mid})):
+    wanted = {mid for mid in ids if mid}
+    known = {mid for mid in wanted if ("one", MESSAGE_SQL, (mid,)) in values}
+    out = {mid: values[("one", MESSAGE_SQL, (mid,))] for mid in known
+           if values[("one", MESSAGE_SQL, (mid,))] is not None}
+    for part in chunks(sorted(wanted - known)):
         found = {row["id"]: row for row in conn.execute(
             "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(part)), part)}
         _prime_message_lookups(conn, part, found)
@@ -8286,7 +8329,7 @@ MESSAGE_PARENT_DEPTH = 100      # task_privacy and live_privacy refuse a provena
 
 def prime_message_rows(conn, rows):
     """Seed message() with stored rows already read whole in this snapshot (a join's `m.*`), then read the messages
-    they reply to or answer, a level at a time in one query per 500 each, so the provenance walks that follow
+    they reply to or answer, and their question replies, a level at a time in one query per 500 each, so the walks
     (task_privacy.message_tasks, live_privacy) read none of them one by one. Returns every row seeded or read."""
     from .read_cache import cache
     values = cache(conn)
@@ -8297,14 +8340,16 @@ def prime_message_rows(conn, rows):
     level, seen = list(rows.values()), set(rows)
     for _ in range(MESSAGE_PARENT_DEPTH):
         parents = set()
+        answers = {row["id"]: row for row in prime_review_answers(conn, level)}
+        _prime_message_lookups(conn, list(answers), answers)
+        parents.update(answers)
         for row in level:
             refs = _json(row["refs_json"], {}) or {}
             parents.add(row["in_reply_to"])
             for key in ("answers", "inputs"):
                 if isinstance(refs, dict) and isinstance(refs.get(key), list):
                     parents.update(v for v in refs[key] if isinstance(v, str))
-        wanted = {mid for mid in parents if mid and mid not in seen
-                  and ("one", MESSAGE_SQL, (mid,)) not in values}
+        wanted = {mid for mid in parents if mid and mid not in seen}
         if not wanted:
             break
         seen |= wanted
@@ -8436,9 +8481,13 @@ def prime_tasks(conn, ids):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
     (a Needs you card reads its task, its ancestors and what they block, one at a time)."""
     from .read_cache import cache, prime, prime_rows
-    if cache(conn) is None:
+    values = cache(conn)
+    if values is None:
         return
-    for part in chunks(sorted({tid for tid in ids if tid})):
+    wanted = {tid for tid in ids if tid}
+    wanted = {tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values
+              or (TASK_TAGS_SQL % "?", (tid,)) not in values}
+    for part in chunks(sorted(wanted)):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
