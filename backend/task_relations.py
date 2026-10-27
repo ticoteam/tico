@@ -584,12 +584,13 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     row = _task(conn, actor, task_id)
     H._task_private_writer(conn, actor, row)
     mover = _mover(conn, actor, mover)
+    _mine(conn, actor, row, mover)
+    from .ceo_acts import TASK, person_task
+    person_task(conn, actor, row, f"make {TASK} wait on another task")      # a person's task stays theirs
     _blocker_gate(conn, actor, row, mover)
     if _exists(conn, blocker_id, task_id, "blocks"):
         return False
     _check_blocker(conn, actor, row, blocker_id)
-    from .ceo_acts import TASK, person_task
-    person_task(conn, actor, row, f"make {TASK} wait on another task")      # a person's task stays theirs
     _insert(conn, actor, blocker_id, task_id, "blocks", H.now())
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
     H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
@@ -615,12 +616,15 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     row = _task(conn, actor, task_id)
     if actor != H.KEEPER:
         H._task_private_writer(conn, actor, row)
-        _blocker_gate(conn, actor, row, _mover(conn, actor, mover))
+        mover = _mover(conn, actor, mover)
+        _mine(conn, actor, row, mover)
+        if _exists(conn, blocker_id, task_id, "blocks"):
+            from .ceo_acts import TASK, person_task
+            person_task(conn, actor, row, f"take a wait off {TASK}")      # a person's task stays theirs
+        _blocker_gate(conn, actor, row, mover)
     blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
-    from .ceo_acts import TASK, person_task
-    person_task(conn, actor, row, f"take a wait off {TASK}")      # a person's task stays theirs
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
