@@ -398,3 +398,32 @@ def test_a_person_s_task_says_an_answer_cleared_it_on_any_route(api):
             assert (row["status"], row["step_id"]) == ("waiting", steps[tid]), tid
             assert row["blocked_reason"] == f"Nothing left to wait on: {ana} answered {ops}'s question", tid
             assert row["holds_cleared_at"], tid
+
+
+def test_taking_off_a_finished_blocker_releases_nothing(api):
+    """A blocker already done held nothing: removing it later must not send a stranded bot task back to work."""
+    from backend import task_relations as TR
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Ship the form")
+        blocker = bot_task(c, "Pick the form vendor", owner="bot:cpo")
+        TR.add_blocker(c, H.KEEPER, tid, blocker)
+        H.task_update(c, "bot:cpo", blocker, status="done", note="Picked")
+        wait(c, tid, note="Holding for the launch window")
+        assert H.task(c, tid)["status"] == "waiting"
+        TR.remove_blocker(c, H.KEEPER, tid, blocker)
+        row = H.task(c, tid)
+        assert (row["status"], row["note"]) == ("waiting", "Holding for the launch window")
+
+
+def test_a_person_s_plain_reply_ends_a_wait_with_no_question_open(api):
+    """A wait on a person with no question behind it ends when they comment: a bot's task goes back to work."""
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Report month")
+        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana",
+                      note="Ana, which month should the report use?")
+        assert not H.open_task_asks(c, H.task(c, tid))
+    post(api, f"tasks/{tid}/comments", {"text": "July, please."})
+    with api.app.state.store.read() as c:
+        row = H.task(c, tid)
+        assert (row["status"], row["waiting_on"]) == ("open", None), row["blocked_reason"]
+        assert row["note"] == f"{task_holds.name(c, 'human:ana')} replied; nothing left to wait on"
