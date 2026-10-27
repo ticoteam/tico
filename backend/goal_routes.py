@@ -621,7 +621,8 @@ def install(app, store, auth, mutate, settings):
         _, error = K.validate_target(spec, target or {"kind": "none"})
         if error:
             raise Problem("validation", f"Change {n}: {error}", 422)
-        return body, spec, owner, words + ", target " + GR.target_words(spec, target)
+        aimed = bool(target) and (target.get("kind") or "none") != "none"
+        return body, spec, owner, words + (", target " + GR.target_words(spec, target) if aimed else ", no target")
 
     def suggestion_words(c, p):
         card, pl = G.card(c, p, set(), True), p.get("payload") or {}
@@ -814,10 +815,12 @@ def install(app, store, auth, mutate, settings):
                             G.kpi_link(c, who.actor, path.split("/")[-3], path.split("/")[-1], body)
                         else:
                             G.update(c, who.actor, path.split("/")[-1], **body)
-                    except Problem as exc:
-                        raise Problem(exc.code if exc.status != 400 else "validation",
+                    except (Problem, H.Refused) as exc:
+                        # A rule's refusal (backend/hubdb.py refuse) is rolled back with the trial: it is not the owner's.
+                        status = getattr(exc, "status", 422)
+                        raise Problem(getattr(exc, "code", "validation") if status != 400 else "validation",
                                       f"Change {change['n']} can't be saved: {exc.detail}",
-                                      exc.status if exc.status != 400 else 422) from None
+                                      status if status != 400 else 422) from None
         finally:
             c.execute("ROLLBACK TO goal_read_back")
             c.execute("RELEASE goal_read_back")

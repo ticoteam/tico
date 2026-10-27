@@ -288,8 +288,11 @@ def click_reason(raw):
     if kind in _CLICK_KINDS:
         return CLICK[_CLICK_KINDS[kind]]
     for key in raw:
-        if str(key).lower() in _CLICK_FIELDS:
-            return CLICK[_CLICK_FIELDS[str(key).lower()]]
+        found = _CLICK_FIELDS.get(str(key).lower())
+        if found == "status" and str(raw[key] or "").lower() in ("red", "yellow", "green", "gray", "grey", "auto"):
+            found = "colour"
+        if found:
+            return CLICK[found]
     return None
 
 

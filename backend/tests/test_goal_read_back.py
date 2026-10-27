@@ -141,6 +141,17 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
     assert say(api, "yes")["fast"] is False
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
+    # A notice, or the CEO Bot's own message, between the read-back and the yes: the yes answers that, not the list.
+    for who, kind in ((H.KEEPER, "notice"), ("bot:goal-manager", "say")):
+        attempt = reply(api, r, attempt, "Again")
+        step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+        finish(api, r, attempt)
+        with api.app.state.store.transaction() as c:
+            H._write_message(c, who, "human:ana", "Want a daily digest of this chat?", room, kind, {"assistant": True},
+                             None, None)
+        assert say(api, "yes")["fast"] is False
+        attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+        assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed", who
     # And so does anything after the yes.
     attempt = reply(api, r, attempt, "Again")
     step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
@@ -215,7 +226,7 @@ def six_changes(api):
     return a, b, c3, kpi, wording, [
         {"kind": "goal_update", "goal_id": a["id"], "title": "Ship the docs"},
         {"kind": "measure_add", "goal_id": a["id"], "measure": {"name": "Docs pages"}},
-        {"kind": "target_set", "goal_id": b["id"], "kpi_id": kpi["id"], "target": {"kind": "maintain", "min": 99.5}},
+        {"kind": "target_set", "goal_id": b["id"], "kpi_id": kpi["id"], "target": {"kind": "improve", "target": 99.9, "deadline": "2027-03-31"}},
         {"kind": "suggestion", "proposal_id": wording["id"], "decision": "confirm"},
         {"kind": "goal_create", "title": "Answer support in a day", "owner": "ops"},
         {"kind": "measure_remove", "goal_id": b["id"], "kpi_id": kpi["id"]},
@@ -228,8 +239,8 @@ def test_yes_to_1_and_3_of_six_saves_only_those_and_says_why_not_for_the_rest(ap
     back = read_back(api, attempt, *changes)
     lines = back["text"].split("\n")
     assert lines[0] == "I'll save these 6 changes:" and lines[1].startswith("1. Change **Launch the docs**: title was")
-    assert lines[3] == "3. Change the target of “Uptime” on **Keep the bots running**: was 99% by Dec 31, now range ≥ 99.5%" \
-        or lines[3].startswith("3. Change the target of “Uptime” on **Keep the bots running**: was 99% by Dec 31, now ")
+    assert lines[3].startswith("3. Change the target of “Uptime” on **Keep the bots running**: was 99")
+    assert "Dec 31, now 99.9" in lines[3] and "Mar 31" in lines[3]
     assert lines[4] == ("4. Accept the suggestion on **Win ten customers**: Title was “Win ten customers”, now "
                         "“Win ten paying customers”")
     assert back["text"].endswith("any other reply saves nothing.")
