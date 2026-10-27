@@ -75,12 +75,13 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   });
   if (S.me?.cloud) void updUnreadRefresh();
   // Tasks, bot status and Needs you arrive as they change (ui/app/live.js). The roster, computers and
-  // Updates are not on that stream: they still refresh, every 30 s while the stream is down and every 2 minutes
-  // while it is up. A tab in the background does not poll; coming back to a stale tab refreshes it at once.
+  // Updates are not on that stream: they still refresh every 2 minutes. When the live stream is down the
+  // previous 30 s poll multiplied /api/status load across tabs while the hub was already busy; visibility
+  // still refreshes a stale tab the moment it is shown again.
   // Subscribe after the initial count snapshots: an older snapshot must not overwrite a live change.
   void counts.then(liveWire);
   let refreshedAt = Date.now();
-  const every = () => liveConnected() ? 120000 : 30000;
+  const every = () => 120000;
   const poll = () => { refreshedAt = Date.now(); return refresh(false); };
   setInterval(() => { if (!document.hidden && Date.now() - refreshedAt >= every() - 1000) void poll(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - refreshedAt > every()) void poll(); });
