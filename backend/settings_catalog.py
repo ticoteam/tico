@@ -65,6 +65,7 @@ class Setting:
     why: str = ""               # person-only: the one-line reason
     confirm_when: tuple = ()    # ((dotted body place, values), ...): a direct entry whose body holds one is `when_held`
     when_held: str = "confirm"
+    parts: tuple = ()           # ((name, help line), ...): the controls one entry's card holds, found by their own names
 
     @property
     def target(self):
@@ -94,7 +95,8 @@ def find(words, limit=20):
     wanted = _tokens(words)
     rows = []
     for e in _entries():
-        name, rest = _tokens(e.name), _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words)))
+        name = _tokens(" ".join((e.name, *(part for part, _ in e.parts))))
+        rest = _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words)))
         hits = len(wanted & (name | rest))
         if wanted and not hits:
             continue
@@ -128,7 +130,8 @@ def body_shape(e):
 def public(e, base=""):
     return {"key": e.key, "name": e.name, "where": e.where, "class": e.kind, "who": e.who, "who_may": who_text(e),
             "value": e.value, "target": e.target, "method": e.method, "route": "/api/v2/" + e.route,
-            "body": body_shape(e), "card": (base.rstrip("/") + "/" + e.card) if base else e.card,
+            "body": body_shape(e), "card": (base.rstrip("/") + "/" + e.card) if base else e.card, "words": e.words,
+            "parts": [{"name": part, "help": help_line} for part, help_line in e.parts],
             **({"why": e.why} if e.why else {}),
             **({"class_when": {"class": e.when_held, "body": {place: list(values) for place, values in e.confirm_when}}}
                if e.confirm_when else {})}

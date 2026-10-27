@@ -175,6 +175,34 @@ def test_find_lists_admins_see_sql_with_its_place_and_class(api):
     assert sql["card"].endswith(ENTRY("team.rules.admin_sql").card)
 
 
+def test_settings_search_finds_a_control_inside_an_entry_by_its_own_name(api):
+    """Settings search (ui/app/settings-search.js) and BotOps read one list: a control an entry's card holds, such as
+    Run workflows inside Bot repositories, is found by its own name and served with its help line."""
+    assert settings_catalog.find("run workflows")[0].key == "bot.repositories"
+    found = get(api, "settings/catalog")["settings"]
+    repos = next(s for s in found if s["key"] == "bot.repositories")
+    assert {"name": "Run workflows", "help": "Start, rerun and cancel workflow runs (GitHub Actions: write)"} in repos["parts"]
+    assert repos["target"] == "bot" and "workflows" in repos["words"]
+    assert all(isinstance(s["parts"], list) and "words" in s for s in found)
+
+
+def test_a_setting_added_to_the_catalogue_reaches_settings_search_with_no_other_list(api, monkeypatch):
+    """Stage 2 criterion 31 and search spec test 15: the catalogue is the only list Settings search reads, so a new
+    entry is served to it, words and all, the moment it is added."""
+    from backend import settings_entries
+    added = settings_catalog.Setting("team.search_probe", "Probe the search", "Settings > Company & policies", "owner",
+                                     "direct", "PUT", "access/rules", "search_probe", card="#/settings/general",
+                                     words="synthetic needle", parts=(("Haystack lever", "A part's help line"),))
+    monkeypatch.setattr(settings_entries, "ENTRIES", [*settings_entries.ENTRIES, added])
+    every = get(api, "settings/catalog")["settings"]
+    assert len(every) == len(settings_entries.ENTRIES) > 20     # no words: every entry, not the first 20
+    probe = next(s for s in every if s["key"] == "team.search_probe")
+    assert probe["where"] == "Settings > Company & policies" and probe["card"].endswith("#/settings/general")
+    assert probe["words"] == "synthetic needle" and probe["parts"] == [{"name": "Haystack lever", "help": "A part's help line"}]
+    # Found by its part's own name too, a word nothing else in the entry holds.
+    assert [s["key"] for s in get(api, "settings/catalog?q=haystack lever")["settings"]] == ["team.search_probe"]
+
+
 def ENTRY(key):  # noqa: N802
     return settings_catalog.entry(key)
 
