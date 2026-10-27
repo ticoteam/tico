@@ -19,18 +19,28 @@ LATE_HOURS.
   unblock or reroute it. It is a `blocker` wake, which a Lead's profile lets through at once. A manager who wrote in
   the ticket's room or changed it in the last SEEN_HOURS already knows how it stands: the notice waits until then.
 
+A third check is for the turn that ended and left its work standing: a working ticket, or an open check filed below an
+engineering ticket, still `doing`, whose owner's last run on it finished TURN_IDLE_MINUTES ago with no run live, queued
+or held on it after, and nothing recorded to wait on. Its owner is woken once per stay at the step (TURN_EVENT), with
+the reason, so a turn that ended on a runtime blocker is picked up before the manager's hourly exceptions list has to
+name it (backend/pipeline_exceptions.py). The wake is decided here, not by the owner's profile: a reviewer's profile
+holds status checks as notes, and this is the one nudge its check gets before it times out.
+
 Each ticket runs in its own savepoint (batch_work.isolated). One that raises is rolled back alone: its wakes and its
 sent markers go with it, the failure is logged, and it is looked at again on the next pass, while the rest of the
 sweep still runs."""
 
 from . import hubdb as H
 from .batch_work import isolated
+from .pipeline_exceptions import reads_list
 from .roadmap_flow import ENGINEERING
 
 WORKING = "doing"
 STATUS_HOURS = 2
 LATE_HOURS = 4
 STATUS_EVENT = "task.step_status"
+TURN_EVENT = "task.turn_ended"
+TURN_IDLE_MINUTES = 10
 LATE_EVENT = "task.step_late"
 SEEN_HOURS = 1
 
@@ -138,6 +148,9 @@ def _row(c, row, start, at, parked, timed=None):
                                                          "quiet_hours": quiet})
         landed.append("asked")
     if late_hours and _hours(at, start) >= late_hours and not _done(c, LATE_EVENT, row, start):
+        typed = H.type_manager(c, row)
+        if typed and reads_list(c, typed):
+            return landed       # its manager reads a stuck ticket on the exceptions list, not as a notice
         to = _manager(c, row)
         if to and _seen_by(c, row, to, at):
             return landed   # the manager has just been at it: a later sweep tells them if it stays late
@@ -177,3 +190,60 @@ def sweep(c, at=None):
         for key in landed:
             done[key].append(row["id"])
     return done
+
+
+def _turn_items(c):
+    """Working engineering tickets and the open checks below engineering tickets, still `doing`, owned by a bot."""
+    from .check_pools import CHECK_TITLE
+    rows = H._rows(c.execute(
+        "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE y.role=? AND t.status=? "
+        "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
+    rows += [r for r in H._rows(c.execute(
+        "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+        "JOIN tasks p ON p.id=r.to_task JOIN task_types y ON y.id=p.type_id WHERE y.role=? AND t.status=? "
+        "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
+        if CHECK_TITLE.match(str(r.get("title") or "").strip())]
+    return rows
+
+
+def turn_ended(c, at=None):
+    """Wake the owner once when its turn ended and left a working ticket or check with nothing queued (module note).
+    Returns the task ids woken."""
+    from .pipeline_exceptions import _runs, _waits
+    from .rules import WAKE, Decision
+    at = at or H.now()
+    rows = _turn_items(c)
+    if not rows:
+        return []
+    starts = {}
+    ids = [r["id"] for r in rows]
+    for part in H.chunks(ids):
+        starts.update(dict(c.execute(
+            f"SELECT task_id, max(ts) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
+            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+    parked = H.parked_bots(c)
+    cutoff = H.shift(at, minutes=-TURN_IDLE_MINUTES)
+    woke = []
+    for row in rows:
+        start = starts.get(row["id"]) or row.get("created")
+        owner = row["owner"]
+        if H.actor_id(owner) in parked or (H.bot(c, H.actor_id(owner)) or {}).get("state") != "active":
+            continue
+        live, finished, jobs = _runs(c, row)
+        if live or jobs or not finished:
+            continue
+        ended = finished[0]["finished"] or finished[0]["created"]
+        if ended < start or ended > cutoff or _done(c, TURN_EVENT, row, start) or _waits(c, row, at):
+            continue
+        with isolated(c, "turn_ended", row["id"]):
+            name, step = _name(c, row)
+            H._write_message(
+                c, H.KEEPER, owner, f"Your last turn on {name} ended with it still in progress at {step} and nothing "
+                "queued to carry it on. Carry it on now, set it waiting on what holds it, or mark it done or blocked; "
+                "if it stays like this it goes on the engineering exceptions list.",
+                H.conversation(c, row["conversation_id"]), "notice",
+                H.RT.stamp({"task": row["id"], "wake": "step_status", "turn_ended": True}, "stall_check", None),
+                None, None, decided=Decision(WAKE, "turn_ended"))
+            H.event(c, H.KEEPER, TURN_EVENT, row["id"], {"bot": H.actor_id(owner), "since": start, "ended": ended})
+            woke.append(row["id"])
+    return woke
