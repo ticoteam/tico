@@ -162,6 +162,12 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                             ({"task": public}, secret["id"]),
                             ({"task": public, "turn_id": world_attempt(c, denied)}, None)):
             H.say(c, "bot:ops", "human:ben", "Synthetic edge", conversation_id=room, refs=refs, in_reply_to=reply)
+        # Rows no stored walk decides: references of the wrong shape and a reply chain deeper than a walk follows.
+        odd = H.say(c, "bot:ops", "human:ben", "Synthetic odd refs", conversation_id=room)["id"]
+        c.execute("UPDATE messages SET refs_json='[1]' WHERE id=?", (odd,))
+        deep = None
+        for _ in range(105):
+            deep = H.say(c, "human:ben", "bot:ops", "Synthetic chain", conversation_id=room, in_reply_to=deep)["id"]
 
     def settled(who):
         with store.read() as c:
@@ -197,12 +203,54 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
 
     callers = [Identity("bot:ops", "bot", attempt_id=attempt["id"]), Identity("human:ben", "human"),
                Identity("human:ana", "owner")]
-    for who in callers:
-        assert settled(who) == reference(who), who.actor
+
+    def same(when):
+        for who in callers:
+            assert settled(who) == reference(who), (when, who.actor)
+    same("before any row is settled")
     with store.read() as c:
         everything = c.execute("SELECT count(*) FROM messages").fetchone()[0]
     bot = settled(callers[0])["messages"]
     assert 0 < len(bot) < everything and secret["id"] not in bot
+
+    # Settled rows are read from the stored index (backend/read_deps.py); every caller still reads the same rows.
+    from backend import read_deps
+    with store.read() as c:
+        read_deps.sweep(c)
+        indexed = c.execute("SELECT count(*) FROM read_index").fetchone()[0]
+        assert indexed > everything // 2
+        assert c.execute("SELECT count(*) FROM read_dirty").fetchone()[0] == 0
+        assert not c.execute("SELECT 1 FROM read_index WHERE key IN (?,?)", ("m:" + odd, "m:" + deep)).fetchall()
+    same("settled")
+
+    # Each change that moves a row's provenance drops the rows it touched back to the gate at once, with no sweep
+    # between the change and the read. A task turning private moves no provenance: readers deny it from the index.
+    with store.transaction() as c:
+        cited = c.execute("SELECT id,refs_json FROM messages WHERE refs_json LIKE '%\"task\"%' AND conversation_id=? "
+                          "LIMIT 1", (room,)).fetchone()
+        task = json.loads(cited["refs_json"])["task"]
+    changes = [
+        ("a cited task turns private", False,
+         lambda c: c.execute("UPDATE tasks SET private=1, requester='human:ana', owner='bot:inbox' WHERE id=?",
+                             (task,))),
+        ("a message now cites a denied task", True,
+         lambda c: c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+                             (json.dumps({"task": denied}), next(iter(sorted(bot)))))),
+        ("a replied-to message is deleted", False,
+         lambda c: c.execute("UPDATE messages SET deleted_at=? WHERE id=(SELECT in_reply_to FROM messages "
+                             "WHERE in_reply_to IS NOT NULL AND conversation_id<>? LIMIT 1)", (H.now(), hidden_room))),
+        ("a room moves to a denied task", True,
+         lambda c: c.execute("UPDATE conversations SET task_id=? WHERE id=?", (denied, room))),
+        ("a run carries a denied task", True, lambda c: world_attempt(c, sorted(world["private"])[1])),
+    ]
+    for when, moves, change in changes:
+        with store.transaction() as c:
+            change(c)
+            assert (c.execute("SELECT count(*) FROM read_dirty").fetchone()[0] > 0) == moves, when
+        same(when)
+        with store.read() as c:
+            read_deps.sweep(c)
+        same(when + ", settled again")
 
 
 def world_attempt(c, denied):

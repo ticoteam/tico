@@ -412,6 +412,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "mail_messages": "1" if owner else "0",
         "mail_fts": "1" if owner else "0",
         "slack_posts": by_message if owner else "message_id IS NULL",
+        # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.
+        "read_index": "key IS NULL",
     }
     for table in ("bot_status", "bot_status_history"):
         rules[table] += " AND (task_id IS NULL OR " + by_task + ")"
@@ -433,7 +435,7 @@ def guarded(c, auth, who, inner, function, columns=None):
 
 
 # Per-request sets, each an indexed temp table only this request's views may read.
-SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers")
+SETS = ("visible_tasks", "readable_conversations", "denied_tasks", "unreadable_rooms", "run_carriers", "denied_reads")
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -556,14 +558,24 @@ def materialize(conn, index, tables, inner, function, private):
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     create("run_carriers", sorted(aid for tid, aid in conn.execute(
         "SELECT id,carried_by FROM main.tasks WHERE carried_by IS NOT NULL") if tid in index.denied))
+    # Settled history rows that touched one of the caller's denied tasks (backend/read_deps.py): few, like the tasks.
+    create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
+                           f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
     message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
     attempt = function("attempt") + "(id)"
+
+    def settled(prefix, fast):
+        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
+        key = f"'{prefix}:'||source.id"
+        return (f"CASE WHEN {key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
+                f'(SELECT id FROM "{private("denied_reads")}") THEN 1 ELSE {fast} END')
     # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
     # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
     return {table: (predicate.replace(message, function("settled_message") +
-                                      f"(id,conversation_id,refs_json,in_reply_to,{gates.message()})")
-                    .replace(attempt, function("settled_attempt") + f"(id,{gates.attempt('source.id')})"), hidden)
+                                      f"(id,conversation_id,refs_json,in_reply_to,{settled('m', gates.message())})")
+                    .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
+                    hidden)
             for table, (predicate, hidden) in tables.items()}
 
 

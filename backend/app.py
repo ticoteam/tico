@@ -326,6 +326,11 @@ def create_app(settings=None):
         index_stop = threading.Event()
         index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
+        # History rows' read dependencies, settled beside the server (backend/read_deps.py); a read of a row not
+        # settled yet walks its provenance as before.
+        from . import read_deps
+        reads_stop = threading.Event()
+        reads_task = asyncio.create_task(asyncio.to_thread(read_deps.loop, store, reads_stop)) if timers else None
         demo_task = None
         if settings.demo:
             from . import demo
@@ -347,11 +352,14 @@ def create_app(settings=None):
             app.state.doc_sources.stop.set()
             copy_stop.set()
             index_stop.set()
+            reads_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
             await index_task
+            if reads_task:
+                await reads_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:
