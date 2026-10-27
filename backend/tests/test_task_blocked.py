@@ -187,6 +187,26 @@ def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, ki
             'waiting', held['note'], kind, held['blocked_since'])
 
 
+def test_stranded_sweep_preserves_general_worktree_hold(api):
+    """Unlinked pushes stay outstanding on General even without a remembered move."""
+    from backend import move_retry, review_gate
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:ana', 'Prepare the offsite plan', 'Write the plan.', 'bot:cpo')
+        assert task['type_id'] == H.GENERAL_TYPE
+        assert not review_gate.engineering(c, task)
+        # Worktree holds can remain after a ticket moves onto another board.
+        H.task_update(c, task['owner'], task['id'], status='waiting', note='Waiting for unlinked pushes')
+        c.execute("UPDATE tasks SET blocked_kind='worktree',blocked_reason=? WHERE id=?",
+                  ('Waiting for unlinked pushes', task['id']))
+        held = H.task(c, task['id'])
+        assert held['blocked_since']
+        assert move_retry.remembered(c, held) is None
+        assert H.sweep_stranded(c, H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)) == []
+        after = H.task(c, task['id'])
+        for field in ('status', 'note', 'blocked_kind', 'blocked_reason', 'blocked_since', 'version'):
+            assert after[field] == held[field], field
+
+
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
     from backend import task_blocked
     task = ticket(api)

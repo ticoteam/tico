@@ -6540,12 +6540,11 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
                 continue
-            # A gate or worktree hold on an engineering ticket clears only through task_blocked reconciliation, which
-            # knows its real condition (fresh CI, no unlinked pushes), and a move Tico still retries clears when it is
-            # made; reopening either here would claim nothing is outstanding when something is. A gate hold on
-            # another board that no retry will clear is released here, or nothing ever would.
-            if row.get("blocked_kind") in ("gate", "worktree") and (
-                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at))):
+            # Worktree holds stay on every board: unlinked pushes are still outstanding. Engineering gate holds
+            # clear through task_blocked reconciliation, and a move Tico still retries clears when it is made.
+            # Only a gate hold on another board that no retry will clear is released here, or nothing ever would.
+            if (row.get("blocked_kind") == "worktree" or row.get("blocked_kind") == "gate" and (
+                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at)))):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("
