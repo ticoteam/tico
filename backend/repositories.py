@@ -29,6 +29,34 @@ def metadata(c, key):
         return {}
 
 
+def computer_repositories(c):
+    """{runner_id: repositories status} for every computer, once per read snapshot.
+
+    Health / `/computers` (`computer_details`) and Operations used to look up
+    `computer-repositories:<id>` once per machine. Missing keys stay absent so
+    callers keep the historical default of \"unknown\".
+    """
+    values = read_cache.cache(c)
+    key = "repositories.computer_repositories"
+    if values is not None and key in values:
+        return values[key]
+    out = {}
+    prefix = "computer-repositories:"
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE ?", (prefix + "%",)):
+        if not row["key"].startswith(prefix):
+            continue
+        rid = row["key"][len(prefix):]
+        try:
+            value = json.loads(row["value_json"] or "{}")
+        except ValueError:
+            continue
+        if isinstance(value, dict) and "repositories" in value:
+            out[rid] = value["repositories"]
+    if values is not None:
+        values[key] = out
+    return out
+
+
 def save_metadata(c, key, value):
     c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
               (key, json.dumps(value)))

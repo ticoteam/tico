@@ -125,8 +125,8 @@ def computer_details(c, row, who, auth):
         without_accounts(readiness.get("runtimes") or {}, windows=True)
     update = runner_versions.view(runner_versions.load(c).get(row["id"]))
     update["wanted_release"] = runner_versions.desired()["version"]
-    from .repositories import metadata
-    return {"repositories": metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown"),
+    from .repositories import computer_repositories
+    return {"repositories": computer_repositories(c).get(row["id"], "unknown"),
             "version": value.get("version") or "", "release": update.get("release") or "", "last_seen": value.get("last_seen"),
             "readiness": readiness, "update": update, "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
             "services": [], "services_scope": "team", "shared_logins": shared}
