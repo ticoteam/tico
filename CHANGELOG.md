@@ -7,9 +7,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
-### Added
-- **What bots may put on you.** A bot's task, question or wait for a person is judged before it lands on their Needs you, with a budget that tightens as their plate fills: repeats join the open item (the answer goes back to each bot that asked), progress notes become FYI, hands-only chores go under **Hands needed** with their own budget, and bot work or unclear asks go back to the bot with the reason and its manager's name; never a refusal. Settings → Tasks sets Off, Rehearsal (the default) or On, the budget and your lines; **Filtered for you** at the foot of Needs you lists what was kept off, with **Let it through**, and **Replay a day** shows what On would have done before you turn it on. Fails open; see [Tasks](docs/tasks.md#what-bots-may-put-on-you).
-
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
