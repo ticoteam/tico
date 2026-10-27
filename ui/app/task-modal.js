@@ -808,6 +808,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
+    ${taskBuilderNotices(taskBuilderActors(t))}
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
