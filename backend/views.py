@@ -1418,16 +1418,12 @@ def recent_bots(c, auth, who, since, limit, needs):
         # to them, not what it is doing.
         status = (privacy.status(c, who, H.status(c, slug), **status_inputs[slug]) or {}) if access.get(slug, auth.FULL)["read"] else {}
         actor = H.bot_actor(slug)
-        # Newest readable line each way: a short recent window + one readable_messages pass, not an
-        # unbounded scan that called message_readable (and re-fetched) for every older row.
-        mine_rows = list(c.execute(
-            "SELECT * FROM messages WHERE from_actor=? AND to_actor=? ORDER BY created DESC LIMIT 40",
-            (me, actor)))
-        theirs_rows = list(c.execute(
-            "SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
-            "ORDER BY created DESC LIMIT 40", (actor, me)))
-        mine = next(iter(privacy.readable_messages(c, privacy.actor(who), mine_rows)), None)
-        theirs = next(iter(privacy.readable_messages(c, privacy.actor(who), theirs_rows)), None)
+        # Newest readable line each way. Lazy, not a fixed window: deleted or unreadable newest rows must not
+        # hide an older readable one, and the first row is readable almost always.
+        mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
+                    "ORDER BY created DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
+        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
+                      "ORDER BY created DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
 
         conversation = next((m["conversation_id"] for m in sorted(filter(None, (mine, theirs)),
                              key=lambda m: m["created"], reverse=True) if m["conversation_id"]), None)
