@@ -513,10 +513,13 @@ def operation_issues(c, who, auth):
         queued = jobs["queued"]
         if location.get("agent"):
             # A synced agent is handed its messages at a sync, which marks them delivered; it never reads them in Tico.
+            # Batch the privacy check (readable_messages primes once); a per-row message_readable re-fetched each
+            # message and scaled with the agent's unread inbox on every /status and /operations poll.
             unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
-            queued = sum(privacy.message_readable(c, privacy.actor(who), m) for m in c.execute(
-                "SELECT * FROM messages WHERE to_actor=? AND " + unread + " "
-                "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now())))
+            waiting = [{"id": row["id"]} for row in c.execute(
+                "SELECT id FROM messages WHERE to_actor=? AND " + unread + " "
+                "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
+            queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
         if uncertain and not mac_offline:
             noun = "run" if uncertain == 1 else "runs"
