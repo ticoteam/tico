@@ -163,7 +163,15 @@ class Walk:
 
     def _attempt(self, aid):
         self.nodes.add("a:" + str(aid))
-        return self.index._attempt_sources(aid)
+        sources = self.index._attempt_sources(aid)
+        # The meeting check also walks each input moved off this run (live_privacy `_attempt_from`), its room and its
+        # ancestors, where the task walk only reads the moved event: walk them here so a change there unsettles the run.
+        for detail, in self.c.execute("SELECT detail_json FROM events WHERE action='attempt.input.moved' AND target=?",
+                                      (aid,)):
+            detail = H._json(detail, {}) or {}
+            if isinstance(detail, dict) and isinstance(detail.get("message_id"), str):
+                self.index.sources(self._message(detail["message_id"]), include_run=False)
+        return sources
 
     def message(self, row):
         """(settled, nodes) for one messages row."""

@@ -162,6 +162,14 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                             ({"task": public}, secret["id"]),
                             ({"task": public, "turn_id": world_attempt(c, denied)}, None)):
             H.say(c, "bot:ops", "human:ben", "Synthetic edge", conversation_id=room, refs=refs, in_reply_to=reply)
+        # Bot answers to a person's reply, the live rows the SQL gates leave to the provenance walk.
+        for n in range(300):
+            ask = H.say(c, "human:ben", "human:ana", "Synthetic question", conversation_id=room,
+                        refs={"task": public})
+            again = H.say(c, "human:ana", "human:ben", "Synthetic follow-up", conversation_id=room,
+                          refs={"task": public}, in_reply_to=ask["id"])
+            H.say(c, "bot:ops", "human:ana", "Synthetic answer", conversation_id=room,
+                  refs={"task": public, "answers": [again["id"]]}, in_reply_to=again["id"])
         # Rows no stored walk decides: references of the wrong shape and a reply chain deeper than a walk follows.
         odd = H.say(c, "bot:ops", "human:ben", "Synthetic odd refs", conversation_id=room)["id"]
         c.execute("UPDATE messages SET refs_json='[1]' WHERE id=?", (odd,))
@@ -222,6 +230,20 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
         assert c.execute("SELECT count(*) FROM read_dirty").fetchone()[0] == 0
         assert not c.execute("SELECT 1 FROM read_index WHERE key IN (?,?)", ("m:" + odd, "m:" + deep)).fetchall()
     same("settled")
+    # What keeps a count fast: settled rows never reach the per-row provenance walk, only the few left undecided.
+    walked = []
+    original = ReadIndex.message
+    ReadIndex.message = lambda self, *args: walked.append(args[0]) or original(self, *args)
+    try:
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, callers[0])
+            try:
+                assert conn.execute("SELECT count(*) FROM messages").fetchone()[0] == len(bot)
+            finally:
+                conn.close()
+    finally:
+        ReadIndex.message = original
+    assert len(walked) < 100, len(walked)
 
     # Each change that moves a row's provenance drops the rows it touched back to the gate at once, with no sweep
     # between the change and the read. A task turning private moves no provenance: readers deny it from the index.
@@ -251,6 +273,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
         with store.read() as c:
             read_deps.sweep(c)
         same(when + ", settled again")
+
 
 
 def world_attempt(c, denied):
