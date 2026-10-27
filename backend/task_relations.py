@@ -310,6 +310,10 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
     for here, field, other in ((from_id, out_field, to_id), (to_id, in_field, from_id)):
         H._task_event(conn, here, actor, field, None if added else other, other if added else None, note)
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, here))
+    if kind in ("parent", "blocks"):
+        # A child or blocker added or taken off changes what the task waits on (backend/task_holds.py).
+        from . import task_holds
+        task_holds.refresh(conn, to_id)
 
 
 def _mine(conn, actor, row, mover):

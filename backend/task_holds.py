@@ -167,10 +167,13 @@ def ended(conn, row, status):
         refresh(conn, blocked, what)
 
 
-def withdrawn(conn, task_id, ask_ids, why):
-    """Questions to people on `task_id` were withdrawn because a task above it ended. Each asker is told in the same
-    transaction, the question shows whether its person had seen it, and the task's holds are recomputed: a bot's task
-    left with nothing to wait on goes back to open with a note naming what ended."""
+def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
+    """Questions to people on `task_id` were just withdrawn: its own task ended, a newer question replaced them, or
+    "still needed?" sent them back (a question lives and dies with its own task, never with a task above it). Each
+    question shows whether its person had seen it ("Withdrawn before Chris saw it: <why>"); its asker is told in the
+    same transaction unless it made the withdrawal itself (`by`) or `told` is False (still needed? sends its own one
+    notice per bot); and the task's holds are recomputed, so a bot's task left with nothing to wait on goes back to
+    open with a note naming what happened."""
     from . import hubdb as H
     if not ask_ids:
         return
@@ -178,27 +181,39 @@ def withdrawn(conn, task_id, ask_ids, why):
     if not row:
         return
     marks = ",".join("?" * len(ask_ids))
-    asks = H._rows(conn.execute(f"SELECT id, from_actor, to_actor, body, read_at, conversation_id FROM messages "
+    asks = H._rows(conn.execute(f"SELECT id, from_actor, to_actor, body, read_at FROM messages "
                                 f"WHERE id IN ({marks}) ORDER BY created", list(ask_ids)))
-    reason_text = str(why or "A task above it ended")
-    reason_text = reason_text[0].lower() + reason_text[1:]
-    told = set()
+    why = str(why or "it was withdrawn")
+    day_ago = H.shift(H.now(), hours=-24)
+    noticed = set()
     for ask in asks:
         person = name(conn, ask["to_actor"])
-        seen = "after" if ask.get("read_at") else "before"
-        status = f"Withdrawn {seen} {person} saw it: {reason_text}"
+        status = f"Withdrawn {'after' if ask.get('read_at') else 'before'} {person} saw it: {why}"
         conn.execute("UPDATE messages SET refs_json=json_set(coalesce(refs_json,'{}'),'$.withdrawn',?) WHERE id=?",
                      (status, ask["id"]))
         asker = ask["from_actor"]
-        if not H.is_bot(asker) or (asker, ask["to_actor"]) in told or not H.bot_reads_task(conn, asker, row):
+        if (not told or asker == by or not H.is_bot(asker) or (asker, ask["to_actor"]) in noticed
+                or not H.bot_reads_task(conn, asker, row)):
             continue
-        told.add((asker, ask["to_actor"]))
+        noticed.add((asker, ask["to_actor"]))
+        # The same question withdrawn again and again is a re-ask loop: the notice says so (to watch, not a block).
+        again = conn.execute(
+            "SELECT count(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.kind='ask' "
+            f"AND m.from_actor=? AND m.to_actor=? AND m.superseded_at>=? AND {H.MESSAGE_TASK_SQL}=?",
+            (asker, ask["to_actor"], day_ago, task_id)).fetchone()[0]
+        loop = (f"\nThis is the {_nth(again)} question from you to {person} on this task withdrawn in 24 hours."
+                if again >= 3 else "")
         H._wake(conn, row, asker, f"Your question to {person} was withdrawn: {row['title']}\n{status}.\n"
-                f"Question: {_line(ask['body'], 300)}\nAsk again on a live task if you still need it.",
+                f"Question: {_line(ask['body'], 300)}{loop}\nAsk again on a live task if you still need it.",
                 refs={"news": "ask_withdrawn", "ask": ask["id"]}, source=ask["id"])
-    first = asks[0] if asks else None
-    if first:
-        refresh(conn, task_id, f"Your question to {name(conn, first['to_actor'])} was withdrawn ({reason_text})")
+    if asks:
+        # Its owner asking again or ending it knows already: only the words follow.
+        refresh(conn, task_id, None if by == row["owner"] else
+                f"Your question to {name(conn, asks[0]['to_actor'])} was withdrawn ({why})")
+
+
+def _nth(n):
+    return {3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
 
 
 BACKFILL = "task_holds.backfill"

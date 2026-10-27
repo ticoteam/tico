@@ -12,6 +12,8 @@ from . import review_gate
 GENERIC = "Waiting on a hold"       # task_blocked.transition's reason when a wait had no note
 # A person wait's note starts "Blocked on Ana: "; the ticket's reason names who it waits on at its end instead.
 PERSON_PREFIX = re.compile(r"^Blocked on [^:]{1,120}: ")
+# A reason Tico derived from the check's holds names its holder first (backend/task_holds.py); the ticket names it last.
+HOLDER_PREFIX = re.compile(r"^Waiting on [^:]{1,120}(: |$)")
 
 
 def _H():
@@ -48,6 +50,12 @@ def blocked(c, child):
     if child["status"] == "waiting":
         detail = H.wait_detail(c, child) or {}
         why = PERSON_PREFIX.sub("", str(child.get("blocked_reason") or "").strip())
+        if child.get("blocked_kind") != "manual":
+            from .task_holds import NOTHING, LEFT
+            why = "" if why.startswith((NOTHING, LEFT)) else HOLDER_PREFIX.sub("", why)
+            # Held by nothing Tico tracks: the check's own note says why, as detail beneath the ticket's reason.
+            why = why or PERSON_PREFIX.sub("", next((s.strip() for s in str(child.get("note") or "").splitlines()
+                                                     if s.strip()), ""))[:300]
         if not why or why == GENERIC:
             why = detail.get("why") or "it is waiting"
         return {"why": why, "on": detail.get("on") or child.get("waiting_on")}

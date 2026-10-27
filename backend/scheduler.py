@@ -697,6 +697,13 @@ class Scheduler:
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at
+            try:
+                # Once after this shipped: every waiting task's reason put right, one wake per bot (task_holds.py).
+                from . import task_holds
+                with self.store.transaction() as c:
+                    task_holds.backfill(c, stamp(at))
+            except Exception as exc:
+                failures.append({"task_holds_backfill": type(exc).__name__})
             with SR.recording(self.store, "waiting_checks") as run:
                 with self.store.transaction() as c:
                     moved = H.sweep_stranded(c, stamp(at))

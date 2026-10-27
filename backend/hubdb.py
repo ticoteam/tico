@@ -2787,7 +2787,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     _close_open_asks(conn, actor, target, kind, msg)
     if kind == "ask" and is_bot(actor) and is_human(target):
         about = message_task_id({"refs": refs}, conv)
-        if about and supersede_asks(conn, about, from_actor=actor, to_actor=target, keep=msg["id"]):
+        if about and (replaced := supersede_asks(conn, about, from_actor=actor, to_actor=target, keep=msg["id"])):
+            from . import task_holds
+            task_holds.withdrawn(conn, about, replaced, "a newer question replaced it", by=actor)
             _recount(conn, actor)
         hook(conn, "needs_you.created", msg["id"], lambda: {"id": msg["id"], "to": target, "from": actor, "task_id": about},
              actor, revision=0)
@@ -3058,6 +3060,9 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         reviewed = task(conn, message_task_id({"refs": refs or {}}, conv) or "")
         if reviewed and reviewed["owner"] == actor:
             record_verdict(conn, actor, reviewed, text=body)
+    if kind == "ask" and (asked_about := message_task_id({"refs": refs or {}}, conv)):
+        from . import task_holds
+        task_holds.refresh(conn, asked_about)     # a new question on a waiting task is what it waits on now
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
@@ -3763,16 +3768,13 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         if effective in ("done", "closed", "declined", "review"):
             TS.clear_finished(conn, actor, row)     # review hands it on: the requester looks now, not at the date
         if effective in ("done", "closed", "declined"):
-            # A finished task's open questions to people are moot, every kind, and so are those on every task below it.
+            # A finished task's open questions to people are moot, every kind. A question lives and dies with its own
+            # task: one on an open task below it carries on (an open subtask says it is still needed), so a bot asking on
+            # a subtask and then finishing the parent no longer withdraws it seconds later (Dev 627).
             # A done task asks its requester to accept what it delivered only after this, so that question stays.
-            supersede_asks(conn, row["id"])
             from . import task_holds
-            for below in descendants(conn, row["id"]):
-                why = f"A task above it was {TASK_ENDED[effective]}"
-                gone = supersede_asks(conn, below["id"], why=why)
-                drop_asked_waits(conn, below["id"], gone, why)
-                # Its asker is told in this transaction, and a bot's task left with nothing to wait on goes back to open.
-                task_holds.withdrawn(conn, below["id"], gone, f"{why} ({_clip(row.get('title') or '', 120)})")
+            task_holds.withdrawn(conn, row["id"], supersede_asks(conn, row["id"]),
+                                 f"its task was {TASK_ENDED[effective]}", by=actor)
             supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
@@ -6150,6 +6152,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         gone = row.get("waiting_on") if (not person and row.get("waiting_on") and row["status"] == "waiting"
                                          and status in (None, "waiting") and actor != row["owner"]) else None
         task_holds.refresh(conn, task_id, f"No longer waiting on {task_holds.name(conn, gone)}" if gone else None)
+        if note is not None:
+            from .check_blocked import changed as check_changed
+            check_changed(conn, task_id)    # a waiting check's ticket shows its note, written after the status move
     if roles:
         # After the rest is saved, so who may be added is checked against the new owner and privacy;
         # the checks above already said this actor may change the task.
