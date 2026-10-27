@@ -632,6 +632,25 @@ def test_a_bots_task_ask_over_budget_is_sent_back_withdrawn_and_listed(gate):
     assert on_plate(api, task["id"])
 
 
+def test_a_sent_back_task_ask_keeps_the_bots_note_and_says_why_in_a_quiet_comment(gate):
+    api, model, token = gate
+    plate(api, 15)
+    task = for_ben(api)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", task["id"], status="doing", note="Drafting the venue shortlist")
+    r = api.post(f"/api/v2/tasks/{task['id']}/ask", json={"text": "Which launch date do you want?"},
+                 headers=headers(token))
+    assert r.status_code == 200 and r.json()["ingest"]["outcome"] == A.SENT_BACK, r.text
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+        assert (row["status"], row["note"]) == ("doing", "Drafting the venue shortlist")
+        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND new='waiting'",
+                             (task["id"],)).fetchone(), "never parked, so nothing to put back"
+        said = [m for m in H.task_comments(c, task["id"]) if m["from_actor"] == H.KEEPER]
+    assert [m["body"] for m in said] == [r.json()["ingest"]["text"]]
+    assert said[0]["refs"].get("quiet") is True
+
+
 def test_a_persons_task_ask_is_not_gated(gate):
     api, model, token = gate
     plate(api, 15)
@@ -656,6 +675,19 @@ def test_a_raw_ask_message_naming_a_task_is_judged(gate):
     assert (item["kind"], item["message_id"]) == ("question", r.json()["id"])
     with api.app.state.store.read() as c:
         assert not on_plate(api, tid) and H.loose_asks_to(c, "human:ben") == []
+
+
+def test_a_raw_ask_naming_a_task_the_bot_cannot_read_never_shows_its_title(gate):
+    api, model, token = gate
+    plate(api, 15)
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "human:ben", "Acme acquisition terms", "", "human:priya", lint=False, private=True)
+    r = api.post("/api/v2/messages", headers=headers(token),
+                 json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask",
+                       "refs": {"task": hidden["id"]}})
+    assert r.status_code in (403, 404), r.text
+    assert model.calls and "Acme" not in str([call["state"] for call in model.calls])
+    assert all(call["state"]["item"]["title"] == "Which launch date do you want?" for call in model.calls)
 
 
 def test_a_question_sent_as_a_reply_is_judged(gate):
