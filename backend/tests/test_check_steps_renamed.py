@@ -197,3 +197,24 @@ def test_a_numbered_review_title_names_only_a_review_step_the_board_has(api):
         assert step_flow.titled(c, None, "Review 3: PR #412") is None
         assert step_flow.titled(c, None, "Review 2: PR #412")["generic"] is True
         assert step_flow.check_kind(step_flow.titled(c, None, "QA: PR #412")) == "qa"
+
+
+def test_a_flow_saved_without_check_keeps_the_steps_kind(api):
+    """A steps file written before steps had kinds sends a check step's flow without `check`: the step keeps its
+    kind, so its request stays a check rather than an open child that holds the ticket (a QA request held that way
+    can't be waived). `"check": null` clears the kind."""
+    task = pools.ticket(api, None)
+    review_2 = {"timeout_hours": 1, "gate": True, "skip_tag": "review-1-only"}
+
+    def save(flow):
+        kind = get(api, "task-types/" + task["type_id"])["type"]
+        r = api.post("/api/v2/task-types/" + task["type_id"], headers=headers(), json={"steps": [
+            {"id": s["id"], "name": s["name"], "status": s["status"],
+             **({"flow": flow} if s["name"] == "Review 2" else {})} for s in kind["steps"]]})
+        assert r.status_code == 200, r.text
+        with api.app.state.store.read() as c:
+            return step_flow.check_kind(step_flow.titled(c, task["type_id"], "Review 2: PR #412"))
+
+    assert save(review_2) == "review"
+    assert save({**review_2, "timeout_hours": 2}) == "review", "a second save without it keeps it too"
+    assert save({**review_2, "check": None}) is None

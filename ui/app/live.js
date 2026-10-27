@@ -180,6 +180,12 @@ function liveDown(es) {
   if (LIVE.es === es) LIVE.es = null;
   if (LIVE.connected) { LIVE.connected = false; liveEmit('status', {connected: false}); }
 }
+// Back after a long time away: a phone may have dropped the stream while the app was suspended without an error
+// reaching the page, so it still counts as connected. Reconnect from the last change number; the server sends what
+// was missed, or `reset`.
+function liveResume() {
+  if (LIVE.started && !SESSION.out) liveEventsConnect();
+}
 // A tab coming back from sleep or a dropped network reconnects now rather than at the end of its backoff.
 window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected && !SESSION.out) liveEventsConnect(); });
 window.liveEvents = {on: liveOn, follow: liveFollow, available: liveAvailable, connected: liveConnected};
