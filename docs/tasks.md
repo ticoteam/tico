@@ -362,6 +362,8 @@ something. Plain code then decides from the answers, your settings and your open
 Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
 note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
 refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
+A question sent back from a bot's own task leaves that task's status and note as they were; the reason is a quiet
+comment on it.
 Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
 its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
 readout counts the outcomes and what people let through.
