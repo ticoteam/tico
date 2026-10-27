@@ -388,3 +388,49 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     with api.app.state.store.read() as c:
         assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE m.from_actor='bot:ops'").fetchone()[0] == 'queued'
+
+
+def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):
+    """Each computer's summary used to rebuild company pools/groups; one Default memo covers the listing."""
+    from backend import usage_limits
+    from backend.tests.test_api import runner
+
+    first = waiters(api, n=0, running=0)
+    second = runner(api, label='Other synthetic computer')
+    assign(api, second, 'finance')
+    ready(api, second, ['finance'])
+    post(api, 'chat/ops', {'text': 'Queue on first computer'})
+    post(api, 'chat/finance', {'text': 'Queue on second computer'})
+    calls = []
+    real = usage_limits.company
+
+    def once(c):
+        calls.append(1)
+        return real(c)
+
+    monkeypatch.setattr(usage_limits, 'company', once)
+    machines = get(api, 'operations')['machines']
+    ops_calls = len(calls)
+    calls.clear()
+    computers = get(api, 'computers')['computers']
+    computer_calls = len(calls)
+    ids = {first['runner_id'], second['runner_id']}
+    assert ids <= {m['id'] for m in machines}
+    assert ids <= {m['id'] for m in computers}
+    assert ops_calls == 1, ops_calls
+    assert computer_calls == 1, computer_calls
+
+
+def test_held_totals_match_each_computers_held_counts(api):
+    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+    from backend import start_places
+    from backend.tests.test_api import runner
+
+    first = waiters(api, n=2, running=1)
+    second = runner(api, label='Other capacity computer')
+    assign(api, second, 'finance')
+    ready(api, second, ['finance'])
+    with api.app.state.store.read() as c:
+        totals = start_places.held_totals(c)
+        for rid in (first['runner_id'], second['runner_id']):
+            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())

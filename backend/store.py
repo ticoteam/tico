@@ -805,6 +805,8 @@ class Store:
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
             c.executescript(_stall_triage.SCHEMA)
+            from . import ask_ingest as _ask_ingest
+            c.executescript(_ask_ingest.SCHEMA)
             from . import rule_suggestions as _rule_suggestions
             c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines

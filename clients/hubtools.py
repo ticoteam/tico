@@ -4768,7 +4768,10 @@ def bot_repos_get(api, args):
        "chosen": {"type": "array", "items": {"type": "object", "properties": {
            "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"]),
            "run_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may start, rerun "
-                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"}},
+                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"},
+           "edit_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may create and "
+                              "change workflow files under .github/workflows (GitHub Workflows: write). Leave out to "
+                              "keep the current setting"}},
            "required": ["full_name", "access"], "additionalProperties": False}}},
       required=("bot", "mode"), writes=True)
 def bot_repos_set(api, args):

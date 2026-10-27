@@ -1310,9 +1310,14 @@ SCHEMAS.update({
                                      "note": "s"}),
     "RepositoryList": obj({"repositories": items(ref("Repository")), "new_bot_default": {"enum": ["own", "all"]},
                            "github_connected": "b"}),
-    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}}),
+    # The workflow options are present only when on; a request's access defaults to write.
+    "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}, "run_workflows": "b",
+                            "edit_workflows": "b"}, required=["full_name"]),
     "BotRepositories": obj({"mode": {"enum": ["own", "all", "chosen"]}, "all_access": {"enum": ["read", "write"]},
-                            "chosen": items(ref("RepositoryGrant")), "effective": items(ref("RepositoryGrant"))}),
+                            "chosen": items(ref("RepositoryGrant")), "all_repos": items(ref("TickedRepository")),
+                            "effective": items(ref("RepositoryGrant"))}),
+    # Only the options that are on are present.
+    "TickedRepository": obj({"full_name": "s", "run_workflows": "b", "edit_workflows": "b"}, required=["full_name"]),
 })
 TAGS['Roadmaps'] = "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
 STABLE.extend([
