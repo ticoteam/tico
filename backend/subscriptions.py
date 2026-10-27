@@ -298,7 +298,7 @@ def connections_by_runner(c, settings, ctx=None):
     (Operations listing). Identity display names are also read once for every profile that appears."""
     from . import providers
     from .read_cache import configs as load_configs
-    from .shared_bots import follow
+    from .shared_bots import follow, source_of
     from .subscription_identity import connection_id
 
     ctx = ctx if ctx is not None else context(c, settings)
@@ -307,12 +307,14 @@ def connections_by_runner(c, settings, ctx=None):
                          "r.revoked_at FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "JOIN runners r ON r.id=a.runner_id "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
-        if row["revoked_at"]:
-            continue
         placed.setdefault(row["runner_id"], []).append(row["bot"])
         runners.setdefault(row["runner_id"], row)
     bots = [bot for group in placed.values() for bot in group]
     config_rows = {row["bot"]: row for row in load_configs(c, bots)} if bots else {}
+    # A branch follows its original's config, and the original need not be placed anywhere.
+    sources = {source_of(json.loads(row["config_json"] or "{}")) for row in config_rows.values()} - {""}
+    if missing := sorted(sources - set(config_rows)):
+        config_rows.update({row["bot"]: row for row in load_configs(c, missing)})
 
     def rows_of(slug):
         return config_rows.get(slug)
@@ -321,7 +323,8 @@ def connections_by_runner(c, settings, ctx=None):
     built, needed = {}, set()
     for rid, bot_list in placed.items():
         runner = runners[rid]
-        computer = {"runner_id": runner["id"], "label": runner["label"]}
+        # A revoked computer is no bot's connection: its bots are listed as on none, as bot_subscription does.
+        computer = None if runner["revoked_at"] else {"runner_id": runner["id"], "label": runner["label"]}
         report = readiness_document(runner["readiness_json"])
         items = []
         for bot in bot_list:
@@ -331,6 +334,10 @@ def connections_by_runner(c, settings, ctx=None):
             runtime = config.get("runtime")
             line = {"profile": None, "source": "computer", "computer": computer,
                     "runtime": runtime or "", "harness": config.get("harness") or ""}
+            if computer is None:
+                line.update(computer=None, signed_in=None, problem="")
+                items.append((bot, line))
+                continue
             bot_report = report.get("bots", {}).get(bot, {})
             line["profile"] = bot_report.get("profile") or None
             if problem := login_upgrade(runner, report, bot=bot):
