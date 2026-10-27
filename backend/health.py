@@ -12,8 +12,8 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login, providers,
-               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
+               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -66,12 +66,37 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
-        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"],
-                      "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_plural(row['queued'], 'job')} queued, "
-                              f"oldest {minutes} min; {row['why']}", "fixes": fixes,
+        # Check summaries enter support reports; private refusal context stays on the bot's display row.
+        why = ("Quarantined: queued work waits for the quarantine to clear."
+               if row["reason"] == "quarantined" else row["why"])
+        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
+                      "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
+                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {why}",
+                      "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
+
+
+def _queue_words(row, minutes):
+    """A bot's queue in one phrase, split as Pipeline splits it: jobs that can start, jobs an interrupted run fences,
+    and jobs held on purpose. The age is the oldest job named first."""
+    words = []
+    if row["queued"]:
+        words.append(f"{_plural(row['queued'], 'job')} queued, oldest {minutes} min")
+    if row.get("dead"):
+        age = "" if row["queued"] else f", oldest {minutes} min"
+        words.append(f"{_plural(row['dead'], 'job')} behind an interrupted run awaiting review{age}")
+    if row.get("held"):
+        words.append(f"{row['held']} held on purpose")
+    return "; ".join(words) or "nothing queued"
+
+
+def _silent_words(computer):
+    """The work waiting behind a silent computer, split as Pipeline splits it."""
+    words = [f"{_plural(computer['queued'], 'job')} queued"] if computer["queued"] else []
+    if computer["dead"]:
+        words.append(f"{_plural(computer['dead'], 'job')} behind an interrupted run awaiting review")
+    return " and ".join(words)
 
 
 def _plural(n, one, many=None):
@@ -446,22 +471,33 @@ def _rejected_summary(rows):
 
 def silent_computers(c, minutes=SILENT_MINUTES):
     """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
-    first: [{id, label, operator, last_seen, minutes, queued, bots}]. A computer that never checked in is setup, not this."""
+    first: [{id, label, operator, last_seen, minutes, queued, dead, bots}]. `queued` can start and `dead` waits behind an
+    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this."""
+    from .execution import unfenced_sql
     rows = c.execute(
-        "SELECT r.id, r.label, r.operator, r.last_seen, count(j.id) queued, group_concat(DISTINCT a.bot) bots "
+        f"SELECT r.id, r.label, r.operator, r.last_seen, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
+        "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
-             "minutes": quiet_minutes(r["last_seen"]), "queued": r["queued"], "bots": sorted(r["bots"].split(","))}
-            for r in rows]
+             "minutes": quiet_minutes(r["last_seen"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+             "bots": sorted(r["bots"].split(","))} for r in rows]
 
 
 def quiet_minutes(last_seen):
     """Whole minutes since `last_seen`; 0 when it cannot be read."""
     seen = H.parse_ts(last_seen)
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
+
+
+def _fenced_queue_reason(row, refused, first, person):
+    """Name the interrupted-run fence when it is the only reason this queue cannot start."""
+    if not row["queued"] and row["dead"] and refused in (None, 'lane_held'):
+        return "uncertain", None, False
+    return refused, first, person
 
 
 def _waiting(c, online_ids, settings=None, limits=None):
@@ -471,10 +507,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
     beside a young free one is neither."""
-    from .execution import bot_claimable, prime_claimables
+    from .execution import bot_claimable, prime_claimables, queued_reasons
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
-    # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
+    # Each bot's queue is shown as Pipeline splits it (pipeline_stats.queue_counts), so the counts match `hub pipeline`:
+    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
+    # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
+    # held job behind an interrupted run as dead, and work held on purpose is not stuck.
+    split = pipeline_stats.queue_counts(c, [r["slug"] for r in c.execute("SELECT slug FROM bots")])
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
         "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
@@ -530,7 +570,10 @@ def _waiting(c, online_ids, settings=None, limits=None):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
-        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": count, "oldest": oldest,
+        shown = split.get(slug, {})
+        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": shown.get("queued", 0),
+               "dead": shown.get("dead", 0), "held": shown.get("held", 0),
+               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
                "computer": where[1] if where else ""}
         if bot["state"] != "active":
             if count:
@@ -566,6 +609,8 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 diagnostic = bot_claimable(c, settings, where[0], slug, limits, oldest=True)
                 if diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
+            # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
+            refused, first, person = _fenced_queue_reason(row, refused, first, person)
             # A running turn only explains this queue when it holds the queued lane. Free task
             # lanes still get the claim's actual refusal, even while another lane runs.
             idle = where[0] not in full and not (refused == 'lane_held' and slug in busy)
@@ -573,6 +618,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
+            # Counts belong to the individual job's task, not the representative oldest job.
+            groups = {}
+            for job, why in queued_reasons(c, settings, where[0], slug, limits):
+                key = why or "slow"
+                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
+                group["queued"] += 1
+                group["oldest"] = min(group["oldest"], job["created"])
+            row["queue_reasons"] = list(groups.values())
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
             slow.append({**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"})
@@ -668,12 +721,11 @@ RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Comp
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
-    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
+    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person, check or an owner's 60-minute queue return", RUNS),
     "task_next_run": ("Its assigned task is deferred to its next run, held by a run that carried it, or waiting on a stored resume condition", RUNS),
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
-    "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -764,6 +816,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         elif reason == "updating":
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
+        elif reason == "quarantined":
+            from .quarantine_display import explanation
+            text = explanation(c, row["bot"], who, auth)
+            fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
@@ -771,10 +827,21 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix("Open Runs", "#/settings", "runs")
+        queue_reasons = row.get("queue_reasons") or []
+        if len(queue_reasons) > 1 and reason not in ("no_slot", "busy", "updating", "restarting"):
+            # Keep one bot row, but never describe all its jobs with the oldest job's hold.
+            words = {"task_wait": "waiting for a snooze, prerequisite, person or check",
+                     "task_next_run": "deferred to the next run or a stored resume condition",
+                     "slow": "ready to start"}
+            text = "; ".join(_plural(item["queued"], "job") + ": " + words.get(item["reason"],
+                            HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"))
+                             for item in queue_reasons)
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
-                   | {"why": text[:320], "fix": fix if full else None,
+                   | {"dead": row.get("dead", 0), "held": row.get("held", 0),
+                       "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
+                       **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 
@@ -1776,7 +1843,7 @@ def view(c, who, settings, auth, github, config):
         names = ", ".join(w["name"] for w in waiting[:5])
         # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
         stopped = "".join(f" {x['label'] if full else 'A computer'} has not checked in for {x['minutes']} minutes "
-                          f"with {_plural(x['queued'], 'job')} queued." for x in silent[:3])
+                          f"with {_silent_words(x)}." for x in silent[:3])
         checks.append(_check("waiting", "Bots waiting", "bad" if silent or not online else "warn",
                              f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
                              + (f": {names}." if full else ".") + stopped,

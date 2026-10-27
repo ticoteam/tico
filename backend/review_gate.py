@@ -28,8 +28,9 @@ def reviewing(c, actor, row):
     return None
 
 
-# One open request per kind of check on a ticket: Review 1, Review 2 or QA (a Security check can be asked again).
-ONE_OPEN = re.compile(r"^(Review [12]|QA)(?:\b|:)", re.I)
+# One open request per kind of check on a ticket: Review 1, Review 2, QA or Post Release QA (a Security check can be
+# asked again).
+ONE_OPEN = re.compile(r"^(Review [12]|QA|Post Release QA)(?:\b|:)", re.I)
 
 
 def heads(c, parent, snapshots=None):
@@ -56,6 +57,15 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         return
     kind = " ".join(kind[1].lower().split())
     wanted = heads(c, parent, snapshots)
+    from . import check_pools
+    for wait in check_pools.waiting(c, parent["id"], kind):
+        judged = set(filter(None, wait["heads"].split(",")))
+        if wanted and judged and not wanted & judged:
+            continue
+        H.refuse(c, actor, "duplicate",
+                 f"{wait['title']} already exists on this ticket{' for this head' if wanted else ''}: Tico filed it to "
+                 f"the step's pool, where it waits for a reviewer ({wait['reason']}). The first free one takes it; "
+                 "you need not file another.")
     for child_id in TR.child_ids(c, parent["id"]):
         other = H.task(c, child_id)
         other_kind = ONE_OPEN.match(str(other.get("title") or "").strip())
@@ -97,13 +107,14 @@ def links(c, row):
 def mint_failure(exc, repo):
     """Describe a failed token request without exposing exception text or response bodies."""
     from .store import Problem
-    from .github_app import MISSING_KEY
+    from .github_app import MISSING_KEY, rate_limited
 
     status = None
     code = None
     auth = isinstance(exc, InvalidKeyError)
     timeout = isinstance(exc, (TimeoutError, httpx.TimeoutException))
     retryable = timeout
+    limited = False
     if isinstance(exc, Problem):
         code = exc.code
         # A transport failure has no GitHub HTTP response; 502 is Tico's own envelope status.
@@ -114,10 +125,12 @@ def mint_failure(exc, repo):
             MISSING_KEY, "The stored GitHub App key could not be decrypted"}
         timeout |= exc.extra.get("timed_out") is True
         retryable |= exc.retryable
+        limited = exc.extra.get("rate_limited") is True
     elif isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-    auth |= status in (401, 403)
-    retryable = not auth and (timeout or retryable or status in (408, 429)
+        limited = rate_limited(exc.response)
+    auth = not limited and (auth or status in (401, 403))
+    retryable = not auth and (limited or timeout or retryable or status in (408, 429)
                              or isinstance(status, int) and 500 <= status < 600)
     # Only fixed-format diagnostic fields are safe to include; never copy Problem.detail.
     cause = []
@@ -127,14 +140,35 @@ def mint_failure(exc, repo):
         cause.append(f"HTTP {status}")
     if timeout:
         cause.append("timed out")
+    if limited:
+        cause.append("rate limited")
     if not cause:
         cause.append(type(exc).__name__)
     action = "the GitHub App could not sign in" if auth else "GitHub token request failed"
-    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable)}
+    # `auth` travels with the refusal so a refused move remembers whether access help is needed
+    # (backend/move_retry.py); the prose `why` already names it, so this adds no new exposure.
+    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable),
+            "auth": bool(auth)}
+
+
+def answered_cause(why):
+    """Cause flags for GitHub's answer to a content read (backend/move_retry.py): a 401 or plain 403 needs access help;
+    a rate limit, 408 or 5xx is temporary. Any other failure carries no cause. `why` is this module's own fixed-format
+    string, never a remote body."""
+    if why == "GitHub answered 403 rate limited":
+        return {"retryable": True, "auth": False}
+    match = re.fullmatch(r"GitHub answered (\d+)", why or "")
+    status = int(match[1]) if match else None
+    if status in (401, 403):
+        return {"retryable": False, "auth": True}
+    if status == 408 or status == 429 or isinstance(status, int) and 500 <= status < 600:
+        return {"retryable": True, "auth": False}
+    return {"retryable": False, "auth": False}
 
 
 def snapshot(service, prs):
     from . import hubdb as H
+    from .github_app import rate_limited
     """Read current PR heads and all checks outside the database write lock.
 
     An unconfigured GitHub integration uses its signed-webhook link snapshot.
@@ -145,6 +179,7 @@ def snapshot(service, prs):
             return None
     out = {}
     for pr in prs:
+        repo = None
         try:
             repo = pr.get("repo")
             if not repo or not pr.get("number"):
@@ -159,7 +194,8 @@ def snapshot(service, prs):
             def read(path, params=None):
                 response = service._call("GET", base + path, headers=headers, params=params)
                 if response.status_code != 200:
-                    raise ValueError(f"GitHub answered {response.status_code}")
+                    limited = " rate limited" if response.status_code == 403 and rate_limited(response) else ""
+                    raise ValueError(f"GitHub answered {response.status_code}{limited}")
                 return response.json()
             data = read(f"/pulls/{pr['number']}")
             head = data["head"]["sha"]
@@ -193,10 +229,15 @@ def snapshot(service, prs):
                 raise ValueError("head changed during collection")
             out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now()}
         except ValueError as exc:
-            out[pr["id"]] = {"error": True, "why": str(exc)}
+            # An unresolved link is Tico's own record, not GitHub's answer: relinking clears it, not access help.
+            out[pr["id"]] = {"error": True, "why": str(exc), **answered_cause(str(exc)),
+                             **({"local": True} if str(exc) == "unresolved PR" else {})}
         except Exception as exc:
-            # Only the exception's type: a transport error's text can carry request details.
-            out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__}
+            # Only the exception's type: a transport error's text can carry request details. Its cause flags
+            # still travel, classified the same way as a token failure, so a refused move remembers them.
+            cause = mint_failure(exc, repo)
+            out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
+                             "retryable": cause["retryable"], "auth": cause["auth"]}
     return out
 
 
@@ -293,10 +334,13 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
-            # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
+            # Every move reads GitHub afresh, so a transient failure clears on a plain retry. The cause flags
+            # travel with the refusal so the remembered move routes like the read reported (backend/move_retry.py).
+            # A changed link or a missing recorded head is Tico's own record, not a GitHub failure.
+            local = detail.get("local", False) if detail.get("error") else True
             return ("ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
                                   "Retry the review move. Anyone allowed to move this ticket can retry.",
-                    detail.get("retryable", False))
+                    detail.get("retryable", False), detail.get("auth", False), local)
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
@@ -324,7 +368,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
             return ("receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}")
 
 
-def reject(c, actor, row, kind, head, pr, text, retryable=False):
+def reject(c, actor, row, kind, head, pr, text, retryable=False, auth=False, local=False):
     from . import hubdb as H
     from . import move_retry
     text += move_retry.hint(kind, text)
@@ -332,7 +376,11 @@ def reject(c, actor, row, kind, head, pr, text, retryable=False):
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
         exc.retryable = retryable
-        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text}
+        # The read's verdict on the failure, in the notice's own vocabulary: a retryable read is temporary and
+        # never routes; an access failure routes on the first refusal; a local one (Tico's own link record) never
+        # routes. `remember` keeps these (backend/move_retry.py).
+        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text,
+                           "temporary": bool(retryable), "devops": bool(auth), "local": bool(local)}
         raise
 
 
@@ -353,5 +401,9 @@ def notify(c, actor, notice):
                  "AND json_extract(refs_json,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return
+    # A temporary GitHub failure is Tico's to retry on its timer (backend/move_retry.py) and nobody's to fix: the
+    # comment stays on the ticket without waking its owner for a turn with nothing to do, which by the time the
+    # owner's queue reaches it reads a ticket the retry has already moved.
     H._write_message(c, H.KEEPER, row["owner"], notice["text"], conv, "say",
-                     {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True)}, None, None)
+                     {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True),
+                      **({"quiet": True} if notice.get("temporary") else {})}, None, None)

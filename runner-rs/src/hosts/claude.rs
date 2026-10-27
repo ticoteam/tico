@@ -15,7 +15,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, tool_summary, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
 use crate::util::{iso, log, py_dumps, text_of};
 
 pub const STREAM_ARGS: &[&str] = &[
@@ -855,7 +855,7 @@ impl ClaudeHost {
                     let mut inner = self.inner();
                     let up = inner.up && !inner.interrupted.contains(&turn);
                     match inner.threads.get_mut(&tid) {
-                        Some(t) if up && (t.started || t.fork_from.is_some()) => {
+                        Some(t) if up && !t.settings.require_existing_session && (t.started || t.fork_from.is_some()) => {
                             t.started = false;
                             t.fork_from = None;
                             t.session_id = None;
@@ -1230,6 +1230,11 @@ impl ClaudeHost {
         // A tool server's arguments are its own: a `path` or `command` there can carry anything.
         let summary = if name.starts_with("mcp__") { String::new() } else { tool_summary(input) };
         let mut fields = json!({"tool": name, "status": "started", "item_id": id, "summary": summary, "parent_id": parent});
+        if name == "Bash" {
+            if let Some(command) = input["command"].as_str() {
+                fields["outside_actions"] = json!(shell_outside_actions(command));
+            }
+        }
         if let Some(s) = subagent {
             fields["subagent"] = s;
         }
@@ -1536,7 +1541,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fake-claude-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_claude(&dir);
-        for (path, expected) in crate::hosts::fixtures::cases("claude") {
+        for (path, mut expected) in crate::hosts::fixtures::cases("claude") {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let host = ClaudeHost::new("acme", vec![cmd.clone()], tx);
             host.start().await.unwrap();
@@ -1555,6 +1560,12 @@ mod tests {
                     break;
                 }
             }
+            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            for event in &mut expected {
+                if event["tool"] == "Bash" && event["status"] == "started" {
+                    event["outside_actions"] = json!([]);
+                }
+            }
             assert_eq!(got, expected, "{}", path.display());
             // The init line hands the session to Claude: the next turn resumes it.
             let sid = host.session_id(&thread);
@@ -1563,6 +1574,19 @@ mod tests {
             assert_eq!(&argv[argv.len() - 2..], &["--resume".to_string(), sid]);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recovery_shell_events_match_the_shared_api_fixture() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        for case in cases {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let host = ClaudeHost::new("acme", vec![], tx);
+            host.tool_started(&json!({"id": "tool-1", "name": "Bash", "input": {"command": case["command"]}}), None, "th", "tu");
+            let got = rx.try_recv().unwrap();
+            assert_eq!(got, case["claude"], "{}", case["command"]);
+            assert!(!got.to_string().contains("synthetic-private-marker"));
+        }
     }
 
     #[test]
@@ -1909,7 +1933,7 @@ mod tests {
     }
 
     /// One turn on a `claude` that writes `first` and exits 1 the first time it runs, and `then` the next time.
-    async fn error_first_turn(first: &str, then: &str, resumed: bool) -> Vec<Value> {
+    async fn error_first_turn(first: &str, then: &str, resumed: bool, require_existing_session: bool) -> Vec<Value> {
         let dir = std::env::temp_dir().join(format!("claude-err-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("first.jsonl"), first).unwrap();
@@ -1923,6 +1947,7 @@ mod tests {
         let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
         host.start().await.unwrap();
         let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.require_existing_session = require_existing_session;
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
         let thread = if resumed { host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings) } else { host.start_thread(&settings) };
         host.start_turn(&thread, "hello", None).unwrap();
@@ -1942,14 +1967,23 @@ mod tests {
     async fn a_zero_turn_error_before_the_prompt_is_still_the_turns_outcome() {
         // A resumed session that is not on this computer: restarted once as a new session, as before.
         let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
-        let got = error_first_turn(&format!("{missing}\n"), &format!("{}\n{}\n", assistant_line("m1", "Recovered."), result_line("Recovered.")), true).await;
+        let got = error_first_turn(&format!("{missing}\n"), &format!("{}\n{}\n", assistant_line("m1", "Recovered."), result_line("Recovered.")), true, false).await;
         assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
         // Any other error before the prompt, on a fresh session too, fails the turn with its own text.
         let refused = r#"{"type": "result", "subtype": "success", "is_error": true, "num_turns": 0, "result": "Invalid API key · Please run /login", "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
-        let got = error_first_turn(&format!("{refused}\n"), "", false).await;
+        let got = error_first_turn(&format!("{refused}\n"), "", false, false).await;
         let failed = got.iter().find(|e| e["kind"] == "turn_failed").expect("a failed turn");
         assert!(text_of(&failed["error"]).contains("Invalid API key"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn a_capacity_continuation_with_a_missing_claude_session_never_restarts() {
+        let missing = r#"{"type":"result","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: 5b1"]}"#;
+        let then = format!("{}\n{}\n", assistant_line("m1", "Repeated work."), result_line("Repeated work."));
+        let got = error_first_turn(&format!("{missing}\n"), &then, true, true).await;
+        assert!(got.iter().any(|e| e["kind"] == "turn_failed" && text_of(&e["error"]).contains("No conversation found")), "{got:?}");
+        assert!(!got.iter().any(|e| e["kind"] == "turn_completed" || (e["kind"] == "diagnostic" && e["text"] == RESTORING)), "{got:?}");
     }
 
     #[tokio::test]

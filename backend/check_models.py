@@ -53,12 +53,12 @@ def authors_of(c, settings, task_id):
 
 def _auto(c, settings, bot, authors):
     """The company's check model for work by `authors` (providers.check_order): the first from a provider none of
-    them is, that this bot's computer does not refuse."""
+    them is, that this bot's computer does not refuse. Another provider is a preference, not a condition: with none
+    that can run, the first of the authors' own providers that can, and the third value says so."""
     record = providers.load(c, settings)
+    order = providers.check_order(record)
     refused = []
-    for row in providers.check_order(record):
-        if row["provider"] in authors:
-            continue
+    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
         model = providers.MODEL_BY_ID[row["model"]]
         harnesses = tuple(model.get("harnesses") or (row["runtime"],))
         harness = next((h for h in harnesses if runtime_of(h) == row["runtime"]), harnesses[0])
@@ -66,22 +66,30 @@ def _auto(c, settings, bot, authors):
         if can.get("can_run") is False:
             refused.append(can.get("problem") or row["runtime"])
             continue
-        return row["runtime"], row["model"]
-    names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
+        if row["provider"] not in authors:
+            return row["runtime"], row["model"], ""
+        names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
+        return row["runtime"], row["model"], (f"no provider other than {' or '.join(names) or 'the author'} can run "
+                                              "it, so it runs on the author's own")
     raise CheckModelError("runner_not_ready" if refused else "check_model",
-                          f"No check model from a provider other than {' or '.join(names) or 'the author'}"
-                          + (": " + "; ".join(refused[:3]) if refused else
-                             ": enable another AI provider in Settings > Computers, or name one with --check-model"))
+                          "No check model can run" + (": " + "; ".join(refused[:3]) if refused else
+                                                      ": enable an AI provider in Settings > Computers, or name one "
+                                                      "with --check-model"))
 
 
 def choose(c, settings, bot, spec, role, authors=()):
     """The check model a subtask of `bot` may name, or CheckModelError. The company must have the provider
     on (Settings > Computers), the model must be current, and the bot's computer must not report that
-    runtime signed out. `auto` takes the company's check model for work by `authors`, never one of their providers."""
+    runtime signed out. `auto` takes the company's check model for work by `authors`, from another provider when one
+    can run it and from theirs when none can; then `note` on the result says so for the task's history."""
     if role not in ROLES:
         raise CheckModelError("role", "Choose --role review or --role check")
     record = providers.load(c, settings)
-    runtime, model = _auto(c, settings, bot, set(authors)) if str(spec or "").strip() == AUTO else parse(spec)
+    note = ""
+    if str(spec or "").strip() == AUTO:
+        runtime, model, note = _auto(c, settings, bot, set(authors))
+    else:
+        runtime, model = parse(spec)
     try:
         runtime, model = providers.complete_choice(record["enabled"], runtime, model)
     except providers.ProviderError as exc:
@@ -95,14 +103,15 @@ def choose(c, settings, bot, spec, role, authors=()):
     if can.get("can_run") is False:
         raise CheckModelError("runner_not_ready", can.get("problem") or f"{runtime} cannot run on this bot's computer")
     return {"runtime": runtime, "model": model, "harness": harness,
-            "effort": str(row.get("default_effort") or ""), "role": role}
+            "effort": str(row.get("default_effort") or ""), "role": role, **({"note": note} if note else {})}
 
 
 def record(c, actor, task_id, check):
     c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created) "
               "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
                                           check["effort"], check["role"], actor, H.now()))
-    H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}", check["role"])
+    H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
+                  check["role"] + (f"; {check['note']}" if check.get("note") else ""))
 
 
 def of(c, task_id, bot):
@@ -135,8 +144,8 @@ def _out_of_quota(c, runner_id, runtime, settings=None):
 def move_on(c, settings, bot, task_id, check, runner_id):
     """When a usage limit stops a check on `runner_id`'s default login that Health already marks out of quota, the
     next check model it runs on from its next turn, or None (no next model: the check keeps its hold). The next is the
-    first in the company's check order that is not the limited model, not from a provider whose work it checks, not on
-    another login out of quota there, and that this bot's computer can run. It goes back to its first model once
+    first in the company's check order that is not the limited model, not on another login out of quota there, and
+    that this bot's computer can run, from a provider other than the work's authors' when one qualifies. It goes back to its first model once
     that model's login is not out of quota any more (of)."""
     from .health_monitor import out_of_quota_logins
     from .repositories import save_metadata
@@ -146,8 +155,9 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
         return None
     authors = authors_of(c, settings, parent_of(c, task_id))
-    for row in providers.check_order(providers.load(c, settings)):
-        if row["model"] == check["model"] or row["runtime"] in out or row["provider"] in authors:
+    order = providers.check_order(providers.load(c, settings))
+    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
+        if row["model"] == check["model"] or row["runtime"] in out:
             continue
         try:
             nxt = choose(c, settings, bot, f"{row['runtime']}:{row['model']}", first["role"])
@@ -226,7 +236,7 @@ def runs_here(readiness, check):
 def review_default(c, settings, owner, parent_id):
     """(check, why not) for a subtask whose owner bot is set to review on the company's check model
     (`review_model: check`) and whose parent is someone else's work. The check is None when that does not apply, or
-    when the author is unknown or no other provider can run it; then `why not` says so for the task's history, and
+    when the author is unknown or no check model can run it; then `why not` says so for the task's history, and
     the bot works on its own model, as before, rather than the review being refused."""
     from .shared_bots import follow
     parent = H.task(c, parent_id) if parent_id else None

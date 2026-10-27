@@ -61,11 +61,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on PERSON]          with --status waiting: the person it waits on (their Needs you);
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
+                    [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
+                                           blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
     hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
                                            wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
+    hub task waive-qa <id> --head SHA --reason "..."
+                                           a person waives a Dev ticket's In QA step for that exact head; a waiver,
+                                           never a QA pass (CI and both reviews on that head stay required)
     hub task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
     hub task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
@@ -919,8 +924,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--check-model", metavar="RUNTIME[:MODEL]", nargs="?", const="auto",
                    help="run this subtask of yours on another model, in its own session (e.g. grok, codex:gpt-6.1-sol); "
-                        "with no value (put the flag after the parent id), the company's check model from a provider other "
-                        "than the parent's authors")
+                        "with no value (put the flag after the parent id), the company's check model, from a provider other "
+                        "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
                    help="with --check-model: what the other model is asked for (default check)")
     s.set_defaults(fn="task child create")
@@ -948,6 +953,9 @@ def parser():
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
     s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
     s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
+    s.add_argument("--blocker", nargs=3, metavar=("REPO", "STATUS", "ENDPOINT"),
+                   help="what refused, for a task to DevOps or a person: e.g. ticoteam/tico 403 workflow_dispatch. "
+                        "An open ask about the same three joins this task instead of a second ask")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
@@ -1021,7 +1029,9 @@ def parser():
                         "ahead on its own: a send, spending or a delete waits for an answer")
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.set_defaults(fn="task question")
-    s = task.add_parser("update")
+    s = task.add_parser("update", description="Move your task; to reopen, set doing or open; the requester closes. "
+                        "Putting it back to open requires a note. Automatic starts wait 60 minutes unless it gets "
+                        "a comment, a new link or a blocker finishes.")
     s.add_argument("--visibility", choices=['public', 'private'])
     s.add_argument("--public-title", dest="public_title")
     s.add_argument("--public-summary", dest="public_summary")
@@ -1040,7 +1050,8 @@ def parser():
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it. "
                         "--note is then your ask to them: one or two plain sentences saying what you need and what "
                         "happens after, at most 40 words, with no ids, hashes, file paths or tool names (\"PR #1555\" is "
-                        "fine)")
+                        "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
+                        "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")
@@ -1178,6 +1189,26 @@ def parser():
     s.add_argument("--note")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task close")
+    s = task.add_parser("bulk", help="one change to every task a filter selects (at most 200): step, status, owner, "
+                                     "tags or close; --dry-run counts first. Each task changes as its own update would")
+    s.add_argument("action", choices=["step", "status", "owner", "tags", "close"])
+    s.add_argument("value", nargs="?", help="the step, status or owner to set (none for tags or close)")
+    s.add_argument("--add", action="append", help="with tags: a tag to add; repeat for more")
+    s.add_argument("--remove", action="append", help="with tags: a tag to take off; repeat for more")
+    s.add_argument("--note", help="what changed, or why; goes with each task's change")
+    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would change; change nothing")
+    for name, word in (("owner", "owner (a bot slug, a human id or me)"), ("requester", "requester"),
+                       ("label", "tag"), ("type", "type (id or name)"), ("step", "step (id or name)"),
+                       ("updated-since", "changed after this ISO-8601 time"), ("member", "person or bot on it by role"),
+                       ("role", "role, with --where-member")):
+        s.add_argument("--where-" + name, dest="where_" + name.replace("-", "_"), help="only tasks with this " + word)
+    s.add_argument("--where-status", dest="where_status", action="append", choices=list(TASK_STATUSES),
+                   help="only tasks with this status; repeat for more")
+    s.add_argument("--where-lane", dest="where_lane", choices=["company", "product"])
+    s.add_argument("--where-number", dest="where_number", type=int, help="only this task number")
+    s.add_argument("--where-snoozed", dest="where_snoozed", choices=["hide", "only", "all"])
+    s.add_argument("--where-id", dest="where_ids", action="append", help="only this task (id or number); repeat for more")
+    s.set_defaults(fn="task bulk")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
     s.add_argument("id")
     s.add_argument("file")
@@ -1237,6 +1268,12 @@ def parser():
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")
+    s = task.add_parser("waive-qa", help="a person waives a Dev ticket's current In QA step for one exact pull "
+                        "request head, with a reason; recorded as a waiver, never as a QA pass")
+    s.add_argument("id")
+    s.add_argument("--head", required=True, help="the pull request's current head: the full 40-character sha")
+    s.add_argument("--reason", required=True, help="why QA is waived, in plain words")
+    s.set_defaults(fn="task waive-qa")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")
@@ -2645,7 +2682,8 @@ def parser():
                        help="wake starts a run, note and ignore wait; ask raises a Needs-you; action runs params.action")
         s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}; '
                                       'for a webhook event only {"trigger":"shop","type":"order.*"}')
-        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
+        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"assign","owner":"ops"}, '
+                                        '{"action":"add_tag","tag":"urgent"} or {"action":"remove_tag","tag":["triage"]}; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
                                         'or {"action":"send_webhook","webhook":"<id>","type":"custom.order","data":{"id":"{{data.order}}"}}; '
                                         '{"action":"create_task","owner":"ops","title":"Order {{data.order}}","body":"..."} or '
                                         '{"action":"forward","webhook":"<id>"} (webhook.received only); '

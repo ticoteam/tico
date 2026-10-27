@@ -535,9 +535,13 @@ def requester_hears_block(conn, row, blocker, actor):
 def _tell_requester(conn, actor, row, blocker):
     """The requester's wake for a block (requester_hears_block); a Dev ticket's own notice carries it instead."""
     from .ticket_notices import _engineering
+    from .check_blocked import kind as check_kind
     H = _H()
     if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
         return
+    parent = H.task(conn, parent_of(conn, row["id"]) or "")
+    if check_kind(row) and parent and _engineering(conn, parent) and parent["owner"] == row["requester"]:
+        return                        # its builder hears once, on the ticket (check_blocked.notify)
     H._wake(conn, row, row["requester"], f"Blocked: {row['title']}: waits on {blocker['title']}",
             {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)
 
@@ -557,12 +561,16 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
     H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
                                                   **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {})})
+    from .auto_tasks import back_off
+    back_off(conn, H.task(conn, task_id))
     from .roadmap_flow import sync
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too
     from .task_blocked import hold
     if H.task(conn, blocker_id)["status"] in H.ACTIVE_STATUSES:
         hold(conn, task_id, "Waiting on a dependency")
+    from .check_blocked import changed
+    changed(conn, task_id)            # a blocked Review or QA check shows on its ticket (Dev 553)
     blocked(conn, actor, row, blocker_id)
     _tell_requester(conn, actor, H.task(conn, task_id), H.task(conn, blocker_id))
     return True
@@ -581,6 +589,10 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
     reconcile(conn, task_id)
+    from .check_blocked import changed
+    changed(conn, task_id)
+    from .blocker_asks import unjoined
+    unjoined(conn, actor, task_id, blocker_id)
     from .roadmap_flow import sync
     sync(conn, task_id)
     return True

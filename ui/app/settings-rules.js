@@ -18,11 +18,13 @@ const RULE_BUILTIN_GROUPS = {always: 'Always wakes', awaited: 'Awaited', filter:
   pr_checks: 'Pull requests', system: 'System'};
 const RULE_OUTCOMES = {wake: 'wake the bot', note: 'leave a note for its next run', batch: 'batch it', ignore: 'drop it', ask: 'ask a person', action: 'do an action'};
 const RULE_ACTIONS = {close: 'close the task', move_step: 'move the step', set_wait: 'set a wait', relate: 'relate tasks', note: 'add a note',
+  assign: 'assign it', add_tag: 'add a tag', remove_tag: 'remove a tag',
   wake_bot: 'wake a bot', send_webhook: 'send a webhook', create_task: 'make a task', forward: 'forward the call'};
 // The actions that need no task (backend/rules.py EVENT_ACTIONS): the only ones an event with no task can run. The
 // last two (ONCE_ACTIONS) run only on such an event, and forward only on webhook.received.
 const RULE_EVENT_ACTIONS = ['wake_bot', 'send_webhook', 'create_task', 'forward'];
 const RULE_ONCE_ACTIONS = ['create_task', 'forward'];
+const RULE_TAG_ACTIONS = ['add_tag', 'remove_tag'];
 const RULE_ACTORS = {human: 'a person', bot: 'a bot', keeper: 'Tico'};
 const RULE_ROLES = {owner: 'owns the task', requester: 'requested the task', qa: "is the task's QA", release_manager: 'is the Release Manager',
   other: 'neither owns nor requested it'};
@@ -64,6 +66,9 @@ function ruleThenWords(r) {
   if (p.action === 'send_webhook' && p.webhook) return `send ${p.type || 'an event'} to ${ruleHookName(p.webhook)}`;
   if (p.action === 'create_task' && p.owner) return `give ${empName(p.owner)} a task`;
   if (p.action === 'forward' && p.webhook) return `forward it to ${ruleHookName(p.webhook)}`;
+  if (p.action === 'assign' && p.owner) return 'assign it to ' + actorLabel(p.owner);
+  if (p.action === 'add_tag' && p.tag) return 'tag it ' + ruleList(p.tag).join(', ');
+  if (p.action === 'remove_tag' && p.tag) return 'take off ' + ruleList(p.tag).join(', ');
   const what = RULE_ACTIONS[p.action] || 'do an action';
   return p.action === 'move_step' && p.step ? `move it to ${p.step}` : p.action === 'set_wait' && p.waiting_on ? `set it waiting on ${p.waiting_on}` : what;
 }
@@ -209,12 +214,14 @@ function rulesPaint() {
 async function rulesLoad() {
   const f = rulesFor(), scope = f.kind ? `&scope_kind=${f.kind}&scope_id=${encodeURIComponent(f.id)}` : '';
   let offset = 0, out = null;
-  for (let page = 0; page < 5; page++) {
+  while (true) {
     const data = await get(`/v2/rules?limit=200&offset=${offset}${scope}`);
     data.rules ||= [];
     if (!out) out = data; else out.rules.push(...data.rules);
     if (!data.more) break;
-    offset += 200;
+    const next = data.next_offset ?? offset + 200;
+    if (!(next > offset)) throw new Error('Could not read the complete rules list');
+    offset = next;
   }
   // A task's or bot's own listing has no built-ins, and the event words come from them; read them once.
   if (f.kind && !out.rules.some(r => r.scope_kind === 'builtin')) {
@@ -227,7 +234,7 @@ async function rulesLoad() {
 async function renderSettingsRules(force) {
   const el = $('#set-rules'); if (!el) return;
   const task = RULES_FOR, f = rulesFor();
-  if (RULES && el.dataset.rulesFor === task && !force && Date.now() - RULES_AT < 60000) { rulesPaint(); return; }
+  if (RULES && el.dataset.rulesFor === task && !force && Date.now() - RULES_AT < 60000) { rulesPaint(); void taskSettingsOpenEditor(); return; }
   RULES_AT = Date.now();
   if (f.kind === 'task' && !RULES_FOR_TITLE) get('/v2/tasks/' + encodeURIComponent(f.id)).then(t => {
     RULES_FOR_TITLE = (t.task || t).title || '';
@@ -242,8 +249,10 @@ async function renderSettingsRules(force) {
   if (RULES_BUSY.size || formBusy(el.querySelector('[data-rules-list]'))) return;
   rulesPaint();
   settingsReveal('#set-rules-card');
+  void taskSettingsOpenEditor();
 }
 function ruleReplace(rule) {
+  taskSettingsChanged();
   if (!RULES || !rule) return;
   const at = RULES.rules.findIndex(r => r.id === rule.id);
   // A write answers the row without its 7-day figures; keep the ones read last.
@@ -321,12 +330,17 @@ function ruleStepHTML(field, label, value, steps, extra = '') {
 function ruleParams(v, before) {
   const action = String(v.get('action')), out = before.action === action ? {...before} : {};
   out.action = action;
+  // create_task's owner is a bot; assign's is a bot or a person, picked from its own list.
+  const owner = action === 'assign' ? 'param_assignee' : 'param_owner';
   for (const [field, key] of [['param_step', 'step'], ['param_waiting_on', 'waiting_on'], ['param_task', 'task'], ['param_note', 'note'],
-    ['param_bot', 'bot'], ['param_text', 'text'], ['param_webhook', 'webhook'], ['param_type', 'type'], ['param_owner', 'owner'],
-    ['param_title', 'title'], ['param_body', 'body']]) {
+    ['param_bot', 'bot'], ['param_text', 'text'], ['param_webhook', 'webhook'], ['param_type', 'type'], [owner, 'owner'],
+    ['param_title', 'title'], ['param_body', 'body'], ['param_tag', 'tag']]) {
     const text = String(v.get(field) || '').trim();
     if (text) out[key] = text; else delete out[key];
   }
+  // Tags are typed comma-separated; the server takes one or a list.
+  if (RULE_TAG_ACTIONS.includes(action) && out.tag) out.tag = out.tag.split(',').map(t => t.trim()).filter(Boolean);
+  else delete out.tag;
   if (action !== 'move_step') delete out.step;
   if (action !== 'set_wait') delete out.waiting_on;
   if (action !== 'relate') delete out.task;
@@ -334,7 +348,8 @@ function ruleParams(v, before) {
   if (action !== 'send_webhook' && action !== 'forward') delete out.webhook;
   if (action !== 'send_webhook') { delete out.type; delete out.data; }
   else out.data = ruleDataParse(v.get('param_data'));
-  if (action !== 'create_task') { delete out.owner; delete out.title; delete out.body; }
+  if (action !== 'create_task' && action !== 'assign') delete out.owner;
+  if (action !== 'create_task') { delete out.title; delete out.body; }
   if (RULE_EVENT_ACTIONS.includes(action)) delete out.note;
   return out;
 }
@@ -353,8 +368,10 @@ function ruleDataParse(text) {
 // call's type), its own scopes (team, department, bot), and acts only with wake_bot or send_webhook; a wake or note
 // on it at a team or department names the bot to tell.
 async function ruleEditor(rule, preset = null) {
+  let tagKeys = [];
   const [listing] = await Promise.all([RULES || get('/v2/rules?scope_kind=builtin').catch(() => ({})), eventTypesLoad().catch(() => []),
-    ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad()]);
+    ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad(),
+    get('/v2/tags?is_template=false').then(d => { tagKeys = (d.tags || []).map(t => t.key); }).catch(() => {})]);
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog';
   const base = rule || preset || {};
@@ -367,12 +384,14 @@ async function ruleEditor(rule, preset = null) {
   const sourceless = [...new Set([...(listing.sourceless_events || []), ...EVENT_TYPES.filter(t => t.sourceless).map(t => t.name)])];
   const isSrc = e => sourceless.includes(e);
   const srcScope = k => ['team', 'department', 'bot'].includes(k);
-  let kind = rule?.scope_kind || f.kind || scopes[0]?.[0] || 'task';
+  let kind = base.scope_kind || f.kind || scopes[0]?.[0] || 'task';
   if (!rule && isSrc(event0) && !srcScope(kind)) kind = scopes.find(([k]) => srcScope(k))?.[0] || kind;
   const params = base.params || {};
   // Until the form exists, the steps come from the rule's own scope (or the filtered one a new rule starts in).
-  let steps = () => ruleStepsFor(rule?.scope_kind || kind, rule?.scope_id ?? (kind === f.kind ? f.id : ''));
+  let steps = () => ruleStepsFor(rule?.scope_kind || kind, base.scope_id ?? (kind === f.kind ? f.id : ''));
   const message = ['*', ...(listing.events || [])];
+  const supportedMessageEvents = new Set(message);
+  const pendingTaskTrigger = e => e.startsWith('task.') && !supportedMessageEvents.has(e);
   if (!message.includes(event0) && !isSrc(event0)) message.push(event0);
   const events = message.map(e => opt(e, (RULE_FLOOR.has(e) ? 'Always: ' : '') + ruleEventWords(e), event0)).join('')
     + (sourceless.length ? `<optgroup label="No task">${sourceless.map(e => opt(e, cap(ruleEventWords(e)), event0)).join('')}</optgroup>` : '');
@@ -381,14 +400,22 @@ async function ruleEditor(rule, preset = null) {
     if (cur && !mine.includes(cur)) mine.push(cur);
     return `<option value="">Choose</option>${mine.map(n => [n, empName(n)]).sort((a, b) => a[1].localeCompare(b[1])).map(([n, w]) => opt(n, w, cur)).join('')}`;
   };
+  // An assign rule hands the task to a bot or a person: both are offered, by the actor id the server stores.
+  const owners = cur => {
+    const list = [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
+      ...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)])];
+    if (cur && !list.some(([a]) => a === cur)) list.push([cur, actorLabel(cur)]);
+    return `<option value="">Choose</option>${list.sort((a, b) => a[1].localeCompare(b[1])).map(([a, w]) => opt(a, w, cur)).join('')}`;
+  };
   const triggers = (ROUTINE_TRIGGERS || []).map(t => opt(t.id, t.name, first(when.trigger))).join('');
   const hooks = (WH_HOOKS || []).map(h => opt(h.id, h.name, params.webhook || '')).join('');
   const sendTypes = EVENT_TYPES.filter(t => t.outbound !== false && !t.name.includes('*')).map(t => `<option value="${esc(t.name)}">`).join('');
   const data = params.data && Object.keys(params.data).length ? JSON.stringify(params.data, null, 2) : '';
   dialog.innerHTML = `<form class="task-rule-form" data-rule-form><header><h2>${rule ? 'Edit rule' : 'Add rule'}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
     ${rule ? `<p class="muted">${esc(ruleScopeWords(rule))}</p>` : `<label>Scope<select name="scope_kind" data-rule-kind>${scopes.map(([k, v]) => opt(k, v, kind)).join('')}</select></label>
-    <div data-rule-target>${ruleTargetHTML(kind, kind === f.kind ? f.id : '')}</div>`}
+    <div data-rule-target>${ruleTargetHTML(kind, base.scope_id ?? (kind === f.kind ? f.id : ''))}</div>`}
     <label>WHEN<select name="event">${events}</select></label>
+    <p class="settings-cell-note" data-rule-pending-trigger hidden>This task trigger will be available in the next stage of Task settings. You can review this preset now; it cannot be saved yet.</p>
     <div class="wr-when" data-rule-when-msg>
       <label>From<select name="actor">${opt('', 'Anyone', first(when.actor))}${Object.entries(RULE_ACTORS).map(([k, v]) => opt(k, v, first(when.actor))).join('')}</select></label>
       <label>Bot's role<select name="role">${opt('', 'Any', first(when.role))}${Object.entries(RULE_ROLE_LABELS).map(([k, v]) => opt(k, v, first(when.role))).join('')}</select></label>
@@ -410,7 +437,10 @@ async function ruleEditor(rule, preset = null) {
       <span class="wr-field" data-rule-param="move_step">${ruleStepHTML('param_step', 'To step', params.step || '', steps(), ' required')}</span>
       <label data-rule-param="set_wait">Waits on<input name="param_waiting_on" maxlength="120" ${params.blocked_by ? '' : ' required'} value="${esc(params.waiting_on || '')}"></label>
       <label data-rule-param="relate">Task ID<input name="param_task" maxlength="120" required value="${esc(params.task || '')}"></label>
-      <label data-rule-param="close move_step set_wait relate note">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
+      <label data-rule-param="assign">Owner<select name="param_assignee" required>${owners(params.action === 'assign' ? params.owner || '' : '')}</select></label>
+      <label data-rule-param="add_tag remove_tag">Tags<input name="param_tag" list="rule-tag-keys" maxlength="400" required spellcheck="false" placeholder="urgent, billing" value="${esc(RULE_TAG_ACTIONS.includes(params.action) ? ruleList(params.tag).join(', ') : '')}"></label>
+      <datalist id="rule-tag-keys">${tagKeys.map(k => `<option value="${esc(k)}">`).join('')}</datalist>
+      <label data-rule-param="close move_step set_wait relate note assign add_tag remove_tag">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
       <label data-rule-param="wake_bot">Bot<select name="param_bot" required>${bots(params.action === 'wake_bot' ? params.bot || '' : '')}</select></label>
       <label data-rule-param="wake_bot">Text<input name="param_text" maxlength="1000" value="${esc(params.action === 'wake_bot' ? params.text || '' : '')}"></label>
       <label data-rule-param="create_task">Bot<select name="param_owner" required>${bots(params.action === 'create_task' ? params.owner || '' : '')}</select></label>
@@ -433,6 +463,9 @@ async function ruleEditor(rule, preset = null) {
   const scopeNow = () => rule ? rule.scope_kind : form.elements.scope_kind?.value || kind;
   // Only the fields that suit the event, outcome and action show.
   const shown = () => {
+    const pending = pendingTaskTrigger(form.elements.event.value);
+    dialog.querySelector('[data-rule-pending-trigger]').hidden = !pending;
+    form.querySelector('[type="submit"]').disabled = pending;
     const src = isSrc(form.elements.event.value);
     toggle(dialog.querySelector('[data-rule-when-msg]'), !src);
     toggle(dialog.querySelector('[data-rule-when-src]'), src);
@@ -479,7 +512,7 @@ async function ruleEditor(rule, preset = null) {
     dialog.querySelector('[data-rule-target]').onchange = restep;
     restep();
   }
-  const done = () => { dialog.close(); rulesPaint(); };
+  const done = () => { dialog.close(); rulesPaint(); toast('Saved'); };
   form.onsubmit = async ev => {
     ev.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true; error.textContent = '';
     try {
@@ -508,6 +541,7 @@ async function ruleEditor(rule, preset = null) {
     del.disabled = true; error.textContent = '';
     try {
       await post('/v2/rules/' + encodeURIComponent(rule.id) + '/delete', {expected_revision: rule.revision});
+      taskSettingsChanged();
       RULES.rules = RULES.rules.filter(r => r.id !== rule.id); done();
     } catch (e) { error.textContent = e.message || 'Could not delete the rule'; del.disabled = false; }
   };

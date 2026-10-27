@@ -90,10 +90,16 @@ A goal's colour is set automatically:
    signal (`on_track`, `at_risk`, `off_track`) within three weeks; else the tasks that name the goal (all done or one done in
    the last two weeks is green; nothing done in two weeks on a goal at least that old is yellow, and nothing moved in thirty
    days is red).
-3. **Gray, "no data"**, when there is not enough to go on. A goal nothing has scored yet has no colour at all.
+3. **Gray, "no data"**, when there is not enough to go on. If the goal's only measure was archived, the note reads
+   "Its only measure was archived on <date>" instead. A goal nothing has scored yet has no colour at all.
 
-The automatic colour is worked out again whenever a reading, a target, a link or a check-in changes, whenever the CEO
-Bot runs its status pass, and once an hour, because data goes stale as time passes.
+The automatic colour is worked out again whenever a reading, a target, a link, an archive or restore, or a check-in changes,
+whenever the CEO Bot runs its status pass, and once an hour, because data goes stale as time passes.
+
+A sub-goal, a goal that supports another goal, is coloured in exactly the same way as a goal with no parent: from its own
+KPIs, check-ins and tasks. Its parent does not decide or hold back its colour. A sub-goal with data gets its colour on the
+next status pass, including one that had no colour before; a sub-goal with no data stays uncoloured. A colour a person set
+stays, and the CEO Bot only suggests a different one. Turning the regular checks off changes nothing, as for any goal.
 
 ### A human can override
 
@@ -304,9 +310,12 @@ Message bots such as Inbox Manager follow separately under **Message bots**.
 
 Tapping any line opens that owner's panel (a sheet at the bottom on a phone). It lists their goals: tap one to edit its
 words, what it supports and its colour (or **Let CEO Bot set it**). Under each goal are its KPIs, its latest
-check-in and **Add KPI**; tapping a KPI shows its history (a chart and the readings with their evidence), its definition
-and version, its owner, its targets and the CEO Bot's latest check-in, with a way back. **Add goal** and **Add KPI**
-(a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
+check-in, **Post update** and **Add KPI**. **Post update** (a check-in) is there for whoever may colour the goal: say in a
+sentence what is going on and, if you like, how it is going (on track, at risk or off track). On a goal no KPI judges, that
+answer sets its colour for three weeks; a colour a person set stays, as does the colour of a goal whose KPIs carry a target
+and a colour, and the update is kept as your words. Tapping a KPI shows its history (a chart and the readings with their
+evidence), its definition and version, its owner, its targets and the CEO Bot's latest check-in, with a way back.
+**Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. The
 [Strategy line](#the-company-section) sits above everything, each goal in a panel shows its
 [Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
@@ -351,10 +360,16 @@ hub proposal create | list | decide
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
 has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
 
-Archived KPIs stay available in `hub kpi show <id>`, `hub kpi list --archived`, and the owner's **Archived KPIs** view. The active list, goal views,
-CEO Bot freshness checks and Needs you omit them. Archive and restore require the KPI's owner or someone above
-them; each transition is audited, and neither changes its definition history, goal links, readings, privacy or owner.
-The CEO Bot cannot archive a KPI.
+Archived KPIs stay available in `hub kpi show <id>`, `hub kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
+CEO Bot freshness checks and Needs you omit them. A goal panel keeps each archived KPI that the goal links to as one muted
+line, **Archived <date>, not counting**, with no colour. It shows at most three such lines, then **+N archived**. The goal
+tree's chips leave them out. Archive asks first and names each goal you can see that the KPI stops counting toward, done
+and dropped goals included; goals you cannot see are not named. A KPI on no goal asks as before. Archive is never blocked
+by goals, and it removes no goal link. A goal's colour counts only its active KPIs; a done or dropped goal keeps its colour
+when its KPI is archived or restored, because the automatic colour never changes those goals. Restore
+puts the KPI back on every goal it was linked to, with its target, and recomputes each goal's colour. Archive and restore
+require the KPI's owner or someone above them; each transition is audited, and neither changes its definition history,
+goal links, readings, privacy or owner. The CEO Bot cannot archive a KPI.
 
 The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 

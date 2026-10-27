@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -175,6 +175,13 @@ class TaskRelationRef(Contract):
     kind: RelationKind = "related"
 
 
+class TaskBlocker(Contract):
+    """What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."""
+    repo: str = Field(min_length=3, max_length=200)
+    status: StrictInt = Field(ge=100, le=599)
+    endpoint: str = Field(min_length=1, max_length=200)
+
+
 class TaskCreate(Contract):
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
@@ -193,6 +200,7 @@ class TaskCreate(Contract):
     change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
     qa: StrictBool | None = None
     qa_not_checkable_live: StrictBool = False
+    blocker: TaskBlocker | None = None
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).
@@ -234,7 +242,7 @@ class TaskUpdate(Contract):
     close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
-    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
+    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on, or a bot owning its blocker; "" clears
     rank: float | None = None
     type: ID | None = None
     step: str | None = Field(default=None, max_length=200)   # "" clears the step
@@ -258,12 +266,61 @@ class TaskUpdate(Contract):
         return self
 
 
+class TaskFilter(Contract):
+    """The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."""
+    owner: ID | None = None
+    requester: ID | None = None
+    status: str | None = Field(default=None, max_length=200)     # comma-separated, as the list takes it
+    lane: Lane | None = None
+    label: str | None = Field(default=None, max_length=200)      # a tag's key
+    type: ID | None = None
+    step: str | None = Field(default=None, min_length=1, max_length=200)
+    number: TaskNumber | None = None
+    updated_since: str | None = Field(default=None, max_length=100)
+    member: ID | None = None
+    role: str | None = Field(default=None, max_length=100)
+    snoozed: Literal["hide", "only", "all"] | None = None
+    ids: list[ID] | None = Field(default=None, min_length=1, max_length=100)
+
+
+class TaskBulk(Contract):
+    """One change to every task `filter` selects (`POST /api/v2/task-bulk`): `action` names it and its one field
+    carries the value: `step` (id or name), `status`, `owner`, `add` or `remove` (tags, for `tags`), or none for
+    `close`. `note` goes with each task's change, as on a single update."""
+    filter: TaskFilter
+    action: Literal["step", "status", "owner", "tags", "close"]
+    step: str | None = Field(default=None, min_length=1, max_length=200)
+    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    owner: ID | None = None
+    add: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
+    remove: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
+    note: str | None = Field(default=None, max_length=20_000)
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def one_change(self):
+        given = {name for name in ("step", "status", "owner") if getattr(self, name) is not None}
+        if self.add or self.remove:
+            given.add("tags")
+        if given != ({self.action} if self.action != "close" else set()):
+            takes = {"step": "step", "status": "status", "owner": "owner", "tags": "add or remove", "close": "no value"}
+            raise ValueError(f"action {self.action} takes {takes[self.action]} and nothing else")
+        return self
+
+
 class TaskStepInput(Contract):
     public_name: str | None = Field(default=None, max_length=200)      # "" keeps the step off public pages
     id: ID | None = None
     name: ID
     position: int | None = None
     status: Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]
+    # The bots that may do this step's check, and how many open checks each may hold (backend/check_pools.py).
+    # Left out, a step keeps what it had; an empty list makes it no check step.
+    check_pool: list[ID] | None = Field(default=None, max_length=40)
+    check_limit: int | None = Field(default=None, ge=1, le=20)
+    # What the step does with a ticket (backend/step_flow.py): where a check's pass or other outcome sends it, the
+    # merged step, a skip tag, a check timeout. Left out, a step keeps what it had; {} clears it.
+    flow: dict | None = None
 
 
 # What every bot may do with a type's tasks beyond its own (hubdb.TYPE_BOTS): parties keeps them to
@@ -1273,7 +1330,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2202,6 +2259,9 @@ class Completion(Contract):
     # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
     # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
     yielded: bool = False
+    # The model was at capacity after the turn acted, and the runner kept its thread: the job continues that thread
+    # after the capacity hold instead of being held for review (backend/execution.py capacity_continuation).
+    continues: bool = False
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
@@ -2276,6 +2336,14 @@ class BotGoLive(Contract):
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
+
+
+class TaskQaWaiver(Contract):
+    # A person waives a Dev ticket's In QA step for one exact pull request head, with a reason (backend/qa_waivers.py).
+    # Never a QA verdict; CI, both reviews and release approval stay required.
+    head: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    reason: str = Field(min_length=1, max_length=2000)
+    step: str | None = Field(default=None, max_length=200)    # the step to waive; only "In QA" is accepted
 
 
 class TaskDefer(Contract):

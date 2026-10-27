@@ -98,6 +98,45 @@ def wait(run):
         time.sleep(10)
 
 
+def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
+    """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
+    The code is None when the VM never ran the command to the end (setup failed, cancelled, timed out, or the Spot
+    VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does."""
+    ref = git('rev-parse', ref or 'HEAD')
+    if not git('branch', '-r', '--contains', ref):
+        raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
+    command = portable(command)
+    run_id = uuid.uuid4().hex[:12]
+    setup = setup or setup_for(command)
+    print(f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
+          file=sys.stderr, flush=True)
+    # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
+    gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
+       '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
+       '-f', f'minutes={minutes}')
+    found = find_run(run_id, time.monotonic() + 120)
+    print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
+    conclusion = wait(found)
+    logs = ROOT / '.remote-runs' / run_id
+    logs.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as scratch:
+        fetched = subprocess.run(['gh', 'run', 'download', str(found['databaseId']), '-n', f'remote-run-{run_id}',
+                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
+        for name in ('command', 'output.log', 'exit-code'):
+            if (Path(scratch) / name).is_file():
+                (logs / name).write_bytes((Path(scratch) / name).read_bytes())
+    output = logs / 'output.log'
+    if echo and output.is_file():
+        print('\n'.join(output.read_text(errors='replace').splitlines()[-TAIL:]))
+    code_file = logs / 'exit-code'
+    if not fetched or not code_file.is_file():
+        print(f'remote: no result ({conclusion}); see {found["url"]}', file=sys.stderr)
+        return None, logs
+    code = int(code_file.read_text().strip() or 1)
+    print(f'remote: exit code {code}; full log {output.relative_to(ROOT)}; {found["url"]}', file=sys.stderr)
+    return code, logs
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--setup', choices=('python', 'browser', 'rust', 'all'),
@@ -111,42 +150,10 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('a command is required, after --')
-    ref = git('rev-parse', args.ref or 'HEAD')
-    if not git('branch', '-r', '--contains', ref):
-        raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
     if git('status', '--porcelain', '--untracked-files=no'):
-        print(f'remote: uncommitted changes are not included; running {ref[:7]} as pushed', file=sys.stderr)
-    command = portable(command)
-    run_id = uuid.uuid4().hex[:12]
-    setup = args.setup or setup_for(command)
-    print(f'remote: {shlex.join(command)} at {ref[:7]} on {args.cpus} vCPUs ({setup} setup), id {run_id}',
-          file=sys.stderr, flush=True)
-    # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
-    gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
-       '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={args.cpus}',
-       '-f', f'minutes={args.minutes}')
-    run = find_run(run_id, time.monotonic() + 120)
-    print(f'remote: {run["url"]}', file=sys.stderr, flush=True)
-    conclusion = wait(run)
-    logs = ROOT / '.remote-runs' / run_id
-    logs.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['gh', 'run', 'download', str(run['databaseId']), '-n', f'remote-run-{run_id}',
-                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
-        for name in ('command', 'output.log', 'exit-code'):
-            if (Path(scratch) / name).is_file():
-                (logs / name).write_bytes((Path(scratch) / name).read_bytes())
-    output = logs / 'output.log'
-    if output.is_file():
-        print('\n'.join(output.read_text(errors='replace').splitlines()[-TAIL:]))
-    code_file = logs / 'exit-code'
-    if not fetched or not code_file.is_file():
-        # No result file means the VM never ran the command to the end (setup failed, cancelled, timed out).
-        print(f'remote: no result ({conclusion}); see {run["url"]}', file=sys.stderr)
-        return 1
-    code = int(code_file.read_text().strip() or 1)
-    print(f'remote: exit code {code}; full log {output.relative_to(ROOT)}; {run["url"]}', file=sys.stderr)
-    return code
+        print('remote: uncommitted changes are not included; running the pushed commit', file=sys.stderr)
+    code, _ = run(command, setup=args.setup, cpus=args.cpus, minutes=args.minutes, ref=args.ref)
+    return 1 if code is None else code
 
 
 if __name__ == '__main__':

@@ -50,14 +50,14 @@ def test_a_quiet_ticket_at_its_checkpoint_wakes_its_owner_once_and_reaches_the_m
         row = ticket(c)
         at_checkpoint(c, row)
         assert W.at_checkpoint(c, H.task(c, row["id"]), "bot:cpo")
-        assert SA.sweep(c, later(1)) == {"asked": [], "late": [], "untold": []}
-        assert SA.sweep(c, later(2.5)) == {"asked": [row["id"]], "late": [], "untold": []}
+        assert SA.sweep(c, later(1)) == {"asked": [], "late": [], "untold": [], "failed": []}
+        assert SA.sweep(c, later(2.5)) == {"asked": [row["id"]], "late": [], "untold": [], "failed": []}
         [asked] = wakes(c, row["id"], "bot:cpo", "step_status")
         assert W.MARK not in H._json(asked["refs_json"], {}), "the status wake is not held as same_state"
         assert queued(c, asked)
         # Once: later sweeps neither ask again nor tell the manager twice.
-        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [row["id"]], "untold": []}
-        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": []}
+        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [row["id"]], "untold": [], "failed": []}
+        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": [], "failed": []}
         assert len(wakes(c, row["id"], "bot:cpo", "step_status")) == 1
         [late] = wakes(c, row["id"], "bot:coo", "blocker")
         assert "In Progress" in late["body"]
@@ -108,7 +108,7 @@ def test_a_late_ticket_with_no_manager_is_nobody_told_and_stays_retryable(api):
         [late] = wakes(c, row["id"], "bot:coo", "blocker")
         assert "In Progress" in late["body"]
         assert queued(c, late)
-        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": []}
+        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": [], "failed": []}
 
 
 def test_a_late_private_ticket_the_manager_cannot_read_is_not_recorded(api):
@@ -117,7 +117,7 @@ def test_a_late_private_ticket_the_manager_cannot_read_is_not_recorded(api):
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
         assert not H.task_private_readable(c, "bot:coo", H.task(c, row["id"]))
         assert SA.sweep(c, later(2.5))["asked"] == [row["id"]]
-        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [row["id"]]}
+        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [row["id"]], "failed": []}
         assert late_events(c, row["id"]) == []
         assert wakes(c, row["id"], "bot:coo", "blocker") == []
         # Readable again for the same stay: exactly one notice, then silence.
@@ -127,7 +127,7 @@ def test_a_late_private_ticket_the_manager_cannot_read_is_not_recorded(api):
         [late] = wakes(c, row["id"], "bot:coo", "blocker")
         assert "In Progress" in late["body"]
         assert queued(c, late)
-        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": []}
+        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": [], "failed": []}
 
 
 def test_a_person_owned_ticket_gets_no_status_wake(api):
@@ -165,6 +165,67 @@ def test_a_manager_who_is_the_owner_is_never_told(api):
         assert wakes(c, row["id"], "bot:cpo", "blocker") == []
 
 
+def test_a_failing_first_row_does_not_stop_the_sweep_and_leaves_no_sent_marker(api, monkeypatch):
+    # The first ticket in updated order raises when its status wake is written; the second is still asked.
+    with api.app.state.store.transaction() as c:
+        bad, good = ticket(c, "Fix the broken connection"), ticket(c, "Fix the other connection")
+        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-3), bad["id"]))
+        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-2), good["id"]))
+    failing = {"on": True}
+    wake = H._wake
+
+    def flaky(c, row, to, body, refs=None, **kw):
+        if failing["on"] and row["id"] == bad["id"]:
+            raise RuntimeError("synthetic bad row")
+        return wake(c, row, to, body, refs, **kw)
+
+    monkeypatch.setattr(H, "_wake", flaky)
+    with api.app.state.store.transaction() as c:
+        assert SA.sweep(c, later(2.5)) == {"asked": [good["id"]], "late": [], "untold": [], "failed": [bad["id"]]}
+        assert wakes(c, bad["id"], "bot:cpo", "step_status") == []
+        assert c.execute("SELECT 1 FROM events WHERE action=? AND target=?",
+                         (SA.STATUS_EVENT, bad["id"])).fetchone() is None
+        [logged] = c.execute("SELECT last_error FROM service_health WHERE service=?",
+                             (f"background:step_age:{bad['id']}",)).fetchall()
+        assert "synthetic bad row" in logged[0]
+        # Retried on the next pass: the stay still gets exactly one status and one late notice per ticket.
+        failing["on"] = False
+        result = SA.sweep(c, later(4.5))
+        assert result["failed"] == [] and result["asked"] == [bad["id"]]
+        assert set(result["late"]) == {bad["id"], good["id"]}
+        assert len(wakes(c, bad["id"], "bot:cpo", "step_status")) == 1
+        assert len(wakes(c, good["id"], "bot:cpo", "step_status")) == 1
+        assert len(wakes(c, bad["id"], "bot:coo", "blocker")) == 1
+        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": [], "failed": []}
+
+
+def test_a_late_notice_that_fails_is_rolled_back_and_the_next_ticket_is_still_told(api, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        bad, good = ticket(c, "Fix the broken connection"), ticket(c, "Fix the other connection")
+        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-6), bad["id"]))
+        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-5), good["id"]))
+    failing = {"on": True}
+    wake = H._wake
+
+    def flaky(c, row, to, body, refs=None, **kw):
+        if failing["on"] and row["id"] == bad["id"] and (refs or {}).get("step_late"):
+            raise RuntimeError("synthetic bad row")
+        return wake(c, row, to, body, refs, **kw)
+
+    monkeypatch.setattr(H, "_wake", flaky)
+    with api.app.state.store.transaction() as c:
+        assert SA.sweep(c, later(4.5)) == {"asked": [good["id"]], "late": [good["id"]], "untold": [],
+                                           "failed": [bad["id"]]}
+        # The failed row's status wake went with its late notice: no sent marker for either.
+        assert late_events(c, bad["id"]) == []
+        assert wakes(c, bad["id"], "bot:coo", "blocker") == []
+        assert wakes(c, bad["id"], "bot:cpo", "step_status") == []
+        failing["on"] = False
+        assert SA.sweep(c, later(4.6)) == {"asked": [bad["id"]], "late": [bad["id"]], "untold": [], "failed": []}
+        assert len(wakes(c, bad["id"], "bot:coo", "blocker")) == 1
+        assert SA.sweep(c, later(9)) == {"asked": [], "late": [], "untold": [], "failed": []}
+
+
 def test_the_scheduler_tick_runs_the_step_age_sweep(api, monkeypatch):
     from datetime import datetime, timezone
 
@@ -174,7 +235,7 @@ def test_the_scheduler_tick_runs_the_step_age_sweep(api, monkeypatch):
 
     def spy(c, at):
         calls.append(at)
-        return {"asked": [], "late": [], "untold": []}
+        return {"asked": [], "late": [], "untold": [], "failed": []}
 
     monkeypatch.setattr(step_age, "sweep", spy)
     Scheduler(api.app.state.store, api.app.state.execution).tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
@@ -190,3 +251,29 @@ def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
     assert rows[working["id"]]["step_since"]
     assert "step_since" not in rows[queued["id"]]
     assert get(api, "tasks/" + working["id"])["task"]["step_since"] == rows[working["id"]]["step_since"]
+
+
+def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api):
+    from backend import step_flow
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
+        at_checkpoint(c, row)
+        assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [], "failed": []}, "6 h, not the default 2"
+        assert SA.sweep(c, later(6.5))["asked"] == [row["id"]]
+        assert SA.sweep(c, later(8.5))["late"] == [row["id"]]
+        # A step of a type that is not engineering is timed only by its own setting, at whatever status it has.
+        typ = H.type_create(c, H.KEEPER, "Content", [{"name": "Drafting", "status": "open"}], bots="work")
+        step_flow.apply(c, typ["id"], {"Drafting": {"status_hours": 1}})
+        draft = H.task_create(c, "bot:ops", "Draft the launch mail", "x", "bot:cpo", type=typ["id"], lint=False)
+        assert SA.sweep(c, later(1.5))["asked"] == [draft["id"]]
+
+
+def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_late(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        # The manager's own sweep asked the owner about it just before it turned late.
+        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES('m1',?,?,'bot:coo','note','','',"
+                  "'What does this wait on?')", (row["id"], later(3.8)))
+        assert SA.sweep(c, later(4.2))["late"] == [], "they know: no notice now"
+        assert SA.sweep(c, later(5))["late"] == [row["id"]], "an hour on and still late: now they hear"

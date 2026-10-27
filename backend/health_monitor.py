@@ -236,7 +236,7 @@ def _runner_checks(c, settings):
         out.append(_finding("computer_silent:" + x["id"], "computer_silent", SETUP,
                             f"{x['label']} has not checked in for {x['minutes']} minutes",
                             f"Computer {x['label']} was last heard from at {(x['last_seen'] or '')[:16]}; "
-                            f"{x['queued']} job(s) wait for {', '.join(x['bots'])}.",
+                            f"{x['queued'] + x['dead']} job(s) wait for {', '.join(x['bots'])}.",
                             f"Ask the person who runs {x['label']} to wake it and check Tico there "
                             "(`tico status`; `tico restart` starts it again), or move its bots to an online computer."))
     starts = None

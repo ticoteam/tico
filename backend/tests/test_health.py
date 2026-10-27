@@ -78,8 +78,10 @@ def silent_computer(api, seconds_ago):
         c.execute("UPDATE runners SET operator='riley' WHERE id=?", (runner,))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m1','human:ana','bot:helper','chat','hi',?)",
-                  (H.now(),))       # queues its job
+        # A chat message in a conversation, as the product writes them: the trigger queues its job, and Pipeline counts it.
+        c.execute("INSERT INTO conversations(id,kind,participants_json,created) VALUES('cv1','chat','[]',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))       # queues its job
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
 
@@ -650,6 +652,165 @@ def claimable(c, runner, *bots):
     document = json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
     document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
     c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), runner))
+
+
+def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    words = "Only a person changes a task number; leave the requested number for the person managing this bot."
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        for _ in range(H.QUARANTINE_AT + 1):
+            with pytest.raises(H.Refused):
+                H.refuse(c, "bot:helper", "identity", words)
+        assert H.bot(c, "helper")["state"] == "quarantined"
+        c.execute("UPDATE events SET ts='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'")
+    body, checks = health_of(api)
+    [held] = body["stuck"]
+    status = api.get("/api/v2/status", headers=signed_in()).json()["bots"]
+    quarantine = next(row for row in status if row["bot"] == "helper")["quarantine"]
+    assert held["reason"] == "quarantined" and held["why"] == quarantine["why"]
+    assert quarantine["auto"] and quarantine["resumes_at"] == "2030-10-27T00:55:00.000000Z"
+    assert "rule 8; 10 repeated refusals today" in held["why"]
+    assert "2030-10-27 00:55 UTC" in held["why"] and "resumes by itself" in held["why"]
+    assert "Refused write (identity): " + words in held["why"]
+    assert "BotOps must review" not in held["why"]
+    assert "a person who manages it can clear it sooner" in held["why"]
+    # Both the summary report and its diagnostic items must exclude manager-only refused words.
+    assert "Quarantined" in checks["queue"]["summary"]
+    assert words not in json.dumps(checks["queue"])
+    assert "Refused write" not in json.dumps(checks["queue"])
+
+
+def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explanation(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        H.quarantine(c, "helper", "A person is checking its work")
+    [held] = health_of(api)[0]["stuck"]
+    status = api.get("/api/v2/status", headers=signed_in()).json()["bots"]
+    quarantine = next(row for row in status if row["bot"] == "helper")["quarantine"]
+    assert held["why"] == quarantine["why"] == "Quarantined until a person clears it."
+    assert not quarantine["auto"] and quarantine["resumes_at"] is None
+    with api.app.state.store.transaction() as c:
+        H.status_set(c, "human:morgan", "helper", state="active", reason="Checked")
+        H.status_set(c, "human:morgan", "helper", state="paused", reason="Waiting")
+    body, checks = health_of(api)
+    [paused] = body["stuck"]
+    assert paused["reason"] == "paused"
+    assert paused["why"] == "Paused: its owner or BotOps must resume it"
+    assert paused["why"] in checks["queue"]["items"][0]["text"]
+
+
+def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        H.quarantine(c, "helper", "10 repeated refusals today",
+                     refusal={"rule": "identity", "detail": "Private request token=synthetic-private-value"})
+    [held] = health_of(api)[0]["stuck"]
+    assert "token=[hidden]" in held["why"] and "synthetic-private-value" not in held["why"]
+    reader = as_person(api, "quinn")
+    status = api.get("/api/v2/status", headers=reader).json()["bots"]
+    why = next(row for row in status if row["bot"] == "helper")["quarantine"]["why"]
+    assert "resumes by itself" in why and "Refused write" not in why and "Private request" not in why
+    [held] = health_of(api, reader)[0]["stuck"]
+    assert held["why"] == why
+
+
+def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
+    from backend import execution, health
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "helper")
+    old = H.shift(H.now(), minutes=-30)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+                  (runner, H.now()))
+        claimable(c, runner, "helper")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Interrupted task", "", "bot:helper", private=False)
+        interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+        interrupted_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (interrupted["id"],)).fetchone()["id"]
+        c.execute("UPDATE jobs SET state='uncertain',created=? WHERE id=?", (old, interrupted_job))
+        H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+        c.execute("UPDATE jobs SET created=? WHERE bot='helper' AND state='queued'", (old,))
+
+        running_chat = H.open_conversation(c, owner, [owner, "bot:helper"], kind="chat")
+        H._write_message(c, owner, "bot:helper", "running turn", running_chat, "say", {}, None, None)
+        running_job = c.execute("SELECT id FROM jobs WHERE bot='helper' AND state='queued' ORDER BY created DESC LIMIT 1").fetchone()["id"]
+        c.execute("UPDATE jobs SET state='running' WHERE id=?", (running_job,))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started) "
+                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
+                  (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()))
+        online = {r["id"] for r in health._online_runners(c)}
+        monkeypatch.setattr(execution, "bot_claimable", lambda *args, **kwargs: ("lane_held", None, False))
+
+        [row] = health._waiting(c, online)[1]
+        assert row["bot"] == "helper" and row["queued"] == 0 and row["dead"] >= 1 and row["reason"] == "uncertain"
+
+        # Removing the fenced-only override reproduces the old, misleading busy reason.
+        original = health._fenced_queue_reason
+        monkeypatch.setattr(health, "_fenced_queue_reason", lambda row, refused, first, person: (refused, first, person))
+        [without_override] = health._waiting(c, online)[1]
+        assert without_override["reason"] == "busy"
+        monkeypatch.setattr(health, "_fenced_queue_reason", original)
+
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit.
+        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        [full] = health._waiting(c, online)[1]
+        assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
+
+
+def fenced_task_jobs(c, bot, created):
+    """A task for `bot` with an interrupted run on it: the IDs of its jobs queued behind that run (Pipeline's `dead`)."""
+    before = {r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued'", (bot,))}
+    owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+    task = H.task_create(c, owner, "Interrupted task", "", "bot:" + bot, private=False)
+    interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+    c.execute("UPDATE jobs SET state='uncertain',created=? WHERE message_id=?", (created, interrupted["id"]))
+    H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+    jobs = [r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued'", (bot,)) if r["id"] not in before]
+    c.executemany("UPDATE jobs SET created=? WHERE id=?", [(created, job) for job in jobs])
+    return jobs
+
+
+def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment):
+    """Pipeline counts a held job behind an interrupted run as dead, but the claim never reads held work: a bot whose
+    only waiting work is held on purpose is neither stuck nor slow, however old it is."""
+    from backend import health
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+                  (runner, H.now()))
+        claimable(c, runner, "helper")
+        jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
+        online = {r["id"] for r in health._online_runners(c)}
+        # Unheld, the fenced work is stuck behind the interrupted run until someone reviews it.
+        [row] = health._waiting(c, online)[2]
+        assert (row["bot"], row["reason"], row["queued"], row["dead"]) == ("helper", "uncertain", 0, len(jobs))
+        c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in jobs])
+        assert health._waiting(c, online)[1:] == ([], [])
+
+
+def test_a_silent_computer_splits_its_queue_as_pipeline_does(environment):
+    """Behind a computer that stopped checking in, work an interrupted run fences is not counted as queued."""
+    from backend import health
+
+    api = environment()
+    silent_computer(api, 1900)
+    with api.app.state.store.transaction() as c:
+        jobs = fenced_task_jobs(c, "helper", H.now())
+        [computer] = health.silent_computers(c)
+    assert jobs and (computer["queued"], computer["dead"]) == (1, len(jobs))
 
 
 def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(environment):

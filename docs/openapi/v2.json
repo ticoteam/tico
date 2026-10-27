@@ -15789,6 +15789,68 @@
         ]
       }
     },
+    "/api/v2/task-bulk": {
+      "post": {
+        "summary": "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
+        "operationId": "bulkChangeTasks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskBulk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskBulkResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/task-manager": {
       "get": {
         "summary": "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each department's last check and open check task",
@@ -29016,9 +29078,10 @@
             "enum": [
               "fresh",
               "stale",
-              "missing"
+              "missing",
+              "archived"
             ],
-            "description": "stale: one period missed; missing: never read or two missed. Never zero"
+            "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"
           },
           "spark": {
             "type": "array",
@@ -29033,9 +29096,10 @@
               "yellow",
               "red",
               "gray",
-              "none"
+              "none",
+              null
             ],
-            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target"
+            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target; null is an archived goal link with no colour"
           },
           "reason": {
             "type": "string"
@@ -35090,6 +35154,249 @@
         "type": "object",
         "title": "TaskAskResolve"
       },
+      "TaskBlocker": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Repo"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status"
+          },
+          "endpoint": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Endpoint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repo",
+          "status",
+          "endpoint"
+        ],
+        "title": "TaskBlocker",
+        "description": "What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."
+      },
+      "TaskBulk": {
+        "properties": {
+          "filter": {
+            "$ref": "#/components/schemas/TaskFilter"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "step",
+              "status",
+              "owner",
+              "tags",
+              "close"
+            ],
+            "title": "Action"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "doing",
+                  "waiting",
+                  "review",
+                  "ready",
+                  "done",
+                  "declined"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "add": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Add"
+          },
+          "remove": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Remove"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filter",
+          "action"
+        ],
+        "title": "TaskBulk",
+        "description": "One change to every task `filter` selects (`POST /api/v2/task-bulk`): `action` names it and its one field\ncarries the value: `step` (id or name), `status`, `owner`, `add` or `remove` (tags, for `tags`), or none for\n`close`. `note` goes with each task's change, as on a single update."
+      },
+      "TaskBulkResult": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "matched": {
+            "type": "integer"
+          },
+          "cap": {
+            "type": "integer"
+          },
+          "changed": {
+            "type": "integer"
+          },
+          "unchanged": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "tasks": {
+            "type": "object",
+            "properties": {
+              "changed": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "number",
+                    "title"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "skipped": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "id",
+                    "number",
+                    "reason",
+                    "title"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            },
+            "required": [
+              "changed",
+              "skipped"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "cap",
+          "changed",
+          "dry_run",
+          "matched",
+          "skipped",
+          "tasks",
+          "unchanged"
+        ],
+        "additionalProperties": true
+      },
       "TaskComment": {
         "properties": {
           "public": {
@@ -35328,6 +35635,16 @@
             "type": "boolean",
             "title": "Qa Not Checkable Live",
             "default": false
+          },
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "top": {
             "type": "boolean",
@@ -35693,6 +36010,189 @@
         ],
         "additionalProperties": true
       },
+      "TaskFilter": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "lane": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "company",
+                  "product"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lane"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 999999999.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "updated_since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Since"
+          },
+          "member": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "snoozed": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hide",
+                  "only",
+                  "all"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snoozed"
+          },
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 100,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TaskFilter",
+        "description": "The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."
+      },
       "TaskFlow": {
         "type": "object",
         "properties": {
@@ -35931,6 +36431,12 @@
           },
           "status": {
             "type": "string"
+          },
+          "check_pool": {
+            "type": "array"
+          },
+          "check_limit": {
+            "type": "integer"
           }
         },
         "required": [
@@ -35999,6 +36505,48 @@
               "declined"
             ],
             "title": "Status"
+          },
+          "check_pool": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Pool"
+          },
+          "check_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Limit"
+          },
+          "flow": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow"
           }
         },
         "additionalProperties": false,

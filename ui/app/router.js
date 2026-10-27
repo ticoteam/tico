@@ -105,6 +105,7 @@ function route() {
     // ?task=<id>, ?bot=<slug>, or the API's own scope_kind=task|bot&scope_id=<id>.
     const q = new URLSearchParams(S.route.split('?')[1] || ''), kind = q.get('task') ? 'task' : q.get('bot') ? 'bot' : q.get('scope_kind');
     const id = q.get('task') || q.get('bot') || q.get('scope_id') || '';
+    RULES_OPEN = Object.fromEntries(q);
     RULES_FOR = ['task', 'bot'].includes(kind) && id ? `${kind}:${id}` : ''; RULES_FOR_TITLE = '';
     SETTINGS_TAB = 'recurring'; SETTINGS_REVEAL = RULES_FOR ? '#set-rules-card' : ''; location.replace(SETTINGS); return;
   }
