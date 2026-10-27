@@ -1377,7 +1377,38 @@ those stays "not found" for it, and its notices and run prompt leave the parent 
 - When the subtask is done, the parent's owner is woken on the parent, as for any subtask. Its words do not reach the
   parent's other readers.
 - The other bot may file its own review or QA subtasks under the sealed one by the same rule.
-- Comments and files from the private run to the subtask, and any company-visible work, stay refused.
+- Comments and files from the private run to the subtask, and any company-visible work, stay refused, except the
+  company-visible task below.
+
+### A private task with no person on it: a company-visible task from private work
+
+When the work belongs to the company (a repair anyone may pick up, see and follow), the same owning bot (or its
+manager), from its own run, files it **from private work**: `hub task create --from-private --owner <bot> --parent
+<task>` (or with no `--parent`). The task is company-visible and carries only its own title, body and acceptance
+criteria; the private task stays sealed.
+
+- The filer must own (or manage the owner of) the parent and every private task the run carries; a bot that is only a
+  reader or guest of one is refused. A person on any of them, or on a private task above one, gets the same refusal
+  as a sealed subtask, naming them and the route to them. The task is for a bot; the parent, when given, is private.
+- Its words are checked before it is written, and a failed check is refused naming the check, never the text: no
+  secret-shaped value (as for a sealed subtask), no 12 or more words in a row copied from the parent or any private
+  task the run carries (title, body, note, acceptance criteria or comments), and no file, attachment or link of a private task. The checks
+  read everything the task keeps: title, body, acceptance criteria, labels, links (a secret-shaped value in a link is
+  refused too), public title and summary, change paths, blocker and the names of its roles (as sent and as stored).
+  Rewrite it and file again; it does not count toward quarantine. Nobody signs off on the words.
+- The title of the parent, or of any private task the run carries, is refused anywhere in that text, in any case.
+- The copy check catches only 12 or more words copied in a row. A short name that is not a private task's title (a
+  vendor, a person, a project) is not caught: that rests on the filing bot's judgement. So does the rest of the run's
+  context: its messages that are not on a private task, the files it read and its tools' output are not compared, and
+  a copy broken up with a word every few words passes. The checks catch careless copying, not a bot set on leaking.
+- A company task under a private parent never sends the parent's state to the stale-work review.
+- It is related to no private task but its parent (no blocker, related or duplicate link to one).
+- A reader who cannot read the parent sees it as "a private task", with no title or id; its own readers see it as usual.
+- History: the private task records "Filed a company-visible task from this private task: <title>"; the new task
+  records "Filed from a private task", without the private task's title.
+- Filed under the private task, it is a subtask: the private task waits on it, and when it is done the private task's
+  owner gets its result, as for any subtask.
+- Without `--from-private`, a company-visible create from private work is refused, and the refusal names this route.
 
 Task-linked messages, files and previews, execution output, SQL results, search context and saved
 responses apply the same current-participant boundary. Retained room grants and attachment

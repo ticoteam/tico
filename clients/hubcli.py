@@ -944,6 +944,9 @@ def parser():
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
     s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
     s.add_argument("--private", action="store_true", default=None, help="only requester and assignee may read")
+    s.add_argument("--from-private", dest="from_private", action="store_true",
+                   help="from a run on your private task: a company-visible task for a bot, in your own words (no "
+                        "12 words copied from the private work, no secret-shaped value, no file or link of it)")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")

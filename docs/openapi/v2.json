@@ -35796,6 +35796,11 @@
               }
             ],
             "title": "Check Role"
+          },
+          "from_private": {
+            "type": "boolean",
+            "title": "From Private",
+            "default": false
           }
         },
         "additionalProperties": false,

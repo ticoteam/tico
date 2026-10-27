@@ -5474,7 +5474,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None,
-                quiet_notice=False):
+                quiet_notice=False, from_private=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5517,9 +5517,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
         private = None              # a bot cannot override a sensitive default to publish
-    private = bool((private if private is not None else
-                    private_tasks_default(conn, actor) or private_tasks_default(conn, target))
-                   or parent and task_private(conn, parent))
+    # A task filed from private work (app.task_create, task_privacy.from_private) is company-visible under its private
+    # parent: its words were checked to carry nothing of the parent.
+    private = not from_private and bool((private if private is not None else
+                                         private_tasks_default(conn, actor) or private_tasks_default(conn, target))
+                                        or parent and task_private(conn, parent))
     if private:
         requester = actor
     from .roadmaps import settings as roadmap_settings

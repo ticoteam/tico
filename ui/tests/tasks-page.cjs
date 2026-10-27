@@ -32,9 +32,11 @@ function withRelations(task, tasks) {
   const relations = {};
   const add = (kind, row) => { if (row) (relations[kind] ||= []).push(row); };
   if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent), 'out'));
+  // A private parent this reader cannot open, as the hub sends it for a task filed from private work.
+  if (task._privateParent) add('parent', {id: null, title: 'a private task', status: null, owner: null, direction: 'out', private: true});
   for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id), 'in'));
   for (const x of tasks) if ((x._blocked || []).includes(task.id)) add('blocks', brief(x, 'out'));
-  const {_parent, _blocked, ...rest} = task;
+  const {_parent, _blocked, _privateParent, ...rest} = task;
   return {...rest, relations};
 }
 function fixtures() {
@@ -941,6 +943,20 @@ async function quietWork(browser) {
   console.log('quiet work: ok');
   await page.close();
 }
+async function privateParent(browser) {
+  // A company task filed from private work: Part of names its parent only as "a private task", not a link and no ×.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const {page, errors} = await open(browser, {extraTasks: [{...base, id: 't-from-private', title: 'Check the upload setting first',
+    _privateParent: true}]});
+  await page.locator('[data-task-key="tt-from-private"] .tl-title').click();
+  await peekTitle(page, 'Check the upload setting first');
+  const row = page.locator('#task-peek [data-task-props] [data-prop-row="parent"]');
+  assert.equal((await row.locator('.prop-v').innerText()).trim(), 'a private task');
+  assert.equal(await row.locator('[data-open-task], [data-prop-clear], [data-prop]').count(), 0);
+  assert.deepEqual(errors, []);
+  console.log('private parent: ok');
+  await page.close();
+}
 async function views(browser) {
   // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
@@ -1383,7 +1399,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, quietWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

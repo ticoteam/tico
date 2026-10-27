@@ -195,7 +195,7 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     words = refused(api, repair(row["id"], private=False), attempt["token"])
-    assert words == "Private task work cannot create company-visible tasks"
+    assert words.startswith("Private task work cannot create company-visible tasks") and "--from-private" in words
     assert post(api, "tasks", repair(row["id"]), attempt["token"])["private"]
 
 
