@@ -2072,6 +2072,10 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from .harness_actions import choices_by_runner, recent_by_runner
+            # One pass each for every computer's harness choices and owner action history (not once per runner).
+            harness_choice = choices_by_runner(c)
+            harness_recent = recent_by_runner(c) if who.role == "owner" else {}
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2107,7 +2111,6 @@ def install_views(app, store, auth, mutate, task_view):
                                              if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
-                from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
@@ -2157,8 +2160,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
-                                 "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
-                                 "harness_choices": choices(c, row["id"])})
+                                 "harness_actions": harness_recent.get(row["id"]) or [],
+                                 "harness_choices": harness_choice.get(row["id"]) or {}})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
                       for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
             from .agents import listing as agent_listing
