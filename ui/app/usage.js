@@ -66,6 +66,7 @@ function pageUsage() {
       <span class="use-custom" hidden><input type="date" id="use-from" aria-label="From"><input type="date" id="use-to" aria-label="To"></span>
       <button type="button" class="ghost use-default" id="use-default" hidden>Default limit</button>
       <button type="button" class="ghost use-default" id="use-pools" hidden>Team and group limits</button>
+      <button type="button" class="ghost use-default" id="use-purge" hidden>Clear automatic queue</button>
     </div>
     <div class="use-bar-row">
       <label>Group by <select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
@@ -73,6 +74,7 @@ function pageUsage() {
       ${USE_DIMENSIONS.map(([key, label]) => `<label>${label} <select data-use-filter="${key}" aria-label="Filter ${label}"><option value="">All</option></select></label>`).join('')}
     </div>
     <p class="muted">Historical details not reported by a runner remain unknown. A run using a fallback can appear in more than one group.</p>
+    <p class="muted" id="use-purge-note"></p>
     <div id="use-body" aria-live="polite"></div>
   </div>`;
   const main = $('#main');
@@ -102,6 +104,10 @@ function pageUsage() {
   };
   $('#use-default').onclick = () => useDefaultDialog(state.limits, () => { void useLimits(); void useLoad(); });
   $('#use-pools').onclick = () => usePoolDialog(state.limits, () => { void useLimits(); void useLoad(); });
+  $('#use-purge').onclick = () => usePurgeDialog(state.limits, result => {
+    const note = $('#use-purge-note');
+    if (note && result) note.textContent = `Cleared ${result.cancelled} automatic queued item${result.cancelled === 1 ? '' : 's'}. ${result.kept_people} from people stayed queued. ${result.still_running} already running.`;
+  });
   void useLimits();
   useLoad();
 }
@@ -110,7 +116,7 @@ function pageUsage() {
 async function useLimits() {
   const state = USE;
   try { state.limits = await get('/v2/usage/limits'); } catch { state.limits = null; }
-  for (const button of [$('#use-default'), $('#use-pools')]) if (USE === state && button) button.hidden = !state.limits?.may_edit_default;
+  for (const button of [$('#use-default'), $('#use-pools'), $('#use-purge')]) if (USE === state && button) button.hidden = !state.limits?.may_edit_default;
 }
 
 const useParams = (state, extra) => {
@@ -240,13 +246,13 @@ function useLimitButton(slug, name, limit) {
 }
 const useAmount = value => { const t = String(value).trim(); return t === '' ? null : Number(t); };
 const useAmounts = form => Object.fromEntries(USE_PERIODS.map(([key]) => [key, useAmount(form[key].value)]));
-function useDialog(label, body, save, done) {
+function useDialog(label, body, save, done, submitLabel = 'Save') {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal use-dialog';
   dialog.setAttribute('aria-label', label);
   dialog.innerHTML = `<div class="tmodal-head"><span class="who">${esc(label)}</span><span class="spacer"></span><button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
     <form class="tmodal-body" novalidate>${body}<p class="err" data-error hidden></p>
-      <div class="use-dialog-row"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">Save</button></div></form>`;
+      <div class="use-dialog-row"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">${esc(submitLabel)}</button></div></form>`;
   document.body.appendChild(dialog);
   dialog.querySelectorAll('[data-close]').forEach(b => b.onclick = () => dialog.close());
   dialog.onclose = () => dialog.remove();
@@ -254,7 +260,7 @@ function useDialog(label, body, save, done) {
   form.onsubmit = async ev => {
     ev.preventDefault(); err.hidden = true;
     const submit = form.querySelector('[type=submit]'); submit.disabled = true;
-    try { await save(form); dialog.close(); done && done(); }
+    try { const result = await save(form); dialog.close(); done && done(result); }
     catch (e) { err.textContent = e.message; err.hidden = false; submit.disabled = false; }
   };
   dialog.showModal();
@@ -304,4 +310,17 @@ function usePoolDialog(limits, done) {
   };
   form.scope.onchange = fill;
   fill();
+}
+// Overload brake: drop queued automatic wakes and waits. Tasks, people's messages and live runs stay.
+function usePurgeDialog(limits, done) {
+  const pools = limits?.pools || {groups: {}};
+  const groups = Object.entries(pools.groups || {});
+  const chain = id => { const out = []; let at = id; while (at && pools.groups[at] && out.length < 8) { out.unshift(pools.groups[at].name); at = pools.groups[at].parent; } return out; };
+  const depth = id => chain(id).length - 1;
+  const scopes = [['company', 'The whole team'], ...groups.sort((a, b) => chain(a[0]).join('\u0000').localeCompare(chain(b[0]).join('\u0000')))
+    .map(([id]) => ['group:' + id, '\u00a0\u00a0'.repeat(depth(id) + 1) + (pools.groups[id].name || id)])];
+  useDialog('Clear automatic queue',
+    `<label>Applies to<select name="scope">${scopes.map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
+     <p class="muted">Cancels queued automatic wakes and waits. Tasks stay on their current step. Messages from people stay queued. A run that already started finishes.</p>`,
+    form => post('/v2/usage/queues/purge', {scope: form.scope.value}), done, 'Clear queue');
 }

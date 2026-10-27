@@ -2216,6 +2216,11 @@ class UsageDefault(UsageLimit):
     count_subscription: bool = True
 
 
+class QueuePurge(Contract):
+    """`company`, or `group:<id>` for that group and the groups nested under it."""
+    scope: str = Field(default="company", max_length=200)
+
+
 class SubscriptionUnavailable(Contract):
     profile: str = Field(min_length=1, max_length=80)
     runtime: str = Field(max_length=80)

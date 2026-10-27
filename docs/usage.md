@@ -54,6 +54,8 @@ it.
 `GET /api/v2/usage/limits`, `PUT /api/v2/usage/limits` (the default), `PUT /api/v2/usage/limits/{bot}` (empty follows the default),
 `PUT /api/v2/usage/pools/company` and `PUT /api/v2/usage/pools/groups/{group}` (empty removes it).
 
+**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group. Tasks stay on their current step. Messages from people stay queued, including a notice of a person's own act. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
+
 ## API
 
 `GET /api/v2/usage?from=&to=&department=&group=bot|day|routine` (UTC dates, default the last 7 days, at most 366) returns `rows` and
