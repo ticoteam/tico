@@ -311,7 +311,7 @@ def start(c, actor, items, snapshot, scope=None):
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
-        return {**view(c, open_, resumed=True), "lineup": line}
+        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line})
     group = _scope(c, actor, line, scope)
     if group:
         rows = [r for r in rows if group_of(r, actor) == group]
@@ -335,7 +335,18 @@ def start(c, actor, items, snapshot, scope=None):
                                        "responses_json", "alerts_json", "message_id", "report_json", "scope")))
     H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
                                                      "scope": group})
-    return {**view(c, batch), "lineup": line}
+    return _presented(c, actor, {**view(c, batch), "lineup": line})
+
+
+def _presented(c, actor, out):
+    """The item the person now hears in full is opened: its task's questions to them are read (delivered and read
+    set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn)."""
+    key = str((out.get("item") or {}).get("key") or "")
+    if key.startswith("task:"):
+        row = H.task(c, key[5:])
+        if row:
+            H.asks_seen(c, actor, [a["id"] for a in H.open_task_asks(c, row) if a["to_actor"] == actor], read=True)
+    return out
 
 
 def _items(batch):
@@ -380,7 +391,7 @@ def next_item(c, actor, batch_id):
     cursor = min(int(batch["cursor"] or 0) + 1, len(items))
     c.execute("UPDATE batches SET cursor=? WHERE id=?", (cursor, batch["id"]))
     batch["cursor"] = cursor
-    return view(c, batch)
+    return _presented(c, actor, view(c, batch))
 
 
 def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", until=None):
