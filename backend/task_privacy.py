@@ -664,15 +664,15 @@ def _person_name(c, person):
 
 
 def sealed_for(c, who, owner, parent):
-    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (the parent
-    and every other private task the run carries that `owner` cannot read), when that create is a sealed hand-off;
-    None when it is not one, so the create is judged as before. Problem when one of them, or a private task above it,
-    has a person on it: the words name them and the route to them."""
+    """The private tasks a run's create of a subtask for bot `owner` under private `parent` keeps from it (each one the
+    run carries that `owner` cannot read, the parent among them when the run carries it), when that create is a sealed
+    hand-off; None when it is not one, so the create is judged as before. Problem when one of them, or a private task
+    above it, has a person on it: the words name them and the route to them."""
     if not (parent and who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
             and H.is_bot(owner or "") and owner != who.actor and H.task_private(c, parent)
             and H.task_represents(c, who.actor, parent["owner"])):
         return None
-    kept = {} if H.task_private_readable(c, owner, parent) else {parent["id"]: H.task(c, parent["id"]) or dict(parent)}
+    kept = {}
     for tid in attempt_tasks(c, who.attempt_id):
         row = _task(c, tid)
         if row and H.task_private(c, row) and not H.task_private_readable(c, owner, row):
