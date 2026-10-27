@@ -662,12 +662,28 @@ def quiet_source_wait(c, job, facts=None):
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
     under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
-    task None and readable False, so it is counted without its title."""
+    task None and readable False, so it is counted without its title.
+
+    Operations / status call held_runs, isolation_refused and stopped_rows for the same bot; cache the list for the
+    read snapshot and batch message/attempt privacy once instead of message_readable per uncertain job per caller.
+    """
+    from . import read_cache
+    actor = privacy.actor(who)
+    values = read_cache.cache(c)
+    key = ("readable_held", actor, bot)
+    if values is not None and key in values:
+        return iter(values[key])
     fence = auth.task_sql(c, who)
-    for row in c.execute("SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    out = []
+    for row in rows:
+        if row["id"] not in shown:
+            continue
+        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
             continue
         job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
         if quiet_source_wait(c, job):
@@ -675,12 +691,15 @@ def _readable_held(c, who, auth, bot):
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
         task = H.task(c, task_id) if task_id else None
-        readable = bool(task and H.task_private_readable(c, privacy.actor(who), task)
+        readable = bool(task and H.task_private_readable(c, actor, task)
                         and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone())
         if task and not readable:
-            yield row, None, False
+            out.append((row, None, False))
         else:
-            yield row, task, True
+            out.append((row, task, True))
+    if values is not None:
+        values[key] = out
+    return iter(out)
 
 
 def held_runs(c, who, auth, bot, limit=3):
