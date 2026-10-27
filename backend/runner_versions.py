@@ -156,12 +156,21 @@ def update_since(c, runner_id, state):
     return now
 
 
+VERSION_SQL = "SELECT * FROM runner_versions WHERE runner_id=?"
+
+
+def _version(c, runner_id):
+    """One runner_versions row for the current read snapshot (Health drain lines and holding_since share it)."""
+    from .read_cache import one
+    return one(c, VERSION_SQL, (runner_id,))
+
+
 def holding_since(c, runner_id):
     """Since when this computer has taken no new work because it is updating, or None while it still takes work.
     New runners report drain counts as soon as they stop claiming. Older runners keep claiming for UPDATE_DRAIN_S.
     An `updating` runner claims nothing, whatever release it is on (a Docker update still settling reports it on the
     new release)."""
-    row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
         return None
     progress = drain_progress(c, runner_id)
@@ -173,8 +182,7 @@ def holding_since(c, runner_id):
 
 def drain_progress(c, runner_id):
     """Counts only, safe wherever a computer's update hold is already visible. Old runners report neither."""
-    row = c.execute("SELECT update_state,update_running,update_handed_back FROM runner_versions WHERE runner_id=?",
-                    (runner_id,)).fetchone()
+    row = _version(c, runner_id)
     if not row or row["update_state"] not in ("waiting", "updating") or row["update_running"] is None:
         return ""
     return f"{row['update_running']} running, {row['update_handed_back'] or 0} handed back"
