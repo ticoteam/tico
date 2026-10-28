@@ -63,29 +63,42 @@ def check_asker(c, asker, asked, instruction):
                       "settled", 409)
 
 
-def file(c, auth, settings, asker, chosen, e, card, room, bot, note=""):
+def _what(c, e, target):
+    """The setting, and what it is for when its entry names one (a bot, a computer, a person or a rule): two bots'
+    limits are two asks."""
+    if target.get("person"):
+        return f"{e.name} for {_name(c, 'human:' + target['person'])}"
+    on = target.get("bot") or target.get("computer") or target.get("id")
+    return f"{e.name} for {on}" if on else e.name
+
+
+def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=None):
     """The task that carries the card to `chosen`, the asker its requester, and the card marked as this ask (so its
-    outcome settles the task and tells the asker). The same card asked for again is the same request."""
+    outcome settles the task and tells the asker). The same card asked for again is the same request; another value
+    for the same setting on the same target waits for the first answer."""
     action = card["action"]
     held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
     if held and held["ask_json"]:
         return json.loads(held["ask_json"])["task"]
-    waiting = c.execute("SELECT 1 FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
-                        "json_extract(ask_json, '$.asker')=? AND json_extract(ask_json, '$.key')=?",
-                        (chosen.actor, action["id"], asker.actor, e.key)).fetchone()
-    if waiting:                 # refused before anything is kept: the card just made goes with the transaction
-        raise Problem("already_asked", f"You already asked {_name(c, chosen.actor)} about {e.name}; their answer to "
-                      "that comes first (they confirm or cancel it, or it expires after a day)", 409)
+    on = {k: str(v) for k, v in (target or {}).items() if v}
+    what = _what(c, e, on)
+    for row in c.execute("SELECT ask_json FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
+                         "json_extract(ask_json, '$.asker')=? AND json_extract(ask_json, '$.key')=?",
+                         (chosen.actor, action["id"], asker.actor, e.key)):
+        if (json.loads(row["ask_json"]).get("target") or {}) == on:
+            # Refused before anything is kept: the card just made goes with the transaction.
+            raise Problem("already_asked", f"You already asked {_name(c, chosen.actor)} about {what}; their answer "
+                          "to that comes first (they confirm or cancel it, or it expires after a day)", 409)
     asker_name = _name(c, asker.actor)
-    body = (f"{asker_name} asked to change {e.name} ({e.where}) and may not change it themselves. "
+    body = (f"{asker_name} asked to change {what} ({e.where}) and may not change it themselves. "
             f"The Confirm card in your chat with BotOps does it: {action.get('description') or action['summary']}.\n\n"
             + (f"{asker_name} said: {note}\n\n" if note else "")
             + f"Confirm or cancel that card. Either settles this request, and {asker_name} is told.")
     # Filed as the asker, who is then its requester: the request is theirs, BotOps or the Assistant only carried it.
-    task = H.task_create(c, asker.actor, f"{asker_name} asks you to change {e.name}"[:200], body, chosen.actor,
+    task = H.task_create(c, asker.actor, f"{asker_name} asks you to change {what}"[:200], body, chosen.actor,
                          lint=False)
-    ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key,
-           "what": e.name}
+    ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key, "target": on,
+           "what": what}
     c.execute("UPDATE assistant_actions SET ask_json=? WHERE id=?", (json.dumps(ask), action["id"]))
     H.event(c, asker.actor, "settings.asked", e.key, {"to": chosen.actor, "task": task["id"], "action": action["id"]})
     return task["id"]

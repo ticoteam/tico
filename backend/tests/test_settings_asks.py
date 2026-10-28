@@ -143,6 +143,20 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
     assert waiting == 1
 
 
+def test_the_same_setting_on_two_bots_is_two_asks_but_another_value_on_one_waits(api, botops):
+    """Review 1 (delta 2): a waiting ask holds its setting on its own target only. Compact at for Finance and for Ops
+    are two requests, each named for its bot; a second value for Finance waits for the first answer."""
+    first = ask(api, botops, "cara", "bot.compact_at", 80, bot="finance")
+    second = ask(api, botops, "cara", "bot.compact_at", 80, bot="ops")
+    assert not first[0] and not second[0], (first, second)
+    chosen = first[1]["asked"]["person"].split(":")[1]
+    titles = sorted(task["title"].split(" asks you to change ")[1] for task, _ in asks(api, chosen))
+    assert titles == ["Compact at for finance", "Compact at for ops"], titles
+    err, got = ask(api, botops, "cara", "bot.compact_at", 70, bot="finance")
+    assert err and got["error"] == "already_asked" and "Compact at for finance" in got["detail"], got
+    assert len(asks(api, chosen)) == 2
+
+
 def test_a_bot_that_made_an_incoming_trigger_may_change_it_as_its_route_allows(api):
     """Review 1 (delta) question: triggers.manages lets whoever made a trigger change it, a bot too; the catalogue
     agrees, and a bot that didn't make it, or one that made an outgoing webhook, still may not."""

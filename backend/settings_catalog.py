@@ -616,7 +616,8 @@ def install(app, store, auth, settings):
                 bot = assistant_mod.room_bot(settings, room)
             else:
                 room, bot = rooms.chat_room(c, auth, who, settings_asks.BOTOPS), settings_asks.BOTOPS
-            task_id = settings_asks.file(c, auth, settings, who, chosen, e, card, room, bot, body.note or "")
+            task_id = settings_asks.file(c, auth, settings, who, chosen, e, card, room, bot, body.note or "",
+                                         target)
             name = settings_asks._name(c, chosen.actor)
             return {"asked": {"person": chosen.actor, "name": name}, "task": {"id": task_id},
                     "action": card["action"], "setting": public(e, settings.public_url),
