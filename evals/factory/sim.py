@@ -13,33 +13,45 @@ from .world import PRIMARY, Refusal, World
 
 PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}   # $ per million: uncached input, cached input, output
 
-CLAIM_LINES = []     # per claim call on the write path: (last line its frame ran, the answer)
+CLAIM_CALLS = []    # per claim request: (step, last line the step ran, what it returned), in order
 
 
-def record_claim_line(original):
-    """Diagnostic only: wraps the claim so a trace can name the line of the write path that answered. The claim's
-    frame is traced for its own lines; the answer is the one the claim returned, unchanged."""
-    code = original.__code__
+def record_claim_steps(execution):
+    """Diagnostic only: wraps the claim's read path, its candidate selections and its write path so a trace can name
+    the line that answered each step and what each selection returned. Every answer is passed back unchanged."""
+    def last_line(original):
+        code = original.__code__
 
-    def traced(self, c, who, body, selected=None, **kw):
-        lines = []
+        def traced(self, *args, **kw):
+            lines = []
 
-        def local(frame, event, arg):
-            if event == "line":
-                lines.append(frame.f_lineno)
-            return local
+            def local(frame, event, arg):
+                if event == "line":
+                    lines.append(frame.f_lineno)
+                return local
 
-        def wanted(frame, event, arg):
-            return local if frame.f_code is code else None
-        sys.settrace(wanted)
-        try:
-            answer = original(self, c, who, body, selected, **kw)
-        finally:
-            sys.settrace(None)
-        CLAIM_LINES.append((lines[-1] if lines else None, answer))
-        return answer
-    traced.__wrapped__ = original
-    return traced
+            def wanted(frame, event, arg):
+                return local if frame.f_code is code else None
+            sys.settrace(wanted)
+            try:
+                answer = original(self, *args, **kw)
+            finally:
+                sys.settrace(None)
+            CLAIM_CALLS.append((original.__name__, lines[-1] if lines else None, answer))
+            return answer
+        traced.__wrapped__ = original
+        return traced
+
+    def selection(original):
+        def traced(self, *args, **kw):
+            row = original(self, *args, **kw)
+            CLAIM_CALLS.append(("candidate " + ("job" if kw.get("job_id") else "select"), None, row))
+            return row
+        traced.__wrapped__ = original
+        return traced
+    execution.Execution._idle_claim = last_line(execution.Execution._idle_claim)
+    execution.Execution.claim = last_line(execution.Execution.claim)
+    execution.Execution.candidate = selection(execution.Execution.candidate)
 
 
 @dataclass
@@ -87,9 +99,9 @@ class Run:
         self.traces = []           # claim traces of short rounds: the server's candidate gates for one queued bot
         self.trace_rounds = 0      # short rounds traced so far (the first few are read)
         self.claim_path = ""       # where the last claim answered: the read path, or the write path's last line
-        from backend.execution import Execution
-        if not hasattr(Execution.claim, "__wrapped__"):
-            Execution.claim = record_claim_line(Execution.claim)
+        from backend import execution
+        if not hasattr(execution.Execution.claim, "__wrapped__"):
+            record_claim_steps(execution)
 
     def team(self, w):
         styles = self.scenario.styles
@@ -210,7 +222,7 @@ class Run:
                 "started": started}
         if free and queued and started < min(free, queued):
             # Diagnostic: the server's view of each queued bot before the claims, and the last claim's answer.
-            mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply} ({self.claim_path}); the claim body was {body} "
+            mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply} [{self.claim_path}]; the claim body was {body} "
                            f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
                            f"paused {sorted(self.paused)}")
             if self.trace_rounds < 60:
@@ -409,18 +421,23 @@ class Run:
 
     @staticmethod
     def where_claim_answered():
-        """The write path's last line for the claim just made, or that the read path answered (no write lock taken)."""
-        if not CLAIM_LINES:
-            return "the read path answered"
-        line, _ = CLAIM_LINES[-1]
+        """Each step the last claim ran, in order: the read path or a selection, and the write path's last line."""
         from backend import execution
-        source = linecache.getline(execution.__file__, line).strip() if line else ""
-        return f"the write path answered at execution.py line {line}: {source}"
+        steps = []
+        for step, line, answer in CLAIM_CALLS:
+            if step.startswith("candidate"):
+                steps.append(f"{step} returned {answer['id'][:6] if answer is not None else None}")
+                continue
+            source = linecache.getline(execution.__file__, line).strip() if line else ""
+            outcome = answer.get("attempt") if isinstance(answer, dict) else None
+            shown = f"attempt {outcome['job_id'][:6]}" if isinstance(outcome, dict) else f"{answer}"[:120]
+            steps.append(f"{step} at execution.py line {line} ({source}) answered {shown}")
+        return "; ".join(steps) or "no step ran"
 
     def claim_once(self, w, body):
         """One claim, its status counted. A 5xx is recorded by the world (with its body, or the traceback when the app
         raised) and the claim answers nothing; any other refusal is the sim's own fault and stops the run."""
-        del CLAIM_LINES[:]
+        del CLAIM_CALLS[:]
         status, reply = w.request("post", "jobs/claim", body, token=w.runner["token"])
         self.claims[status] += 1
         self.claim_path = self.where_claim_answered()
