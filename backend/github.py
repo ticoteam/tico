@@ -445,9 +445,12 @@ CHECKS_KEPT = 100
 
 
 def _kept(checks):
-    """What a link stores of a head's checks: at most CHECKS_KEPT keys, every failing one first, then pending, then the
-    latest. `_overall` of the stored copy is the head's own state, so a later webhook that reads the stored copy back
-    cannot lose a failure an older key carried (Dev 646 Review 2: the last 100 keys dropped an early failure)."""
+    """What a link stores of a head's checks: at most CHECKS_KEPT keys, every failing one first, then pending, then
+    the most recently added. A later webhook reads the stored copy back, so keeping the checks that decide the state
+    keeps `_overall` of the copy equal to the head's own state, even when an early failure or a running check is
+    among the older keys. That holds only while at most CHECKS_KEPT of a head's checks are not passing: past that
+    some are dropped, and a webhook that turns the kept ones green can read the head passing while a dropped one
+    still fails."""
     if len(checks) <= CHECKS_KEPT:
         return dict(checks)
     keys = list(checks)
