@@ -63,6 +63,7 @@ AWAKE_SETTLE = 120
 CONTACT_EVERY = 10
 CLAIM_MAINTENANCE = 8       # a polling request never cleans up the whole install's backlog
 CLAIM_STARTS = 5           # jobs one claim may hold for failing to start before it answers: its work stays bounded
+CLAIM_PICKS = 5            # candidates one claim may drop under its lock (no longer eligible) before it answers none
 
 
 # A runner that advertises this runs a bot's task-keyed turns in their own lanes, side by side;
@@ -2557,11 +2558,11 @@ class Execution:
                           (json.dumps(runtimes), H.now(), runner_id, profile))
         c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(ready), runner_id))
 
-    def candidate(self, c, who, body, runner, *, job_id=None, people_only=False, failed=None):
+    def candidate(self, c, who, body, runner, *, job_id=None, people_only=False, failed=None, skip=()):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
         message (start_places.from_person), on a computer that holds every other start. `failed`: a claim's list, which
         takes each job whose checks raise as (job id, error name) and moves on to the next candidate; without it the
-        error propagates."""
+        error propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
         lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
@@ -2627,6 +2628,8 @@ class Execution:
              *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         candidates = candidates.fetchall()
         for i, row in enumerate(candidates):
+            if row["id"] in skip:
+                continue
             if i % PRIME_QUEUED == 0 and len(candidates) > 1:
                 # A backlog the claim passes over (lane held, check model, budget) is checked again on every claim, a
                 # few a second per computer: the next jobs' messages, rooms and tasks are read together, not one by one.
@@ -2868,26 +2871,40 @@ class Execution:
             if oldest[0] != who.runner_id:
                 return {'attempt': None, 'waiting': org_turns.REASON}
             selected, prepared = oldest[1], True
-        # Selection scans the queue on a read connection. Recheck only that job's
-        # current eligibility under the writer lock; a changed queue waits one poll.
-        if prepared:
-            row = (self.candidate(c, who, body, runner, job_id=selected["id"], failed=failed)
-                   if selected is not None else None)
-        else:
-            row = (selected if selected is not None else
-                   self.candidate(c, who, body, runner, people_only=people_only, failed=failed))
-        raised = bool(failed)
-        self.hold_failed(c, failed)
-        if row is None and raised:
-            # The job checked here was held just now: the next candidate is taken in this same claim.
-            row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
+        # Selection scans the queue on a read connection. Recheck only that job's current eligibility under the writer
+        # lock. A selected job that is no longer eligible here (the obsolete-notice loop above cancelled it, or its
+        # recheck refuses it) is dropped, and the claim takes the next candidate in this same call, passing over the
+        # jobs it dropped. A claim drops at most CLAIM_PICKS, so it never loops; then it answers none, as before.
+        passed = []
+        for _ in range(CLAIM_PICKS):
+            if prepared:
+                row = (self.candidate(c, who, body, runner, job_id=selected["id"], failed=failed)
+                       if selected is not None else None)
+            else:
+                row = (selected if selected is not None else
+                       self.candidate(c, who, body, runner, people_only=people_only, failed=failed, skip=passed))
+            raised = bool(failed)
             self.hold_failed(c, failed)
+            if row is None and raised:
+                # The job checked here was held just now: the next candidate is taken in this same claim.
+                row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed, skip=passed)
+                self.hold_failed(c, failed)
+            if row is not None and self.obsolete_notice(c, who, row["id"], now):
+                # The obsolete-notice page above cancels CLAIM_MAINTENANCE at a time, and an obsolete notice is never
+                # handed out: the claim passes over this one and takes the next.
+                passed.append(row["id"])
+                row, selected, prepared = None, None, False
+                continue
+            if row is not None or selected is None:
+                break
+            passed.append(selected["id"])
+            selected, prepared = None, False
         if row is None and people_only:
             return self.held_answer(c, who.runner_id)
         # Backfill a free turn after queued conversations and awaited results keep their place.
         if row is None and selected is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
             auto_tasks.enqueue(c, pending)
-            row = self.candidate(c, who, body, runner, failed=failed)
+            row = self.candidate(c, who, body, runner, failed=failed, skip=passed)
             self.hold_failed(c, failed)
         if not row:
             return {"attempt": None}
@@ -2909,7 +2926,7 @@ class Execution:
                 starts += 1
                 if starts == CLAIM_STARTS:
                     return {"attempt": None}
-                row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
+                row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed, skip=passed)
                 self.hold_failed(c, failed)
                 if not row:
                     return {"attempt": None}
@@ -3197,6 +3214,12 @@ class Execution:
                             "session_epoch": epoch["epoch"] if epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
+
+    @staticmethod
+    def obsolete_notice(c, who, job_id, now):
+        """Whether a queued job is an obsolete keeper notice (obsolete_notices_sql), which a claim cancels, never hands out."""
+        return c.execute("SELECT 1 FROM (SELECT j.id AS id " + obsolete_notices_sql() + ") o WHERE o.id=? LIMIT 1",
+                         (who.runner_id, H.KEEPER, now, job_id)).fetchone() is not None
 
     def hold_failed(self, c, failed):
         """Hold each job the claim could not evaluate or start, given as (job id, error name), and clear the list."""
