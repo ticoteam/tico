@@ -123,21 +123,22 @@ def hour_spent(run, when):
 
 
 def resumes_within(when, minutes):
-    """Once the limit lifts at `when`, a turn starts within `minutes` while work is waiting. The detail says what the
-    board had to work with at the lift: the free slots, the work waiting and the hour's spend."""
+    """Once the limit lifts at `when`, a turn starts within `minutes` of work waiting for a free slot. Work that is not
+    waiting at the lift is not the limit's wait, so the clock starts when work first waits after it. The detail says
+    what the board had at the lift: the free slots and the hour's spend."""
     def check(run):
         t0 = START + when
         after = [m for m in run.marks if m["at"] >= t0]
-        if not any(m["claimable"] for m in after):
-            return True, "no work was waiting once it lifted"
-        first = next((m["at"] for m in after if m["started"]), None)
-        waiting = "yes" if after[0]["claimable"] else "no"
-        state = (f"at the lift {after[0]['free']} slots free, work waiting {waiting}, the hour spent "
-                 f"${hour_spent(run, when):.2f}")
+        ready = next((m["at"] for m in after if m["claimable"]), None)
+        if ready is None:
+            return True, "no work was waiting after it lifted"
+        first = next((m["at"] for m in after if m["started"] and m["at"] >= ready), None)
+        state = f"at the lift {after[0]['free']} slots free, the hour spent ${hour_spent(run, when):.2f}"
         if first is None:
-            return False, f"no turn started in the {len(after)} claim rounds after it lifted; {state}"
-        gap = (first - t0).total_seconds() / 60
-        return gap <= minutes, f"first turn {gap:.0f} min after it lifted (limit {minutes} min) at {first:%H:%M}; {state}"
+            return False, f"no turn started in the claim rounds after work waited at {ready:%H:%M}; {state}"
+        gap = (first - ready).total_seconds() / 60
+        return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready:%H:%M} (limit {minutes} min), "
+                                f"at {first:%H:%M}; {state}")
     return check
 
 
@@ -176,8 +177,9 @@ def freeze_checks(since, *extra):
 
 SCENARIOS = [
     Scenario("freeze_company_cap",
-             "The team's hourly limit is lowered to $3 at 10:30, below the hour's spend, and raised to $40 at 10:42.",
-             setup=setup_with(12), claim="runner", signed_in=("fake",),
+             "The team's hourly limit is lowered to $3 at 10:30, below the hour's spend, and raised to $40 at 10:42, "
+             "with a backlog on every fleet bot.",
+             setup=setup_with(10, each=12), claim="runner", signed_in=("fake",), capacity=8, fleet=24,
              during=at_times([(at(1, 30), cap("company", 3)), (at(1, 42), cap("company", 40))]),
              checks=freeze_checks(at(1, 30),
                                   ("no turn starts past the cap while it is lowered", None,
@@ -185,8 +187,10 @@ SCENARIOS = [
                                   ("the board resumes within 15 minutes of the raise", None,
                                    resumes_within(at(1, 42), 15)))),
     Scenario("freeze_group_cap",
-             "The engineering group's hourly limit is lowered to $3 at 10:30 and raised to $40 at 10:42: its bots resume.",
-             setup=setup_with(12, groups=("engineering",)), claim="runner", signed_in=("fake",),
+             "The engineering group's hourly limit is lowered to $3 at 10:30 and raised to $40 at 10:42, with a backlog "
+             "on every fleet bot: its bots resume.",
+             setup=setup_with(10, each=12, groups=("engineering",)), claim="runner", signed_in=("fake",),
+             capacity=8, fleet=24,
              during=at_times([(at(1, 30), cap("groups/engineering", 3)), (at(1, 42), cap("groups/engineering", 40))]),
              checks=freeze_checks(at(1, 30),
                                   ("no turn starts past the cap while it is lowered", None,
