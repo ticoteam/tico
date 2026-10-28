@@ -51,7 +51,9 @@ def keep_stderr(c, row, text):
 
 def reason(c, row, outcome, summary=''):
     if row['stop_requested'] and outcome != 'completed':
-        return 'Cancelled by ' + row['stop_requested']
+        from .quarantine_stops import stopped_by
+        # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
+        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested']
     if outcome in ('completed', 'ok'):
         return 'Finished'
     if row['state'] == 'expired':
@@ -106,8 +108,9 @@ def restored(c, aid):
 
 
 def metadata(c, aid):
-    row = c.execute('SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at '
-                    'FROM attempt_diagnostics WHERE attempt_id=?', (aid,)).fetchone()
+    from .read_cache import one
+    row = one(c, 'SELECT end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at '
+              'FROM attempt_diagnostics WHERE attempt_id=?', (aid,))
     return {'end_reason': row['end_reason'] if row else None, 'ended_at': row['ended_at'] if row else None,
             'last_event': row['last_event'] if row else None, 'last_event_at': row['last_event_at'] if row else None,
             'last_heartbeat_at': row['heartbeat_at'] if row else None,

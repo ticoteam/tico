@@ -64,7 +64,7 @@ function providersFormHTML(view, models, id, editable = true) {
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
       value="${esc((view.check_models || []).join(', '))}"
       placeholder="${esc((view.check_order || []).map(row => row.runtime).join(', ') || 'grok, codex')}"${dis}>
-      <span class="muted">Review and check subtasks run on the first of these from a provider other than the author's, then on the other providers above.</span></label>` : ''}</div>`;
+      <span class="muted">Review and check subtasks prefer the first of these from a provider other than the author's, then the other providers above. With none that can run, they use the author's own rather than wait.</span></label>` : ''}</div>`;
 }
 function providersFillModels(root, view, models, keep) {
   const gateway = providersGatewayIds(view).filter(id => (view.enabled || []).includes(id));
@@ -194,7 +194,10 @@ function gatewayWire(gateway) {
     // The key leaves the field as soon as it is sent: nothing on the page holds it after a save.
     const body = {url: url.value.trim(), expected_revision: gateway.revision || 0, ...(key.value.trim() ? {key: key.value.trim()} : {})};
     key.value = '';
-    run(save, 'Saving…', () => put('/v2/providers/gateway', body), saved => saved.working === false ? saved.message : 'Tico AI Gateway saved');
+    // A new address for another service while a key is saved asks first: keep the key, or clear it and paste one again.
+    run(save, 'Saving…', () => settingsDestinationSave(extra => put('/v2/providers/gateway', {...body, ...extra})),
+      saved => saved.credentials_choice === 'clear' ? 'Gateway address saved and its key cleared: paste a key for the new address'
+        : saved.working === false ? saved.message : 'Tico AI Gateway saved');
   };
   const check = root.querySelector('[data-gateway-check]');
   if (check) check.onclick = () => run(check, 'Checking…', () => post('/v2/providers/gateway/check', {}), shown => shown.message || 'Checked');

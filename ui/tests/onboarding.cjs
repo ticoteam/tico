@@ -894,8 +894,11 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#onb-tour').click();
     await page.locator('.gs-tour[role=dialog]').waitFor();
     assert.equal(await page.locator('.gs-tour-count').textContent(), '1 of 6');
+    // The tour closes before its choice is saved, so wait for the save rather than the dialog.
+    const tourSaved = page.waitForResponse(r => r.url().endsWith('/api/v2/setup/getting-started/state'));
     await page.locator('[data-tour-skip]').click();
     await page.locator('.gs-tour').waitFor({state: 'detached'});
+    await tourSaved;
     assert.deepEqual(tourPosts, [{tour: true}]);
     assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 5 bots. Change');
     assert.match(await page.locator('#fr-providers').textContent(), /AI providers: subscriptions plus Tico Gateway\./);

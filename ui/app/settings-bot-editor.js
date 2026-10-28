@@ -122,6 +122,23 @@ function settingsUpdateSubscriptionsChange(form, e) {
   const before = ['templates', 'tico'].filter(name => (e?.update_subscriptions || []).includes(name));
   return picked.join() === before.join() ? {} : {update_subscriptions: picked};
 }
+// The CEO Bot's Hide from my chart / Show on my chart (state.js `ceoChartSet`): one person's own view of the Team chart,
+// by the bot's current name. It saves at once, apart from Save bot, and changes nothing about the bot itself. Settings >
+// Bots shows it on the CEO Bot's row (anyone) and in its editor (who may manage it).
+// `short`: the list row's line, beside the name.
+function settingsCeoChartLine(cls = '', short = false) {
+  const hidden = ceoChartHidden(), name = esc(ceoBotName());
+  const button = `<button class="linkish" type="button" data-ceo-chart-toggle="${hidden ? 'show' : 'hide'}">${hidden ? 'Show on my chart' : 'Hide from my chart'}</button>`;
+  if (short) return `<small class="sb-ceo-chart ${cls}" data-ceo-chart>${hidden ? 'Hidden from your chart · ' : ''}${button}</small>`;
+  return `<small class="${cls}" data-ceo-chart>${hidden ? `${name} is hidden from your chart.` : `${name} is on your chart.`}
+    ${button} Only your view; everyone else's chart stays as it is.</small>`;
+}
+async function settingsCeoChartToggle(button) {
+  button.disabled = true;
+  try { await ceoChartSet(button.dataset.ceoChartToggle === 'hide'); }
+  catch (e) { toast(e.message, true); button.disabled = false; return false; }
+  return true;
+}
 function settingsEditBot(slug = '', inline = false) {
   if (slug && !inline) { location.hash = `#/bot/${encodeURIComponent(slug)}/settings`; return; }
   const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
@@ -154,6 +171,7 @@ function settingsEditBot(slug = '', inline = false) {
       <div class="bot-editor-grid">
         <h3 class="bot-editor-sec bot-editor-wide">Profile</h3>
         <label class="bot-editor-wide">Name<input name="display_name" type="text" autocomplete="off" value="${esc(e?.display_name || '')}" placeholder="Release Captain" maxlength="100" required${ownerNamesIt ? ' readonly' : ''}>${ownerNamesIt ? '<small>Only the owner renames the CEO Bot.</small>' : ''}</label>
+        ${editing && e.name === 'goal-manager' ? settingsCeoChartLine('bot-editor-wide') : ''}
         <label class="bot-editor-wide">Description<textarea name="description" maxlength="2000" placeholder="What this bot owns and does">${esc(e?.description || '')}</textarea></label>
         <label>Status<select name="status">${['planned','active','paused'].map(value => `<option value="${value}" ${(e?.status || 'planned') === value ? 'selected' : ''}>${value === 'planned' ? 'Setting up' : value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></label>
         <label>Reports to<select name="reports_to"><option value="">Top level</option>${parentOptions}</select></label>
@@ -183,6 +201,13 @@ function settingsEditBot(slug = '', inline = false) {
     <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = closeEditor);
+  form.addEventListener('click', async event => {
+    const toggle = event.target.closest('[data-ceo-chart-toggle]'); if (!toggle) return;
+    event.preventDefault();
+    if (!await settingsCeoChartToggle(toggle)) return;
+    const line = form.querySelector('[data-ceo-chart]');
+    if (line) { line.outerHTML = settingsCeoChartLine('bot-editor-wide'); form.querySelector('[data-ceo-chart-toggle]')?.focus(); }
+  });
   // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
   // rows only while nothing is waiting. An agent's credential buttons act at once and move the revision, so after one
   // Save uses the newer revision.
@@ -596,7 +621,7 @@ function settingsWatchTransition(id, origin = {}) {
     const input = settingsControlInput(origin.control);
     if (input && !input.disabled) input.value = input.defaultValue || origin.current;
   };
-  void paint(); SETTINGS_TRANSITION_TIMER = setInterval(paint, 2000);
+  void paint(); SETTINGS_TRANSITION_TIMER = setInterval(() => { if (!document.hidden) paint(); }, 2000);
 }
 
 function settingsEditInstructions(slug) {

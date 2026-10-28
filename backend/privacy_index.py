@@ -25,7 +25,8 @@ class ReadIndex:
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in c.execute(
-            "SELECT id,requester,owner,guest,private FROM tasks WHERE private IS NOT 0")}
+            "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties "
+            "WHERE private IS NOT 0")}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
@@ -64,12 +65,14 @@ class ReadIndex:
     def task_ids(self):
         # Provenance validates task existence, even when no private task is denied.
         # Reuse identifiers from this snapshot rather than thrash a per-row LRU.
+        # The primary key is already a covering index for this. A second id index would not change the plan.
         return {row[0] for row in self.c.execute("SELECT id FROM tasks")}
 
     @cached_property
     def conversation_tasks(self):
         # Message provenance needs only the task reference, never room content.
-        return dict(self.c.execute("SELECT id,task_id FROM conversations"))
+        return dict(self.c.execute(
+            "SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
 
     def known_task(self, tid):
         return tid in self.task_ids

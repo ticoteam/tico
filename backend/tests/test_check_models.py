@@ -73,6 +73,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     assert all(m.get("conversation_id") == sub["conversation_id"] for m in check["history"])
     finish(api, machine, check, GROK, during=lambda: post(
         api, "tasks/" + sub["id"], {"status": "done", "note": "Verdict: OK to merge; one nit on naming.",
+                                         "verdict": "approve", "verdict_head": "a" * 40,
                                          "version": check["task"]["version"]}, check["token"]))
     shown = get(api, "tasks/" + sub["id"])
     assert shown["runs"][0]["ran_on"]["segments"][0]["model"] == "grok-4.6"
@@ -268,6 +269,19 @@ def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(
     assert shown["check_model"]["model"] == "gpt-6-luna", "the check asked for stays on record"
 
 
+def test_with_no_other_provider_left_the_check_moves_to_the_authors_own(api, monkeypatch):
+    machine, sub, check = codex_check(api)
+    company(api, "anthropic", "openai")                     # Claude wrote the work; Codex is the only other model
+    start = H.now()
+    out_of_quota(api, machine, check)
+    later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    again = claim(api, machine)
+    out_of_quota(api, machine, again)
+    moved = claim(api, machine)
+    assert moved["task"]["id"] == sub["id"], "another provider is preferred, not required: the review still runs"
+    assert moved["config"]["runtime"] == "claude"
+
+
 def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
     machine, sub, check = codex_check(api)
     company(api, "anthropic", "openai")                     # Claude wrote the work; Codex is the only other model
@@ -275,6 +289,7 @@ def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
     out_of_quota(api, machine, check)
     later(api, monkeypatch, machine, H.shift(start, minutes=31))
     again = claim(api, machine)
+    all_ready(api, machine, signed_out=("claude",))         # and the author's own cannot run on this computer
     out_of_quota(api, machine, again)
     assert claim(api, machine) is None, "nowhere to move: the check waits on Codex as before"
     with api.app.state.store.read() as c:

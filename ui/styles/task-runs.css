@@ -10,6 +10,7 @@
 .truns-try.live>summary>span:first-child::before{content:'';display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--run);vertical-align:middle}
 .truns-reason,.truns-next,.truns-empty{margin:4px 0 4px 14px;font-size:var(--t-sm)}
 .truns-note{display:block;color:var(--muted);overflow-wrap:anywhere}
+.truns-decision .truns-note{display:inline}
 .truns-sub{margin:4px 0 4px 14px}
 .truns-list,.truns-tree{margin:2px 0;padding-left:16px;font-size:var(--t-sm)}
 .truns-tree .truns-tree{margin:0}

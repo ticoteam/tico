@@ -150,6 +150,6 @@ def test_owner_cannot_start_held_work_early(api):
     post(api, 'chat/ops', {'text': 'Check the queue without starting held work.'})
     owner = post(api, 'jobs/claim', {}, machine['token'])['attempt']
     result = post(api, f"tasks/{task['id']}/run-now", {}, owner['token'], expected=403)
-    assert 'requester or BotOps' in result['error']['detail']
+    assert "a party's manager or BotOps" in result['error']['detail']
     assert reason(api, machine) == 'task_next_run'
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None

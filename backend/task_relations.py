@@ -199,6 +199,9 @@ def _parts(values):
         yield values[i:i + 400]
 
 
+PRIVATE_PARENT = "a private task"
+
+
 def grouped(conn, task_ids, visible_sql="1"):
     """{task id: {kind: [{id, title, status, owner, direction}]}} for each of `task_ids`.
 
@@ -227,6 +230,18 @@ def grouped(conn, task_ids, visible_sql="1"):
             entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner": row["owner"],
                      "direction": row["direction"]}
             out[row["here"]].setdefault(row["kind"], []).append(entry)
+        if visible_sql == "1":
+            continue
+        # A company-visible task filed from private work (task_privacy.from_private) under a private parent the reader
+        # cannot open: the parent is there, as "a private task", with nothing of it but that.
+        for row in conn.execute(
+                "SELECT r.from_task FROM task_relations r INDEXED BY task_relations_from "
+                "JOIN tasks c ON c.id=r.from_task JOIN tasks p ON p.id=r.to_task "
+                f"WHERE r.from_task IN ({marks}) AND r.kind='parent' AND c.private=0 "
+                "AND (p.private IS NULL OR p.private<>0) "
+                f"AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))", part):
+            out[row["from_task"]]["parent"] = [{"id": None, "title": PRIVATE_PARENT, "status": None, "owner": None,
+                                               "direction": "out", "private": True}]
     return out
 
 
@@ -254,7 +269,7 @@ OWN_SUBTASK_BLOCKER = (
     "{blocker} is a subtask of {task}, and now blocks it. If the subtask stays open until {task} finishes "
     "(a hold, an acknowledgement, a window), neither can ever move. Say what {task} waits for with a comment or "
     "`waiting` and a reason instead, or finish the subtask once it has answered. If both go quiet, Tico wakes "
-    "{task}'s owner about it, and BotOps sees it as stuck.")
+    "the task's owner about it, and BotOps sees it as stuck.")
 
 
 def own_subtask_warning(conn, task_id, other_id, kind):
@@ -310,18 +325,24 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
     for here, field, other in ((from_id, out_field, to_id), (to_id, in_field, from_id)):
         H._task_event(conn, here, actor, field, None if added else other, other if added else None, note)
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, here))
+    if added and kind == "blocks":
+        # A blocker added changes what the task waits on (backend/task_holds.py). One taken off is recomputed by
+        # remove_blocker after reconcile; a child moved in or out by set_parent and task_create.
+        from . import task_holds
+        task_holds.refresh(conn, to_id)
 
 
 def _mine(conn, actor, row, mover):
     """task_update's gate: a party, a delegate, an ancestor's party, a type's working bot, or a mover."""
     H = _H()
-    mine = actor in (row["owner"], row["requester"]) or bool(H._one(
+    mover = H.task_mover(conn, actor, row, mover)
+    mine = H.task_participant(conn, actor, row) or bool(H._one(
         conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
         (row["id"], actor, H.now())))
     mine = (mine or H.task_ancestor_party(conn, actor, row) or H.type_bot_works(conn, actor, row)
             or H.task_manager_acts(conn, actor, row))
     if not mine and not mover and actor != H.KEEPER:
-        H.refuse(conn, actor, "identity", f"{row['id']} is not yours to change")
+        H.refuse(conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers")
 
 
 def _mover(conn, actor, mover):
@@ -436,7 +457,8 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     H._task_private_writer(conn, actor, row)
     mover = _mover(conn, actor, mover)
     _mine(conn, actor, row, mover)
-    if actor not in (row["owner"], row["requester"]) and not mover:
+    mover = H.task_mover(conn, actor, row, mover)
+    if not H.task_participant(conn, actor, row) and not mover:
         _need_mover(conn, actor, "parent")
     old = parent_of(conn, child_id)
     new = str(parent_id or "").strip() or None
@@ -444,15 +466,15 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         return False
     if old and not mover:
         old_parent = H.task(conn, old)
-        if old_parent and actor not in (old_parent["owner"], old_parent["requester"]):
-            H.refuse(conn, actor, "identity", "Only the parent's owner, requester or a mover can move a subtask away")
+        if old_parent and not H.task_participant(conn, actor, old_parent):
+            H.refuse(conn, actor, "identity", "Only the parent's owner, requester, their managers or a mover can move a subtask away")
     target = None
     if new:
         target = H._task_parent(conn, actor, child_id, new)
         if H.task_private(conn, target) and private is False:
             H.refuse(conn, actor, "private", "A task under a private parent stays private")
-        if not mover and actor not in (target["owner"], target["requester"]) and not H.task_ancestor_party(conn, actor, target):
-            H.refuse(conn, actor, "identity", "Re-parent under a task you own or requested")
+        if not mover and not H.task_participant(conn, actor, target) and not H.task_ancestor_party(conn, actor, target):
+            H.refuse(conn, actor, "identity", "Re-parent under a task you own, requested or whose party you manage")
         above = {new, *ancestors(conn, new)}
         if any(above.intersection(blocker_ids(conn, tid)) for tid in (child_id, *descendant_ids(conn, child_id))):
             H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
@@ -476,6 +498,14 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     if old and row["status"] not in ("done", "closed", "declined"):
         # The old parent may have nothing left open now.
         H._parent_finished(conn, {**row, "status": "closed"}, row["status"], actor, parent=old)
+    # What each parent waits on changed: the old one lost a child (a hold cleared, when it was open), the new one
+    # gained one (backend/task_holds.py).
+    from . import task_holds
+    if old:
+        live = row["status"] not in ("done", "closed", "declined")
+        task_holds.refresh(conn, old, f"{task_holds.title(conn, row)} moved away" if live else None)
+    if new:
+        task_holds.refresh(conn, new)
     from .roadmap_flow import changed, sync
     changed(conn, child_id)
     if old:
@@ -512,7 +542,9 @@ def _blocker_gate(conn, actor, row, mover):
     """The owner says what its own task waits on; anyone else who may change it must be a mover (or the Task Manager,
     whose grant covers relations)."""
     _mine(conn, actor, row, mover)
-    if actor != row["owner"] and not mover and not _H().task_manager_acts(conn, actor, row):
+    H = _H()
+    mover = H.task_mover(conn, actor, row, mover)
+    if not H.task_represents(conn, actor, row["owner"]) and not mover and not H.task_manager_acts(conn, actor, row):
         _need_mover(conn, actor, "blocked_by")
 
 
@@ -531,9 +563,13 @@ def requester_hears_block(conn, row, blocker, actor):
 def _tell_requester(conn, actor, row, blocker):
     """The requester's wake for a block (requester_hears_block); a Dev ticket's own notice carries it instead."""
     from .ticket_notices import _engineering
+    from .check_blocked import kind as check_kind
     H = _H()
     if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
         return
+    parent = H.task(conn, parent_of(conn, row["id"]) or "")
+    if parent and check_kind(conn, row, parent) and _engineering(conn, parent) and parent["owner"] == row["requester"]:
+        return                        # its builder hears once, on the ticket (check_blocked.notify)
     H._wake(conn, row, row["requester"], f"Blocked: {row['title']}: waits on {blocker['title']}",
             {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)
 
@@ -553,12 +589,16 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     _history(conn, actor, blocker_id, task_id, "blocks", True, note)
     H.event(conn, actor, "task.relate", task_id, {"task": blocker_id, "kind": "blocked_by",
                                                   **({"own_subtask": True} if is_descendant(conn, task_id, blocker_id) else {})})
+    from .auto_tasks import back_off
+    back_off(conn, H.task(conn, task_id))
     from .roadmap_flow import sync
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too
     from .task_blocked import hold
     if H.task(conn, blocker_id)["status"] in H.ACTIVE_STATUSES:
         hold(conn, task_id, "Waiting on a dependency")
+    from .check_blocked import changed
+    changed(conn, task_id)            # a blocked Review or QA check shows on its ticket (Dev 553)
     blocked(conn, actor, row, blocker_id)
     _tell_requester(conn, actor, H.task(conn, task_id), H.task(conn, blocker_id))
     return True
@@ -571,12 +611,20 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     if actor != H.KEEPER:
         H._task_private_writer(conn, actor, row)
         _blocker_gate(conn, actor, row, _mover(conn, actor, mover))
+    blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
     reconcile(conn, task_id)
+    from . import task_holds
+    # The blocker taken off is a hold cleared: the last one sends a bot's task back to work (task_holds.refresh).
+    task_holds.refresh(conn, task_id, f"{task_holds.title(conn, blocker)} no longer blocks it" if blocker else None)
+    from .check_blocked import changed
+    changed(conn, task_id)
+    from .blocker_asks import unjoined
+    unjoined(conn, actor, task_id, blocker_id)
     from .roadmap_flow import sync
     sync(conn, task_id)
     return True

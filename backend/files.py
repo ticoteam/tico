@@ -109,7 +109,9 @@ def prime_visible(c, rows):
     privacy.snapshot(c)
     if read_cache.cache(c) is None:
         return
-    H.prime_tasks(c, {row["task_id"] for row in rows if row["task_id"]})
+    H.prime_tasks(c, {row["task_id"] for row in rows if row["task_id"]}
+                  | {row["scope"][5:] for row in rows if row["scope"].startswith("task:")})
+    H.prime_conversations(c, {row["scope"][13:] for row in rows if row["scope"].startswith("conversation:")})
     versions = {row["id"]: [] for row in rows}
     for part in H.chunks(sorted(versions)):
         for v in c.execute("SELECT file_id,blob_id,attempt_id FROM bot_file_versions WHERE file_id IN (%s)"
@@ -117,6 +119,7 @@ def prime_visible(c, rows):
             versions[v["file_id"]].append(v)
     read_cache.prime_rows(c, VERSIONS_SQL, {(fid,): found for fid, found in versions.items()})
     privacy.prime_blobs(c, {v["blob_id"] for found in versions.values() for v in found})
+    privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
 def file_visible(c, auth, who, row, cache):
@@ -707,6 +710,7 @@ class Files:
             rows = [{"id": r["id"], "actor": r["actor"], "action": r["action"], "task_id": r["task_id"],
                      "version": r["version"], "digest": r["digest"], "created": r["created"]}
                     for r in c.execute("SELECT * FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 500", (fid,))]
+            H.prime_tasks(c, {r["task_id"] for r in rows})
             rows = [r for r in rows if not r["task_id"] or privacy.task_readable(c, who, H.task(c, r["task_id"]))]
             return {"file": fid, "activity": rows}
 

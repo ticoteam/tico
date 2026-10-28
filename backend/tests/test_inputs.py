@@ -108,6 +108,9 @@ def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(a
     from backend.store import H
     from backend.tests.test_task_privacy_reads import sql
     r = two_bots(api)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
@@ -140,6 +143,33 @@ def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(a
         assert task_privacy.attempt_readable(c, "bot:ops", first["id"])
         event = c.execute("SELECT * FROM events WHERE action='attempt.input.moved' AND target=?", (first["id"],)).fetchone()
         assert not task_privacy.event_readable(c, "human:ana", event)
+
+
+def test_a_deferred_input_moves_to_the_next_run_after_the_history_sweep_indexed_the_first(api):
+    """The move's event and the input's own row both mark what read the first run as changed, in one write; once the
+    sweep has indexed that run, the second run must still get the input instead of an error."""
+    from backend import read_deps
+    from backend.store import H
+    from backend.tests.test_api import unrelated_task_managers
+    r = two_bots(api)
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+    with api.app.state.store.transaction() as c:
+        packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+    post(api, "chat/ops", {"text": "Check the public numbers"})
+    first = claim(api, r, "ops")
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    ask = ask_ops(api, r, packet["id"], "Are the packet figures final?")
+    assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
+    post(api, f"attempts/{first['id']}/inputs/{ask['id']}/ack", {}, r["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, r["token"])
+    with api.app.state.store.read() as conn:
+        read_deps.sweep(conn)
+    post(api, "chat/ops", {"text": "One more check"})
+    second = claim(api, r, "ops")
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
+    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
 
 
 def test_private_task_input_is_not_folded_into_another_tasks_run_and_runs_on_its_own(api):

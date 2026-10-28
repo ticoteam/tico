@@ -130,6 +130,9 @@ opens your chat with it (`#/assistant`, `GET /api/v2/assistant` answers `"ceo": 
 draft, labelled the CEO Bot's), plus company-wide work within its level. Your chat is one conversation and one session
 of its own, whatever its session setting; its goals work (regular checks, goals, bots' messages to it) is another,
 and neither shares the other's context. Everything it does in your chat is recorded as you, via the CEO Bot.
+Your chat takes pictures and files like any bot chat: attach them, drop them, or paste a screenshot
+(`POST /api/v2/uploads/assistant/messages`, multipart: `text`, optional `titles`, up to ten `files`). A message with
+files always goes to the CEO Bot's turn, which can open them. An Assistant's room stays text only (`422 text_only`).
 
 Nobody else talks to it: everyone else, administrators included, keeps the Assistant, and the chat routes refuse them
 (`403`). Bots still message it, in its goals session, never in your chat. Your chats with your Assistant from before

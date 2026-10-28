@@ -395,10 +395,11 @@ CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
 SCHEMA += SLACK_SCHEMA
 
 
-def refused(c, identity, exc):
-    """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it."""
-    c.execute("ROLLBACK TO domain_write")
-    c.execute("RELEASE domain_write")
+def refused(c, identity, exc, savepoint="domain_write"):
+    """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it. `savepoint` is the
+    write undone: the whole request's, or one task's of a bulk change (app.py task_bulk), which goes on to the next."""
+    c.execute("ROLLBACK TO " + savepoint)
+    c.execute("RELEASE " + savepoint)
     from . import ceo_acts
     if isinstance(exc, ceo_acts.Proposed):
         # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
@@ -804,6 +805,8 @@ class Store:
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
             c.executescript(_stall_triage.SCHEMA)
+            from . import ask_ingest as _ask_ingest
+            c.executescript(_ask_ingest.SCHEMA)
             from . import rule_suggestions as _rule_suggestions
             c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines
@@ -812,7 +815,14 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
+            _rules.ensure_schema(c)
             _rules.seed_dev(c)
+            from . import check_pools as _check_pools
+            _check_pools.ensure(c)
+            _check_pools.seed(c)
+            from . import step_flow as _step_flow
+            _step_flow.ensure(c)
+            _step_flow.seed(c)
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
@@ -1367,6 +1377,10 @@ class Store:
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)
                 H.ensure_market_reads(c)
+                # Setup commands cleared in Settings before a clear released the row (backend/repositories.py).
+                # Unversioned and idempotent like the trash below: it matches nothing once those rows are released.
+                from .repositories import release_cleared_overrides
+                release_cleared_overrides(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
@@ -1514,7 +1528,12 @@ class Store:
                                    ("bot_file_versions_poster",
                                     "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
                                    ("bot_file_versions_thumb",
-                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL")):
+                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
+                                   # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
+                                   # but runs before cloud migration 57 adds tasks.private on an upgraded database.
+                                   ("tasks_private_parties",
+                                    "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   ("conversations_id_task", "conversations(id, task_id)")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.
@@ -1591,6 +1610,9 @@ class Store:
                 raise
             from . import provenance_clock
             provenance_clock.ensure(c)
+            # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
+            from . import read_deps
+            read_deps.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -1805,6 +1827,9 @@ class Store:
                         for item in value:
                             referenced(item)
                 referenced(result)
+                if operation == "/api/v2/task-bulk":
+                    for rows in result.get("tasks", {}).values():
+                        task_ids.update(task["id"] for task in rows)
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)

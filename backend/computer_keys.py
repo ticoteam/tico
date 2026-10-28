@@ -133,14 +133,22 @@ def active(c, runner_id, runtime):
                      "ORDER BY k.created DESC", (runner_id, runtime, ACTIVE)).fetchone()
 
 
+def _sealed_credentials(c):
+    """Sealed credential rows once per read snapshot. `shared` used to re-scan the table for every runtime × computer
+    (Operations `serving` / `shared_listing`)."""
+    from . import read_cache
+    return read_cache.rows(c, "SELECT * FROM credentials WHERE ciphertext IS NOT NULL ORDER BY id")
+
+
 def shared(c, runtime, runner_id=None):
     """The shared key for `runtime` on computer `runner_id`: {env: credential row}, the first stored per variable. A key
     shared with that computer by name comes before the company's "Every computer" key; with no computer, only the
     latter."""
     allowed = providers.MODEL_KEYS.get(runtime) or ()
+    sealed = _sealed_credentials(c)
     for held in ([granted(c, SHARED_WITH + runner_id)] if runner_id else []) + [granted(c, COMPUTERS)]:
         found = {}
-        for row in c.execute("SELECT * FROM credentials WHERE ciphertext IS NOT NULL ORDER BY id"):
+        for row in sealed:
             if row["env"] in allowed and row["env"] not in found and row["id"] in held:
                 found[row["env"]] = row
         if found:
@@ -197,6 +205,17 @@ def listing(c, runner_id):
                          "JOIN credentials cr ON cr.id=k.credential_id WHERE k.runner_id=? AND k.state=? "
                          "ORDER BY k.created", (runner_id, ACTIVE)):
         out[row["runtime"]] = {"env": row["env"], "preview": row["preview"], "since": row["created"]}
+    return out
+
+
+def listing_by_runner(c):
+    """{runner_id: listing(...)} for every computer in one pass (Operations listing)."""
+    out = {}
+    for row in c.execute("SELECT k.runner_id, k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
+                         "JOIN credentials cr ON cr.id=k.credential_id WHERE k.state=? "
+                         "ORDER BY k.created", (ACTIVE,)):
+        out.setdefault(row["runner_id"], {})[row["runtime"]] = {
+            "env": row["env"], "preview": row["preview"], "since": row["created"]}
     return out
 
 

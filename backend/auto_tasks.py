@@ -4,6 +4,68 @@ from . import task_privacy as privacy
 from .task_snooze import snoozed
 
 KEY = "keep_tasks_going"
+PUT_BACK_MINUTES = 60
+START_NOTE = 'Automatic start on a free turn'
+
+
+def put_back_held(c, row):
+    """An owner's queue return holds until its hour expires or new task input arrives.
+
+    Status history survives restarts; ordinary note edits and automatic notices do not
+    silently undo the owner's decision.
+    """
+    if not row or row['status'] != 'open':
+        return False
+    move = c.execute("SELECT rowid,ts,actor,old,new FROM task_events WHERE task_id=? AND actor=? "
+                     "AND field IN ('status','queue_return') AND new='open' ORDER BY rowid DESC LIMIT 1",
+                     (row['id'], row['owner'])).fetchone()
+    if (not move or move['actor'] != row['owner'] or move['old'] not in ('doing', 'waiting', 'done', 'review')
+            or move['new'] != 'open' or move['ts'] <= H.shift(H.now(), minutes=-PUT_BACK_MINUTES)):
+        return False
+    # Derived Blocked and its keeper resume preserve the owner's hold. A later working move ends it.
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND field='status' "
+                 "AND (actor<>? OR new NOT IN ('waiting','open')) LIMIT 1",
+                 (row['id'], move['rowid'], H.KEEPER)).fetchone():
+        return False
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND new IS NOT NULL "
+                 "AND field IN ('link','related','blocked_by','blocks','parent_id','subtask','follow_up_of','follow_ups') "
+                 "LIMIT 1", (row['id'], move['rowid'])).fetchone():
+        return False
+    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>=? "
+                 "AND json_extract(m.refs_json,'$.task')=? "
+                 "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs_json,'$.comment')=1 "
+                 "LIMIT 1", (row['conversation_id'], move['ts'], row['id'], H.KEEPER)).fetchone():
+        return False
+    if c.execute("SELECT 1 FROM task_events e WHERE e.task_id=? AND e.rowid>? AND e.field='blocked_by' "
+                 "AND e.new IS NULL AND EXISTS (SELECT 1 FROM task_events done WHERE done.task_id=e.old "
+                 "AND done.field='status' AND done.new IN ('done','closed','declined') AND done.ts>=?) LIMIT 1",
+                 (row['id'], move['rowid'], move['ts'])).fetchone():
+        return False
+    if c.execute("SELECT 1 FROM task_relations r JOIN task_events e ON e.task_id=r.from_task "
+                 "WHERE r.to_task=? AND r.kind='blocks' AND e.field='status' AND e.new IN ('done','closed','declined') "
+                 "AND e.ts>=? LIMIT 1", (row['id'], move['ts'])).fetchone():
+        return False
+    return True
+
+
+def back_off(c, row):
+    """Undo only an automatic start that has not produced a finished task run."""
+    if row['status'] != 'doing' or not H.TR.live_blocker(c, row['id'], H.ACTIVE_STATUSES):
+        return False
+    move = c.execute("SELECT rowid,actor,new,note FROM task_events WHERE task_id=? AND field='status' "
+                     "ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()
+    if not move or (move['actor'], move['new'], move['note']) != (H.KEEPER, 'doing', START_NOTE):
+        return False
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND field IN ('step','owner') "
+                 "AND actor<>? LIMIT 1", (row['id'], move['rowid'], H.KEEPER)).fetchone():
+        return False
+    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
+        return False
+    H._set_status(c, H.KEEPER, row, status='open', note='Automatic start returned to the queue: a blocker was linked',
+                  skip_step_wake=(row['owner'],))
+    c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
+    H.recount(c, [row['owner'], row['requester']])
+    return True
 
 
 def of(config):
@@ -25,12 +87,47 @@ def review(c, row, *, parent_id=None):
     parent = H.task(c, parent) if parent else None
     if not parent or parent['owner'] == row['owner']:
         return False
-    step = c.execute('SELECT name FROM task_steps WHERE id=?',
-                     (parent.get('blocked_from_step') if parent.get('blocked_since') else parent.get('step_id'),)).fetchone()
-    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
+    from . import step_flow
+    step = step_flow.step(c, parent.get('blocked_from_step') if parent.get('blocked_since') else parent.get('step_id'))
+    return bool(step and step_flow.check_kind(step))
 
 
-def next_run_held(c, row):
+def actionable_notice(row, message):
+    """Only owner-directed work notices release quiet carriage; informational news stays quiet."""
+    refs = (message or {}).get('refs') or {}
+    return bool(message and message.get('from_actor') == H.KEEPER and message.get('kind') == 'notice'
+                and message.get('to_actor') == row['owner'] and not refs.get('quiet')
+                and (refs.get('wake') in ('due', 'snooze', 'resume')
+                     or refs.get('trigger') == 'pr_checks' and refs.get('wake') == 'pr_checks_done'))
+
+
+def carrier_held(c, row):
+    """A carried task cannot be released around its live, queued or interrupted run."""
+    if not row.get('carried_by'):
+        return False
+    carrier = c.execute("SELECT a.state,j.state job_state FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                        "WHERE a.id=?", (row['carried_by'],)).fetchone()
+    return bool(carrier and (carrier['state'] in ('leased', 'running') or
+                            carrier['job_state'] in ('queued', 'leased', 'running', 'uncertain')))
+
+
+def notice_releases(c, row, message):
+    """An actionable notice starts its own work only after the previous carrier has let go."""
+    if not row.get('next_run') or row['status'] != 'open' or row.get('resume_json'):
+        return False
+    if not actionable_notice(row, message):
+        return False
+    if carrier_held(c, row):
+        return False
+    # A task may have moved lanes or have a run of its own without a carried_by marker.
+    if c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id LEFT JOIN jobs j ON j.id=a.job_id "
+                 "WHERE a.bot=? AND t.task_id=? AND (a.state IN ('leased','running') OR j.state='uncertain') "
+                 "LIMIT 1", (H.actor_id(row['owner']), row['id'])).fetchone():
+        return False
+    return True
+
+
+def next_run_held(c, row, *, message=None):
     """A real next-run deferral holds; a task reopened from Waiting has work of its own again.
 
     Read the transition so already-queued Open notices recover too. A later quiet-work decision,
@@ -38,8 +135,10 @@ def next_run_held(c, row):
     """
     if not row.get('next_run'):
         return False
-    if row.get('resume_json') or row['status'] != 'open':
+    if row.get('resume_json') or row['status'] != 'open' or carrier_held(c, row):
         return True
+    if actionable_notice(row, message):
+        return not notice_releases(c, row, message)
     move = c.execute("SELECT rowid,ts,old,new FROM task_events WHERE task_id=? AND field='status' "
                      "ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()
     if not move or (move['old'], move['new']) != ('waiting', 'open'):
@@ -57,19 +156,21 @@ def next_run_held(c, row):
     return False
 
 
-def waiting(c, row, starting=False, *, include_next_run=True):
-    if snoozed(row) or include_next_run and next_run_held(c, row):
+def waiting(c, row, starting=False, *, include_next_run=True, result=False):
+    """`result`: the claim is handing out a subtask's result (refs.subtask). The task's open subtasks never hold
+    that back, or a parent waiting on two subtasks hears from neither until both finish; every other wait does."""
+    if snoozed(row) or put_back_held(c, row) or include_next_run and next_run_held(c, row):
         return True
     if H._has_table(c, 'worktree_waits') and c.execute(
             "SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1",
             (row['id'],)).fetchone():
         return True
     from .milestone_waits import pending
-    if (row.get('waiting_on') or H.TR.live_blocker(c, row['id'], H.ACTIVE_STATUSES)
+    if (row.get('waiting_on') or H.live_blocker(c, row['id'], children=not result)
             or pending(c, row['id']) or c.execute(
                 'SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1', (row['id'],)).fetchone()):
         return True
-    why = H.waiting_for(c, row)
+    why = H.waiting_for(c, row, children=not result)
     # A new parent and the work someone filed beneath it may share the same bot's session.
     # Let that session coordinate its own work; another owner's child remains an awaited result.
     if starting and why == 'an open child task':
@@ -96,17 +197,19 @@ def counts(c, bot, who=None, tasks=None):
     return {'going': going, 'waiting': queued}
 
 
-def refusal(c, row, config, woken=False):
+def refusal(c, row, config, woken=False, result=False, *, message=None):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
-    that, while waits, the off switch and the task cap still do."""
-    if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate" or waiting(c, row, starting=True)):
+    that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
+    Waiting task's open subtasks do not hold back (`waiting`)."""
+    if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
+                                              or waiting(c, row, starting=True, result=result)):
         return "task_wait"
     if not startable(c, row):
         return None
     if waiting(c, row, starting=True, include_next_run=False):
         return 'task_wait'
-    if next_run_held(c, row):
+    if next_run_held(c, row, message=message):
         return 'task_next_run'
     from . import profiles
     if not woken and (why := profiles.pull_refusal(c, row, config)):
@@ -125,8 +228,7 @@ def missing(c, settings, runner, body):
     from .shared_bots import follow
     from .store import readiness_document
     ready = readiness_document(runner['readiness_json'])
-    busy = {(r[0], r[1]) for r in c.execute(
-        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    busy = set(E.live_lanes(c))
     busy |= {tuple(v.split('|', 1)) for v in body.busy_lanes or () if '|' in v}
     held = E.turns_here(c, runner['id'])
     held_bots = set(body.busy_bots or ()) | ({b for b, _ in busy} if not E.lanes_on(runner) else set())
@@ -174,19 +276,24 @@ def missing(c, settings, runner, body):
 
 def enqueue(c, row):
     """Catalog action: reuse task wake delivery; claim still checks every execution fence."""
+    move = c.execute("SELECT id FROM task_events WHERE task_id=? AND field='status' ORDER BY rowid DESC LIMIT 1",
+                     (row['id'],)).fetchone()
+    # A fresh return to Open is new work even if the previous automatic start just finished.
     return H._wake(c, row, row['owner'], 'Start assigned task: ' + row['title'],
-                   {'auto_start': True}, trigger='other')
+                   {'auto_start': True}, trigger='other', source=move['id'] if move else None)
 
 
-def started(c, row):
+def started(c, row, *, message=None):
     if not startable(c, row):
         return row
-    if row.get('next_run') and not next_run_held(c, row):
+    if row.get('next_run') and not next_run_held(c, row, message=message):
         c.execute('UPDATE tasks SET next_run=0,carried_by=NULL WHERE id=?', (row['id'],))
-        H._task_event(c, row['id'], H.KEEPER, 'next_run', '1', '0', 'reopened from waiting')
+        H._task_event(c, row['id'], H.KEEPER, 'next_run', '1', '0',
+                      'actionable notice released stale carriage' if notice_releases(c, row, message)
+                      else 'reopened from waiting')
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
-    H._set_status(c, H.KEEPER, row, status='doing', step=step, note='Automatic start on a free turn')
+    H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner'], row['requester']])
     return H.task(c, row['id'])

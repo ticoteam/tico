@@ -95,7 +95,8 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
  UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs_json,'$.wake_batch')
    ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
-   AND m.from_actor='{H.KEEPER}' AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
+   AND m.from_actor='{H.KEEPER}' AND coalesce(json_extract(m.refs_json,'$.wake_immediate'),0)<>1
+   AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
  UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
    AND ({_DUPLICATE});
 END"""
@@ -198,6 +199,12 @@ def sweep_key(refs):
     return str(refs.get("sweep") or refs.get("task") or "")
 
 
+def release_quota_resets(c, at=None):
+    """A quota retry keeps its job and becomes claimable at the reset even between scheduler ticks."""
+    c.execute("UPDATE jobs SET held=0 WHERE held=1 AND state='queued' AND wake_class='quota-reset' "
+              "AND hold_until<=?", (at or H.now(),))
+
+
 def tick(c, at=None):
     """Plan each newly held job's release, then let go of the ones that are due. Runs in the scheduler's write
     transaction every tick; a release is an UPDATE of `held`, which tells the bot's computer there is work."""
@@ -223,7 +230,8 @@ def tick(c, at=None):
     for job in c.execute("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.message_id,m.conversation_id,m.refs_json "
                          "FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.held=1 AND j.state='queued' "
                          "AND j.hold_until IS NOT NULL AND j.hold_until<=? ORDER BY j.created,j.id", (at,)).fetchall():
-        if job["wake_class"] == "sweep":
+        if job["wake_class"] in ("sweep", "quota-reset"):
+            # A quota retry is the same job, not news to batch, fold into another request or turn into a digest.
             c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
             continue
         scope = (numbers_for(c, job["bot"], job["wake_preset"], cache) or {}).get("batch_scope")
@@ -327,7 +335,7 @@ def _release(c, bot, jobs):
     sent = H.say(c, H.KEEPER, "bot:" + bot, f"{len(jobs)} updates held by {held_by}:\n"
                  + "\n".join(lines) + "\nOpen each task that needs you; the rest is news.", kind="notice",
                  refs={"wake_digest": len(jobs)})
-    held_until = max(c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] for j in jobs)
+    held_until = max(c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] or H.now() for j in jobs)
     c.execute("UPDATE jobs SET wake_class='digest',wake_preset=?,hold_until=? WHERE message_id=?",
               (jobs[0]["wake_preset"], held_until, (sent or {}).get("id")))
     digest = c.execute("SELECT id FROM jobs WHERE message_id=?", ((sent or {}).get("id"),)).fetchone()
@@ -354,7 +362,8 @@ def replan(c, bot):
     """A preset change: the bot's held jobs are planned again on the new values."""
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     name = preset_of(H._json(config[0], {}) if config else {})
-    c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot=? AND held=1 AND state='queued'", (name, bot))
+    c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot=? AND held=1 AND state='queued' "
+              "AND coalesce(wake_class,'')<>'quota-reset'", (name, bot))
 
 
 def classify(message):

@@ -33,6 +33,11 @@ impl Broker {
         Self { kind: kind.into(), env, lock }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn hold_refresh(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.lock.clone().lock_owned().await
+    }
+
     pub async fn access(&self, minimum: f64, previous: Option<&Value>) -> Result<Value, String> {
         let broker = self.clone();
         let request = json!({"kind": self.kind, "minimum": minimum, "parent": std::process::id(),

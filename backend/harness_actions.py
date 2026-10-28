@@ -96,6 +96,14 @@ def choices(c, rid):
         "SELECT harness,enabled FROM runner_harness_choices WHERE runner_id=?", (rid,))}
 
 
+def choices_by_runner(c):
+    """{runner_id: {harness: enabled}} for every computer in one pass (Operations listing)."""
+    out = {}
+    for r in c.execute("SELECT runner_id,harness,enabled FROM runner_harness_choices"):
+        out.setdefault(r["runner_id"], {})[r["harness"]] = bool(r["enabled"])
+    return out
+
+
 def recent(c, rid):
     """Requests still in flight, and the last finished one per harness, for the Computers page. Reads
     only: the page loads on a read connection, and `sweep` runs on every write."""
@@ -106,6 +114,24 @@ def recent(c, rid):
         if row["state"] in ACTIVE or row["harness"] not in seen:
             out.append(view(row))
         seen.add(row["harness"])
+    return out
+
+
+def recent_by_runner(c):
+    """{runner_id: recent()} for every computer. Newest-first scan keeps each runner's latest 30 rows."""
+    newest = {}
+    for row in c.execute("SELECT * FROM runner_harness_actions ORDER BY created DESC"):
+        bucket = newest.setdefault(row["runner_id"], [])
+        if len(bucket) < 30:
+            bucket.append(row)
+    out = {}
+    for rid, rows in newest.items():
+        seen, items = set(), []
+        for row in rows:
+            if row["state"] in ACTIVE or row["harness"] not in seen:
+                items.append(view(row))
+            seen.add(row["harness"])
+        out[rid] = items
     return out
 
 

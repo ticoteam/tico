@@ -40,7 +40,9 @@ function liveFollow(id) {
   };
 }
 // Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
-const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(fn, ms);
+// A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
+// whenever live was down.
+const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(() => { if (!document.hidden) fn(); }, ms);
 // Run `fn` once after a burst: every call within `ms` of the first folds into it.
 const LIVE_SOON = new Map();
 function liveSoon(key, fn, ms = 250) {
@@ -179,6 +181,12 @@ function liveDown(es) {
   try { es.close(); } catch {}
   if (LIVE.es === es) LIVE.es = null;
   if (LIVE.connected) { LIVE.connected = false; liveEmit('status', {connected: false}); }
+}
+// Back after a long time away: a phone may have dropped the stream while the app was suspended without an error
+// reaching the page, so it still counts as connected. Reconnect from the last change number; the server sends what
+// was missed, or `reset`.
+function liveResume() {
+  if (LIVE.started && !SESSION.out) liveEventsConnect();
 }
 // A tab coming back from sleep or a dropped network reconnects now rather than at the end of its backoff.
 window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected && !SESSION.out) liveEventsConnect(); });

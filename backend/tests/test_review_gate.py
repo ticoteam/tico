@@ -14,7 +14,8 @@ def ticket(api, receipt=None, **fields):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Dev tickets', [
             {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
-            {'name': 'Review 2', 'status': 'review'}, {'name': 'Done', 'status': 'done'}])
+            {'name': 'Review 1 Fixes', 'status': 'doing'}, {'name': 'Review 2', 'status': 'review'},
+            {'name': 'Done', 'status': 'done'}])
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
                               'type': typ['id'], 'step': 'In Progress', 'links': [PR], **fields})
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
@@ -326,6 +327,9 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
 @pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
 def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
     task = ticket(api, private=False)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
         c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=?, note=? WHERE id=?",
@@ -361,7 +365,8 @@ def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatc
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     assert move(api, task).status_code == 422
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step_id'] == task['step_id'] and not current.get('blocked_since')
 
 
 def test_author_labels_override_pr_path_default(api):

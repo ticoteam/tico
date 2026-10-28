@@ -712,6 +712,9 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])
+        from .quarantine_display import builder_notice, explanation
+        row["quarantine"]["why"] = explanation(c, row["bot"], who, auth)
+        row["quarantine"]["builder_notice"] = builder_notice(row["quarantine"])
         auto = row["quarantine"]["auto"]
         if not auto and auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"])):
             review = dict(H.quarantine_review(c, row["bot"]) or {})

@@ -641,8 +641,11 @@ def writer_for(c, settings, store=None, vault=None):
         def key_of():
             from .credentials import Vault
             keys = vault or Vault(store)
+            if not keys.configured and not gateway_connection.env_key(settings):
+                return ""
             with store.read() as c:
-                return gateway_connection.key(c, keys, settings) if keys.configured or gateway_connection.env_key(settings) else ""
+                secret, now_base, _ = gateway_connection.target(c, keys, settings)
+            return secret if G.chat_base(now_base) == base else ""   # moved since: the key is not this address's
         return J.gateway_writer(key_of, base, models_preset.pick())
     found = fallback_model(record)
     return J.llm_writer(*found) if found else None

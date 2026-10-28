@@ -12,8 +12,8 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login, providers,
-               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
+               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -66,12 +66,37 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
-        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"],
-                      "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_plural(row['queued'], 'job')} queued, "
-                              f"oldest {minutes} min; {row['why']}", "fixes": fixes,
+        # Check summaries enter support reports; private refusal context stays on the bot's display row.
+        why = ("Quarantined: queued work waits for the quarantine to clear."
+               if row["reason"] == "quarantined" else row["why"])
+        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
+                      "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
+                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {why}",
+                      "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
+
+
+def _queue_words(row, minutes):
+    """A bot's queue in one phrase, split as Pipeline splits it: jobs that can start, jobs an interrupted run fences,
+    and jobs held on purpose. The age is the oldest job named first."""
+    words = []
+    if row["queued"]:
+        words.append(f"{_plural(row['queued'], 'job')} queued, oldest {minutes} min")
+    if row.get("dead"):
+        age = "" if row["queued"] else f", oldest {minutes} min"
+        words.append(f"{_plural(row['dead'], 'job')} behind an interrupted run awaiting review{age}")
+    if row.get("held"):
+        words.append(f"{row['held']} held on purpose")
+    return "; ".join(words) or "nothing queued"
+
+
+def _silent_words(computer):
+    """The work waiting behind a silent computer, split as Pipeline splits it."""
+    words = [f"{_plural(computer['queued'], 'job')} queued"] if computer["queued"] else []
+    if computer["dead"]:
+        words.append(f"{_plural(computer['dead'], 'job')} behind an interrupted run awaiting review")
+    return " and ".join(words)
 
 
 def _plural(n, one, many=None):
@@ -166,9 +191,13 @@ def _computers(c, runners_online, settings, limits=None):
                                   for n, v in sorted(runtimes.items())
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
                                   or n in run_on.get(r["id"], ())]})
+    from . import org_turns
     from .start_places import summary, describe
+    # Below warning, Health's stuck and queue checks already say why a bot is not starting: the Turns line skips
+    # claim_refusal per queued bot. At warning it names quota and readiness waits again.
+    classify = org_turns.admission(c)['at_warning']
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings, limits)
+        row["turn_counts"] = summary(c, row["id"], settings, limits, classify=classify)
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
@@ -306,12 +335,14 @@ def missing_repositories(c, online_ids):
 def failed_repository_copies(c, online_ids):
     """(computer, repository, why) for the repositories an online computer could not copy to its workspace: the
     runner's own words, git's reason included, so nobody has to guess between access, network and disk."""
-    from .repositories import metadata
+    from .repositories import computer_repositories
+    # One registry scan for every computer, shared with the computer cards in this snapshot.
+    by_repos = computer_repositories(c)
     out = []
     for r in c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL ORDER BY label"):
         if r["id"] not in online_ids:
             continue
-        rows = metadata(c, "computer-repositories:" + r["id"]).get("repositories")
+        rows = by_repos.get(r["id"])
         for row in rows if isinstance(rows, list) else ():
             if isinstance(row, dict) and row.get("state") == "failed" and row.get("full_name"):
                 out.append((r["label"], str(row["full_name"]), str(row.get("error") or "the copy failed")[:500]))
@@ -402,15 +433,20 @@ def repository_fix(c, bot, label, github_owner=""):
 def _member_bots_beside_shared_keys(c):
     """Computers whose `_shared.env` holds keys every bot there receives, and that also host bots members
     created: a member's bot instructions could ask a run for them."""
-    out = []
-    for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-        if not readiness_document(r["readiness_json"]).get("shared_env"):
-            continue
-        members = [a["bot"] for a in c.execute(
-            "SELECT a.bot FROM assignments a JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
-            "AND bc.created_by LIKE 'human:%'", (r["id"],)) if _made_by_member(c, a["bot"])]
-        if members:
-            out.append((r["label"], members))
+    runners = [r for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY label")
+               if readiness_document(r["readiness_json"]).get("shared_env")]
+    out, members = [], {}
+    if runners:
+        marks = ",".join("?" * len(runners))
+        for row in c.execute("SELECT a.runner_id,a.bot FROM assignments a JOIN bot_config bc ON bc.bot=a.bot "
+                             f"WHERE a.runner_id IN ({marks}) AND bc.created_by LIKE 'human:%'",
+                             [r["id"] for r in runners]):
+            if _made_by_member(c, row["bot"]):
+                members.setdefault(row["runner_id"], []).append(row["bot"])
+    for runner in runners:
+        found = members.get(runner["id"])
+        if found:
+            out.append((runner["label"], found))
     return out
 
 
@@ -446,22 +482,33 @@ def _rejected_summary(rows):
 
 def silent_computers(c, minutes=SILENT_MINUTES):
     """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
-    first: [{id, label, operator, last_seen, minutes, queued, bots}]. A computer that never checked in is setup, not this."""
+    first: [{id, label, operator, last_seen, minutes, queued, dead, bots}]. `queued` can start and `dead` waits behind an
+    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this."""
+    from .execution import unfenced_sql
     rows = c.execute(
-        "SELECT r.id, r.label, r.operator, r.last_seen, count(j.id) queued, group_concat(DISTINCT a.bot) bots "
+        f"SELECT r.id, r.label, r.operator, r.last_seen, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
+        "count(j.id) n, group_concat(DISTINCT a.bot) bots "
         "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
+        "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
-             "minutes": quiet_minutes(r["last_seen"]), "queued": r["queued"], "bots": sorted(r["bots"].split(","))}
-            for r in rows]
+             "minutes": quiet_minutes(r["last_seen"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
+             "bots": sorted(r["bots"].split(","))} for r in rows]
 
 
 def quiet_minutes(last_seen):
     """Whole minutes since `last_seen`; 0 when it cannot be read."""
     seen = H.parse_ts(last_seen)
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
+
+
+def _fenced_queue_reason(row, refused, first, person):
+    """Name the interrupted-run fence when it is the only reason this queue cannot start."""
+    if not row["queued"] and row["dead"] and refused in (None, 'lane_held'):
+        return "uncertain", None, False
+    return refused, first, person
 
 
 def _waiting(c, online_ids, settings=None, limits=None):
@@ -471,10 +518,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
     beside a young free one is neither."""
-    from .execution import bot_claimable, prime_claimables
+    from .execution import bot_claimable, prime_claimables, queued_reasons
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
-    # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
+    # Each bot's queue is shown as Pipeline splits it (pipeline_stats.queue_counts), so the counts match `hub pipeline`:
+    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
+    # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
+    # held job behind an interrupted run as dead, and work held on purpose is not stuck.
+    split = pipeline_stats.queue_counts(c, [r["slug"] for r in c.execute("SELECT slug FROM bots")])
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
         "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
@@ -488,7 +539,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
     from . import org_turns
-    company_stopped = settings and org_turns.snapshot(c, settings)['at_stop']
+    # Admission is enough for the company-stop gate: a full snapshot classifies every queued bot and held the
+    # writer for seconds on a live install. Detailed wait counts stay on the company-turns check below.
+    company_stopped = settings and org_turns.admission(c)['at_stop']
     busy, running, turns = set(), {}, {}
     for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
@@ -496,9 +549,10 @@ def _waiting(c, online_ids, settings=None, limits=None):
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
-    from .execution import turns_here
+    from . import start_places
+    held_now = start_places.held_totals(c)
     full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if sum(turns_here(c, r["id"]).values()) >= (r["capacity"] or 1)}
+            if held_now.get(r["id"], 0) >= (r["capacity"] or 1)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
@@ -525,12 +579,16 @@ def _waiting(c, online_ids, settings=None, limits=None):
     from .login_waits import unknown_holder
     orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
-    prime_claimables(c, [slug for slug in queued if slug in assigned])
+    # The whole queue, not the next three jobs: queued_reasons reads every queued message.
+    prime_claimables(c, [slug for slug in queued if slug in assigned], first=None)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
-        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": count, "oldest": oldest,
+        shown = split.get(slug, {})
+        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": shown.get("queued", 0),
+               "dead": shown.get("dead", 0), "held": shown.get("held", 0),
+               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
                "computer": where[1] if where else ""}
         if bot["state"] != "active":
             if count:
@@ -566,6 +624,8 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 diagnostic = bot_claimable(c, settings, where[0], slug, limits, oldest=True)
                 if diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
+            # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
+            refused, first, person = _fenced_queue_reason(row, refused, first, person)
             # A running turn only explains this queue when it holds the queued lane. Free task
             # lanes still get the claim's actual refusal, even while another lane runs.
             idle = where[0] not in full and not (refused == 'lane_held' and slug in busy)
@@ -573,6 +633,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
+            # Counts belong to the individual job's task, not the representative oldest job.
+            groups = {}
+            for job, why in queued_reasons(c, settings, where[0], slug, limits):
+                key = why or "slow"
+                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
+                group["queued"] += 1
+                group["oldest"] = min(group["oldest"], job["created"])
+            row["queue_reasons"] = list(groups.values())
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
             slow.append({**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"})
@@ -668,12 +736,11 @@ RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Comp
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
-    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
+    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person, check or an owner's 60-minute queue return", RUNS),
     "task_next_run": ("Its assigned task is deferred to its next run, held by a run that carried it, or waiting on a stored resume condition", RUNS),
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
-    "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -764,6 +831,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         elif reason == "updating":
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
+        elif reason == "quarantined":
+            from .quarantine_display import explanation
+            text = explanation(c, row["bot"], who, auth)
+            fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
@@ -771,10 +842,21 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix("Open Runs", "#/settings", "runs")
+        queue_reasons = row.get("queue_reasons") or []
+        if len(queue_reasons) > 1 and reason not in ("no_slot", "busy", "updating", "restarting"):
+            # Keep one bot row, but never describe all its jobs with the oldest job's hold.
+            words = {"task_wait": "waiting for a snooze, prerequisite, person or check",
+                     "task_next_run": "deferred to the next run or a stored resume condition",
+                     "slow": "ready to start"}
+            text = "; ".join(_plural(item["queued"], "job") + ": " + words.get(item["reason"],
+                            HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"))
+                             for item in queue_reasons)
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
-                   | {"why": text[:320], "fix": fix if full else None,
+                   | {"dead": row.get("dead", 0), "held": row.get("held", 0),
+                       "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
+                       **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 
@@ -959,6 +1041,30 @@ def _github_workflows(c, github):
                       "if this stays, check the installation's repository access and the organisation's Actions "
                       "policy on GitHub. Refused: " + ", ".join(refused[:3])
                       + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
+                      [_fix("Open GitHub settings", "#/integrations")])
+    return None
+
+
+def _github_workflow_edits(c, github):
+    """`_github_workflows` for write grants an Owner or admin let edit workflow files: their token carries Workflows:
+    write only once the installation has accepted it."""
+    from .repo_waits import permissions_url
+    from .repositories import workflows_refused, workflows_waiting
+    connected = bool(github and github.row(c))
+    if waiting := workflows_waiting(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "Bots can't edit workflow files yet", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: the GitHub App's "
+                      "Workflows permission is not Read and write on the installation. Set it in the App's "
+                      "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
+                      + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
+                      [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
+                       _fix("Open GitHub settings", "#/integrations")])
+    if refused := workflows_refused(c, 'edit_workflows') if connected else []:
+        return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
+                      "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
+                      "token with Workflows: write although the installation reports it. Tico asks again after a "
+                      "minute; if this stays, check the installation's repository access on GitHub. Refused: "
+                      + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
                       [_fix("Open GitHub settings", "#/integrations")])
     return None
 
@@ -1332,16 +1438,37 @@ def _aged_pr_checks(c, who, auth, full, kind):
 def _unreviewed_runs(c, who, auth):
     """Bots with a stopped run held two hours or more with no decision (execution.unreviewed), as `who` may read them:
     BotOps's review of it did not happen, so a person sees it here and in the operator's Needs you (Dev 543)."""
-    from .execution import HELD_UNREVIEWED, unreviewed
+    from . import task_privacy as privacy
+    from .execution import HELD_UNREVIEWED
     slugs = [row[0] for row in c.execute(
         "SELECT DISTINCT j.bot FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id WHERE j.state='uncertain' "
         "AND coalesce(a.finished,j.created)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
     readable = auth.bot_accesses(c, who, slugs) if slugs else {}
     items = []
+    # One read of every held run, then the same per-run visibility check unreviewed does for one bot.
+    held = {}
+    if slugs:
+        cutoff = H.shift(H.now(), seconds=-HELD_UNREVIEWED)
+        marks = ",".join("?" * len(slugs))
+        for row in c.execute("SELECT m.*,j.bot,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
+                             "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
+                             f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
+                             "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
+                             "ORDER BY since", (*slugs, cutoff)):
+            held.setdefault(row["bot"], []).append(row)
+        privacy.prime_messages(c, [row for rows in held.values() for row in rows])
+        privacy.prime_attempts(c, [row["attempt_id"] for rows in held.values() for row in rows])
     for slug in slugs:
         if not readable.get(slug, auth.FULL)["read"]:
             continue
-        count, hours = unreviewed(c, who, slug)
+        count, oldest = 0, None
+        for row in held.get(slug, []):
+            if not (privacy.message_readable(c, privacy.actor(who), row)
+                    and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+                continue
+            count += 1
+            oldest = oldest or row["since"]
+        hours = int((H.parse_ts(H.now()) - H.parse_ts(oldest)).total_seconds() // 3600) if oldest else 0
         if count:
             text = f"{_bot_name(c, slug)}: {count} stopped run{'' if count == 1 else 's'} waiting {hours} h"
             items.append({"bot": slug, "name": _bot_name(c, slug), "count": count, "hours": hours, "text": text,
@@ -1432,7 +1559,9 @@ def view(c, who, settings, auth, github, config):
         from . import org_turns
         incident = org_turns.saved(c, org_turns.INCIDENT)
         if incident.get('opened_at'):
-            value = org_turns.snapshot(c, settings)
+            # in_use / warning / stop come from admission. The fixer's saved finding already holds the detailed
+            # queue classification; rebuilding a fleet snapshot on every Health poll is not needed here.
+            value = org_turns.admission(c)
             # The turn fixer's finding (backend/turn_fixer.py) once it has run: one per incident, rewritten in place.
             found = (incident.get('finding') or {}) if incident.get('active') else {}
             text = (found.get('text') or f"{value['in_use']} company turns in use; warning {value['warning']}, "
@@ -1776,7 +1905,7 @@ def view(c, who, settings, auth, github, config):
         names = ", ".join(w["name"] for w in waiting[:5])
         # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
         stopped = "".join(f" {x['label'] if full else 'A computer'} has not checked in for {x['minutes']} minutes "
-                          f"with {_plural(x['queued'], 'job')} queued." for x in silent[:3])
+                          f"with {_silent_words(x)}." for x in silent[:3])
         checks.append(_check("waiting", "Bots waiting", "bad" if silent or not online else "warn",
                              f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
                              + (f": {names}." if full else ".") + stopped,
@@ -1823,13 +1952,21 @@ def view(c, who, settings, auth, github, config):
 
     # Successful model turns can still make no task progress. Infrastructure and failed-run
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    stalled = list(c.execute(
-        "SELECT id,title,number,owner,updated FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
+    # Waiting tasks can also escalate when held only by their own quiet subtasks.
+    stalled = [row for row in c.execute(
+        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
+        # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
+        "AND (status<>'waiting' OR NOT EXISTS (SELECT 1 FROM task_relations r "
+        "WHERE r.to_task=tasks.id AND r.kind='blocks' AND r.from_task IN "
+        f"(SELECT tasks.id FROM tasks WHERE status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+        f"AND NOT coalesce(({auth.task_sql(c, who)}),0)))) "
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
+        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated", H.ACTIVE_STATUSES)
+        if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated"]),
@@ -1880,6 +2017,8 @@ def view(c, who, settings, auth, github, config):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
             checks.append(workflows)
+        if edits := _github_workflow_edits(c, github):
+            checks.append(edits)
         slack = _slack(c)
         if slack:
             checks.append(slack)

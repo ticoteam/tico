@@ -7,7 +7,9 @@ step. A person moves the task. The repository's webhook posts here signed with
 
 - a pull request opened, merged or closed -> the link is `open`, `draft`, `merged` or `closed`
 - checks                            -> nothing per check; one `pr_checks_done` per head (and result) once every check
-                                       on it has finished, which backend/rules.py turns into a wake or a note
+                                       on it has finished, which backend/rules.py turns into a wake or a note. Checks
+                                       left pending are read afresh from GitHub (`refresh_pending_checks`, and a task
+                                       read's refresh): a suite with no check run is not pending
 - conflicts and reviews             -> specific owner notices grouped within three minutes; a review or comment that is
                                        not from a person is a note (`pr_review`)
 - a link armed with `wake_once`     -> one notice when its checks finish (pass or fail), it gets an
@@ -76,21 +78,23 @@ def _save_burst(c, task, burst, **parts):
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
-def queue_wake(c, task, item, batch=None):
+def queue_wake(c, task, item, batch=None, handoff=None):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
     `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
     request), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
     one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
     also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
-    message so one can never lift or lower another."""
+    message so one can never lift or lower another. `handoff` (a merge conflict) puts the burst first in the owner's
+    queue (backend/verdict_moves.py) and stays on it until it is sent."""
     from .repositories import metadata
     burst = metadata(c, "github-task-wake:" + task["id"])
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
     kind = batch if not burst.get("items") or burst.get("batch") == batch else None
-    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items, **({"batch": kind} if kind else {}))
+    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items, **({"batch": kind} if kind else {}),
+                **({"handoff": handoff} if handoff else {}))
 
 
 def queue_note(c, task, item):
@@ -138,6 +142,8 @@ def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
     from .repositories import metadata
+    from .review_gate import engineering
+    from . import step_flow, verdict_moves
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
         with isolated(c, "github_wake", row["key"]):
@@ -149,13 +155,18 @@ def flush_wakes(c):
             if live:
                 if burst.get("items"):
                     H._wake(c, task, task["owner"], "\n".join(burst["items"]),
+                            {verdict_moves.HANDOFF: burst["handoff"]} if burst.get("handoff") else
                             {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
                 if burst.get("notes"):
                     H._wake(c, task, task["owner"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks")
                 for done in burst.get("done", []):
+                    # A failed check on a bot's ticket on a board with a flow is its builder's hand-off, at any step.
+                    failed = done["result"] == "fail" and H.is_bot(task["owner"]) and (
+                        engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
                     H._wake(c, task, task["owner"], done["item"],
                             {"wake": "pr_checks_done", "pr_head": done["head"], "pr_result": done["result"],
-                             **({"pr_armed": True} if done.get("armed") else {})}, trigger="pr_checks")
+                             **({"pr_armed": True} if done.get("armed") else {}),
+                             **({verdict_moves.HANDOFF: "failed_check"} if failed else {})}, trigger="pr_checks")
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if live:
                 sent.append(task["id"])
@@ -329,6 +340,14 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         record_health_wait({**link, "state": state, "mergeable": mergeable,
                             **({"checks": "pending"} if new_head else {})}, detail)
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+        if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
+            # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
+            from . import verdict_moves
+            verdict_moves.merged(c, task)
+        elif new_head and action == "synchronize" and state == "open":
+            # A push at a check step whose check already finished needs a check of the new head.
+            from . import check_pools, verdict_moves
+            check_pools.safely(c, verdict_moves.new_head, task)
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)]
         # GitHub computes unknown mergeability after a push, without a corresponding user action.
@@ -349,7 +368,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if (state == "closed" and link["state"] != state and link["id"] not in registered
                 or conflict_wake):
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
-            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
+            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None,
+                       handoff="merge_conflict" if conflict_wake else None)
         if not read_refresh:
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
@@ -410,6 +430,162 @@ def _suite_key(suite, run):
     return ("suite:" + slug[:150] + (f"#{suite['id']}" if suite.get("id") else ""))[:200]
 
 
+def _check_state(result):
+    """One check's result as the link keeps it: passing, pending or failing."""
+    return "passing" if result in ("success", "neutral", "skipped") else (
+           "pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+
+
+def _overall(checks):
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing."""
+    return "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
+
+
+def _finish(c, task, link, detail, full, checks):
+    """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
+    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
+    either way: a head green again after a check came late (a suite requested after the rest passed) is still green for
+    the ticket's move (verdict_moves.checks_done, once per head itself)."""
+    failed = list(dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k
+                                for k, v in checks.items() if v == "failing"))
+    outcome = "fail" if failed else "pass"
+    finished = detail.get("checks_done", [])
+    if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
+        return full, outcome
+    detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
+    sha = full[:12]
+    done = (f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
+            f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
+    armed = fire_once(detail, done)
+    queue_checks_done(c, task, full, outcome, done, armed)
+    return full, outcome
+
+
+# A check suite GitHub queued for a head that has had no check run for this long never started: an installed App (a
+# deploy or monitoring service) gets a suite on every push whether or not it runs anything, and no webhook ever says
+# it finished (Dev 646: tico-team-hub, tico-team-bots, vercel and sentry suites queued with zero runs on every head).
+STUCK_SUITE_MINUTES = 10
+
+
+def read_checks(service, headers, repo, head):
+    """The checks on `head` as GitHub has them now, keyed as `pr_signal` keys them: each check run (the latest per name),
+    each commit status (the latest per context) and each check suite, except a suite not completed with no check run
+    that has sat `STUCK_SUITE_MINUTES`, which is not pending (a completed one keeps its conclusion, failed or not). None when GitHub's answer is incomplete or there is nothing on the head
+    (a fresh read never turns a head with no checks green)."""
+    base = f"/repos/{quote(repo, safe='/')}/commits/{quote(head, safe='')}"
+    def pages(path, field):
+        rows = []
+        for page in range(1, 11):
+            response = service._call("GET", base + path, headers=headers, params={"per_page": 100, "page": page})
+            if response.status_code != 200:
+                return None
+            got = response.json().get(field) or []
+            rows.extend(got)
+            if len(got) < 100:
+                return rows
+        return None
+    suites, runs, statuses = pages("/check-suites", "check_suites"), pages("/check-runs", "check_runs"), pages("/status", "statuses")
+    if suites is None or runs is None or statuses is None:
+        return None
+    stuck_before = H.parse_ts(H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES))
+    checks = {}
+    for suite in suites:
+        created = H.parse_ts(suite.get("created_at"))
+        if (suite.get("status") != "completed" and not suite.get("latest_check_runs_count")
+                and created and created <= stuck_before):
+            continue
+        checks[_suite_key(suite, suite)] = _check_state(suite.get("conclusion") or suite.get("status") or "pending")
+    for run in runs:
+        checks[str(run.get("name") or "Checks")[:200]] = _check_state(run.get("conclusion") or run.get("status") or "pending")
+    for status in statuses:
+        checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
+    return checks or None
+
+
+def _fresh_checks(service, repo, head):
+    token, _ = service.mint([repo], {"checks": "read", "statuses": "read"})
+    return read_checks(service, {"Authorization": "Bearer " + token}, repo, head)
+
+
+PENDING_READ_EVERY_S = 600      # one fresh read per pending link per ten minutes
+PENDING_READS_PER_PASS = 10
+_pending_reads = {}             # link id -> monotonic time its next read is due
+_pending_lock = threading.Lock()
+
+
+def refresh_pending_checks(service):
+    """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
+    on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
+    so a suite that never started stops holding a green head (Dev 646). Reads outside the write, and applies a read
+    only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first. Returns
+    the ids of links whose checks left pending."""
+    with service.store.read() as c:
+        app = service.row(c)
+        if not app:
+            return []
+        marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        rows = H._rows(c.execute(
+            "SELECT l.id,l.repo,l.number,l.updated,json_extract(l.detail_json,'$.head_sha') AS head FROM task_links l "
+            "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+            f"WHERE l.kind='pr' AND l.state='open' AND l.checks='pending' AND l.number IS NOT NULL AND r.reachable=1 "
+            f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated,l.created)<? "
+            "ORDER BY coalesce(l.updated,l.created),l.id LIMIT 200",
+            (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES, H.shift(H.now(), minutes=-STUCK_SUITE_MINUTES))))
+    now = time.monotonic()
+    with _pending_lock:
+        for gone in set(_pending_reads) - {r["id"] for r in rows}:
+            _pending_reads.pop(gone, None)
+        due = [r for r in rows if r["head"] and _pending_reads.get(r["id"], 0) <= now][:PENDING_READS_PER_PASS]
+        for r in due:
+            _pending_reads[r["id"]] = now + PENDING_READ_EVERY_S
+    left, read = [], {}
+    for r in due:
+        key = (r["repo"].lower(), r["head"])
+        try:
+            if key not in read:
+                read[key] = _fresh_checks(service, r["repo"], r["head"])
+            if read[key]:
+                with service.store.transaction() as c:
+                    if apply_checks(c, r["id"], r["head"], read[key], since=r["updated"]) not in (None, "pending"):
+                        left.append(r["id"])
+        except Exception:
+            logging.getLogger("tico.github").exception("Checks read failed for %s #%s", r["repo"], r["number"])
+    return left
+
+
+def apply_checks(c, link_id, head, checks, since=None):
+    """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
+    pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
+    `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
+    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
+    applies (another head, a closed PR, a write since)."""
+    row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
+    link = dict(row) if row else None
+    detail = H._json(link.get("detail_json"), {}) or {} if link else {}
+    task = link and H.task(c, link["task_id"])
+    if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+        return None
+    if since is not None and link.get("updated") != since:
+        return None
+    checks = dict(list(checks.items())[-100:])
+    state = _overall(checks)
+    if detail.get("checks") == checks and link.get("checks") == state:
+        return state
+    detail["checks"] = checks
+    finished = state != "pending" and state != link.get("checks")
+    finished_head = _finish(c, task, link, detail, head, checks) if finished else None
+    record_health_wait({**link, "checks": state}, detail)
+    c.execute("UPDATE task_links SET checks=?,detail_json=?,updated=? WHERE id=?",
+              (state, json.dumps(detail), H.now(), link_id))
+    if state != link.get("checks"):
+        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
+        H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
+    if finished_head:
+        from . import verdict_moves
+        verdict_moves.checks_done(c, task, *finished_head)
+    return state
+
+
 def pr_signal(c, event, payload):
     """Checks, commit statuses, reviews and review comments update every attached PR."""
     repo = str((payload.get("repository") or {}).get("full_name") or "")
@@ -437,12 +613,11 @@ def pr_signal(c, event, payload):
         fields = {}
         label = link["title"]
         wake, batch, who_key = False, None, ""
+        finished_head = None
         if event in ("check_run", "check_suite", "status"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
-            result = signal.get("conclusion") or signal.get("state") or "pending"
-            state = "passing" if result in ("success", "neutral", "skipped") else (
-                    "pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+            state = _check_state(signal.get("conclusion") or signal.get("state") or "pending")
             checks = detail.get("checks", {})
             name = (_suite_key(signal, signal) if event == "check_suite"
                     else str(signal.get("name") or signal.get("context") or "Checks")[:200])
@@ -456,7 +631,7 @@ def pr_signal(c, event, payload):
                 # suite completed is a stale snapshot and does not.
                 checks[_suite_key(own, signal)] = "pending"
             detail["checks"] = dict(list(checks.items())[-100:])
-            fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
+            fields["checks"] = _overall(checks)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
@@ -468,19 +643,7 @@ def pr_signal(c, event, payload):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
                 full = str(signal.get("head_sha") or payload.get("sha") or detail.get("head_sha") or "")
-                sha = full[:12]
-                failed = list(dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k
-                                            for k, v in checks.items() if v == "failing"))
-                outcome = "fail" if failed else "pass"
-                # Once per head and result: a redelivery or a re-run that ends the same way says nothing new, unless
-                # the bot armed the link again to hear that re-run.
-                finished = detail.get("checks_done", [])
-                if f"{full}:{outcome}" not in finished or detail.get("wake_once"):
-                    detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
-                    done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
-                            f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
-                    armed = fire_once(detail, done)
-                    queue_checks_done(c, task, full, outcome, done, armed)
+                finished_head = _finish(c, task, link, detail, full, checks)
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -531,6 +694,10 @@ def pr_signal(c, event, payload):
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
                   (*fields.values(), link["id"]))
+        if finished_head:
+            # Green at a Fixes step moves the ticket on; green where the last check approved wakes the merge.
+            from . import verdict_moves
+            verdict_moves.checks_done(c, task, *finished_head)
         if wake and batch == "review" and not by_person(c, payload, who_key):
             queue_note(c, task, item)       # a bot's or an App's review is news for the next run, not a wake
         elif wake:
@@ -645,6 +812,13 @@ def refresh_task_prs(service, task_id):
                                                      (data.get("committer") or {}).get("login") or "").lower()
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
+                        # Pending checks are read afresh too: a suite that never starts sends no webhook (Dev 646).
+                        checks = None
+                        if head and link.get("checks") == "pending" and pr.get("state") == "open":
+                            try:
+                                checks = _fresh_checks(service, link["repo"], head)
+                            except Exception:
+                                logging.getLogger("tico.github").debug("Checks unavailable for %s #%s", *key)
                         with service.store.transaction() as c:
                             current = c.execute("SELECT updated FROM task_links WHERE id=?", (link["id"],)).fetchone()
                             if not current or current[0] != link.get("updated"):
@@ -653,6 +827,8 @@ def refresh_task_prs(service, task_id):
                             pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
                                          review_role=service.settings.github_review_role,
                                          release_repo=service.settings.release_repo, read_refresh=True)
+                            if checks:
+                                apply_checks(c, link["id"], head, checks)
                         success = True
                 except Exception:
                     logging.getLogger("tico.github").exception("PR refresh failed for %s #%s", *key)

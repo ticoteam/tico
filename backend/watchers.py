@@ -43,6 +43,7 @@ BOT_REPO = re.compile(r"\b(bot-[A-Za-z0-9-]+)/")
 
 class WatcherEvent(Contract):
     op: Literal["task", "comment", "done"]
+    incident: bool = False
     key: str = Field(min_length=1, max_length=LIMITS["key"])
     ref: str = Field(default="", max_length=LIMITS["ref"])
     title: str = Field(default="", max_length=LIMITS["title"])
@@ -75,11 +76,12 @@ def live(task):
     return bool(task) and task["status"] not in ("closed", "declined")
 
 
-def _open(c, auth, bot, title, body, owner=None):
+def _open(c, auth, bot, title, body, owner=None, *, incident=False):
     owner = owner or "bot:" + bot
     conversation = rooms.task_conversation_id(c, auth, owner, H.KEEPER)
     return H.task_create(c, H.KEEPER, defang(title, c).strip()[:300] or "From a watcher", defang(body, c), owner,
-                         deduplicate=False, conversation_id=conversation, lint=not owner.startswith("human:"))
+                         deduplicate=False, conversation_id=conversation, lint=not owner.startswith("human:"),
+                         labels=["incident"] if incident else None)
 
 
 def _wake(c, bot, task, text, why):
@@ -115,12 +117,12 @@ def deliver(c, auth, bot, event, triage=None):
             return None
         if triage and triage(c, event):
             return None
-        task = _open(c, auth, bot, event.title or event.key, event.body)
+        task = _open(c, auth, bot, event.title or event.key, event.body, incident=event.incident)
     elif event.op == "comment":
         if live(task):
             _wake(c, bot, task, event.text, "watcher")
             return task["id"]
-        task = _open(c, auth, bot, event.title or event.key, event.body or event.text)
+        task = _open(c, auth, bot, event.title or event.key, event.body or event.text, incident=event.incident)
     else:
         if not live(task):
             return None

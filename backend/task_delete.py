@@ -213,6 +213,7 @@ def delete_tasks(c, ids, apply=False, actor=None):
     actor = actor or H.KEEPER
     now = H.now()
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
+    found_rows = {tid: H.task(c, tid) for tid in ids}
     for tid in ids:
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
         task = rows["tasks"][0]
@@ -252,6 +253,14 @@ def delete_tasks(c, ids, apply=False, actor=None):
     # A roadmap item counts its children and the Dev tickets it is blocked by.
     for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] in ("parent", "blocks")}:
         sync(c, parent)
+    # A deleted child or blocker is a hold cleared on the task it held (backend/task_holds.py).
+    from . import task_holds
+    held = {r["to_task"]: r["from_task"] for edges in relations.values() for r in edges
+            if r["kind"] in ("parent", "blocks") and r["from_task"] in ids and r["to_task"] not in ids}
+    for tid, gone in held.items():
+        t = found_rows[gone]
+        live = t["status"] not in ("done", "closed", "declined")
+        task_holds.refresh(c, tid, f"{task_holds.title(c, t)} was deleted" if live else None)
     report["applied"] = True
     return report
 

@@ -391,9 +391,61 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
+  # The factory simulation (evals/factory): scripted bots work the candidate's Dev board on a fake clock, seeds 1-3,
+  # packed into four groups of about three minutes each. A failed check fails the release; NOTE lines (tickets that
+  # ran long) go in the job summary for the Release Manager. A candidate frozen before the sim could shard skips it.
+  factory-sim:
+    needs: candidate
+    name: factory-sim-${{ matrix.shard }}
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/spot=false/extras=s3-cache
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1', '2', '3', '4']
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Does the candidate shard the sim
+        id: has
+        run: |
+          if grep -q 'add_argument("--shard"' candidate/evals/factory/run.py 2>/dev/null; then echo "run=true" >> "$GITHUB_OUTPUT"
+          else echo "run=false" >> "$GITHUB_OUTPUT"; echo "The candidate has no sharded factory sim; skipped." >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: steps.has.outputs.run == 'true'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - if: steps.has.outputs.run == 'true'
+        name: Install
+        working-directory: candidate
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m uv pip install --python "$RUNNER_TEMP/venv/bin/python" -r backend/requirements-dev.txt
+      - if: steps.has.outputs.run == 'true'
+        name: Run this group of the factory sim
+        working-directory: candidate
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1-3 --shard "$SHARD/4" -j 4 2>&1 \
+            | tee "$RUNNER_TEMP/sim.log"
+      - if: always() && steps.has.outputs.run == 'true'
+        name: Summary
+        run: |
+          { echo "### Factory sim, group ${{ matrix.shard }} of 4"; echo '```'
+            awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   # The one verdict: the release passes only when every part passed and every platform's binaries built.
   release-check:
-    needs: [gate, native-macos]
+    needs: [gate, native-macos, factory-sim]
     if: always()
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     timeout-minutes: 5
@@ -402,6 +454,7 @@ jobs:
         env:
           GATE: ${{ needs.gate.result }}
           MACOS: ${{ needs.native-macos.result }}
+          SIM: ${{ needs.factory-sim.result }}
         run: |
-          echo "Release gate parts: $GATE; Mac binaries: $MACOS"
-          test "$GATE" = success && test "$MACOS" = success
+          echo "Release gate parts: $GATE; Mac binaries: $MACOS; factory sim: $SIM"
+          test "$GATE" = success && test "$MACOS" = success && test "$SIM" = success

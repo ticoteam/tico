@@ -189,7 +189,7 @@ class Computer:
         with self.api.app.state.store.read() as c:
             rows = c.execute("SELECT id, state, result_json, final_text FROM attempts WHERE runner_id=? ORDER BY created",
                              (self.registration["runner_id"],)).fetchall()
-        return [{"id": r[0], "state": r[1], "result": json.loads(r[2] or "null"), "text": r[3]} for r in rows]
+        return [{"id": r[0], "state": r[1], "result": terminal_result(r[2]), "text": r[3]} for r in rows]
 
     def events(self, aid):
         with self.api.app.state.store.read() as c:
@@ -244,11 +244,17 @@ def codex_turns(computer):
     return sorted((c["at"], ends.get(c["turn"])) for c in calls if c.get("method") == "turn/start")
 
 
+def terminal_result(raw):
+    # Running fallback custody is durable before completion. It is not a terminal result to poll for.
+    result = json.loads(raw or "null")
+    return result if result and result.get("outcome") else None
+
+
 def bot_attempts(api, computer, bot):
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
                          (computer.registration["runner_id"], bot)).fetchall()
-    return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
+    return [{"id": r[0], "result": terminal_result(r[1])} for r in rows]
 
 
 @pytest.mark.parametrize("harness", ["claude"])

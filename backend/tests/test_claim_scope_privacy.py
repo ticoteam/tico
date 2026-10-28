@@ -43,7 +43,9 @@ def test_a_bot_reader_who_may_not_read_its_limit_task_learns_only_that_a_limit_i
 
 
 def test_a_bot_manager_cannot_limit_it_to_a_task_they_may_not_read(api):
-    task = private_task(api, "human:ben", "Ben's private check")    # Ana owns the company, not Ben's private task
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Ben's private check", "Private.", "human:ben",
+                             private=True, lint=False)  # Person-only privacy does not inherit through bot management.
     get(api, "tasks/" + task["id"], "ana-test", expected=404)
     before = get(api, "bots/ops")["revision"]
     refused = control(api, action="scope", task_id=task["id"], expected=404)

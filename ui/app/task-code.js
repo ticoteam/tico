@@ -22,6 +22,17 @@ function taskVerdictHTML(t) {
     ? ` <code class="tnum" data-verdict-head>${esc(head)}</code>` : ''}</span>`;
 }
 
+// A person's QA waiver on a Dev ticket (`qa_waivers`, backend/qa_waivers.py): amber, never green, and always the words
+// "QA waived", so it never reads as a QA pass. A waiver for a head the pull request has moved on from says so.
+function taskQaWaiverHTML(w) {
+  if (!w?.head) return '';
+  const head = String(w.head).slice(0, 7);
+  const tip = `QA waived on ${head} by ${actorLabel(w.actor)}: ${w.reason || 'no reason given'}. A waiver, not a QA pass.${
+    w.current ? '' : ' The pull request has a newer head, which this waiver does not cover.'}`;
+  return `<span class="verdict-chip waived" data-qa-waiver data-current="${w.current ? 'yes' : 'no'}" title="${esc(tip)}" aria-label="${esc(tip)}">QA waived <code class="tnum">${
+    esc(head)}</code>${w.current ? '' : ' · old head'}</span>`;
+}
+
 // ---- Code: one line per worktree and per pull request
 const taskLinkDetail = l => {
   let d = l.detail || l.detail_json || {};
@@ -113,14 +124,19 @@ function taskWorktreeWaitHTML(w) {
   const what = w.state === 'reserved' ? 'setting up' : 'no room yet';
   return `<li class="code-line wt wait" data-worktree-wait="${esc(w.id || '')}"><span class="code-main" title="${esc(w.reason || '')}"><span class="code-repo">${esc(repoShort(w.repo))}</span><span class="code-dot">·</span><span>Waiting for a worktree · ${esc(what)} · ${esc(ageShort(w.since))}</span></span></li>`;
 }
+// A check filed to its step's pool with no reviewer free yet (backend/check_pools.py): the first free one takes it.
+function taskCheckWaitHTML(w) {
+  return `<li class="code-line wt wait" data-check-wait="${esc(w.id || '')}"><span class="code-main" title="${esc(w.reason || '')}"><span class="code-repo">${esc(w.title || w.step || 'Check')}</span><span class="code-dot">·</span><span>${esc(w.label || 'Waiting for a reviewer')} · ${esc(ageShort(w.since))}</span></span></li>`;
+}
 function taskCodeHTML(t) {
   const links = taskCodeLinks(t), waits = Array.isArray(t.worktree_waits) ? t.worktree_waits : [];
-  if (!links.length && !waits.length) return '';
+  const checks = Array.isArray(t.check_waits) ? t.check_waits : [];
+  if (!links.length && !waits.length && !checks.length) return '';
   const mover = canMove();
   // Worktrees first, then pull requests; each in the order they were added.
   const sorted = [...links.filter(l => l.kind === 'worktree'), ...links.filter(l => l.kind === 'pr')];
   return `<section class="rail-sec task-code" aria-labelledby="task-code-h"><h3 class="rail-h" id="task-code-h">Code</h3>
-    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}</ul></section>`;
+    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}${checks.map(taskCheckWaitHTML).join('')}</ul></section>`;
 }
 
 // ---- Subtasks: the children (one level shown, each expandable), with the roll-up line

@@ -304,7 +304,7 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
     from . import gateway_connection
     settings = settings or store.settings
     with store.read() as c:
-        key, base, usage = gateway_connection.key(c, vault, settings), gateway_connection.url(c, settings), totals(c)
+        (key, base, _), usage = gateway_connection.target(c, vault, settings), totals(c)
     if not key or settings.rehearsal or settings.demo:
         return None
     try:

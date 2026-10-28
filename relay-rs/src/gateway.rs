@@ -3,7 +3,7 @@ use super::{browser, runner, App};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -91,7 +91,9 @@ async fn forward(
 ) -> Response {
     let path = request.uri().path();
     if path == "/control" || path.starts_with("/control/") || path == "/_tico" || path.starts_with("/_tico/") {
-        return StatusCode::FORBIDDEN.into_response();
+        // The refusal leaves the request body unread, so the server may drop the connection after it; saying so keeps a
+        // client from sending its next request on a connection that closes without an answer.
+        return (StatusCode::FORBIDDEN, [(header::CONNECTION, "close")]).into_response();
     }
     let (mut parts, body) = request.into_parts();
     strip_hop_headers(&mut parts.headers);

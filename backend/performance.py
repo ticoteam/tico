@@ -105,9 +105,10 @@ def ingest(c, runner_id, samples, now=None):
         ts = at // MINUTE * MINUTE
         if not minutes or minutes[-1] != ts:
             minutes.append(ts)
-        # Separate high-level load from the existing CPU-time diagnostics. A retry replaces its minute,
-        # never duplicates it; delayed older samples cannot replace a newer sample in the same minute.
-        cpu_pct = round(100.0 * s.load[0] / s.cores, 1) if s.load else None
+        # The busy reading is CPU time actually used. Load average counts runnable and waiting threads, so a
+        # box with many agent turns idling on I/O reads far above its cores while it still has room to start more.
+        # A retry replaces its minute, never duplicates it; delayed older samples cannot replace a newer one.
+        cpu_pct = round(s.cpu, 1)
         c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,ts) DO UPDATE SET "
                   "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
                   "mem_total=excluded.mem_total,swap_used=excluded.swap_used,swap_total=excluded.swap_total,"
@@ -211,9 +212,10 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
 
 
 def attempt_snapshots(c, attempt_id):
-    row = c.execute("SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,)).fetchone()
-    return {"load_start": json.loads(row[0]) if row and row[0] else None,
-            "load_end": json.loads(row[1]) if row and row[1] else None}
+    from .read_cache import one
+    row = one(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
+    return {"load_start": json.loads(row["start_json"]) if row and row["start_json"] else None,
+            "load_end": json.loads(row["end_json"]) if row and row["end_json"] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads

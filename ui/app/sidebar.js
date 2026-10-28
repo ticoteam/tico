@@ -33,38 +33,6 @@ const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
 // Branches are personal workspaces, not additional teammates. Admin access still belongs in the branch picker.
 const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.operator === S.me.id);
 const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-branch">Your branch</span>' : '';
-// A team made from the catalog has several "Head of …" bots, and a narrow row cut each one to "Head of …". The first
-// words a bot's name shares with another bot's on the chart are muted, and drop out whole when the row is too narrow
-// for all of it (ui/styles/sidebar.css), so the part that tells them apart stays; the row's tooltip has the whole name.
-let ORG_LEADS = {key: null, lead: null};           // the last answer, by its names: the tree redraws often
-function orgNameLeads(names) {
-  const key = JSON.stringify([...names]);
-  if (ORG_LEADS.key === key) return ORG_LEADS.lead;
-  ORG_LEADS = {key, lead: orgNameLeadsOf(names)};
-  return ORG_LEADS.lead;
-}
-function orgNameLeadsOf(names) {
-  const words = name => String(name).match(/\S+\s*/g) || [];
-  const lead = new Map();
-  for (const name of names) {
-    const mine = words(name);
-    let most = 0;
-    for (const other of names) {
-      if (other === name) continue;
-      const theirs = words(other);
-      let k = 0;
-      while (k < mine.length - 1 && k < theirs.length && mine[k].trim() === theirs[k].trim()) k++;
-      most = Math.max(most, k);
-    }
-    if (most) lead.set(name, mine.slice(0, most).join(''));
-  }
-  return lead;
-}
-function orgNodeName(e, lead) {
-  const name = (e.display_name || '').replace(TEMP_RE, ''), shared = lead.get(name);
-  if (!shared) return `<span class="nm">${shownName(e)}</span>`;
-  return `<span class="nm nm-split">${isTempBot(e) ? TEMP_FLAG : ''}<span class="nm-words"><span class="nm-lead">${esc(shared)}</span><span class="nm-rest">${esc(name.slice(shared.length))}</span></span></span>`;
-}
 const orgGroupIds = () => new Set((S.orgGroups || []).map(g => g.id));
 const orgCanGroups = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 // Who a human or bot reports to, as a key (`p:<id>` or `b:<slug>`); '' when nobody is on the chart above it.
@@ -107,7 +75,8 @@ function orgTreeByParent() {
   // "Only bots I can read or write": a bot the caller may merely see leaves the chart, and the
   // bots under it hang from the next thing that is left.
   // Built-in and message bots sit apart, as on Goals; a bot that reports to one hangs where it would have.
-  const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e));
+  // A CEO Bot this person hid from their chart (`chart_hidden`) is left off; nothing was moved under it.
+  const bots = (S.emps || []).filter(e => orgBranchVisible(e) && orgMineKeep(e) && !e.chart_hidden);
   const empIds = new Set(bots.map(e => e.name));
   const seats = S.seats || [];
   const groupOf = orgGroupOf(people, bots, seats);
@@ -120,6 +89,9 @@ function orgTreeByParent() {
   }
   for (const e of bots) {
     let boss = orgBossKey({kind: 'bot', ...e});
+    // Under a CEO Bot this person hid: the next row up, where GET /api/v2/org hangs it too.
+    const hiddenBoss = boss.startsWith('b:') && (S.emps || []).find(x => x.name === boss.slice(2) && x.chart_hidden);
+    if (hiddenBoss) boss = orgBossKey({kind: 'bot', ...hiddenBoss});
     if (boss.startsWith('b:') && !empIds.has(boss.slice(2))) {
       const owner = e.operator || e.users?.[0]?.id;
       boss = owner ? 'p:' + owner : '';
@@ -354,6 +326,17 @@ function orgMoveStep(key, parent, step) {
   return orgOrderSave(parent, keys, key);
 }
 let ORG_MENU = null;                       // the key whose Move menu is open
+// Hide from my chart, from the CEO Bot's menu: the toast names it by its current name and offers it back at once.
+async function ceoChartHideFromTree() {
+  const name = ceoBotName();
+  try {
+    await ceoChartSet(true);
+    toast(`${name} is hidden from your chart. Settings > Bots > ${name} shows it again.`, false,
+      {label: 'Show on my chart', run: () => ceoChartSet(false)});
+    // Its row and menu are gone: the way back has focus.
+    [...document.querySelectorAll('.toast button')].pop()?.focus();
+  } catch (e) { toast(e.message, true); renderTree(); }
+}
 async function orgDrop(from, to) {
   const isGroup = to.startsWith('g:');
   if (from.startsWith('g:')) {
@@ -670,7 +653,6 @@ function renderTree() {
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : n.kind === 'seat' ? n.title || ''
     : (n.display_name || '').replace(TEMP_RE, '');
-  const leads = orgNameLeads(new Set(Object.values(byParent).flat().filter(n => n.kind === 'bot').map(nameOf).filter(Boolean)));
   const sources = {};
   for (const r of inboxNavRows()) (sources[r.bot] ||= []).push(r);
   INBOX_PLACED = new Set();
@@ -688,13 +670,17 @@ function renderTree() {
     const at = n => { const manager = orgReportsTo(n), list = lists[manager] || []; return {parent: manager, order: list.length > 1 ? list : []}; };
     return sorted.map(node => row(node, depth, false, at(node))).join('');
   };
-  // A report's place among its manager's reports: its drop zones and its Move menu.
+  // A report's place among its manager's reports: its drop zones and its Move menu. The CEO Bot's row always has the
+  // menu, with Hide from my chart (one person's view; Settings > Bots > CEO Bot shows it again).
   const placeAttrs = (key, at) => at.order.includes(key) ? ` data-org-in="${esc(at.parent)}" data-org-place` : '';
   const moveMenu = (key, name, at) => {
-    const i = at.order.indexOf(key); if (i < 0) return '';
-    const open = ORG_MENU === key;
-    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="Move" aria-label="Move ${esc(name)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
-      + (open ? `<span class="org-order-menu" role="menu" aria-label="Move ${esc(name)}"><button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button></span>` : '')
+    const i = at.order.indexOf(key), ceo = key === 'b:goal-manager';
+    if (i < 0 && !ceo) return '';
+    const open = ORG_MENU === key, label = (ceo ? 'More for ' : 'Move ') + name;
+    const moves = i < 0 ? '' : `<button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button>`;
+    const hide = ceo ? '<button type="button" role="menuitem" data-org-hide-ceo>Hide from my chart</button>' : '';
+    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="${ceo ? 'More' : 'Move'}" aria-label="${esc(label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
+      + (open ? `<span class="org-order-menu" role="menu" aria-label="${esc(label)}">${moves}${hide}</span>` : '')
       + '</span>';
   };
   // flat: the history list, one row per bot and person, no children and nothing to drag
@@ -742,7 +728,7 @@ function renderTree() {
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
       <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.name, depth ? 16 : 20, st)}${orgNodeName(e, leads)}${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
@@ -795,6 +781,12 @@ function renderTree() {
     const seat = ev.target.closest('[data-seat-open]');
     if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
     const opener = ev.target.closest('[data-org-menu]'), step = ev.target.closest('[data-org-step]');
+    if (ev.target.closest('[data-org-hide-ceo]')) {
+      ev.preventDefault();
+      ORG_MENU = null;
+      void ceoChartHideFromTree();
+      return;
+    }
     if (step) {
       ev.preventDefault();
       const btn = step.closest('.org-order').querySelector('[data-org-menu]');

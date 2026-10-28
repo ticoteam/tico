@@ -171,6 +171,8 @@ pub struct Settings {
     /// How long a Claude turn that has answered may wait on nothing but its background shells before it ends and
     /// leaves them running (`background_wait_s`); None waits for them, as before.
     pub background_wait: Option<std::time::Duration>,
+    /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
+    pub require_existing_session: bool,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
@@ -236,6 +238,27 @@ pub fn tool_summary(input: &Value) -> String {
         return clip(path);
     }
     text("command").map(command_program).unwrap_or_default()
+}
+
+/// Only fixed operation labels leave the computer. Commands can contain private text and credentials,
+/// while a program-only display summary cannot distinguish `gh pr view` from `gh pr merge`.
+pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
+    static RULES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| [
+        ("merge pull request", r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)"),
+        ("publish release", r"\bgh\s+release\s+create\b|\bhub\s+release\s+now\b"),
+        ("publish package", r"\b(?:npm|cargo)\s+publish\b|\btwine\s+upload\b|\bdocker\s+(?:image\s+)?push\b"),
+        ("consume approval", r"\b(?:hub\s+)?approval\s+consume\b"),
+        ("send email", r"\b(?:hub\s+)?(?:mail|email)\s+send\b|\bsendmail\b"),
+        ("send webhook", r"\b(?:hub\s+)?webhook\s+(?:send|retry|recover)\b"),
+        ("send support report", r"\bhub\s+support\s+send\b"),
+        ("make payment", r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
+    ].into_iter().map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap())).collect());
+    // Normalize shell quoting as well as scanning the raw command: quoted subcommands and nested shell
+    // wrappers must retain their action. Matching mentions can conservatively hold; it never exports them.
+    let normalized = shell_words(command).map(|words| words.join(" ")).unwrap_or_default();
+    rules.iter().filter(|(_, pattern)| pattern.is_match(command) || pattern.is_match(&normalized))
+        .map(|(label, _)| *label).collect()
 }
 
 /// The program a shell command runs: leading `NAME=value` assignments are skipped, a `sh -c` wrapper is unwrapped,

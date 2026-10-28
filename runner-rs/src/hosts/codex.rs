@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
-use super::{command_program, event, failed, hub_mcp_server, is_limit, tool_summary, Events, HostError, Settings};
+use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{iso, log, py_dumps, text_of};
 
@@ -366,7 +366,9 @@ impl CodexHost {
                 tokio::spawn(async move {
                     let same_account = previous.as_ref().is_some_and(|p| p["chatgptAccountId"] == msg["params"]["previousAccountId"]);
                     let result = if same_account {
-                        tokio::time::timeout(Duration::from_secs(8), host.0.broker.as_ref().unwrap().access(60.0, previous.as_ref())).await.ok().and_then(Result::ok)
+                        // Waiting for another turn's refresh is not a vendor timeout. The broker bounds
+                        // the vendor call after acquiring its lock and retains that lock through cleanup.
+                        host.0.broker.as_ref().unwrap().access(60.0, previous.as_ref()).await.ok()
                     } else { None };
                     let response = match result {
                         Some(access) => {
@@ -600,6 +602,9 @@ impl CodexHost {
         if !done {
             fields["summary"] = json!(summary);
         }
+        if kind == "commandExecution" && item["command"].is_string() {
+            fields["outside_actions"] = json!(shell_outside_actions(item["command"].as_str().unwrap()));
+        }
         self.emit(event("tool", t, u, fields));
     }
 
@@ -811,8 +816,38 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn refresh_request_survives_more_than_eight_seconds_waiting_for_another_turn() {
+        let root = std::env::temp_dir().join(format!("tico-refresh-{}", uuid::Uuid::new_v4().simple()));
+        let home = root.join(".codex");
+        std::fs::create_dir_all(&home).unwrap();
+        // Synthetic JWT payload with an expiry far in the future; the managed CLI must never run.
+        let token = "synthetic.eyJleHAiOjQxMDI0NDQ4MDB9.fixture";
+        let path = home.join("auth.json");
+        std::fs::write(&path, json!({"tokens": {"access_token": token, "account_id": "acme"}}).to_string()).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let env: Env = [("HOME".into(), root.display().to_string()), ("PATH".into(), "/usr/bin:/bin".into())].into();
+        let broker = super::super::turn_signin::Broker::new("codex-external", &env);
+        let guard = broker.hold_refresh().await;
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home_as(env, tx, None, None, Some(broker));
+        *host.0.access.lock().unwrap() = Some(json!({"accessToken": "synthetic-old", "chatgptAccountId": "acme"}));
+        host.on_message(json!({"id": 77, "method": "account/chatgptAuthTokens/refresh", "params": {"previousAccountId": "acme"}})).await;
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        assert_eq!(host.0.access.lock().unwrap().as_ref().unwrap()["accessToken"], "synthetic-old");
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if host.0.access.lock().unwrap().as_ref().unwrap()["accessToken"] == token { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("queued refresh was cancelled before its lock became available");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn every_codex_fixture_gives_the_python_hosts_events() {
-        for (path, expected) in crate::hosts::fixtures::cases("codex") {
+        for (path, mut expected) in crate::hosts::fixtures::cases("codex") {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = CodexHost::on_home(Env::new(), tx, None);
             for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
@@ -822,7 +857,27 @@ mod tests {
             while let Ok(ev) = rx.try_recv() {
                 got.push(ev);
             }
+            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            for event in &mut expected {
+                if event["tool"] == "shell" {
+                    event["outside_actions"] = json!([]);
+                }
+            }
             assert_eq!(got, expected, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn recovery_shell_events_match_the_shared_api_fixture() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        for case in cases {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = CodexHost::on_home(Env::new(), tx, None);
+            host.on_item(false, &json!({"threadId": "th", "turnId": "tu", "item": {
+                "type": "commandExecution", "id": "tool-1", "command": case["command"]}}));
+            let got = rx.try_recv().unwrap();
+            assert_eq!(got, case["codex"], "{}", case["command"]);
+            assert!(!got.to_string().contains("synthetic-private-marker"));
         }
     }
 

@@ -18,7 +18,9 @@ pytestmark = pytest.mark.slow
 def test_same_origin_gateway_preserves_http_streams_socket_paths_and_hides_control(service):
     with httpx.Client(base_url=service.public_origin, timeout=5) as client:
         for path in ("/control/v1/hello", "/_tico/screen/v1/authorize"):
-            assert client.post(path, json={}).status_code == 403
+            refused = client.post(path, json={})
+            # The refusal never reads the body, so the gateway must not leave the connection open for a next request.
+            assert (refused.status_code, refused.headers.get("connection")) == (403, "close")
         assert client.get("/healthz").status_code == 200
         assert client.get("/api/v2/tasks").status_code == 401
         assert client.get("/api/v2/tasks", headers=headers()).status_code == 200

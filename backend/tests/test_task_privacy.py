@@ -19,14 +19,16 @@ def test_private_two_party_matrix(api, requester, owner):
                              private=True, type=typ['id'], lint=False)
         c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
+    # Ana is the chart's root above cpo even when she is not a task party.
+    readers = {requester, owner, 'human:ana'}
     for actor, token in tokens.items():
         response = api.get('/api/v2/tasks/' + task['id'], headers=headers(token))
-        assert response.status_code == (200 if actor in (requester, owner) else 404), response.text
+        assert response.status_code == (200 if actor in readers else 404), response.text
         listed = get(api, 'tasks', token=token)['tasks']
-        assert (task['id'] in {row['id'] for row in listed}) == (actor in (requester, owner))
+        assert (task['id'] in {row['id'] for row in listed}) == (actor in readers)
         response = api.post('/api/v2/sql', json={'sql': 'SELECT id,title FROM tasks'}, headers=headers(token))
         assert response.status_code == 200, response.text
-        assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in (requester, owner))
+        assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in readers)
 
 
 def test_company_read_does_not_grant_work_but_dev_type_does(api):
@@ -117,6 +119,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'").fetchall():
             c.execute('DROP TRIGGER ' + name)
         c.execute('DROP INDEX IF EXISTS tasks_private')
+        c.execute('DROP INDEX IF EXISTS tasks_private_parties')
         c.execute('ALTER TABLE tasks DROP COLUMN private')
         c.execute('DELETE FROM cloud_migrations WHERE version=57')
     api.app.state.store.initialize(seed_market=False)
@@ -129,6 +132,8 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=57').fetchone()
         assert all(c.execute('SELECT count(*) FROM ' + name).fetchone()[0] == count for name, count in counts.items())
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=53').fetchone()
+    # Task reads name tasks_private_parties: the upgrade's first start makes it, not only the next restart.
+    get(api, 'tasks')
     api.app.state.store.initialize(seed_market=False)
     assert get(api, 'tasks/' + task['id'])['task']['private']
 
@@ -193,6 +198,7 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
     c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
     c.execute('DROP INDEX IF EXISTS tasks_private')
+    c.execute('DROP INDEX IF EXISTS tasks_private_parties')
     c.execute('ALTER TABLE tasks DROP COLUMN private')
     c.execute('PRAGMA user_version=23')
     ids = {row[0] for row in c.execute('SELECT id FROM messages')}

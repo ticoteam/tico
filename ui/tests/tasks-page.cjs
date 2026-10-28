@@ -32,9 +32,11 @@ function withRelations(task, tasks) {
   const relations = {};
   const add = (kind, row) => { if (row) (relations[kind] ||= []).push(row); };
   if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent), 'out'));
+  // A private parent this reader cannot open, as the hub sends it for a task filed from private work.
+  if (task._privateParent) add('parent', {id: null, title: 'a private task', status: null, owner: null, direction: 'out', private: true});
   for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id), 'in'));
   for (const x of tasks) if ((x._blocked || []).includes(task.id)) add('blocks', brief(x, 'out'));
-  const {_parent, _blocked, ...rest} = task;
+  const {_parent, _blocked, _privateParent, ...rest} = task;
   return {...rest, relations};
 }
 function fixtures() {
@@ -87,7 +89,7 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
@@ -138,6 +140,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const donePage = url.searchParams.get('sort') === 'finished';
       if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
       const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || rows.length);
+      if (!donePage && activePage) return activePage(route, rows, offset, limit);
       return json({tasks: (donePage ? rows.slice(offset, offset + limit) : rows).map(x => withRelations(x, tasks)),
         next_offset: donePage && rows.length > offset + limit ? offset + limit : null});
     }
@@ -726,8 +729,17 @@ async function properties(browser) {
   await menu.locator('.tl-mi', {hasText: 'Open full'}).click();
   const modal = page.locator('#task-modal');
   await modal.locator('.task-subs .sub-row').first().waitFor();
-  const [p, c, s, m] = await Promise.all(['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].map(sel => modal.locator(sel).boundingBox()));
-  assert.ok(p.y < c.y && c.y < s.y && p.x > m.x + m.width - 1, 'Properties, Code, Subtasks, beside the details');
+  // The rail re-renders as its links load, so four separate boundingBox calls could catch one replaced or not yet
+  // shown; the layout is read in one pass once all four are rendered.
+  const layout = () => page.evaluate(() => {
+    const box = sel => { const el = document.querySelector('#task-modal ' + sel); const r = el?.getBoundingClientRect();
+      return r && r.width && r.height ? {x: r.x, y: r.y, width: r.width} : null; };
+    const [p, c, s, m] = ['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].map(box);
+    return p && c && s && m ? p.y < c.y && c.y < s.y && p.x > m.x + m.width - 1 : null;
+  });
+  await page.waitForFunction(() => ['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].every(sel => {
+    const r = document.querySelector('#task-modal ' + sel)?.getBoundingClientRect(); return r && r.width && r.height; }));
+  assert.equal(await layout(), true, 'Properties, Code, Subtasks, beside the details');
   await shot(page, 'modal-dark');
   await modal.locator('[data-task-more]').click();
   await modal.locator('.prop-pop .tl-mi', {hasText: 'Close task'}).click();
@@ -811,6 +823,27 @@ async function bulk(browser) {
   assert.deepEqual(taskWrites(posts).slice(-2).map(x => x.body.note), [undefined, undefined]);
   assert.equal(posts.filter(x => x.p.startsWith('/api/v2/tasks/t-copy/')).length, 0, 'not sent as a comment either');
   assert.equal(await page.evaluate(() => TASK_DRAFTS.get('t-copy')), 'Half a thought about headl', 'the draft stays for its task');
+  // Select all: from one picked row to every row shown, sent as one bulk change. The open list is one server filter:
+  // its type and the open statuses.
+  await page.locator('#task-bulk [data-bulk="clear"]').click();
+  await box('tt-triage').click();
+  await page.locator('#task-bulk [data-bulk="all"]').click();
+  const shown = await page.locator('#task-body [data-task-key]').evaluateAll(rows => rows.filter(r => r.getClientRects().length).map(r => r.dataset.taskKey).filter(k => k.startsWith('t')));
+  assert(shown.length > 1);
+  assert.equal(await page.locator('.tl-bulk-n').innerText(), `All ${shown.length} matching`);
+  let sent = null;
+  await page.route('**/api/v2/task-bulk', route => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify({dry_run: false, matched: shown.length, cap: 200,
+      changed: shown.length, unchanged: 0, skipped: 0, tasks: {changed: [], skipped: []}})});
+  });
+  const writesBefore = taskWrites(posts).length;
+  await page.locator('#task-bulk [data-bulk="tags"]').click();
+  await page.locator('#task-filter-pop .tl-menu-new input').fill('q4');
+  await page.locator('#task-filter-pop .tl-menu-new input').press('Enter');
+  await page.waitForFunction(n => document.querySelector('.tl-bulk-msg')?.textContent === `${n} tagged q4`, shown.length);
+  assert.deepEqual(sent, {filter: {type: 'general', status: 'open,doing,waiting,review,ready,declined', lane: 'company'}, action: 'tags', add: ['q4']});
+  assert.equal(taskWrites(posts).length, writesBefore, 'one call, not one per task');
   assert.deepEqual(errors, []);
   console.log('bulk: ok');
   await page.close();
@@ -822,6 +855,39 @@ async function bulk(browser) {
   assert.equal(await viewer.page.locator('#task-bulk').isHidden(), true);
   assert.deepEqual(viewer.errors, []);
   await viewer.page.close();
+}
+
+async function bulkPaging(browser) {
+  const base = fixtures().find(task => task.id === 't-triage');
+  const baseTasks = Array.from({length: 150}, (_, i) => ({...base, id: `t-page-${i}`, title: `Draft the brief ${i}`}));
+  let release;
+  const nextPage = new Promise(resolve => { release = resolve; });
+  const {page, errors} = await open(browser, {baseTasks, activePage: async (route, rows, offset, limit) => {
+    if (offset) await nextPage;
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      tasks: rows.slice(offset, offset + limit), next_offset: offset + limit < rows.length ? offset + limit : null})});
+  }});
+  await page.locator('[data-task-key="tt-page-0"] .tl-check').click();
+  await page.locator('#task-bulk [data-bulk="all"]').click();
+  const shown = await rowKeys(page);
+  assert.equal(shown.length, 100);
+  // Pages arriving after selection must not widen it to the other 50 tasks.
+  release();
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 150);
+  let sent;
+  await page.route('**/api/v2/task-bulk', route => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify({dry_run: false, matched: 100, cap: 200,
+      changed: 100, unchanged: 0, skipped: 0, tasks: {changed: [], skipped: []}})});
+  });
+  await page.locator('#task-bulk [data-bulk="tags"]').click();
+  await page.locator('#task-filter-pop .tl-menu-new input').fill('q4');
+  await page.locator('#task-filter-pop .tl-menu-new input').press('Enter');
+  await page.waitForFunction(() => /100 tagged q4/.test(document.querySelector('.tl-bulk-msg')?.textContent || ''));
+  assert.deepEqual(sent, {filter: {ids: shown.map(key => key.slice(1))}, action: 'tags', add: ['q4']});
+  assert.deepEqual(errors, []);
+  console.log('bulk paging: ok');
+  await page.close();
 }
 
 async function snoozing(browser) {
@@ -875,6 +941,20 @@ async function quietWork(browser) {
   assert.equal(await line('tt-digest', 'Weekly metrics digest'), null, 'an ordinary task has no quiet line');
   assert.deepEqual(errors, []);
   console.log('quiet work: ok');
+  await page.close();
+}
+async function privateParent(browser) {
+  // A company task filed from private work: Part of names its parent only as "a private task", not a link and no ×.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const {page, errors} = await open(browser, {extraTasks: [{...base, id: 't-from-private', title: 'Check the upload setting first',
+    _privateParent: true}]});
+  await page.locator('[data-task-key="tt-from-private"] .tl-title').click();
+  await peekTitle(page, 'Check the upload setting first');
+  const row = page.locator('#task-peek [data-task-props] [data-prop-row="parent"]');
+  assert.equal((await row.locator('.prop-v').innerText()).trim(), 'a private task');
+  assert.equal(await row.locator('[data-open-task], [data-prop-clear], [data-prop]').count(), 0);
+  assert.deepEqual(errors, []);
+  console.log('private parent: ok');
   await page.close();
 }
 async function views(browser) {
@@ -1319,7 +1399,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, quietWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

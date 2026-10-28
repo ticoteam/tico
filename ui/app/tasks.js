@@ -66,7 +66,26 @@ function taskBlockedLine(t) {
     ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
   return `${reason} · since ${fmt(t.blocked_since)}`;
 }
+// A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
+// must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
+// blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
+// task, an open question to them, or any open blocker they own, which is how the ask card a bot's task files for them
+// is served) keeps their ask, so its note is never shown as a bot's reason. A reader who cannot open the first
+// blocker is served only the ones after it, so a second bot's task there is named instead. That wait is the task's
+// Blocked hold, so it carries the hold's age; a review-gate or worktree hold is something else and says its own why.
+function taskBotWait(t) {
+  const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
+  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(t.blocked_kind) || actorPerson(t.waiting_on)
+      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
+  const b = taskBlockers(t).find(open);
+  if (!b || !actorSlug(b.owner)) return null;
+  const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b,
+    since: t.blocked_since ? ` · since ${fmt(t.blocked_since)}` : ''};
+}
 function taskWaitLine(t) {
+  const bot = taskBotWait(t);
+  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}${bot.since}`;
   if (t?.blocked_since) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
@@ -330,6 +349,28 @@ function taskRelChip(t) {
 // A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
 // told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
 const STEP_LATE_MS = 4 * 3600e3;
+// Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
+function taskBuilderActors(t) {
+  if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
+  return [...new Set([t.owner, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
+}
+function taskBuilderNoticesHTML(actors, names = false) {
+  names ||= actors.length > 1;
+  return actors.map(slug => {
+    const status = v2StatusOf(slug);
+    const text = status?.bot_state === 'quarantined' ? status.quarantine?.builder_notice : '';
+    return text ? `<div class="task-builder-notice">${names ? `<strong>${esc(botDisplayName(slug))}</strong>: ` : ''}${esc(text)}</div>` : '';
+  }).join('');
+}
+function taskBuilderNotices(actors, names = false) {
+  return actors.length ? `<div class="task-builder-notices" data-task-builders="${esc(JSON.stringify(actors))}"${names ? ' data-builder-names' : ''}>${taskBuilderNoticesHTML(actors, names)}</div>` : '';
+}
+function taskBuilderNoticesRefresh() {
+  for (const slot of document.querySelectorAll('[data-task-builders]')) {
+    const html = taskBuilderNoticesHTML(JSON.parse(slot.dataset.taskBuilders), slot.hasAttribute('data-builder-names'));
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  }
+}
 function taskStepAge(t) {
   const since = Date.parse(t?.step_since || ''); if (!since) return '';
   const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
@@ -345,6 +386,7 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
+    ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
     <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
@@ -399,8 +441,12 @@ function boardColumnsHTML(columns, {head = ''} = {}) {
       <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>
     </section>`;
     const fold = column.foldable ? `<button type="button" class="bfold-x" data-board-fold="${esc(column.foldable)}" aria-label="Fold" title="Fold">${TL_ICON.caret}</button>` : '';
+    const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
+    const all = column.items.length && tasksCanSelect()
+      ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
+      ${taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true)}
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;
   }).join('')}</div>`;

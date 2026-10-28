@@ -117,6 +117,37 @@ function settingsWhoCanHTML(what = 'this', {admins = false} = {}) {
   const who = admins ? (name ? `${esc(name)} (the owner) or an admin` : 'the owner or an admin') : (name ? `${esc(name)}, the owner,` : 'the owner');
   return `<p class="settings-cell-note" data-who-can>Only ${who} can change ${esc(what)}.</p>`;
 }
+// A save that would send saved credentials to another service is held (backend/destinations.py: 409
+// destination_change, naming the old and new destination by scheme, host and port and the credentials by label, never a
+// value). The editor keeps them (they go to the new address), clears them to type again, or cancels (nothing is saved).
+// Resolves 'keep', 'clear' or '' for cancel.
+const settingsDestinationHeld = error => error?.status === 409 && error?.body?.error?.code === 'destination_change';
+function settingsDestinationChoice(error) {
+  const held = error?.body?.error || {}, labels = (held.credentials || []).join(', ') || 'The saved credentials';
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal destination-dialog';
+    dialog.setAttribute('aria-label', 'Change where this sends');
+    dialog.innerHTML = `<form method="dialog"><header><h2>Change where ${esc(held.name || 'this integration')} sends?</h2></header>
+      <p><b>${esc(labels)}</b> ${held.credentials?.length > 1 ? 'were' : 'was'} saved for <b data-destination-old>${esc(held.old?.address || '')}</b>.
+        This change sends to <b data-destination-new>${esc(held.new?.address || '')}</b>${held.path ? ` (${esc(held.path)})` : ''}.</p>
+      <p class="muted">Keep sends the saved ${esc(labels)} to the new address from now on. Clear removes ${held.credentials?.length > 1 ? 'them' : 'it'}, so you type ${held.credentials?.length > 1 ? 'them' : 'it'} again for the new address. Either way the change is kept in the history.</p>
+      <footer><button value="keep" class="primary" data-destination-keep>Keep and send to the new address</button>
+        <button value="clear" class="ghost danger" data-destination-clear>Clear and re-enter</button>
+        <button value="" class="ghost" data-destination-cancel>Cancel</button></footer></form>`;
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(dialog.returnValue || ''); });
+    document.body.appendChild(dialog); dialog.showModal();
+  });
+}
+// `send(extra)` once, and again with the editor's answer when it was held; a cancel throws "Nothing was saved".
+async function settingsDestinationSave(send) {
+  try { return await send({}); } catch (error) {
+    if (!settingsDestinationHeld(error)) throw error;
+    const credentials = await settingsDestinationChoice(error);
+    if (!credentials) throw new Error('Nothing was saved');
+    return Object.assign(await send({credentials}), {credentials_choice: credentials});
+  }
+}
 // The one way a failure shows: a red line under the control that failed, saying what to do. A row-like
 // parent holds it so it sits under the whole row; a list item holds it inside.
 function settingsFieldAnchor(control) {
@@ -242,6 +273,8 @@ function pageSettings() {
       <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
+      <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
+      <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
@@ -331,7 +364,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
+  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); void askFilterSettingsLoad(); }
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
@@ -539,6 +572,7 @@ async function loadSettings() {
       issues: operations.issues || [], history, limits,
       schedulerEnabled: operations.scheduler_enabled, loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
+    if (TASK_SETTINGS && !formBusy($('#set-task-settings'))) taskSettingsPaint();
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
@@ -578,6 +612,10 @@ function renderSettingsIssues() {
 // not retried unless the person knows better.
 const STOPPED_PICK = {
   read: {retry: true, what: () => 'before changing anything', say: () => 'Try again: it only read, so nothing repeats.'},
+  restarted: {retry: true, what: () => 'when its computer restarted',
+    say: () => 'Try again: check what already happened first, then continue.'},
+  timeout: {retry: true, what: () => 'at its run time limit',
+    say: () => 'Try again: check what already happened first, then continue.'},
   changed: {retry: false, what: tools => `after using ${tools || 'an approval or a tool that can change things'}`,
     say: tools => `Don’t retry unless you know ${tools || 'that action'} didn’t finish. It could run twice.`},
   twice: {retry: false, what: () => 'the same way more than once',
@@ -595,8 +633,9 @@ const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encode
   attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
-const stoppedOutcome = (decision, deferred) => deferred
-  ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
+const stoppedOutcome = (decision, deferred) => decision === 'mixed'
+  ? 'Choices saved. The bot is busy; Tico will apply them when its turn ends.'
+  : deferred ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
   : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
 // `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {
