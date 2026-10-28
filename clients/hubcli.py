@@ -118,6 +118,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
+    hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
+    hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
@@ -1288,7 +1290,24 @@ def parser():
     scope.add_argument("--person", help="only what involves this person")
     scope.add_argument("--team", help="only what involves this team")
     s.set_defaults(fn="replay show")
-    goal = sub.add_parser("goal", help="goals: list yours, show one, set one, set its colour, edit it").add_subparsers(dest="sub")
+    goal = sub.add_parser("goal", help="goals: list, read-back, create and edit",
+                          description="Read back goal changes in the owner's CEO Bot chat. Saves nothing without a plain yes; "
+                                      "cite that yes with --on-behalf-of turn (or its message id) on each save.").add_subparsers(dest="sub")
+    s = goal.add_parser("read-back", help="Tico writes the draft; saves nothing without a plain yes",
+                        description="Post 1 to 20 changes as Tico's read-back. Saves nothing without a plain yes. "
+                                    "Returns message_id, text and exact method/path/body_json steps. After yes, use goal save "
+                                    "for each agreed step; replace {new} with the first save's goal id using --created-goal. "
+                                    "On not_agreed read back again; never retry the save.")
+    s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
+                                  "and that change's fields")
+    s.set_defaults(fn="goal read-back")
+    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes")
+    s.add_argument("method", choices=["POST"])
+    s.add_argument("path", help="the step's /api/v2 path")
+    s.add_argument("body_json", help="the step's exact body_json string, unchanged")
+    s.add_argument("--created-goal", dest="created_goal", help="first save's goal id, to replace {new} in later paths")
+    s.add_argument("--on-behalf-of", required=True, help="turn or the message id of the owner's plain yes")
+    s.set_defaults(fn="goal save")
     s = goal.add_parser("list", help="what you are for: your goals, the chain above them, your reports' goals")
     s.add_argument("--owner", help="someone else's: a bot slug or a person id")
     s.add_argument("--all", action="store_true", help="every live goal in the company")
@@ -1305,6 +1324,7 @@ def parser():
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--top", action="store_true", help="put it first in the owner's order")
     s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (hub strategy show lists them)")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="goal create")
     s = goal.add_parser("status", help="set the colour by hand: red, yellow or green with one sentence, done or dropped "
                                      "when it ends; it sticks until a person hands it back (status auto)")
@@ -1322,6 +1342,7 @@ def parser():
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
     s.add_argument("--bet", dest="bet_id", help='the strategy bet it serves; "" unlinks it')
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="goal update")
     s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
@@ -1398,6 +1419,7 @@ def parser():
     s.add_argument("--owner", help="me (default), company, a bot slug or a person id")
     kpi_flags(s)
     target_flags(s)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi create")
     s = kpi.add_parser("update", help="a change to what it measures is a new definition version")
     s.add_argument("id")
@@ -1409,10 +1431,18 @@ def parser():
     s.add_argument("goal_id")
     s.add_argument("kpi_id")
     target_flags(s)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi link")
+    s = kpi.add_parser("target", help="set or remove the target on a goal's measure")
+    s.add_argument("goal_id")
+    s.add_argument("kpi_id")
+    target_flags(s)
+    s.add_argument("--on-behalf-of", help="turn or the message id of the owner's plain yes")
+    s.set_defaults(fn="kpi target")
     s = kpi.add_parser("unlink", help="take a KPI off a goal")
     s.add_argument("goal_id")
     s.add_argument("kpi_id")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi unlink")
     s = kpi.add_parser("log", help="a reading: a fact with its period; to correct one, supersede it")
     s.add_argument("kpi_id")
@@ -1450,6 +1480,7 @@ def parser():
     s.add_argument("decision", choices=["confirm", "reject"])
     s.add_argument("--note", default="")
     s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="proposal decide")
 
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
