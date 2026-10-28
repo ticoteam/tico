@@ -99,7 +99,7 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
-    S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
+    S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),
@@ -145,7 +145,7 @@ ENTRIES = TEAM_RULES + [
     S("computer.revoke", "Revoke a computer", COMPUTERS, "operator", "confirm", "POST", "computers/{computer}/revoke",
       value="json", card=_card("devices")),
     S("sleep.hours", "Sleep when idle", COMPUTERS + " > Sleep when idle", "admin", "direct", "POST", "sleep", "hours",
-      "number", _card("devices", "settings-sleep"), "sleep#hours"),
+      "number", _card("devices", "settings-sleep"), "sleep#sleep.hours"),
     S("models.providers", "Models", COMPUTERS + " > Models", "owner", "confirm", "PUT", "providers", value="json",
       card=_card("devices", "settings-models"), read="providers", words="model provider fallback"),
     S("models.gateway", "Tico AI Gateway", COMPUTERS + " > Models", "owner", "person", "PUT", "providers/gateway",
@@ -226,7 +226,7 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("recurring", "set-system-card")),
     S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
       "task-rules", value="json", card=_card("recurring", "set-system-card")),
-    S("rules.wake", "What wakes a bot", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules/{id}",
+    S("rules.wake", "What wakes a bot", RULES + " > What wakes a bot", "scope", "direct", "POST", "rules/{id}",
       value="json", card=_card("recurring", "set-rules-card"), words="rule event trigger", confirm_when=_SENDS_OUT),
     S("rules.wake.create", "New wake rule", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules",
       value="json", card=_card("recurring", "set-rules-card"), confirm_when=_SENDS_OUT),
@@ -265,10 +265,13 @@ ENTRIES = TEAM_RULES + [
       "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
     S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
       "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "confirm", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway")),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "confirm", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing")),
+    # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
+    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("webhooks", "gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
+      value="json", card=_card("webhooks", "outgoing"),
+      why="A new outgoing webhook shows its signing secret once, in Settings"),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
@@ -313,13 +316,8 @@ ENTRIES = TEAM_RULES + [
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once.
-NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
-               "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
-               "bot.budget", "ceo.checks", "ceo.level",
-               "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
+# changes them in Settings until it can, rather than BotOps changing them at once. None now (settings stage 3).
+NO_CARD_YET = ()
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]
