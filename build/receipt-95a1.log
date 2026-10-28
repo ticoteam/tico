@@ -1,0 +1,10 @@
+waiting for heavy-job slot (2 holders)
+HEAD 95a15770ba6102ec3c5ae1be29e6da069565663a
+............                                                             [100%]
+12 passed in 49.77s
+RECEIPT-EXIT 0
+E       AssertionError: assert 'goal-manager' in {'coo': ('p:morgan', '', 'Morgan'), 'botops': ('p:morgan', '', 'BotOps'), 'eng-lead': ('p:morgan', '', 'Eng-Lead'), 'inbox': ('p:morgan', '', 'Inbox'), ...}
+backend/tests/test_ceo_bot.py:323: AssertionError
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+1 failed, 7 deselected in 4.43s
+RESTORED

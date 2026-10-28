@@ -1,0 +1,7 @@
+Ready for Review 1: PR #1773, head 820e54fa9b73af9f5483225495f87822e1bd4e88, base aba27d7765. Nothing open except the parent link (below).
+- Storage: the per-person preferences table, key chart.hide_ceo_bot (boolean). Nothing is written to the bot's config, reports_to, access or level.
+- The chart is read in four places, not three: the org chart API, employee rows, the people chart, and the seat parents behind GET /api/v2/seats (added since the sizing).
+- Goals tree: it uses the same code path (the same chart positions), so with the setting on, the Heads sit in their own places there too. The CEO Bot stays on Goals. This is said in the PR.
+- Tests: the receipt above (2 new backend tests), and a removal control: with hidden_for forced off, both new tests fail on assertions. Browser tests pass: ceo-bot (new scenario: renamed bot, hide by keyboard from the sidebar menu, show from the Settings > Bots row, hide from the editor), team-groups, sample-company, goals, goals-company, settings-ceo-bot, settings-bots-search-bulk, ceo-bot-chat, bot-editor-save, settings-forms, bot-permissions. Not run: the full suite (hosted checks run it).
+- Counts as qa (user-visible: the sidebar menu and Settings > Bots). The ticket has no qa tag.
+- Parent 425bba7f: Tico refused my link (identity: only its owner or requester may change it), and I can't comment there. Asked Engineering Manager to link #1773 on it.
