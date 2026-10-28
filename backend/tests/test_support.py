@@ -633,24 +633,25 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
 
 
 def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(environment, hq):
-    """Spec ticket-source.md criteria 1, 3 and 8: the person's own app sends `person` (it never names one), BotOps'
-    `hub support file` says `botops`, nothing else may be claimed, and an HQ that refuses `source` as an unknown field
-    gets the ticket again without it, its message unchanged (BotOps' name stays at its start, which such an HQ reads)."""
+    """Spec ticket-source.md criteria 1, 3 and 8: the person's own app sends `person` (it never names one), a person's
+    claim of `botops` is filed as theirs (BotOps' own request is tested in test_botops_parity.py), nothing else may be
+    claimed, and an HQ that refuses `source` as an unknown field gets the ticket again without it, its message
+    unchanged (BotOps' name stays at its start, which such an HQ reads)."""
     api = environment()
     file(api)
     assert json.loads(hq.seen[-1].content)["source"] == "person"
     assert "source" not in file(api).json()["sent"]                 # HQ's sorting, not something the person sent
     file(api, message="[BotOps] Sync fails", source="botops")
-    assert json.loads(hq.seen[-1].content)["source"] == "botops"
+    assert json.loads(hq.seen[-1].content)["source"] == "person"
     for claimed in ("bot_report", "health_monitor", "hq_alert", "website", "unknown"):
         assert file(api, source=claimed).status_code == 422
     filed = len(hq.tickets)
 
     hq.fields = {"message", "email", "install_id", "version", "app_version", "kind"}
-    r = file(api, message="[BotOps] Sync fails", source="botops")
+    r = file(api, message="[BotOps] Sync fails")
     assert r.status_code == 200, r.text
     first, again = (json.loads(x.content) for x in hq.seen[-2:])
-    assert first["source"] == "botops" and "source" not in again and again["message"] == "[BotOps] Sync fails"
+    assert first["source"] == "person" and "source" not in again and again["message"] == "[BotOps] Sync fails"
     assert len(hq.tickets) == filed + 1
     # Today's HQ knows kind but not source: only source is dropped, so a setup request keeps its kind.
     r = file(api, message="Stuck on the computer step", kind="setup")

@@ -71,7 +71,8 @@ class SupportTicket(Contract):
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
     # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
-    # BotOps' `hub support file` says `botops`. It sorts tickets at HQ and grants nothing.
+    # BotOps' `hub support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
+    # grants nothing.
     source: Literal["person", "botops"] = "person"
 
 
@@ -357,7 +358,8 @@ class Support:
         # could not keep.
         with self.store.transaction() as c:
             self.vault.cipher.key(c)
-        source = source or body.source
+        # Only BotOps says botops: the same claim from a person's own app or the Assistant is the person's ticket.
+        source = source or ("person" if body.source == "botops" and who.via != "botops" else body.source)
         if source not in SOURCES:
             raise ValueError(f"not a support source: {source}")
         sent, payload = {}, {"message": message, "source": source}
