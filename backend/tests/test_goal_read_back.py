@@ -118,7 +118,8 @@ def test_any_reply_but_a_yes_saves_nothing(api):
 
 def test_the_owners_words_tico_reads_as_yes(api):
     six = set(range(1, 7))
-    for words in ("yes", "Yes!", "ok", "go ahead", "save it", "yes to all", "Yes please", "ok, thanks"):
+    for words in ("yes", "Yes!", "yep", "yeah", "ok", "Okay", "go ahead", "save it", "yes to all", "ok to both",
+                  "Yes please", "ok, thanks"):
         assert GR.agreed(words, 6) == six, words
     assert GR.agreed("yes to 1 and 3", 6) == {1, 3}
     assert GR.agreed("yes to 1, 3 and 5, no to 2", 6) == {1, 3, 5}
@@ -126,7 +127,10 @@ def test_the_owners_words_tico_reads_as_yes(api):
     assert GR.agreed("yes except 2", 6) == {1, 3, 4, 5, 6}
     assert GR.agreed("yes to all but 2 and 4", 6) == {1, 3, 5, 6}
     for words in ("yes but make it 50", "wait", "no", "yes to 7", "yes to 1, no to 1", "yes except 1, 2, 3, 4, 5, 6",
-                  "sure, and add a deadline", "", "yes to 0", "go ahead and change the owner too"):
+                  "sure, and add a deadline", "", "yes to 0", "go ahead and change the owner too",
+                  # Wider than the spec's plain yes: refused, and the owner says yes again.
+                  "sure", "y", "go", "save", "save them", "do it", "please do", "confirm", "correct", "that's right",
+                  "yes to everything", "ok all of them"):
         assert GR.agreed(words, 6) is None, words
 
 
@@ -270,6 +274,35 @@ def test_yes_to_all_settles_a_suggestion_and_its_card_leaves(api):
     attempt = reply(api, r, attempt, "go ahead")
     assert save(api, attempt, back["changes"][0]["steps"][0])["proposal"]["status"] == "confirmed"
     assert get(api, "goals/" + c3["id"])["goal"]["title"] == "Win ten paying customers"
+
+
+def test_a_yes_takes_a_measure_off_its_goal_and_keeps_the_measure(api):
+    a, b, c3, kpi, wording, changes = six_changes(api)
+    r, attempt = turn(api, "goal-manager", "ana-test", "Drop uptime from the bots goal")
+    back = read_back(api, attempt, changes[5])
+    attempt = reply(api, r, attempt, "yes")
+    step = back["changes"][0]["steps"][0]
+    assert step["path"] == f"/api/v2/goals/{b['id']}/kpis/{kpi['id']}/unlink"
+    save(api, attempt, step)
+    assert get(api, "goals/" + b["id"])["goal"]["kpis"] == []
+    # Once: the same yes does not save it again.
+    assert save(api, attempt, step, expected=409)["error"]["code"] == "conflict"
+    with api.app.state.store.read() as c:
+        assert len(GR.saves(c, back["message_id"])) == 1
+    with api.app.state.store.read() as c:
+        assert G.kpi(c, kpi["id"])["name"] == "Uptime"
+
+
+def test_a_suggestion_someone_settled_after_the_read_back_saves_nothing_and_says_so(api):
+    a, b, c3, kpi, wording, changes = six_changes(api)
+    r, attempt = turn(api, "goal-manager", "ana-test", "Go through the suggestions")
+    back = read_back(api, attempt, changes[3])
+    attempt = reply(api, r, attempt, "yes")
+    with api.app.state.store.transaction() as c:
+        G.decide(c, "human:ana", wording["id"], "reject")
+    refused = save(api, attempt, back["changes"][0]["steps"][0], expected=409)["error"]
+    assert refused["code"] == "goal_changed" and "ana turned down the suggestion" in refused["detail"]
+    assert get(api, "goals/" + c3["id"])["goal"]["title"] == "Win ten customers"
 
 
 def test_a_goal_someone_changed_after_the_read_back_saves_nothing_and_says_what_changed(api):

@@ -82,15 +82,16 @@ def active():
 
 
 # ------------------------------------------------------------------ the owner's yes
-_YES = (r"(?:yes|yep|yeah|y|ok|okay|sure|go ahead|go|do it|please do|save it|save them|save|confirm(?:ed)?|"
-        r"correct|that'?s right)")
+# Only the plain yes words the spec names: a refused yes is the safe failure (the owner says it again), a yes read
+# into words that meant something else is not.
+_YES = r"(?:yes|yep|yeah|ok|okay|go ahead|save it)"
 _TAIL = r"[\s,.!]*(?:please|thanks|thank you)?[\s.!]*"
 _N = r"#?\d{1,2}"
 _NUMS = rf"{_N}(?:\s*(?:,\s*and|,|&|\+|and)\s*{_N})*"
-PLAIN = re.compile(rf"{_YES}(?:\s+(?:to\s+)?(?:all|both|everything|all of them|them all))?{_TAIL}", re.I)
+PLAIN = re.compile(rf"{_YES}(?:\s+to\s+(?:all|both))?{_TAIL}", re.I)
 SOME = re.compile(rf"{_YES}[\s,:]*(?:to\s+)?(?:numbers?\s+)?(?P<yes>{_NUMS})"
                   rf"(?:\s*[,;.]?\s*(?:and\s+|but\s+)?(?:no|not)\s+(?:to\s+)?(?P<no>{_NUMS}))?{_TAIL}", re.I)
-EXCEPT = re.compile(rf"{_YES}(?:\s+to\s+(?:all|everything)\s+but|(?:\s+to\s+(?:all|everything))?[\s,]*"
+EXCEPT = re.compile(rf"{_YES}(?:\s+to\s+all\s+but|(?:\s+to\s+all)?[\s,]*"
                     rf"(?:except(?:\s+for)?|but\s+not|apart\s+from|other\s+than))\s+(?:numbers?\s+)?(?P<no>{_NUMS})"
                     rf"{_TAIL}", re.I)
 
@@ -224,6 +225,14 @@ def changed_since(c, back, change, done):
     goals = [g for g in change.get("watch") or []] + [d["goal_id"] for (n, _), d in done.items()
                                                        if n == change["n"] and d.get("goal_id")]
     said = []
+    # A suggestion settled by someone else since: its decide route would only say it was decided already.
+    for step in change["steps"]:
+        m = re.fullmatch(r"/api/v2/goal-proposals/([^/]+)/decide", step["path"])
+        p = m and G.proposal(c, m.group(1))
+        if p and p["status"] != "pending":
+            did = {"confirmed": "accepted", "rejected": "turned down"}.get(p["status"])
+            said.append(f"{H.actor_id(p['decided_by'] or '') or 'someone'} {did} the suggestion" if did
+                        else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
         for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND ts>? "
                            "ORDER BY ts", (gid, back["created"])):
