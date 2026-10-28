@@ -17,11 +17,30 @@ PACKET_TEXTS = ("Check the packet figures.", "Confirm the totals before you answ
 LOWERED = [(at(1, 30), at(1, 42))]                                      # a cap is lowered from 10:30 to 10:42
 
 
-def login_wait(limit, reset=at(1, 30)):
-    """A login's queue waits from its limit to its reset, and then while its probe runs: a probe that has not started
-    holds the queue for the server's stale bound at most."""
-    from backend.login_holds import PROBE_STALE
-    return [(limit, reset + dt.timedelta(seconds=PROBE_STALE))]
+def _utc(text):
+    return dt.datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+
+
+def limit_cooldowns(run):
+    """Each limited bot's wait, from its limit (its status's `since`) to the time its runs may start again, as the server
+    holds it (execution.limit_until): the login hold's reset when the hold names one, else LIMIT_COOLDOWN (1800 s), or
+    LIMIT_COOLDOWN_LONG (7200 s) once LIMIT_STRIKES (3) limits came in a row. Read from World.limit_window after each
+    limited turn, so the constant is the server's own."""
+    return [(_utc(win["since"]), _utc(win["until"]), f"{win['bot']} cooling off ({win['source']})")
+            for win in run.w.limit_windows if win["since"] and win["until"]]
+
+
+def probe_runs(run):
+    """Each probe that a round met holding its login's queue (sim.Run.probe_seen): from its attempt's creation to its end,
+    or to its lease lapsing when it was lost, or to now while it is still out. The server holds the rest of that login's
+    queue while a probe is live (login_holds.holding: "probing")."""
+    now, out = run.w.now(), []
+    for job in sorted(run.probe_seen):
+        for row in run.w.sql("SELECT created, finished, ended_at, lease_until FROM attempts WHERE job_id=?", (job,)):
+            end = row["finished"] or row["ended_at"]
+            end = _utc(end) if end else min(_utc(row["lease_until"]), now)
+            out.append((_utc(row["created"]), end, f"probe {job[:6]} holds its login's queue"))
+    return out
 
 
 def hit(runtime, text):
@@ -65,9 +84,6 @@ def lose_probe(mode):
     def during(run, w, team, i):
         from backend import login_holds
         now = w.now()
-        if getattr(run, "back_at", None) and now >= run.back_at:
-            team.bot(run.probe_bot).available = True
-            run.back_at = None
         if getattr(run, "probe_lost_at", None) is not None or now < START + at(1, 30):
             return
         with w.store.read() as c:
@@ -78,6 +94,7 @@ def lose_probe(mode):
             return
         bot = team.bot(row[0]["bot"])
         run.probe_lost_at, run.probe_bot = now, bot.slug
+        run.lost_probe = {"job": job, "bot": bot.slug, "attempt": bot.attempt["id"], "mode": mode, "at": now}
         if mode == "stale":
             bot.available = False
             run.back_at = now + at(0, 40)
@@ -86,6 +103,16 @@ def lose_probe(mode):
                 c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job,))
             bot.lose()
     return during
+
+
+def back_from_loss(run, w, team, i):
+    """The computer a lost probe ran on comes back on the tick its back time falls in. Its bot is available before that
+    tick's clock moves, so the heartbeat the tick sends reports it ready and this tick's claims see it (sim.Run loop)."""
+    back = getattr(run, "back_at", None)
+    if back and w.now() + w.tick >= back:
+        team.bot(run.probe_bot).available = True
+        run.back_at = None
+        run.back_check = {"slug": run.probe_bot, "at": w.now()}     # runner_round reads its readiness on this tick
 
 
 def setup_with(tasks, each=0, providers=(), groups=()):
@@ -269,10 +296,12 @@ def inputs_moved(bot, texts):
     return check
 
 
-def freeze_checks(since, *extra, waits=()):
+def freeze_checks(since, *extra, waits=(), evidence=(limit_cooldowns, probe_runs)):
     """The checks every freeze runs, the board's from `since` on. `waits` are windows (offsets on the scenario's clock)
-    in which the scenario knows its work waits on a limit or a probe, so no turn is expected in them."""
-    return [*BASE, ("the board keeps moving from the event on", None, board_keeps_moving(since, waits)), *extra]
+    the scenario declares; `evidence` are functions of the run that return windows from the server's own records (a
+    bot's cooling off, a probe holding its login), read when the check runs."""
+    return [*BASE, ("the board keeps moving from the event on", None,
+                    board_keeps_moving(since, waits, evidence)), *extra]
 
 
 SCENARIOS = [
@@ -326,16 +355,14 @@ SCENARIOS = [
              "The login's hold ends at 10:30 and its probe turn is lost mid-run: the probe's time goes stale and the queue "
              "must go on without it.",
              setup=setup_with(8), claim="runner", signed_in=("fake",),
-             during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("stale")),
-             checks=freeze_checks(at(1, 30), ("the queue goes on once the lost probe is stale", None, probe_resumes(30)),
-                                  waits=login_wait(at(0, 30)))),
+             during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("stale")), arrive=back_from_loss,
+             checks=freeze_checks(at(1, 30), ("the queue goes on once the lost probe is stale", None, probe_resumes(30)))),
     Scenario("freeze_probe_missing",
              "The login's hold ends at 10:30 and its probe job is gone before it finishes: the queue must take a new probe.",
              setup=setup_with(8), claim="runner", signed_in=("fake",),
              during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("missing")),
              checks=freeze_checks(at(1, 30), ("the queue takes a new probe once the probe is gone", None,
-                                              probe_resumes(15)),
-                                  waits=login_wait(at(0, 30)))),
+                                              probe_resumes(15)))),
     Scenario("freeze_moved_input",
              "A person's two messages reach a bot on its task while its turn runs: the turn reads them, then its login's "
              "limit stops it before it answers. A third message queues after the stop, and the claims that take the login "
@@ -349,6 +376,5 @@ SCENARIOS = [
              checks=freeze_checks(at(0, 20),
                                   ("the limited turn read both inputs, left them unanswered, and a later turn took them over",
                                    None, inputs_moved(PACKET_BOT, PACKET_TEXTS)),
-                                  ("turns run again once the login is back", None, turns_from(at(1, 30))),
-                                  waits=login_wait(at(0, 20)))),
+                                  ("turns run again once the login is back", None, turns_from(at(1, 30))))),
 ]

@@ -121,21 +121,26 @@ def no_server_error(run):
                    f"claims: {counts}")
 
 
-def board_keeps_moving(since, waits=()):
+def board_keeps_moving(since, waits=(), evidence=()):
     """From `since` on, each claim round with a free slot and queued work starts as many turns as the smaller of the
     two. Queued work is the bots with a job not held, read from the queue before the claims, and a turn started takes
     its bot out of the count. A round inside `waits` is not judged: the scenario knows the work waits there, on a limit
-    in force or on a login's probe, which holds the rest of its login's queue until it starts or its stale bound passes.
-    A judged round that starts fewer turns is a stall, whatever its cause. A run with no judged round fails, since
+    in force or on a login's probe. `evidence` are functions of the run returning (from, to, why) windows of absolute
+    times from the server's own records (a bot's cooling off, a probe holding its login); they are read when the check
+    runs. A judged round that starts fewer turns is a stall, whatever its cause. A run with no judged round fails, since
     nothing then shows the board moved."""
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
         start = START + since
         windows = [(START + lo, START + hi) for lo, hi in waits]
-        judged, short = 0, []
+        windows += [(lo, hi) for read in evidence for lo, hi, _ in read(run)]
+        judged, short, waived = 0, [], 0
         for m in run.marks:
-            if m["at"] < start or not m["free"] or not m["queued"] or any(lo <= m["at"] < hi for lo, hi in windows):
+            if m["at"] < start or not m["free"] or not m["queued"]:
+                continue
+            if any(lo <= m["at"] < hi for lo, hi in windows):
+                waived += 1
                 continue
             judged += 1
             need = min(m["free"], m["queued"])
@@ -147,7 +152,8 @@ def board_keeps_moving(since, waits=()):
         if short:
             return False, (f"{len(short)} of {judged} claim rounds started fewer turns than the smaller of free slots "
                            "and queued bots: " + ", ".join(short[:6]))
-        return True, f"all {judged} claim rounds with a free slot and queued work started the smaller of the two"
+        note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        return True, f"all {judged} claim rounds with a free slot and queued work started the smaller of the two{note}"
     return check
 
 

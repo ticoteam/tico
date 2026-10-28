@@ -50,6 +50,11 @@ class Run:
         self.claims = Counter()    # claim replies by HTTP status: an exception the app raised counts as a 500
         self.paused = set()        # bots the scenario paused: the work they hold waits on their owner, not the board
         self.marks = []            # per runner claim round: free slots, queued bots, held jobs and turns started
+        self.lost_probe = None
+        self.probe_seen = set()    # probe jobs a round met on a login the server held for them (windows read at check time)
+        self.back_check = None     # set by the scenario when a computer comes back: its readiness is read on that tick
+        self.back_lines = []       # what the server held for the returning computer's bot on its first round back
+        self.traces = []           # claim traces of short rounds: the server's candidate gates for one queued bot
 
     def team(self, w):
         styles = self.scenario.styles
@@ -91,6 +96,7 @@ class Run:
                 # asks whether a ticket got stuck, not whether the team finished in the scenario's hours.
                 if i >= ticks and all(t["id"] in self.merged_at or self.shipped(t) for t in w.tickets()):
                     break
+                s.arrive(self, w, team, i)
                 w.advance(ready=[b.slug for b in team.all if b.available],
                           beat=lambda: [b.renew() for b in team.all if b.available])
                 ready_before = {b.slug for b in team.all if b.available}
@@ -150,6 +156,11 @@ class Run:
         body = self.runner_body(team)
         free = w.capacity - sum(1 for b in team.all if b.running)
         idle = {b.slug for b in team.all} - set(body["busy_bots"]) - self.paused
+        if self.back_check:
+            # The computer's readiness as the heartbeat before this round's claims told the server it (the sim sends
+            # that heartbeat once the scenario changes who is available).
+            self.back_lines.append(self.back_read(w, self.back_check["slug"]))
+            self.back_check = None
         queued, held = w.queued_bots(idle)
         before = self.refusals(w, idle) if free and queued else []
         started, reply = 0, None
@@ -166,7 +177,78 @@ class Run:
             mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the claim body was {body} "
                            f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
                            f"paused {sorted(self.paused)}")
+            if len(self.traces) < 8:
+                self.traces.extend(self.trace(w, body, idle))
         self.marks.append(mark)
+
+    def back_read(self, w, slug):
+        """Diagnostic only: the readiness the server holds for one bot of this computer, as its heartbeat last reported
+        it, with the refusals its queued work gets on this round."""
+        from backend.execution import readiness_document
+        with w.store.read() as c:
+            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        doc = readiness_document(row["readiness_json"]) if row else {}
+        ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
+        return {"at": w.now(), "bot": slug, "server_ready": ready, "refusals": self.refusals(w, [slug])}
+
+    def trace(self, w, body, slugs, limit=2):
+        """Diagnostic only, read before a short round's claims: for up to `limit` queued bots that Health calls handed
+        out, the server's candidate for the whole computer and for the bot's oldest job, and each gate the claim applies to
+        that job (execution.candidate), read on a read connection. No check judges these lines."""
+        from types import SimpleNamespace
+        from backend import execution as X, subscriptions, usage_limits
+        from backend.auth import Identity
+        from backend.shared_bots import follow
+        rid = w.runner["runner_id"]
+        who = Identity(actor="runner", role="runner", runner_id=rid)
+        ns = SimpleNamespace(bot=None, busy_bots=list(body["busy_bots"]), busy_lanes=list(body["busy_lanes"]),
+                             start_places=True, next_run=True)
+        ex, out = w.app.state.execution, []
+        stamp = f"{w.now():%H:%M}"
+        with w.store.read() as c:
+            try:
+                runner = ex.runner(c, who)
+                lanes = X.lanes_on(runner)
+                live = set(X.live_lanes(c))
+                held_bots = set(body["busy_bots"]) | ({b for b, _ in live} if not lanes else set())
+                busy = live | {tuple(e.split("|", 1)) for e in body["busy_lanes"] if "|" in e}
+                ready = X.readiness_document(runner["readiness_json"])
+                ctx, default, roots, live_tasks = subscriptions.context(c), usage_limits.company(c), X.roots_on(runner), X.live_tasks(c)
+                any_job = ex.candidate(c, who, ns, runner)
+                out.append(f"{stamp} candidate for the computer: {any_job['id'][:6] if any_job else None}")
+                for slug in sorted(slugs):
+                    if len(out) > limit:
+                        break
+                    reasons = list(X.queued_reasons(c, w.store.settings, rid, slug, oldest=True))
+                    if not reasons or reasons[0][1] is not None:
+                        continue
+                    job = reasons[0][0]
+                    assigned = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
+                                         "WHERE a.runner_id=? AND a.bot=? AND b.state='active'",
+                                         (rid, slug)).fetchone() is not None
+                    sql_ok = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                       "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.id=? AND "
+                                       f"{X.unfenced_sql()} AND {X.scoped_sql()}", (job["id"],)).fetchone() \
+                        is not None
+                    cfg = c.execute(X.CLAIM_CONFIG_SQL, (slug,)).fetchone()
+                    why, config = X.claim_refusal(c, w.store.settings, runner, slug, cfg["config_json"], cfg["draining"],
+                                                  ready, held_bots, ctx, default)
+                    gates = [f"assigned {assigned}, unfenced and scoped {sql_ok}", f"bot-level {why or 'passes'}"]
+                    if config is not None:
+                        followed = follow(c, slug, config)
+                        gates.append(f"job {X.job_refusal(c, job, followed, ready, busy, lanes, roots, live_tasks)}")
+                        gates.append(f"login with ctx {X.login_refusal(c, w.store.settings, rid, slug, followed, job['id'], ctx)}")
+                        gates.append(f"login without ctx {X.login_refusal(c, w.store.settings, rid, slug, followed, job['id'])}")
+                    gates.append(f"source continuation {bool(X.source_continuation(c, job['id']))}")
+                    gates.append(f"thread {X.continuation_thread(c, job['id']) or '-'}, continues "
+                                 f"{X.capacity_continue_on(runner)}, source_continue "
+                                 f"{X.SOURCE_CONTINUE in X._capability_set(runner['capabilities_json'])}")
+                    mine = ex.candidate(c, who, ns, runner, job_id=job["id"])
+                    gates.append(f"candidate for this job {mine['id'][:6] if mine else None}")
+                    out.append(f"{stamp} {slug} oldest {job['id'][:6]}: " + "; ".join(gates))
+            except Exception as error:      # a diagnostic never stops the run
+                out.append(f"{stamp} trace error {error!r}")
+        return out
 
     def refusals(self, w, slugs):
         """Diagnostic only, read before a round's claims: for each bot among `slugs` with queued work, the claim's own
@@ -214,6 +296,8 @@ class Run:
                         if hold:
                             text += f" (hold ends {stamp(hold.get('until'))})"
                             probe = hold.get("probe_job")
+                            if probe:
+                                self.probe_seen.add(probe)
                             row = c.execute("SELECT j.state AS job, a.id AS aid, a.state AS attempt, a.lease_until "
                                             "FROM jobs j LEFT JOIN attempts a ON a.job_id=j.id WHERE j.id=? "
                                             "ORDER BY a.rowid DESC LIMIT 1", (probe,)).fetchone() if probe else None
@@ -339,6 +423,32 @@ class Run:
                                 "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
                                 "AND j.state NOT IN ('done','cancelled')", (t["id"], t["id"])):
                 out.append(f"  job {j['bot']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
+        out += self.diagnostics()
+        return out
+
+    def diagnostics(self):
+        """Diagnostic only: the lost probe's posts, the readiness read after each returning bot's heartbeat, each
+        limited bot's wait as the server holds it, the probes that held a login, and the short rounds' traces."""
+        out, w = [], self.w
+        if self.lost_probe:
+            lp = self.lost_probe
+            posts = [p for p in w.attempt_posts if p[1].startswith(f"attempts/{lp['attempt']}/")]
+            off = [p for p in posts if not p[4]]
+            out.append(f"lost probe {lp['job'][:6]} bot {lp['bot']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
+                       f"{lp['at']:%H:%M}): {len(posts)} sim posts to it, {len(off)} sent while its bot was off")
+        for b in self.back_lines:
+            out.append(f"back {b['bot']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
+                       + " | ".join(b["refusals"]))
+        for win in w.limit_windows:
+            out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
+                       f"streak {win['streak']})")
+        for job in sorted(self.probe_seen):
+            for row in w.sql("SELECT id,state,created,started,finished,ended_at,lease_until FROM attempts "
+                             "WHERE job_id=? ORDER BY created", (job,)):
+                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created']} "
+                           f"started {row['started']} finished {row['finished'] or row['ended_at']} "
+                           f"lease {row['lease_until']}")
+        out += self.traces
         return out
 
     def summary(self):
@@ -373,6 +483,7 @@ class Scenario:
     about: str
     setup: object
     during: object = lambda run, w, team, i: None
+    arrive: object = lambda run, w, team, i: None   # before the tick's clock moves and its heartbeat
     checks: list = field(default_factory=list)   # (name, ticket, fn(run) -> (ok, detail))
     styles: dict = field(default_factory=dict)
     hours: float = 12

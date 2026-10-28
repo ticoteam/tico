@@ -62,6 +62,7 @@ class World:
         self.server_errors = []             # (when, route, status, body) for each call the server answered with a 5xx
         self.input_reads = []               # (when, bot, attempt, message ids): the inputs a turn read as it started
         self.attempt_posts = []             # (when, path, caller, bot, bot on, bot running) for each renew or events post
+        self.limit_windows = []             # one per limited turn: the bot's limit as the server holds it after the turn
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -305,6 +306,27 @@ class World:
         self.post(f"attempts/{attempt['id']}/events",
                   {"events": [{"seq": 1, "kind": "error", "payload": {"error": text, "limit": True}}]},
                   token=self.runner["token"])
+
+    def limit_window(self, slug):
+        """The bot's own limit as the server holds it after its limited turn: `since` (its status), the time its runs
+        may start again (execution.limit_until), and the constant that wait came from: the login hold's reset when the
+        hold names one, else LIMIT_COOLDOWN, or LIMIT_COOLDOWN_LONG after LIMIT_STRIKES limits in a row."""
+        from backend import execution, login_holds
+        from backend.store import H
+        with self.store.read() as c:
+            status = H.status(c, slug) or {}
+            if status.get("state") != "limited" or not status.get("since"):
+                return None
+            since = status["since"]
+            until = execution.limit_until(c, slug, since)
+            last = execution.last_limit(c, slug)
+            hold = login_holds.for_attempt(c, last["id"]) if last else {}
+            streak = execution.limit_streak(c, slug)
+        if hold and hold.get("until"):
+            source = "login hold reset"
+        else:
+            source = "LIMIT_COOLDOWN_LONG" if streak >= execution.LIMIT_STRIKES else "LIMIT_COOLDOWN"
+        return {"bot": slug, "since": since, "until": until, "source": source, "streak": streak}
 
     # ------------------------------------------------------------------ fake GitHub
     def hook(self, event, payload):

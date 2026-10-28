@@ -136,6 +136,9 @@ class Bot:
             record["kind"] = "limited"
             w.limit_events(attempt, hit)
             self.finish(attempt, "failed", limited=True, seq=1)
+            window = w.limit_window(self.slug)
+            if window:
+                w.limit_windows.append(window)
             return self.log(record)
         if self.chance("silent"):
             self.unfinished.add(message.get("id"))
@@ -197,7 +200,8 @@ class Bot:
             w.call("post", f"attempts/{attempt['id']}/inputs/{mid}/ack", {}, token=w.runner["token"])
 
     def renew(self):
-        if self.running:
+        # A computer that is off sends nothing: its turn's lease lapses on the server, as a real lost computer's does.
+        if self.running and self.available:
             self.world.call("post", f"attempts/{self.attempt['id']}/renew", {}, token=self.world.runner["token"],
                             ok=False)
 
