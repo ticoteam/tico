@@ -1,4 +1,4 @@
-/* ui/app/format.js — Time, size and routine wording helpers
+/* ui/app/format.js — Time, size and schedule wording helpers
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -19,18 +19,15 @@ function agoTick() {
 setInterval(() => { if (!document.hidden) agoTick(); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) agoTick(); });
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-// A routine is a row in the hub (docs/routines.md): the owner or the bot's operator edits it here.
-const routineMayEdit = r => S.me?.role === 'owner' || (!!S.me?.id && (S.emps || []).find(e => e.name === (r.employee || r.bot))?.operator === S.me.id);
-const routinePaused = r => r.enabled === false || r.enabled === 0 ? ' <span class="pill" title="kept, not running">paused</span>' : '';
-// A routine runs on a cron or `on:` a hub event (docs/routines.md); one phrase for either.
+// A schedule runs on a cron or `on:` a hub event; one phrase for either.
 const EVENT_WORDS = {'meeting.ready': 'when a meeting is imported', 'recording.ready': 'when a meeting is imported',
   'market.insight.urgent': 'when an urgent market insight comes in', release_published: 'when a release is published',
   'strategy.published': 'when a strategy version is published', 'market.briefing': 'when a market briefing is posted'};
 // An event with no words of its own still reads as words: "market.price.changed" is "when market price changed".
-const eventWords = on => EVENT_WORDS[on] || (String(on).startsWith('webhook.') ? `on the ${(typeof ROUTINE_TRIGGERS !== 'undefined' && (ROUTINE_TRIGGERS || []).find(t => t.event === on)?.name) || on.slice(8).replace(/-/g, ' ')} webhook`
+const eventWords = on => EVENT_WORDS[on] || (String(on).startsWith('webhook.') ? `on the ${(WH_TRIGGERS || []).find(t => t.event === on)?.name || on.slice(8).replace(/-/g, ' ')} webhook`
   : `when ${String(on).replace(/[._-]+/g, ' ').trim()}`);
 const cadenceWords = r => r.on ? eventWords(r.on) : cronWords(r.cron);
-// A routine's time zone, short ("PDT"), and nothing when it is the viewer's own.
+// A schedule's time zone, short ("PDT"), and nothing when it is the viewer's own.
 const zoneWord = tz => {
   if (!tz) return '';
   try {
@@ -39,65 +36,12 @@ const zoneWord = tz => {
   } catch { return tz; }
 };
 const cadenceZoned = r => { const z = !r.on && zoneWord(r.timezone); return cadenceWords(r) + (z ? ` ${z}` : ''); };
-const routineKind = r => r.kind || (r.on ? 'event' : 'cron');
-const routineIsInbox = r => !!(r.inbox && ((r.inbox.mailboxes || []).length || r.inbox.org_read));
-function routineMatches(r, filters) {
-  const bot = (filters && filters.bot) || '';
-  const kind = (filters && filters.kind) || 'all';
-  const armed = (filters && filters.armed) || 'all';
-  if (bot && (r.employee || r.bot) !== bot) return false;
-  if (kind === 'cron' && routineKind(r) !== 'cron') return false;
-  if (kind === 'event' && routineKind(r) !== 'event') return false;
-  if (kind === 'inbox' && !routineIsInbox(r)) return false;
-  if (armed === 'armed' && !r.active) return false;
-  if (armed === 'idle' && r.active) return false;
-  return true;
-}
 function durationWords(s) {
   if (s == null || s === '') return '';
   s = Math.max(0, Math.round(+s));
   if (s < 60) return s + 's';
   const m = Math.floor(s / 60), r = s % 60;
   return r ? m + 'm ' + r + 's' : m + 'm';
-}
-function occurrenceLabel(o) {
-  const t = String(o && o.occurrence || '');
-  return /^\d{4}-\d{2}-\d{2}T/.test(t) ? fmt(t) : t;
-}
-function inboxHowHTML(r) {
-  const boxes = (r.inbox && r.inbox.mailboxes) || [];
-  if (!boxes.length && !(r.inbox && r.inbox.org_read)) return '';
-  const title = boxes.join(', ') || 'team read';
-  return ` <span class="pill inbox" title="${esc(title)}">Message bot</span>`;
-}
-function routineHowHTML(r, hideBot) {
-  const bits = [];
-  if (!hideBot) bits.push(empName(r.employee || r.bot));
-  bits.push(esc(cadenceWords(r)));
-  if (r.timezone && !r.on) bits.push(esc(r.timezone));
-  const boxes = (r.inbox && r.inbox.mailboxes) || [];
-  return `<span class="when">${bits.join(' · ')}${inboxHowHTML(r)}</span>`
-    + (boxes.length ? `<span class="boxes" title="${esc(boxes.join(', '))}">${esc(boxes.join(', '))}</span>` : '');
-}
-function occurrenceTableHTML(rows) {
-  if (!rows.length) return '<div class="empty">No runs recorded yet.</div>';
-  const word = {created: 'created', coalesced: 'coalesced', event: 'event'};
-  const pill = {created: '', coalesced: 'waiting', event: 'ready',
-    done: 'ok', closed: 'ok', open: 'waiting', doing: 'in-progress', waiting: 'waiting',
-    completed: 'ok', failed: 'fail', expired: 'fail', interrupted: 'fail'};
-  return `<div class="scroll"><table><tr><th>Occurrence</th><th>Outcome</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr>`
-    + rows.map(o => {
-      const status = o.status || '';
-      const exit = o.exit || '';
-      return `<tr>
-        <td>${esc(occurrenceLabel(o))}</td>
-        <td><span class="pill ${pill[o.outcome] || ''}">${esc(word[o.outcome] || o.outcome || '—')}</span></td>
-        <td>${status ? `<span class="pill ${pill[status] || ''}">${esc(status)}</span>` : o.reason ? `<span class="muted">${esc(o.reason)}</span>` : '<span class="muted">—</span>'}</td>
-        <td class="tnum">${o.started ? esc(fmt(o.started)) : '<span class="muted">—</span>'}</td>
-        <td class="tnum">${o.duration_s != null ? esc(durationWords(o.duration_s)) : (exit && exit !== 'completed' ? `<span class="pill ${pill[exit] || ''}">${esc(exit)}</span>` : '<span class="muted">—</span>')}</td>
-        <td>${o.task_id ? `<a class="linkish" href="#/task/${esc(o.task_id)}">Open</a>` : ''}</td>
-      </tr>`;
-    }).join('') + '</table></div>';
 }
 function cronWords(expr) {
   const f = (expr || '').trim().split(/\s+/); if (f.length !== 5) return expr;
@@ -158,3 +102,11 @@ const modelChoiceWords = (model, effort, harness, ownHarness) => {
   const via = harness && ownHarness && harness !== ownHarness ? ` in ${harnessWords(harness)}` : '';
   return name + via + (effort ? ` · ${effort}` : '');
 };
+
+// Shared with the bot page's state pill: lifecycle pause takes precedence over a running turn.
+function botPausedBadge(slug, link = false) {
+  if (stateOf(slug) !== 'paused') return '';
+  const words = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M2 1h3v10H2zm5 0h3v10H7z"/></svg>Paused';
+  return link ? `<a class="pill waiting bot-paused-badge" href="#/bot/${encodeURIComponent(slug)}">${words}</a>`
+    : `<span class="pill waiting bot-paused-badge">${words}</span>`;
+}

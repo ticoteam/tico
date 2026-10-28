@@ -42,11 +42,51 @@ def via_tool(client, args, **more):
               and v is not None}
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn == "bot keep-tasks-going" and hasattr(args, "limit"):
+    if args.fn in ("bot keep-tasks-going", "bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
+
+
+def automation(client, args):
+    """`hub automation ...`: the hub_automation_* tools, with flows read from a file or stdin."""
+    from clients import hubtools
+
+    def flow(path):
+        try:
+            data = json.loads(sys.stdin.read() if path == "-" else Path(path).read_text())
+        except ValueError as exc:
+            raise APIError("file", f"--file is not JSON ({exc})") from None
+        if not isinstance(data, dict):
+            raise APIError("file", "--file must hold a JSON object")
+        return data
+
+    run = lambda name, fields: hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": os.environ.get("HUB_OPERATION_ID")})
+    if args.sub == "inbox":
+        return run("hub_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
+    fields = {"id": args.id} if hasattr(args, "id") else {}
+    if args.sub == "list":
+        fields.update({k: getattr(args, k) for k in ("owner", "limit", "cursor") if getattr(args, k) is not None})
+    elif args.sub == "create":
+        fields.update(flow(args.file))
+    elif args.sub == "update":
+        fields.update(flow(args.file) if args.file else {})
+        fields.update({k: getattr(args, k) for k in ("name", "summary") if getattr(args, k) is not None})
+        if args.enable or args.disable:
+            fields["enabled"] = bool(args.enable)
+    elif args.sub == "run":
+        try:
+            fields["input"] = json.loads(args.input) if args.input else {}
+        except ValueError:
+            raise APIError("input", "--input must be JSON") from None
+    elif args.sub == "runs":
+        fields.update({k: getattr(args, k) for k in ("limit", "before") if getattr(args, k) is not None})
+    elif args.sub == "versions" and args.pending:
+        fields["status"] = "pending"
+    elif args.sub in ("restore", "discard"):
+        fields["n"] = args.n
+    return run(tool_name(args.fn), fields)
 
 
 def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
@@ -124,7 +164,7 @@ def run(args, who=None):
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
         return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
-    if fn.startswith(("trigger ", "rule ", "notice ")) or fn == "event-types":
+    if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -182,21 +222,16 @@ def run(args, who=None):
         return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
-    if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "tool list", "tool learn", "tool add", "tool update", "tool remove",
+    if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "group delete", "tool list", "tool learn", "tool add", "tool update", "tool remove",
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
-              "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "team budget", "org order", "run list",
+              "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
               "seat list", "seat create", "seat update", "seat close", "seat draft"):
         if fn == "seat draft" and args.file:      # the CEO Bot's draft, from a file beside it
             return via_tool(client, args, text=Path(args.file).read_text())
-        if fn == "routine update":                  # --enable / --disable are the tool's `enabled`; a key or an id names it
-            more = {"text": Path(args.text_file).read_text()} if args.text_file else {}
-            if args.enable or args.disable:
-                more["enabled"] = bool(args.enable)
-            return via_tool(client, args, **more)
         return via_tool(client, args)
     if fn == "run export":
         from clients import hubtools
@@ -223,7 +258,7 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
-    if fn == "stall-triage":
+    if fn in ("stall-triage", "audit"):
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
@@ -606,16 +641,10 @@ def run(args, who=None):
             links = s3links.apply(client, body, ("note",))
             return s3links.annotate(post("tasks/" + args.id, body, delegate=asked), links)
     if cmd == "goal":
-        if sub == "create":
-            body = Path(args.body_file).read_text() if args.body_file else args.body
-            return post("goals", {"owner": target(args.owner), "title": args.title, "parent_id": args.parent,
-                        "body": body or "", "top": bool(args.top), "bet_id": args.bet_id})["goal"]
-        if sub == "update":
-            body = {"title": args.title, "parent_id": args.parent, "owner": target(args.owner) if args.owner else None,
-                    "rank": args.rank, "top": bool(args.top), "bet_id": args.bet_id}
-            if args.body_file or args.body is not None:
-                body["body"] = Path(args.body_file).read_text() if args.body_file else args.body
-            return post("goals/" + args.id, body)["goal"]
+        if sub in ("create", "update"):
+            args.parent_id = args.parent
+            if args.body_file:
+                args.body = Path(args.body_file).read_text()
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
@@ -714,15 +743,8 @@ def run(args, who=None):
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {"conversation": page.get("conversation"), "messages": page.get("messages", []),
                 "has_more": bool(page.get("has_more")), "next_before": page.get("next_before")}
-    if cmd == "routine":
-        bot = getattr(args, "bot", None) or actor.split(":", 1)[-1]
-        if sub == "list":
-            return via_tool(client, args)
-        if sub == "set":
-            text = Path(args.text_file).read_text() if args.text_file else args.text
-            return via_tool(client, args, text=text, enabled=not args.disabled)
-        if sub in ("delete", "run"):
-            return via_tool(client, args)
+    if cmd == "automation":
+        return automation(client, args)
     if cmd == "release":
         return via_tool(client, args)
     if cmd == "approval":
@@ -844,9 +866,6 @@ def bots(client, args):
             fields["build"] = False
         if getattr(args, "no_setup", False):
             fields["setup"] = False
-        if getattr(args, "routines_file", None):
-            from clients.hubcli import read_routines_file
-            fields["routines"] = read_routines_file(args.routines_file)
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
@@ -864,7 +883,8 @@ def bots(client, args):
                                display_name=args.name or chosen.get("display_name"),
                                instructions=chosen.get("instructions"))
     result = {"path": str(path), "template": args.template, "slug": slug,
-              "committed": catalog.committed(path), "routines": seed_routines(client, slug, path),
+              "committed": catalog.committed(path),
+              "automations": seed_automations(client if registered is None else _person(client), slug, path),
               **({"registered": registered} if registered else {})}
     result["github"] = github_repository(client, slug, path)
     return result
@@ -923,10 +943,15 @@ def register_for_requester(client, args, chosen):
         raise
 
 
-def seed_routines(client, slug, path):
-    """The template's `routines:` (older: `schedules:`) become the new bot's first routines in the hub. The manifest
-    is read once, here, with its playbooks already rendered; from now on the hub's rows are the
-    routines and `hub routine set` changes them (docs/routines.md)."""
+def _person(client):
+    from clients import hubtools
+    return hubtools._as_person(client)
+
+
+def seed_automations(client, slug, path):
+    """The template's `routines:` (older: `schedules:`) become the new bot's first automations: each a schedule (or an
+    event, or a webhook trigger) and one bot turn with the routine's text. The manifest is read once, here, with its
+    playbooks already rendered; from now on they are edited in Automations."""
     from clients.manifest import manifest_path, routines_of
     from clients.routines import validate_schedules
     import yaml
@@ -937,10 +962,15 @@ def seed_routines(client, slug, path):
         return {"error": f"bot.yaml routines: {exc}"}
     seeded = []
     for entry in entries:
-        seeded.append(client.post(f"bots/{slug}/routines", {
-            "key": entry["id"], "title": entry["title"], "text": entry["instructions"],
-            "cron": entry["cron"], "on": entry["on"], "timezone": entry["timezone"],
-            "enabled": entry["enabled"]})["routine"]["id"])
+        on = entry["on"] or ""
+        trigger = ({"type": "webhook", "id": on[len("webhook."):]} if on.startswith("webhook.") else
+                   {"type": "event", "name": on} if on else
+                   {"type": "schedule", "cron": entry["cron"], "tz": entry["timezone"]})
+        made = client.post("automations", {
+            "name": entry["title"][:120], "owner": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
+            "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
+                       "prompt": entry["instructions"] or "Do this routine's work."}]})
+        seeded.append(made.get("id") or (made.get("automation") or {}).get("id"))
     return seeded
 
 
@@ -1120,6 +1150,8 @@ def main(args, who=None):
             print(integration_text(result))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
+        elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
+            print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
             print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "

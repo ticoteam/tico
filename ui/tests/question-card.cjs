@@ -1,4 +1,4 @@
-// The one question card (ui/app/question-card.js), in Decide and in the task page's Needs you box: the real asker,
+// The one question card (ui/app/question-card.js), in the Needs you card and in the task page's Needs you box: the real asker,
 // "asked N days ago" and what it holds up; the question and its why line; four picks as checkboxes, the recommended
 // ones ticked and labelled; "Yes to all" and "Send ticked (n)", each with its "what happens" line; the fallback small
 // at the foot; ids, paths and error text only under Details. Ticking 1, 2 and 4 sends those three, and the bot hears
@@ -66,7 +66,7 @@ const card = () => ({
       answers.push({task: decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)), ...route.request().postDataJSON()});
       return route.fulfill({contentType: 'application/json', body: '{}'});
     });
-    await page.evaluate(async () => { await v2Refresh(); location.hash = DECIDE; });
+    await page.evaluate(async () => { await v2Refresh(); decideOpen('task:t-four'); });
     await page.locator('.decide .dc-card[data-key="task:t-four"]').waitFor();
 
     // 10, 14, 15: all four picks, the recommended ones ticked and labelled; every pick and button says what happens;
@@ -123,7 +123,7 @@ const card = () => ({
 
     // 13: Yes to all sends every pick.
     items = [question('t-all')];
-    await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = DECIDE; });
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-all'); });
     await page.locator('.decide .dc-card[data-key="task:t-all"]').waitFor();
     await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
     await page.locator('.decide .dc-actions [data-dc="all"]').click();
@@ -152,7 +152,7 @@ const card = () => ({
       `3. Pages${PICKS[2].then}`, `4. Spend cap (recommended)${PICKS[3].then}`].map(s => s.replace(/\s+/g, ' ')));
     assert.deepEqual(onPage.buttons, ['Yes to allAll 4 go to Writer as yes', 'Send ticked (3)These 3 as yes; Writer hears "not this one" for the rest']);
     assert.equal(onPage.details, false);
-    // Unticking on the task page sends the rest, as in Decide.
+    // Unticking on the task page sends the rest, as on the card.
     await box.locator('[data-qc-tick="0"]').uncheck();
     await box.locator('[data-qc="ticked"]').click();
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
@@ -228,14 +228,14 @@ const card = () => ({
     for (let i = 0; i < 100 && !answers.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(answers.shift(), {task: 't-swap', target: {comment: 'q-t-swap'}, answers: {decision: ['Spend cap', 'Visitor notes', 'Calls']}});
 
-    // Picks with pictures show the same pictures in Decide and on the task page, several picks included; a Yes / No
+    // Picks with pictures show the same pictures on the card and on the task page, several picks included; a Yes / No
     // asked with no options still says what each button does.
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({files: FILES})}));
     await page.route('**/api/v2/files/**', route => route.fulfill({contentType: 'image/png', body: PNG}));
     const seen = {};
     for (const id of ['t-pair', 't-several', 't-yn']) {
       items = [id === 't-pair' ? pair(id) : id === 't-several' ? several(id) : yesNo(id)];
-      await page.evaluate(async () => { location.hash = '#/tasks'; await v2Refresh(); location.hash = DECIDE; });
+      await page.evaluate(async id => { location.hash = '#/tasks'; await v2Refresh(); decideOpen('task:' + id); }, id);
       await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
       if (id !== 't-yn') await page.waitForFunction(() => document.querySelectorAll('.decide .dc-body img[data-tf-src]').length >= 2);
       const decide = await page.evaluate(([pictures]) => ({pics: eval(pictures)('.decide .dc-body'),

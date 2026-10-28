@@ -1,11 +1,11 @@
-// Settings > Listening (ui/app/settings-listening.js): the owner and admins read every destination (a file one is
-// read-only, marked "From listening.yaml"); only the owner adds, edits and removes the ones saved in Settings; the
-// form sends the category, receiver, threshold, readers, optional skip rule and what; the server's refusal shows in the
-// form; the tab is absent for a member; the Beta label stays; a phone has no sideways scroll. Fixtures only.
+// Strategy › Market › Listening's Settings fold (ui/app/settings-listening.js): the owner and admins read every
+// destination (a file one is read-only, marked "From listening.yaml"); only the owner adds, edits and removes the ones
+// saved in Settings; the form sends the category, receiver, threshold, readers, optional skip rule and what; the
+// server's refusal shows in the form; a member has no Listening view; a phone has no sideways scroll. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, beta} = require('./support/page.cjs');
+const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const CATEGORIES = ['market', 'content', 'lead', 'vendor_pitch'].map(id => ({id, label: id.replace('_', ' ')}));
@@ -27,7 +27,7 @@ async function open(browser, role, width = 1440) {
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const config = {version: '0.1.0', app_name: 'Tico', beta};
+    const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',
       name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
@@ -36,6 +36,7 @@ async function open(browser, role, width = 1440) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/models') return json({models: [], harnesses: []});
     if (p === '/api/v2/access') return json({rules: {}});
+    if (p === '/api/v2/listening/stats') return json({daily: [], recent: []});
     if (p === '/api/v2/listening/destinations' && req.method() === 'GET')
       return json({destinations: dests, categories: CATEGORIES, receivers: RECEIVERS});
     const one = p.match(/^\/api\/v2\/listening\/destinations\/([^/]+)(\/remove)?$/);
@@ -52,11 +53,9 @@ async function open(browser, role, width = 1440) {
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-tabs').waitFor();
+  await page.goto('https://tico-ui.test/#/strategy/market/listening');
   if (role !== 'member') {
-    await page.locator('#settings-more summary').click();
-    await page.locator('[data-settings-tab="listening"]').click();
+    await page.locator('[data-rdm-settings]').click();
     await page.locator('[data-listen-dest]').first().waitFor();
   }
   return {page, errors, writes, dests};
@@ -68,8 +67,6 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
   try {
     {
       const {page, errors, writes} = await open(browser, 'owner');
-      assert.equal(await page.locator('#settings-listening h2').innerText(), 'Listening');
-      assert.equal(await page.locator('#settings-listening .pill.beta').count(), 1, 'the Beta label stays');
       assert.match(await row(page, 'market').innerText(), /market at 0\.7 or above → Librarian/);
       assert.match(await row(page, 'leads').innerText(), /lead at 0\.75 or above → Sales Ops, not when vendor pitch is 0\.7 or above/);
       assert.match(await row(page, 'leads').innerText(), /Can read: Content/);
@@ -132,10 +129,10 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await page.close();
     }
     {
-      // A member has no Listening tab.
+      // A member has no Listening view.
       const {page} = await open(browser, 'member');
-      await page.locator('#settings-more summary').click();
-      assert.equal(await page.locator('[data-settings-tab="listening"]').count(), 0);
+      await page.locator('.mkt-views').waitFor();
+      assert.equal(await page.locator('[data-market-view="listening"]').count(), 0);
       await page.close();
     }
     console.log('listening-settings: ok');

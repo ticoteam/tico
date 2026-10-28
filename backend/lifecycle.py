@@ -114,7 +114,7 @@ def _manager_actor(c, slug):
 def _person_above(c, pid, slug):
     from . import people as P, views
     archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-    return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived)
+    return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived, True)
 
 
 def may_complete(auth, c, who, slug):
@@ -324,7 +324,7 @@ def close_seat(auth, c, who, seat_id):
     return {"id": seat_id, "closed": True}
 
 
-def org_parent(seat_row, roster, employees, archived=(), all_seats=None):
+def org_parent(seat_row, roster, employees, archived=(), all_seats=None, bare_people=False):
     """Where a seat hangs on the chart: under the open seat it reports to (`s:<id>`), else under its bot while that bot
     is on the chart, else under its person, as a bot reporting there would (backend/people.py `org_parent`). A closed
     seat above it is passed over for whatever that seat answered to. `all_seats` is {id: row}, closed seats too."""
@@ -342,7 +342,8 @@ def org_parent(seat_row, roster, employees, archived=(), all_seats=None):
         reports = str(parent["reports_to"] or "")
     probe = "seat:" + seat_row["id"]
     return P.org_parent("bot", probe, roster, {**(employees or {}), probe: {"reports_to": reports,
-                                                                           "team": seat_row["team"] or ""}}, archived)
+                                                                           "team": seat_row["team"] or ""}}, archived,
+                       bare_people)
 
 
 def all_seats(c):
@@ -354,14 +355,14 @@ def chart_seats(c, roster, employees, archived=(), may_see=lambda slug: True):
     where it hangs. One under a bot the caller may not see hangs from the nearest thing above that bot they may, as
     that bot's own reports do on the chart."""
     from . import people as P
-    every, out = all_seats(c), []
+    every, out, bare = all_seats(c), [], True
     for row in every.values():
         if row["closed_at"]:
             continue
-        parent, seen = org_parent(row, roster, employees, archived, every), set()
+        parent, seen = org_parent(row, roster, employees, archived, every, bare), set()
         while parent.startswith("b:") and parent not in seen and not may_see(parent[2:]):
             seen.add(parent)
-            parent = P.org_parent("bot", parent[2:], roster, employees, archived)
+            parent = P.org_parent("bot", parent[2:], roster, employees, archived, bare)
         out.append({"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
                     "description": row["description"], "team": row["team"], "reports_to": row["reports_to"],
                     "created": row["created"], "org_parent": parent})

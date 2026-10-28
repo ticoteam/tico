@@ -321,13 +321,13 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Goals: one Strategy line at the top; the goal editor's Bet picker saves bet_id; the bet's chip opens it on Strategy.
+    // Goals: no Strategy line at the top (Strategy is the tab beside it); the goal editor's Bet picker saves bet_id; the
+    // bet's chip opens it on Strategy.
     {
       const {page, errors, sent} = await open(browser, {route: '#/goals'});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      assert.match(await page.locator('#goal-strategy').innerText(), /^Strategy v1\s*·?\s*Acme cleans homes/);
-      assert.equal(await page.locator('#goal-strategy').getAttribute('href'), '#/strategy');
-      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]').first().click();
+      assert.equal(await page.locator('#goal-strategy').count(), 0);
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-cmo"]').click();
       const picker = panel.locator('select[name="bet"]');
@@ -389,7 +389,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await card.waitFor();
       const flat = t => t.replace(/\s+/g, ' ').trim();
       assert.equal(flat(await card.locator('.kpi-prop-head').innerText()),
-        'CEO Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
+        'Strategy Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
       assert.equal(await card.locator('.strat-prop-open').getAttribute('href'), '#/strategy');
       // The vision it proposes is the draft's already: no row for it.
       assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(flat)), [
@@ -429,7 +429,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
       assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
       await lens.waitFor();
-      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^CEO Bot suggests a change to your strategy from the Blue Ocean lens/);
+      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Bot suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
       const tall = () => values.evaluateAll(els => els.map(el => el.scrollHeight > el.clientHeight + 1));
       // The draft's own text is short, so only Proposed is cut; both are clamped to four lines until Show all.
@@ -466,7 +466,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const old = {id: 'g-old', title: 'Win the office park', owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
       const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      await page.locator('#goal-tree .gt-row', {hasText: 'Win the office park'}).click();
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-old"]').click();
       const picker = panel.locator('select[name="bet"]');

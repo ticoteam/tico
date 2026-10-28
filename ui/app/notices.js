@@ -287,7 +287,7 @@ document.addEventListener('visibilitychange', () => {
 const assistantShownName = () => assistantName();
 // The CEO Bot's old name never shows (state.js `ceoBotName`), wherever the roster is read.
 const namedRoster = rows => rows.map(e => e.name === assistantBot() ? {...e, display_name: assistantShownName()}
-  : e.name === 'goal-manager' && ['', 'Goal Manager'].includes(String(e.display_name || '').trim()) ? {...e, display_name: 'CEO Bot'} : e);
+  : e.name === 'goal-manager' && ceoDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: ceoDefaultName()} : e);
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.
 window.ticoIsCloud = () => !!S.me?.cloud;

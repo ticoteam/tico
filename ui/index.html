@@ -49,6 +49,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/visual-media.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
 <link rel="stylesheet" href="/tico/ui/styles/goals.css">
+<link rel="stylesheet" href="/tico/ui/styles/automations.css">
 <link rel="stylesheet" href="/tico/ui/styles/strategy.css">
 <link rel="stylesheet" href="/tico/ui/styles/lenses.css">
 <link rel="stylesheet" href="/tico/ui/styles/tasks.css">
@@ -71,6 +72,10 @@
 <link rel="stylesheet" href="/tico/ui/styles/computer-performance.css">
 <link rel="stylesheet" href="/tico/ui/styles/rails.css">
 <link rel="stylesheet" href="/tico/ui/styles/skeleton.css">
+<link rel="stylesheet" href="/tico/ui/styles/redesign.css">
+<link rel="stylesheet" href="/tico/ui/styles/redesign-strategy.css">
+<link rel="stylesheet" href="/tico/ui/styles/strategy-budget.css">
+<link rel="stylesheet" href="/tico/ui/styles/redesign-library.css">
 <!-- bundle:css:end -->
 </head>
 <body>
@@ -97,7 +102,6 @@
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
     <a class="nav-link" id="nav-assistant" href="#/bot/coo" data-nav="assistant" hidden><span class="nav-icon" aria-hidden="true">assistant</span><span data-nav-name>Assistant</span></a>
     <a class="nav-link" id="nav-botops" href="#/bot/botops" data-nav="botops" hidden><span class="nav-icon" aria-hidden="true">smart_toy</span>BotOps</a>
-    <a class="nav-link" href="#/goals" data-nav="goals"><span class="nav-icon" aria-hidden="true">target</span>Goals</a>
     <div class="nav-row">
       <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
       <a class="nav-librarian" id="nav-docs-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
@@ -144,7 +148,6 @@
         <div id="account-status-pop" class="account-status" hidden></div>
         <nav id="account-menu" aria-label="Account navigation" hidden>
           <div id="account-status" class="account-status" hidden></div>
-          <a class="nav-link" href="#/integrations" data-nav="integrations" id="nav-integrations"><span class="nav-icon" aria-hidden="true">api</span>Tools</a>
           <a class="nav-link" href="#/replay" data-nav="replay"><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
           <a class="nav-link" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
@@ -269,7 +272,6 @@
 <script src="/tico/ui/app/tasks-page.js"></script>
 <script src="/tico/ui/app/decide.js"></script>
 <script src="/tico/ui/app/task-stats.js"></script>
-<script src="/tico/ui/app/recurring.js"></script>
 <script src="/tico/ui/app/credentials.js"></script>
 <script src="/tico/ui/app/mail.js"></script>
 <script src="/tico/ui/app/messaging.js"></script>
@@ -278,7 +280,6 @@
 <script src="/tico/ui/app/inbound.js"></script>
 <script src="/tico/ui/app/settings.js"></script>
 <script src="/tico/ui/app/settings-recurring.js"></script>
-<script src="/tico/ui/app/settings-rules.js"></script>
 <script src="/tico/ui/app/settings-tasks.js"></script>
 <script src="/tico/ui/app/settings-release.js"></script>
 <script src="/tico/ui/app/settings-webhooks.js"></script>
@@ -310,12 +311,22 @@
 <script src="/tico/ui/app/updates.js"></script>
 <script src="/tico/ui/app/updates-chat.js"></script>
 <script src="/tico/ui/app/goals.js"></script>
+<script src="/tico/ui/app/automations.js"></script>
+<script src="/tico/ui/app/automations-flow.js"></script>
+<script src="/tico/ui/app/automations-editors.js"></script>
+<script src="/tico/ui/app/automations-runs.js"></script>
+<script src="/tico/ui/app/automations-bot.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/computer-screen.js"></script>
 <script src="/tico/ui/app/computer-performance.js"></script>
 <script src="/tico/ui/app/overview.js"></script>
 <script src="/tico/ui/app/overview-hours.js"></script>
+<script src="/tico/ui/app/redesign.js"></script>
+<script src="/tico/ui/app/strategy-budget.js"></script>
+<script src="/tico/ui/app/redesign-org.js"></script>
+<script src="/tico/ui/app/redesign-market.js"></script>
+<script src="/tico/ui/app/redesign-library.js"></script>
 <script src="/tico/ui/app/router.js"></script>
 <script src="/tico/ui/app/drawer.js"></script>
 <script src="/tico/ui/app/team-add.js"></script>

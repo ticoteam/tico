@@ -58,6 +58,7 @@
 .bt-list .bt-repo summary{padding:5px 2px}
 .bt-list .bt-repo .bt-name{font-weight:500;max-width:55%}
 .bt-list .bt-repo .bt-body{padding-left:2px}
+.bt-list .bt-open{display:inline-block;margin-top:6px;font-size:var(--t-sm)}
 .bt-list dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px}
 .bt-list dt{color:var(--muted);font-size:12px;padding-top:1px}
 .bt-list dd{margin:0;min-width:0;overflow-wrap:anywhere}
@@ -237,7 +238,9 @@
         ? `<span class="bt-problem">${esc(tool.problem)}</span>`
         : `${statusPill(tool)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
-      return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl></div>`;
+      // Who else has it and its credentials live in Library › Tools (ui/app/redesign-library.js).
+      const open = tool.service ? `<a class="bt-open" href="#/library/tools/${encodeURIComponent(tool.service)}?who=bot:${encodeURIComponent(slug)}">Open in Tools</a>` : '';
+      return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>${open}</div>`;
     }
     // The line's key values: the model and effort for the model, access for a repository, otherwise who it acts
     // as and what it may do. A problem takes their place, so it is read without opening the tool.

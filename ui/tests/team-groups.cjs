@@ -303,7 +303,7 @@ async function externalChanges(browser) {
   await page.evaluate(() => refresh(false));
   assert.deepEqual(await shape(page), [
     'Ana', {Marketing: [{Ben: ['Marketing Lead']}, {SEO: ['Writer']}, {Campaigns: ['Cara', 'Scout']}]},
-    {Sales: []}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
+    {Sales: []}]);
   assert.equal(await node(page, 'b:scout').isVisible(), false, 'normal polling preserves collapsed groups');
   await page.locator('#tree .dept-label', {hasText: /^Marketing$/}).click();
   assert.equal(await node(page, 'b:scout').isVisible(), true);
@@ -328,7 +328,7 @@ async function owner(browser) {
   const {page, errors, calls} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
   // Groups nest and hold humans and bots; a member hangs under its manager inside the group; Built-in is outside.
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {Sales: []}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
+    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {Sales: []}]);
   // A group collapses.
   await page.locator('#tree .dept-label', {hasText: /^Marketing$/}).click();
   assert.equal(await page.locator('#tree a.node[href="#/bot/writer"]').isVisible(), false);
@@ -336,22 +336,8 @@ async function owner(browser) {
   assert.equal(await page.locator('#tree a.node[href="#/bot/writer"]').isVisible(), true);
   assert.equal(await node(page, 'b:botops').count(), 0, 'built-in bots stay out of the chart');
   assert.equal(await page.locator('#nav-botops').getAttribute('href'), '#/bot/botops');
-  assert.equal(await node(page, 'b:channel').getAttribute('draggable'), null, 'a message bot is not moved');
-  // One Message bots heading: each mailbox and channel sits under the bot that works it.
-  await page.locator('#tree .node-sources a', {hasText: '#support'}).waitFor();
-  assert.deepEqual(await page.locator('#tree .node-sources a').evaluateAll(els => els.map(a => [a.closest('li').closest('ul').closest('li').querySelector('a.node').dataset.org, a.querySelector('span:last-child').textContent])),
-    [['b:inbox', 'ana@example.test'], ['b:channel', '#support']]);
-  assert.equal(await page.locator('#nav-inboxes-section').isHidden(), true);
-  // Message bots is a Beta feature: its heading carries the pill, and no other group does.
-  await row(page, 'Message bots').locator('.pill.beta').waitFor();
-  assert.equal(await page.locator('#tree .noderow[data-org^="g:"] .pill.beta').count(), 1);
-  for (const name of ['Message bots']) {
-    assert.equal(await row(page, name).getAttribute('draggable'), null);
-    assert.equal(await row(page, name).locator('[data-group-add], [data-group-rename], [data-group-delete]').count(), 0);
-  }
-  await row(page, 'Message bots').locator('.dept-label').click();
-  assert.equal(await node(page, 'b:inbox').isVisible(), false);
-  await row(page, 'Message bots').locator('.dept-label').click();
+  assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0, 'message bots stay off the chart');
+  assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, 'nor are their mailboxes in the sidebar');
 
   // Add a group even when Team is collapsed and showing history.
   await page.locator('#org-history').click();
@@ -400,7 +386,7 @@ async function owner(browser) {
   assert.deepEqual(calls.shift(), ['PATCH', 'legal', {parent: 'sales'}]);
   assert.deepEqual(await shape(page), [
     'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]},
-    {Revenue: ['Cara', 'Scout', {Legal: []}, {EMEA: []}]}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
+    {Revenue: ['Cara', 'Scout', {Legal: []}, {EMEA: []}]}]);
 
   // Out of a group: onto "No group", which shows while dragging.
   assert.equal(await page.locator('#tree .org-no-group').isVisible(), false);
@@ -411,7 +397,7 @@ async function owner(browser) {
   await page.waitForFunction(() => [...document.querySelectorAll('#tree > li.org-group > .noderow .dept-label')].some(l => l.textContent === 'SEO'));
   assert.deepEqual(calls.shift(), ['PATCH', 'seo', {parent: ''}]);
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara']}, {Marketing: [{Ben: ['CMO']}]}, {SEO: ['Writer']}, {Revenue: ['Scout', {Legal: []}, {EMEA: []}]}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
+    {Ana: ['Cara']}, {Marketing: [{Ben: ['CMO']}]}, {SEO: ['Writer']}, {Revenue: ['Scout', {Legal: []}, {EMEA: []}]}]);
   assert.deepEqual(errors, []);
   await page.close();
 }
@@ -420,7 +406,7 @@ async function member(browser) {
   const {page, errors} = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member'});
   // A member may create bots, but has no group-edit handles; an empty group is not shown.
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
+    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}]);
   await page.locator('#org-add-group').click();
   assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Add bot']);
   await page.keyboard.press('Escape');
@@ -463,7 +449,7 @@ async function teamAdd(browser) {
   await page.locator('#tree a.node.seat[data-seat-open="seat1"]').waitFor({state: 'attached'});
   assert.match(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').textContent(), /Ledger\s*Recruiting/);
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout'].map(n => n.kind + ':' + n.id)), ['seat:seat1']);
-  await page.locator('[data-recruit-draft]', {hasText: 'Drafted by CEO Bot'}).waitFor({timeout: 8000});
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafted by Strategy Bot'}).waitFor({timeout: 8000});
   assert.equal(await page.locator('#recruit-picker textarea').inputValue(), 'Keeps the books and closes each month.');
   await page.getByRole('button', {name: 'Recruit', exact: true}).click();
   const cards = page.locator('[data-recruit-candidate]');
@@ -604,7 +590,6 @@ async function deleteGroups(browser) {
   for (const me of [{id: 'ana', role: 'owner', cloud: true}, {id: 'ben', role: 'viewer', bot_admin: true, cloud: true}]) {
     const {page, errors, calls, people, groups, bots, deletion} = await open(browser, me);
     const reporting = [...people, ...bots].map(p => [p.id || p.name, p.reports_to]);
-    assert.equal(await row(page, 'Message bots').locator('[data-group-delete]').count(), 0);
     page.once('dialog', async dialog => { assert.match(dialog.message(), /^Delete Sales\? Its teammates and groups move to [^;]+\.$/); await dialog.dismiss(); });
     await clickDelete(page, 'sales');
     assert.deepEqual(calls, [], 'cancellation never sends a delete');

@@ -1,0 +1,25 @@
+{
+  "id": "07-mail-calendar-invite",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "omar@acme.example",
+    "from_name": "Omar",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T13:20:00Z",
+    "subject": "Invitation: Partner sync, Tue 3 Nov 14:00 UTC",
+    "snippet": "Omar has invited you to Partner sync on Tuesday 3 November, 14:00 to 14:30 UTC. Join with the video link in the invite.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": true,
+    "is_calendar_invite": true,
+    "labels": [
+      "INBOX",
+      "CATEGORY_UPDATES"
+    ]
+  },
+  "note": "A calendar invite from a teammate: no decision asked, so reply or watch rather than escalate."
+}

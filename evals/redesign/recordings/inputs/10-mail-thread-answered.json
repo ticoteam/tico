@@ -1,0 +1,24 @@
+{
+  "id": "10-mail-thread-answered",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "lee.tanaka@acme.example",
+    "from_name": "Lee Tanaka, Oakridge Surveys",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T15:44:00Z",
+    "subject": "Re: Seat count for the Oakridge rollout",
+    "snippet": "Thanks Dana, that answers it. We will go with 25 seats from 1 November. Appreciate the quick turnaround.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A thread the owner already answered; nothing is asked: archive."
+}

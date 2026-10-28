@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from backend import hook_relay
 from backend import hubdb as H
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_event_rules import rule as rule_row
 from backend.tests.test_triggers import hook
 from backend.tests.test_triggers_incoming import as_bot
 from backend.tests.test_wake_rules import jobs, setup
@@ -14,9 +15,10 @@ from backend.tests.test_webhooks import net  # noqa: F401
 
 
 def wake_rule(api, **when):
-    return post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action", "when": when,
-                               "params": {"action": "wake_bot", "bot": "cpo",
-                                          "text": "Order {{data.order}} ({{type}})"}})["rule"]
+    """A stored `webhook.received` rule that wakes cpo (rules made today live in automations; the engine still reads
+    these rows)."""
+    return rule_row(api, by="human:ana", then="action", when=when,
+                    params={"action": "wake_bot", "bot": "cpo", "text": "Order {{data.order}} ({{type}})"})["rule"]
 
 
 def test_a_direct_call_wakes_the_bot_a_rule_names_and_that_bot_may_read_the_call(api):
@@ -75,8 +77,7 @@ def test_a_call_through_the_gateway_relay_runs_the_same_rule(api):
 def test_a_rule_that_ignores_a_call_heard_it_so_its_maker_gets_no_unheard_note(api):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     post(api, "triggers/shop", {"unheard": "note"})
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "ignore", "when": {"trigger": "shop"},
-                        "params": {}})
+    rule_row(api, by="human:ana", then="ignore", when={"trigger": "shop"})
     assert hook(api, made["url"], b'{"kind": "ping"}', {"Webhook-Id": "p1"}).status_code == 202
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE refs_json LIKE '%unheard%'").fetchone()
@@ -87,9 +88,9 @@ def test_a_call_a_rule_forwards_reaches_the_outgoing_endpoint_signed(api, net):
     from backend.tests.test_webhooks import make, run, verify
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     endpoint = make(api, events=["custom.*"], token="ana-test")
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action", "when": {"trigger": "shop"},
-                        "params": {"action": "send_webhook", "webhook": endpoint["id"], "type": "custom.order",
-                                   "data": {"order": "{{data.order}}", "from": "{{trigger.name}}"}}}, token="ana-test")
+    rule_row(api, by="human:ana", then="action", when={"trigger": "shop"},
+             params={"action": "send_webhook", "webhook": endpoint["id"], "type": "custom.order",
+                     "data": {"order": "{{data.order}}", "from": "{{trigger.name}}"}})
     got = hook(api, made["url"], b'{"order": 42}', {"Webhook-Id": "w9"}).json()
     assert got["rules"] == 1
     run(api, net)
@@ -103,12 +104,11 @@ def test_a_call_a_rule_forwards_reaches_the_outgoing_endpoint_signed(api, net):
     assert len(net.seen) == 1 and D.MAX_ATTEMPTS == 8
 
 
-def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_with_the_vault_and_auth(api, monkeypatch):
+def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_with_the_vault(api):
     """The relay once called receive() with no vault, so every signed preset was refused as vault_unavailable and still
     acknowledged to HQ: valid deliveries never reached a rule."""
     import hashlib
     import hmac
-    from backend import routines
     setup(api)
     post(api, "triggers", {"name": "Shop"})
     key = "k" * 24
@@ -118,9 +118,6 @@ def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_
         c.execute("DELETE FROM jobs")
         c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana", H.now()))
-    emitted = []
-    real = routines.emit
-    monkeypatch.setattr(routines, "emit", lambda *a, **kw: (emitted.append(kw.get("auth")), real(*a, **kw))[1])
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings, SimpleNamespace(state=api.app.state),
                                  api.app.state.auth)
     body = b'{"order": 8}'
@@ -138,7 +135,6 @@ def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_
     with api.app.state.store.read() as c:
         row = c.execute("SELECT outcome,rules FROM trigger_deliveries WHERE delivery='s2'").fetchone()
         assert (row["outcome"], row["rules"]) == ("accepted", 1) and jobs(c, "cpo") == 1
-    assert emitted and all(a is api.app.state.auth for a in emitted)
 
 
 def test_one_send_rule_for_two_triggers_sends_each_call_even_when_both_carry_the_same_delivery_id(api, net):
@@ -146,9 +142,9 @@ def test_one_send_rule_for_two_triggers_sends_each_call_even_when_both_carry_the
     first = post(api, "triggers", {"name": "Shop"})["trigger"]
     second = post(api, "triggers", {"name": "Blog"})["trigger"]
     endpoint = make(api, events=["custom.*"], token="ana-test")
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action", "when": {},
-                        "params": {"action": "send_webhook", "webhook": endpoint["id"], "type": "custom.seen",
-                                   "data": {"from": "{{trigger.name}}"}}}, token="ana-test")
+    rule_row(api, by="human:ana", then="action",
+             params={"action": "send_webhook", "webhook": endpoint["id"], "type": "custom.seen",
+                     "data": {"from": "{{trigger.name}}"}})
     assert hook(api, first["url"], b"{}", {"Webhook-Id": "1"}).json()["rules"] == 1
     assert hook(api, second["url"], b"{}", {"Webhook-Id": "1"}).json()["rules"] == 1
     run(api, net)

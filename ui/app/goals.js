@@ -136,11 +136,85 @@ function goalAddInline(host, owner, done) {
 
 // The Goals page's editor: one form for a new goal and an existing one. Goal, Owner (new goals),
 // Supports (optional, Nothing by default) and one Save.
+const goalEveryone = () => [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
+  ...shownEmps().filter(e => !isBuiltInBot(e.name)).map(e => ['bot:' + e.name, e.display_name || e.name])];
 function goalOwnerChoices(mine) {
   if (S.me?.role !== 'owner') return mine ? [[mine, 'Me']] : [];
-  return [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
-          ...shownEmps().filter(e => !isBuiltInBot(e.name)).map(e => ['bot:' + e.name, e.display_name || e.name])];
+  return goalEveryone();
 }
+// The sheet's owners: the environment's owner may pick the company or anyone; anyone else themselves or someone below
+// them on the org chart (backend/goal_routes.py goal_create). The goal's current owner always stays a choice.
+function goalSheetOwners(current) {
+  const me = mePerson(), mine = me ? 'human:' + me.id : '';
+  const all = goalEveryone();
+  const out = S.me?.role === 'owner' ? [[GOAL_COMPANY, goalOwnerInfo(GOAL_COMPANY).name], ...all]
+    : all.filter(([v]) => v === mine || (me && goalOrgPlace(v).above.has('p:' + me.id)));
+  if (mine && !out.some(([v]) => v === mine)) out.unshift([mine, me.name || 'Me']);
+  if (current && !out.some(([v]) => v === current)) out.unshift([current, goalOwnerInfo(current).name]);
+  return out;
+}
+// Handing a goal to someone else: the owner of the goal it supports, or someone above its owner (goal_update).
+function goalMayMove(g, goals = []) {
+  if (S.me?.role === 'owner') return true;
+  const me = mePerson();
+  if (!me || g.owner === GOAL_COMPANY) return false;
+  return goals.find(x => x.id === g.parent_id)?.owner === 'human:' + me.id || goalOrgPlace(g.owner).above.has('p:' + me.id);
+}
+// A group's goals are its lead's: the "+" on a group's line adds one for the lead, when this person may.
+function goalGroupOwner(gid) {
+  const g = (GOALS_ST?.groups || []).find(x => x.id === gid) || (S.orgGroups || []).find(x => x.id === gid);
+  const lead = String(g?.lead || ''), owner = lead.startsWith('person:') ? 'human:' + lead.slice(7) : lead;
+  return owner && goalMayEdit({owner}, GOALS_ST?.goals || []) ? owner : '';
+}
+// A long press on a phone line adds a goal, as "+" does under a pointer; the tap that ends it opens nothing.
+function goalLongPress(el, fire) {
+  let timer = 0;
+  const stop = () => { clearTimeout(timer); timer = 0; if (el._pressed) setTimeout(() => { el._pressed = false; }, 400); };
+  el.addEventListener('touchstart', ev => {
+    if (ev.touches.length !== 1) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { timer = 0; el._pressed = true; fire(); }, 500);
+  }, {passive: true});
+  for (const t of ['touchend', 'touchmove', 'touchcancel']) el.addEventListener(t, stop, {passive: true});
+  el.addEventListener('contextmenu', ev => { if (el._pressed) ev.preventDefault(); });
+}
+function goalPressed(el) { if (!el._pressed) return false; el._pressed = false; return true; }
+// One goal on its own: tap a goal on the Goals tab, or "+" for a new one. A bottom sheet on a phone, a side panel on a
+// wider window (the owner's panel's frame, ui/styles/goals.css .gpanel). Details opens the owner's whole panel.
+function goalSheetOpen(state, {goal = '', owner = ''} = {}) {
+  const g = goal ? state.goals.find(x => x.id === goal) : null;
+  if (goal && !g) return;
+  if (!g) { const me = mePerson(); owner = owner || (me ? 'human:' + me.id : S.me?.role === 'owner' ? GOAL_COMPANY : ''); }
+  let dlg = document.getElementById('goal-sheet');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'goal-sheet'; dlg.className = 'tmodal kpi-panel gpanel gsheet';
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+    document.body.appendChild(dlg);
+  }
+  dlg.setAttribute('aria-label', g ? 'Goal' : 'New goal');
+  dlg.innerHTML = `<div class="tmodal-head"><h2 class="gs-h">${g ? 'Goal' : 'New goal'}</h2><span class="spacer"></span>
+      ${g ? '<button class="linkish" type="button" data-gs-details>Details</button>' : ''}
+      <button class="ghost tmodal-x" type="button" data-gs-close aria-label="Close">✕</button></div>
+    <div class="tmodal-body gs-body">${goalFormHtml(g || {}, state.goals, {owner, sheet: true})}</div>`;
+  if (!dlg.open) dlg.showModal();
+  dlg.querySelector('[data-gs-close]').onclick = () => dlg.close();
+  const details = dlg.querySelector('[data-gs-details]');
+  if (details) details.onclick = () => { dlg.close(); goalPanelOpen(state, g.owner, {goal: g.id}); };
+  for (const a of dlg.querySelectorAll('[data-goal-go]')) a.onclick = ev => {
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+    ev.preventDefault();
+    goalSheetOpen(state, {goal: a.dataset.goalGo});
+  };
+  bindGoalForm(dlg.querySelector('[data-goal-form]'), g || {}, state.goals, {owner}, ok => {
+    dlg.close();
+    if (ok && GOALS_ST === state) goalsRender(state);
+  });
+}
+window.addEventListener('hashchange', () => {
+  const dlg = document.getElementById('goal-sheet');
+  if (dlg?.open && !location.hash.startsWith(goalsBase())) dlg.close();
+});
 // The colour a person sets by hand sticks until they let the CEO Bot set it again.
 const GOAL_COLOURS = [['green', 'On track'], ['yellow', 'At risk'], ['red', 'Off track'], ['done', 'Done']];
 function goalColourHtml(g) {
@@ -278,19 +352,24 @@ function goalFinishedMount(host, owner, goals, changed) {
   };
   draw();
 }
-function goalFormHtml(g, goals, {owner = '', company = false, fixed = false} = {}) {
-  company = company || g.owner === GOAL_COMPANY;      // a team goal supports nothing
+function goalFormHtml(g, goals, {owner = '', company = false, fixed = false, sheet = false} = {}) {
+  company = company || g.owner === GOAL_COMPANY || (sheet && !g.id && owner === GOAL_COMPANY);   // a team goal supports nothing
   const may = !g.id || goalMayEdit(g, goals);
   const me = mePerson(), mine = me ? 'human:' + me.id : '';
-  const choices = g.id || company || fixed ? [] : goalOwnerChoices(mine);   // fixed: the owner is whoever was tapped
-  const who = owner || mine || choices[0]?.[0] || '';
+  // The sheet always names the owner: a select while they may hand the goal to someone else, else just its one name.
+  const choices = sheet ? (g.id && !goalMayMove(g, goals) ? [[g.owner, goalOwnerInfo(g.owner).name]] : goalSheetOwners(g.owner || owner))
+    : g.id || company || fixed ? [] : goalOwnerChoices(mine);   // fixed: the owner is whoever was tapped
+  const who = g.owner || owner || mine || choices[0]?.[0] || '';
   const kids = g.id ? goals.filter(x => goalLive(x) && x.parent_id === g.id).sort(goalRank) : [];
-  return `<form class="goal-form goal-ed" data-goal-form="${esc(g.id || (company ? 'company' : 'new'))}" novalidate>
+  const ownerSel = `<label class="goal-f"><span>Owner</span><select name="owner"${sheet && choices.length < 2 ? ' disabled' : ''}>${choices.map(([v, name]) => `<option value="${esc(v)}"${v === who ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>`;
+  const supports = (off, whose, hide = false) => `<label class="goal-f"${hide ? ' hidden' : ''}><span>Supports</span><select name="parent"${off ? ' disabled' : ''}>${goalSupportOptions(g, whose, goals)}</select></label>`;
+  return `<form class="goal-form goal-ed${sheet ? ' goal-sheet-f' : ''}" data-goal-form="${esc(g.id || (company && !sheet ? 'company' : 'new'))}" novalidate>
       <label class="goal-f"><span>Goal</span><input type="text" name="title" maxlength="300" autocomplete="off" value="${esc(g.title || '')}"${may ? '' : ' readonly'} placeholder="${company ? 'Reach 100 paying customers by June' : 'Answer every ticket the same day'}"></label>
-      ${choices.length ? `<div class="goal-fs"><label class="goal-f"><span>Owner</span><select name="owner">${choices.map(([v, name]) => `<option value="${esc(v)}"${v === who ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
-        <label class="goal-f"><span>Supports</span><select name="parent">${goalSupportOptions(g, who, goals)}</select></label></div>`
-      : company ? '' : `<label class="goal-f"><span>Supports</span><select name="parent"${may ? '' : ' disabled'}>${goalSupportOptions(g, g.owner || who, goals)}</select></label>`}
+      ${sheet ? `<div class="goal-fs">${ownerSel}${supports(!may || company, who, company)}</div>`
+      : choices.length ? `<div class="goal-fs">${ownerSel}${supports(false, who)}</div>`
+      : company ? '' : supports(!may, g.owner || who)}
       ${goalBetHtml(g, may)}
+      ${sheet ? goalMeasureHtml(g, may) : ''}
       ${kids.length ? `<div class="goal-ed-kids"><span>Supported by</span>${kids.map(k =>
         `<a href="${GOALS}/${encodeURIComponent(k.id)}" data-goal-go="${esc(k.id)}">${esc(k.title)} <span class="muted">· ${esc(goalOwnerInfo(k.owner).name)}</span></a>`).join('')}</div>` : ''}
       ${may && g.id ? goalColourHtml(g) : ''}
@@ -300,12 +379,45 @@ function goalFormHtml(g, goals, {owner = '', company = false, fixed = false} = {
       </div>
     </form>`;
 }
+// The goal's measure in the sheet: its first KPI, the number it should reach and the date it is due (an "improve"
+// target on the link, backend/kpis.py validate_target); a goal with none names a new one. A range is set in Details.
+const goalMeasure = g => (g.kpis || []).find(k => !k.archived_at) || null;
+function goalMeasureHtml(g, may) {
+  const k = goalMeasure(g), link = k?.link || {}, range = link.kind === 'maintain', off = !may || range ? ' disabled' : '';
+  const n = v => v == null ? '' : String(v);
+  return `<div class="goal-fs goal-measure">
+      <label class="goal-f goal-metric"><span>Metric</span><input type="text" name="metric" maxlength="300" autocomplete="off" value="${esc(k?.name || '')}"${k || !may ? ' readonly' : ''} placeholder="Paying customers"></label>
+      <label class="goal-f"><span>Target</span><input type="number" name="target" step="any" inputmode="decimal" value="${esc(range ? '' : n(link.target))}"${off}${range ? ' placeholder="Range"' : ''}></label>
+      <label class="goal-f"><span>Due</span><input type="date" name="due" value="${esc(range ? '' : link.deadline || '')}"${off}></label></div>`;
+}
+// What saving the measure posts, or the field to fill first: a target and its date go together, and a new one needs a name.
+function goalMeasurePlan(form, g) {
+  if (!form.elements.metric) return {};
+  const k = g.id ? goalMeasure(g) : null, link = k?.link || {};
+  const name = form.elements.metric.value.trim(), target = form.elements.target.value.trim(), due = form.elements.due.value;
+  if (form.elements.target.disabled) return {};
+  if (Boolean(target) !== Boolean(due)) return {missing: target ? form.elements.due : form.elements.target};
+  const aim = target ? {kind: 'improve', target: Number(target), deadline: due} : {kind: 'none'};
+  if (k) {
+    if (n2(link.target) === (target ? Number(target) : null) && (link.deadline || '') === due) return {};
+    if (target && link.baseline != null) Object.assign(aim, {baseline: link.baseline, baseline_at: link.baseline_at});
+    return {post: gid => post(`/v2/goals/${encodeURIComponent(gid)}/kpis/${encodeURIComponent(k.id)}`, aim)};
+  }
+  if (!name) return target ? {missing: form.elements.metric} : {};
+  return {post: gid => post(`/v2/goals/${encodeURIComponent(gid)}/kpis`, {name, ...aim})};
+}
+const n2 = v => v == null || v === '' ? null : Number(v);
 function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) {
   const title = form.elements.title, ownerSel = form.elements.owner, parentSel = form.elements.parent, betSel = form.elements.bet;
   const save = form.querySelector('[type=submit]');
   form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
   form.querySelector('[data-goal-cancel]').onclick = () => done();
-  if (ownerSel) ownerSel.onchange = () => { parentSel.innerHTML = goalSupportOptions(g, ownerSel.value, goals); };
+  if (ownerSel) ownerSel.onchange = () => {
+    parentSel.innerHTML = goalSupportOptions(g, ownerSel.value, goals);
+    if (!form.classList.contains('goal-sheet-f')) return;
+    parentSel.disabled = ownerSel.value === GOAL_COMPANY || Boolean(g.id && !goalMayEdit(g, goals));
+    parentSel.closest('label').hidden = ownerSel.value === GOAL_COMPANY;
+  };
   const auto = form.querySelector('[data-goal-auto]');
   if (auto) auto.onclick = async () => {
     auto.disabled = true;
@@ -326,21 +438,27 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
     const colour = g.id && form.elements.status ? form.elements.status.value : '';
     const why = g.id && form.elements.note ? form.elements.note.value.trim() : '';
     if (colour && colour !== 'done' && !why) { form.elements.note.focus(); return; }
+    const measure = goalMeasurePlan(form, g);
+    if (measure.missing) { measure.missing.focus(); return; }
     save.disabled = true;
     try {
       if (colour) await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: colour, note: why});
+      let gid = g.id;
       if (g.id) {
         const body = {};
         if (words !== g.title) body.title = words;
-        if (parentSel && parentSel.value !== (g.parent_id || '')) body.parent_id = parentSel.value;
+        if (ownerSel && !ownerSel.disabled && ownerSel.value !== g.owner) body.owner = ownerSel.value;
+        if (parentSel && !parentSel.disabled && parentSel.value !== (g.parent_id || '')) body.parent_id = parentSel.value;
+        else if (body.owner === GOAL_COMPANY && g.parent_id) body.parent_id = '';   // a team goal supports nothing
         if (betSel && betSel.value !== (g.bet_id || '')) body.bet_id = betSel.value;   // "" unlinks it
         if (Object.keys(body).length) await post('/v2/goals/' + encodeURIComponent(g.id), body);
       } else {
-        const body = {title: words, owner: company ? GOAL_COMPANY : ownerSel ? ownerSel.value : owner || 'me'};
-        if (parentSel?.value) body.parent_id = parentSel.value;
+        const body = {title: words, owner: company && !ownerSel ? GOAL_COMPANY : ownerSel ? ownerSel.value : owner || 'me'};
+        if (parentSel?.value && !parentSel.disabled) body.parent_id = parentSel.value;
         if (betSel?.value) body.bet_id = betSel.value;
-        await post('/v2/goals', body);
+        gid = (await post('/v2/goals', body))?.goal?.id;
       }
+      if (measure.post && gid) await measure.post(gid);
       await goalsRefresh();
       done(true);
     } catch (e) { toast(e.message || 'Could not save the goal', true); save.disabled = false; }
@@ -348,17 +466,20 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
   title.focus();
 }
 function pageGoals() {
-  const open = S.route.startsWith(GOALS + '/') ? decodeURIComponent(S.route.slice(GOALS.length + 1)) : '';
+  const base = goalsBase(), open = S.route.startsWith(base + '/') ? decodeURIComponent(S.route.slice(base.length + 1)) : '';
   const was = document.getElementById('goal-panel');
   if (was) { was._state = null; if (was.open) was.close(); }
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, loaded: false, open, panel: null, strategy: null};
-  // The tree is the page; the CEO Bot is its right rail (under the tree on a narrow window). The sidebar
-  // says where you are, so the title is for screen readers only.
-  $('#main').classList.add('goals-layout');
-  $('#main').innerHTML = `<div class="goals-main"><h1 class="sr-only">Goals</h1>
-      <div id="goal-body"><p class="muted">Loading…</p></div></div>
-    <aside class="gm gm-rail" id="goal-manager-panel" aria-label="${esc(ceoBotName())}"></aside>`;
-  goalManagerMount(state);
+  const sheet = document.getElementById('goal-sheet'); if (sheet?.open) sheet.close();
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null};
+  // Goals is a Strategy tab: the tree is the page, the Strategy Bot's panel (ui/app/redesign.js) is beside it and
+  // "+ Goal" heads it.
+  $('#main').classList.add('strategy-layout', 'rd-goals');
+  $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div></div>`;
+  const actions = $('#strat-actions');
+  if (actions && (mePerson() || S.me?.role === 'owner')) {
+    actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
+    actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
+  }
   goalsLoad(state);
 }
 function goalsApply(state, data, needs) {
@@ -369,15 +490,17 @@ function goalsApply(state, data, needs) {
   if (needs !== undefined) state.needs = (needs?.items || []).filter(n => !goalBuiltInOwner(n.goal_owner) && !goalBuiltInOwner(n.owner) && !(data.goals || []).some(g => g.id === (n.goal_id || n.proposal?.goal_id) && goalBuiltInOwner(g.owner)));
 }
 // Two requests: the tree and what needs you. The roster (people, bots, departments) is already in S.
-// The strategy comes with them, for its one line at the top (ui/goals-kpis.js goalStrategyHtml) and the bets a goal
-// may serve. The goals never wait on it: if it cannot be read, the line and the picker are left out.
+// The strategy comes with them, for the bets a goal may serve, and the groups, for their leads (a group's "+"). The
+// goals never wait on either: if one cannot be read, the picker or the group's "+" is left out.
 const goalStrategyGet = () => v2Get('/v2/strategy').catch(() => null);
 async function goalsLoad(state) {
-  let data, needs, strategy;
-  try { [data, needs, strategy] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalStrategyGet()]); }
-  catch (e) { $('#goal-body').innerHTML = `<p class="err">${esc(e.message || 'Could not load goals')}</p>`; return; }
-  if (GOALS_ST !== state) return;
+  let data, needs, strategy, groups;
+  try { [data, needs, strategy, groups] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalStrategyGet(), get('/v2/groups').catch(() => null)]); }
+  catch (e) { const body = GOALS_ST === state && $('#goal-body'); if (body) body.innerHTML = `<p class="err">${esc(e.message || 'Could not load goals')}</p>`; return; }
+  // Left Goals before the tree came: opening a goal now would cover the next page and rewrite its address.
+  if (GOALS_ST !== state || !$('#goal-body')) return;
   state.strategy = Array.isArray(strategy?.bets) ? strategy : null;
+  state.groups = Array.isArray(groups) ? groups : groups?.groups || [];
   goalsApply(state, data, needs);
   state.loaded = true;
   goalsRender(state);
@@ -403,7 +526,7 @@ function headGoalsReload() {
   if (BOT && $('#bot-goal')) void botGoalLoad(BOT.slug);
   if (BOT && $('#bot-goals-list')) void botGoalsCardLoad(BOT.slug);
 }
-function openGoal(id) { location.hash = GOALS + '/' + encodeURIComponent(id); }
+function openGoal(id) { location.hash = goalsBase() + '/' + encodeURIComponent(id); }
 async function goalsRefresh() {
   GOAL_OPTIONS = null;
   if (GOALS_ST && $('#goal-body')) {
@@ -414,46 +537,42 @@ async function goalsRefresh() {
   headGoalsReload();
 }
 
-// The CEO Bot can be renamed while Goals is open (the owner, in another tab; `refresh` calls this): the rail's names
+// The CEO Bot can be renamed while Goals is open (the owner, in another tab; `refresh` calls this): the panel's names
 // follow and the tree is drawn again, keeping the composer's draft, the chat's stream and a field being typed in.
 function goalsFollowRoster() {
-  const state = GOALS_ST, host = $('#goal-manager-panel');
+  const state = GOALS_ST, host = document.querySelector('#sbot .sbot-body');
   if (!state || !host?.isConnected) return;
   const name = ceoBotName();
-  host.setAttribute('aria-label', name);
-  const title = host.querySelector('.gm-head h2'); if (title) title.textContent = name;
   host.querySelector('[data-gm-thread]')?.setAttribute('aria-label', name + ' conversation');
   host.querySelector('.gm-form .p-text')?.setAttribute('aria-label', 'Message to the ' + name);
   host._gmDraw?.();
   const body = $('#goal-body'), typing = document.activeElement?.matches?.('input, textarea, select') && body?.contains(document.activeElement);
   if (state.loaded && !typing && state.shape !== goalTreeKey()) goalsRender(state);
 }
-// The CEO Bot in the right rail of Goals (docs/goals-and-kpis.md): what it does, its routines from the server (when
-// each next runs), its last run, and the viewer's chat with it: the room its bot page shows, loaded with the page. A reply
-// redraws the tree, since the CEO Bot may have just edited a goal. Leaving the page stops its stream.
-let GOAL_MANAGER_STOP = null;
+// The Strategy Bot's chat in its panel beside the Strategy tabs (ui/app/redesign.js): the viewer's chat with it, the
+// room its bot page shows. A reply redraws the Goals tree, since it may have just edited a goal.
 const GM = 'goal-manager';
 const GM_STATE = {paused: 'Paused', planned: 'Not set up', archived: 'Off', retired: 'Off', quarantined: 'Paused'};
 const GM_STARTERS = ['Set a goal', 'Fix my goals', 'Go through suggestions'];
-async function goalManagerMount(pageState) {
-  GOAL_MANAGER_STOP?.();
-  const host = $('#goal-manager-panel');
+// On the Org tab the starters ask for org changes: it suggests them in words, and makes one when the owner says so.
+const GM_ORG_STARTERS = ['Suggest org changes', 'Who should lead each group?', 'Fix reporting lines'];
+const gmStarters = () => /^#\/strategy\/org(?:$|[/?])/.test(location.hash) ? GM_ORG_STARTERS : GM_STARTERS;
+// `rail`: the panel's host; it lives across tabs, so its stop is its own (`rail.stop`).
+async function goalManagerMount(rail) {
+  rail.stop?.();
+  const host = rail.host;
   if (!host) return;
   const bot = (S.emps || []).find(e => e.name === GM);
   const active = !!bot && !GM_STATE[bot.status];
   let stopped = false, es = null, poll = null, conversation = null, messages = [], execution = null, sending = false, lastReply, composer = null;
-  const current = () => !stopped && GOALS_ST === pageState && host.isConnected;
+  const current = () => !stopped && host.isConnected;
   // `es` is the release of this chat's live events (ui/app/live.js).
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  GOAL_MANAGER_STOP = () => { stopped = true; stopStream(); if (composer) PILLS.delete(composer); };
-  const off = !bot ? 'Not set up' : GM_STATE[bot.status] || '';
-  host.innerHTML = `<section class="rail-sec gm-info">
-      <header class="gm-head"><h2>${esc(ceoBotName())}</h2>${off ? `<span class="pill">${esc(off)}</span>` : ''}<a href="#/bot/${GM}">Open bot</a></header>
-      <p class="gm-what">Keeps KPIs current and each goal green, yellow or red. ${meCeo()
-        ? 'Tell it what you want to achieve. It drafts the goal and saves it when you say yes.' : 'Humans set the goals.'}</p></section>
-    ${bot ? `<section class="rail-sec" aria-labelledby="gm-routines-h"><h3 class="rail-h" id="gm-routines-h">Routines</h3>
-      <ul class="gm-routines" data-gm-routines><li class="muted">Loading…</li></ul><p class="gm-last" data-gm-result></p></section>` : ''}
-    <section class="rail-sec gm-chat" data-gm-chat aria-labelledby="gm-chat-h"><h3 class="rail-h" id="gm-chat-h">Chat</h3></section>`;
+  const onHash = () => host._gmDraw?.();                  // the rail stays across tabs; its starters follow the tab
+  const stop = () => { stopped = true; stopStream(); if (composer) PILLS.delete(composer); removeEventListener('hashchange', onHash); };
+  addEventListener('hashchange', onHash);
+  rail.stop = stop;
+  host.innerHTML = '<section class="gm-chat" data-gm-chat></section>';
   const chat = host.querySelector('[data-gm-chat]');
   if (!active) {
     chat.innerHTML = '<h3 class="rail-h" id="gm-chat-h">Chat</h3>' + (S.me?.role === 'owner'
@@ -467,7 +586,7 @@ async function goalManagerMount(pageState) {
       try {
         const result = await post('/v2/goal-manager/turn-on', {});
         if (!current()) return;
-        if (result.state === 'active') { await refresh(true); if (current()) goalManagerMount(pageState); return; }
+        if (result.state === 'active') { await refresh(true); if (current()) goalManagerMount(rail); return; }
         status.textContent = 'Needs a computer with a model. See Settings.';
       } catch (e) { if (current()) status.textContent = e.message; }
       if (current()) on.disabled = false;
@@ -498,7 +617,7 @@ async function goalManagerMount(pageState) {
       else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(ceoBotName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>');
       else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
       // An empty chat offers three starters; a tap sends its words as the owner's message.
-      const html = rows.join('') || `<div class="gm-starters">${GM_STARTERS.map(words =>
+      const html = rows.join('') || `<div class="gm-starters">${gmStarters().map(words =>
         `<button type="button" class="ghost" data-gm-starter>${esc(words)}</button>`).join('')}</div>`;
       if (html === rendered) return;
       // Keep an older message in view while new replies arrive (ui/app/stick-scroll.js).
@@ -517,7 +636,7 @@ async function goalManagerMount(pageState) {
       draw();
       const reply = messages.filter(isReply).at(-1)?.id;
       // A new reply after the first look may come with an edited goal: draw the tree again.
-      if (lastReply !== undefined && reply !== lastReply) await goalsReload(pageState);
+      if (lastReply !== undefined && reply !== lastReply && GOALS_ST && $('#goal-body')) await goalsReload(GOALS_ST);
       lastReply = reply ?? null;
     };
     const snapshot = async () => {
@@ -556,7 +675,7 @@ async function goalManagerMount(pageState) {
       } catch (e) { fail(e.message); }
       finally { sending = P.sending = false; if (current()) pillButtons(P); }
     };
-    composer = makePill({mode:'chat', files:false, label:'Message to the ' + ceoBotName(), placeholder:'Set or fix a goal…', send});
+    composer = makePill({mode:'chat', files:false, label:'Message to the ' + ceoBotName(), placeholder: 'Ask ' + ceoBotName(), send});
     pq(composer, '.p-text').maxLength = 4000;
     thread.addEventListener('click', event => {
       const starter = event.target.closest('[data-gm-starter]');
@@ -573,28 +692,5 @@ async function goalManagerMount(pageState) {
         else draw();
       } catch (e) { fail(e.message); }
     })();
-  }
-  if (!bot) return;
-  // The routines are the server's rows; the times are the viewer's own, with the routine's zone when it differs.
-  const routinesEl = host.querySelector('[data-gm-routines]'), resultEl = host.querySelector('[data-gm-result]');
-  try {
-    const rows = (await get(`/v2/bots/${GM}/routines`)).routines || [];
-    const runs = await Promise.all(rows.map(r => get(`/v2/routines/${encodeURIComponent(r.id)}/occurrences`).then(o => o.occurrences?.[0] || null, () => null)));
-    if (!current()) return;
-    routinesEl.innerHTML = rows.length ? rows.map(r => {
-      const when = r.enabled === false || !r.active ? 'paused' : r.on ? '' : r.next ? 'next ' + fmt(r.next) : '';
-      return `<li><span class="nav-icon" aria-hidden="true">schedule</span><span><b>${esc(r.title)}</b> · ${esc(cadenceZoned(r))}${when ? ' · ' + esc(when) : ''}</span></li>`;
-    }).join('') : '<li class="muted">No routines.</li>';
-    // The last run: what the bot last reported, else the newest routine firing.
-    const status = v2StatusOf(GM);
-    const fired = runs.filter(Boolean).map(o => ({at: o.started || o.occurrence, what: o.outcome || o.status || ''}))
-      .concat(rows.filter(r => r.last_fired).map(r => ({at: r.last_fired, what: ''})))
-      .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
-    const at = status?.last_turn_at || fired?.at, said = String(status?.last_result || fired?.what || '').split('\n')[0].slice(0, 240);
-    resultEl.textContent = at ? `Last run ${fmt(at) || at}${said ? ' · ' + said : ''}` : 'Not run yet.';
-  } catch (e) {
-    if (!current()) return;
-    routinesEl.innerHTML = `<li class="err">Routines did not load. ${esc(e.message || '')}</li>`;
-    resultEl.textContent = '';
   }
 }

@@ -418,14 +418,11 @@ def _task_of(item):
 
 
 def _propose(c, reason, left):
-    """What the CEO Bot couldn't do alone, as one item in the owner's Needs you, or why it isn't there (the 5 a day
-    are used, or no owner yet). Returns (task id or None, note)."""
+    """What the CEO Bot couldn't do alone, as one item in the owner's Needs you, or why it isn't there (no owner
+    yet). Returns (task id or None, note)."""
     owner = _owner(c)
     if not owner:
         return None, "No owner to propose it to yet"
-    if ceo_bot.room_today(c, owner) == 0:
-        return None, (f"Not in Needs you: the {ceo_bot.name(c)} has put {ceo_bot.DAILY_CAP} items there today; "
-                      "it stays here in the log")
     # The item is a company task: a private task is named there by no title.
     said = [(_say(c, x["text"], _task_of(x), _company(c), PRIVATE), _say(c, x["why"], _task_of(x), _company(c),
                                                                          PRIVATE)) for x in left]

@@ -49,7 +49,7 @@ DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
            {"name": "Assigned to Others", "show_count": True, "conditions": [
                {"field": "asked_by", "value": "this_bot"}, {"field": "assigned_to", "value": "others"},
                {"field": "status", "value": ACTIVE}]}]
-WIDGETS = ("tasks", "updates", "files", "routines")
+WIDGETS = ("tasks", "updates", "files")            # an old saved "routines" is dropped: they are automations
 DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 
 # field -> what its value is. Lists are "any of"; every row of a tab must match.

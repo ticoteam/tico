@@ -160,8 +160,9 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs: PAST});
       await page.locator('[data-lens="blue-ocean"]').waitFor();
       assert.equal(await page.locator('#main h1').innerText(), 'Strategy');
-      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Strategy', 'Lenses', 'Market']);
-      assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Lenses');
+      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget']);
+      assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Strategy', 'Lenses are a view of the Strategy tab');
+      assert.equal(await page.locator('.strat-sub').innerText(), 'Strategy', 'the way back to the strategy');
       assert.equal(await page.locator('#side [data-nav="strategy"]').getAttribute('aria-current'), 'page');
       assert.deepEqual(await page.locator('[data-lens-group="strategy"] .lens-name').allInnerTexts(), ['Playing to Win', 'Blue Ocean', 'Scenarios']);
       assert.deepEqual(await page.locator('[data-lens-group="market"] .lens-name').allInnerTexts(), ['Where to play']);
@@ -237,7 +238,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await dlg.locator('[data-lens-next]').innerText(), 'Run');
       assert.deepEqual(await dlg.locator('[data-lens-on]').allInnerTexts(), ['Published', 'Draft']);
       assert.equal(await dlg.locator('[data-lens-on="published"]').getAttribute('aria-pressed'), 'true');
-      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the CEO Bot assume');
+      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the Strategy Bot assume');
       await dlg.locator('.lens-pill', {hasText: 'Three years'}).click();
       await dlg.locator('[data-lens-back]').click();
       await dlg.locator('[data-lens-skip]').click();     // skips Scores: the grid's answer is dropped
@@ -370,9 +371,9 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs, route: '#/strategy/lenses/r-draft'});
       await page.locator('[data-lens-chart="matrix_2x2"]').waitFor();
       assert.match(await page.locator('.lens-meta').innerText(), /^draft\s+\d+ Oct/);
-      assert.match(await page.locator('.lens-meta').innerText(), /CEO Bot/);
+      assert.match(await page.locator('.lens-meta').innerText(), /Strategy Bot/);
       assert.match(await page.locator('[data-lens-proposal]').innerText(), /^Sent to you as a proposal/);
-      assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/decide');
+      assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/tasks?view=foryou');
       assert.equal(await page.locator('[data-lens-change]').count(), 2);
       assert.equal(await page.locator('[data-lens-apply]').count(), 0, 'a proposed run is decided on its card');
       assert.deepEqual(await page.locator('.lens-quad').evaluateAll(a => a.map(e => [e.dataset.q, e.querySelector('b').textContent])),

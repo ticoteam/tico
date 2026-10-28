@@ -143,6 +143,10 @@ class Client:
                 if not isinstance(payload, dict):
                     payload = {}
                 error = payload.get("error", {})
+                if isinstance(error, str):
+                    # A flat refusal (CONTRACT §1 task caps): `error` is the code, `message` the words, the rest is extra.
+                    error = {"code": error, "detail": payload.get("message") or "",
+                             **{k: v for k, v in payload.items() if k not in ("error", "message")}}
                 if not isinstance(error, dict):
                     error = {}
                 # Cloudflare answers 502 then 530 (Error 1033, tunnel down) with a problem-detail

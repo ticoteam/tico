@@ -21,7 +21,8 @@ def subjects(c, actor):
         out = {actor}
         if me not in nodes:
             return out
-        parents = {node: P.org_parent(kind, ident, roster, entries, archived)
+        bare = True                          # a bot's bare person id in reports_to is that person (people.py)
+        parents = {node: P.org_parent(kind, ident, roster, entries, archived, bare)
                    for node, (kind, ident) in nodes.items()}
         parents.update({'g:' + gid: 'p:' + group['reports_to'] if group.get('reports_to') else ''
                         for gid, group in (roster.get('org_groups') or {}).items()})

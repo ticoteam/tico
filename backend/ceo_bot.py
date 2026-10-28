@@ -60,7 +60,7 @@ def view(c):
             "level": level(c), "levels": levels(),
             "level_changed_by": history[0]["by"] if history else "",
             "level_changed_at": history[0]["at"] if history else "",
-            "level_history": history, "daily_cap": DAILY_CAP, "asked_today": asked_today_all(c),
+            "level_history": history, "asked_today": asked_today_all(c),
             "level3_offer": _offer(c)}
 
 
@@ -241,7 +241,7 @@ def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
             continue
         entry = entry or {}
         if (P._clean(entry.get("reports_to")) and str(entry.get("template") or "") not in leads) \
-                or P.org_parent("bot", slug, roster, entries, archived) != top:
+                or P.org_parent("bot", slug, roster, entries, archived, True) != top:
             continue
         out[slug] = {**entry, "reports_to": SLUG}
     out[SLUG] = {**(entries[SLUG] or {}), "reports_to": "human:" + owner["id"]}
@@ -351,11 +351,11 @@ def _save(c, record):
               (KEY, encode(record)))
 
 
-# ----------------------------------------------------------------------------- at most 5 a day in Needs you
-# At every level the CEO Bot puts at most 5 items a day in a person's Needs you (spec test 14). The server counts the
-# tasks it filed for that person since midnight UTC, whoever filed them for it: its own `hub task create` and the asks
-# backend/goal_asks.py files in its name, and the items it merged several bots' asks into (backend/ceo_merge.py).
-DAILY_CAP = 5
+# ----------------------------------------------------------------------------- what it asked today
+# The CEO Bot has no daily limit on a person's Needs you. The server counts the tasks it filed for that person since
+# midnight UTC, whoever filed them for it: its own `hub task create` and the asks backend/goal_asks.py files in its
+# name, and the items it merged several bots' asks into (backend/ceo_merge.py).
+NO_LIMIT = 10 ** 6          # no daily cap: the room never runs out
 
 
 def day_start(at=None):
@@ -384,16 +384,5 @@ def asked_today_all(c, at=None):
 
 
 def room_today(c, person, at=None):
-    """How many more items the CEO Bot may put in this person's Needs you today."""
-    return max(0, DAILY_CAP - asked_today(c, person, at))
-
-
-def check_cap(c, actor, owner):
-    """Refuse a sixth task today from the CEO Bot to one person. Like any refusal it counts toward the bot's quarantine,
-    so its playbooks read `asked_today` in `GET /api/v2/ceo-bot` first and keep the rest for tomorrow; the asks
-    backend/goal_asks.py files check `room_today`, and the urgent ones pass `capped=False`."""
-    if actor != "bot:" + SLUG or not H.is_human(owner):
-        return
-    if room_today(c, owner) == 0:
-        raise H.Refused("cap", f"The {name(c)} already put {DAILY_CAP} items in this person's Needs you today; "
-                               "keep the rest for tomorrow, most important first")
+    """How many more items the CEO Bot may put in this person's Needs you today: no limit."""
+    return NO_LIMIT

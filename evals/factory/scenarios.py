@@ -168,33 +168,37 @@ def every_major_planned(run):
     return not bad, ", ".join(bad[:6])
 
 
-def hourly_spend_under(cap):
-    """The cap stops new turns, never running ones: no turn starts in a clock hour once the runs that started in that
-    hour and have finished cost the cap (what usage_limits counts). The hour's total may pass the cap by what was
+def window_spend_under(cap):
+    """The cap stops new turns, never running ones: no turn starts in a UTC half hour once the runs that started in that
+    half hour and have finished cost the cap (what usage_limits counts). The window's total may pass the cap by what was
     already running; that is reported, not judged."""
+    def window(stamp):
+        return stamp[:14] + ("00" if stamp[14:16] < "30" else "30")
+
     def check(run):
         runs = [dict(r) for r in run.w.sql("SELECT started, finished, est_cost_usd FROM turns ORDER BY started")]
         per, late = Counter(), []
         for r in runs:
-            hour = r["started"][:13]
-            per[hour[11:13] + ":00"] += r["est_cost_usd"] or 0
+            here = window(r["started"])
+            per[here[11:16]] += r["est_cost_usd"] or 0
             # Finished strictly before: a run ending in the same tick as this claim may end after it.
-            spent = sum(x["est_cost_usd"] or 0 for x in runs if x["started"][:13] == hour and x["finished"]
+            spent = sum(x["est_cost_usd"] or 0 for x in runs if window(x["started"]) == here and x["finished"]
                         and x["finished"] < r["started"] and x is not r)
             if spent >= cap:
                 late.append(f"{r['started'][11:16]} (${spent:.2f} spent)")
-        return not late, (f"peak hour ${max(per.values() or [0]):.2f}; "
+        return not late, (f"peak half hour ${max(per.values() or [0]):.2f}; "
                           + (f"{len(late)} turns started past the cap: {', '.join(late[:4])}" if late
                              else "no turn started past the cap"))
     return check
 
 
-def company_cap(hourly):
+def company_cap(per_30m):
     def setup(run, w, team):
         from backend import usage_limits
         with w.store.transaction() as c:
-            usage_limits.save_pool(c, usage_limits.COMPANY, {"hourly_usd": hourly, "daily_usd": None,
-                                                              "weekly_usd": None, "monthly_usd": None}, "human:ana")
+            usage_limits.save_pool(c, usage_limits.COMPANY, {"per_30m_usd": per_30m, "hourly_usd": None,
+                                                              "daily_usd": None, "weekly_usd": None,
+                                                              "monthly_usd": None}, "human:ana")
         tickets(run, w, 10)
     return setup
 
@@ -330,9 +334,9 @@ SCENARIOS = [
     Scenario("off_script", "Reviewers sometimes try to move the ticket themselves (refused).",
              setup=lambda run, w, team: tickets(run, w, 6), styles={"reviewer": {"off_script": 0.3}},
              checks=standard(*REVIEW_TIMEOUT)),
-    Scenario("engineering_budget", "An hourly budget of $10 for the team (below what it would spend): work slows to it, and still ships.",
-             setup=company_cap(10), hours=24,
-             checks=standard(("the $10 hourly cap holds", None, hourly_spend_under(10)))),
+    Scenario("engineering_budget", "A $5 half-hour budget for the team (below what it would spend): work slows to it, and still ships.",
+             setup=company_cap(5), hours=24,
+             checks=standard(("the $5 half-hour cap holds", None, window_spend_under(5)))),
     Scenario("forgetful_builder", "Builders often forget to hand a ticket on after fixes: the hourly sweep unsticks it.",
              setup=lambda run, w, team: tickets(run, w, 6), styles={"builder": {"forget_move": 0.4}},
              checks=standard(*HOE_CHECKS)),

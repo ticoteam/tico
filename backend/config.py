@@ -355,6 +355,9 @@ class Settings:
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
     rehearsal: bool = False
+    # TICO_MIGRATE_TO_AUTOMATIONS=1: this install's routines and rules move to Automations at this start, once
+    # (backend/redesign_migration.py). Without it a database that still holds them refuses to start, untouched.
+    migrate_to_automations: bool = False
 
     def __post_init__(self):
         self.hosted = self.hosted.strip()
@@ -525,6 +528,7 @@ class Settings:
             scheduler_enabled=not rehearsal and os.environ.get("TICO_SCHEDULER", "1") == "1",
             flight_recorder=os.environ.get("TICO_FLIGHT_RECORDER", "1") != "0",
             rehearsal=rehearsal,
+            migrate_to_automations=os.environ.get("TICO_MIGRATE_TO_AUTOMATIONS", "").strip().lower() in ("1", "true", "yes"),
             blob_dir=Path(os.environ["TICO_BLOB_DIR"]) if os.environ.get("TICO_BLOB_DIR") else None,
             blob_bucket=os.environ.get("TICO_BLOB_BUCKET", ""),
             blob_region=os.environ.get("TICO_BLOB_REGION", ""),

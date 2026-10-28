@@ -11,8 +11,8 @@ open question, or as a comment that wakes the bot whose task waits on them or th
 item is then done.
 
 Nothing is dropped: an original whose answer can't be passed on, or every original of a merged item that ends without
-an answer, is back in the person's Needs you as it was. A merged item counts toward the CEO Bot's 5 a day
-(backend/ceo_bot.py `asked_today`).
+an answer, is back in the person's Needs you as it was. A merged item counts in what the CEO Bot asked
+today (backend/ceo_bot.py `asked_today`).
 """
 
 from . import ceo_bot
@@ -147,9 +147,6 @@ def merge(c, actor, person, title, question, task_ids):
         if task_id in taken:
             raise H.Refused("duplicate", f'"{row["title"]}" is already merged into another item')
         found.append((row, how))
-    if ceo_bot.room_today(c, person) == 0:
-        raise H.Refused("cap", f"The {ceo_bot.name(c)} already put {ceo_bot.DAILY_CAP} items in this person's Needs you "
-                               "today; keep the rest for tomorrow, most important first")
     who = "\n".join(f'- {_name(c, how[1])}: "{row["title"]}"' for row, how in found)
     body = (f"{question}\n\n{len(found)} bots asked you this; it is one item instead of {len(found)}:\n{who}\n"
             f"Answer here once and the {ceo_bot.name(c)} passes your answer to each of them.")

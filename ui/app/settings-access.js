@@ -25,7 +25,7 @@ function settingsPanelShow(panel) {
 // itself and the humans it reports up to always have all three.
 const ACCESS_LEVELS = [
   ['see', 'See', 'the bot in the team chart and lists: its name, role, who owns it and who it reports to'],
-  ['read', 'Read', 'its work: tasks, updates, files, status, run log and routines'],
+  ['read', 'Read', 'its work: tasks, updates, files, status, run log and automations'],
   ['write', 'Write', 'send it messages, tasks, notes and comments'],
 ];
 const ACCESS_PRESETS = [

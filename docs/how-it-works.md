@@ -29,7 +29,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | CEO Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals | “Why is this goal yellow?” |
-| Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; Settings → Rules | `hub task-manager status` |
+| Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; Settings → System | `hub task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: chat or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -127,7 +127,7 @@ in so that each channel's readers see it within the hour (`docs/slack-gateway.md
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
-and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines are in **Settings → Rules**.
+and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the CEO Bot and the Task Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** chat, its own page from the left rail
@@ -239,7 +239,7 @@ person's review comments are batched (`batch_*`); one check finishing is ignored
 all finished wakes the ticket's owner at a working step (`pr_checks_done`) or is a note (`pr_checks_note`); work wakes
 (an assignment, a review request, a blocker, a routine, a due date, a finished subtask, a published release) and anything
 no rule names waits as a note (`default_note`). Teams, task types, departments, bots and
-single tasks can override these with rules of their own (Settings → Rules → **What wakes a bot**, `hub rule list`). Every message to a bot records the
+single tasks can override these with rules of their own (the **What wakes** automations on the Automations page). Every message to a bot records the
 rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and
 runs that did nothing per rule ([Querying Tico with SQL](hub-sql.md)).
 
@@ -444,6 +444,23 @@ fails after more than a minute changes nothing. **Release** (Settings → Bots, 
 `POST /api/v2/bots/{bot}/release`, MCP `hub_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
 shows the hold's `next_try`.
 
+**A queued run Tico cannot start is held by itself.** Each claim checks the queued jobs it considers and prepares the
+one it hands out. If an error happens for one job there, the claim rolls back only that job's writes, logs its
+traceback on the server, and holds the job for a wait: a minute at first, doubling with each failed try, up to an
+hour. The held job reads *Couldn't start: an error while preparing this run* on its task, the bot's one Needs-you item
+covers all its held runs, and Health shows `claim_failed`. When the wait ends the run is free and the next claim tries
+it again; a run that starts clears its hold, and one that fails again waits longer. Until its wait ends, a running turn
+of the bot does not take the held run in as a follow-up either. A claim holds at most three jobs and goes on to the
+bot's next job in the same call; the bot's other work is not held. A full disk or a locked database is not one job's
+error: the claim answers with a retryable error and holds nothing. An error in one bot's own check (its budget,
+back-off or login as a whole) passes that bot over for the claim and holds none of its runs. Tico runs that check
+again only after a wait: a minute, doubling with each failure in a row, up to five minutes. Health shows
+`claim_check` until one of its runs starts. A login hold that raises for one job holds that job alone. A team-wide
+check that raises fails the claim. **Release** (Health, `hub
+bot release <bot>`, `POST /api/v2/bots/{bot}/release`) frees the held runs at once, whatever their wait, and one that
+fails again is held again. A held run whose task finished meanwhile is cancelled by the next claim once its wait has
+ended.
+
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the
 team defaults (`GET/POST /api/v2/settings/turn-budgets`, `hub team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps
 sets its own (`GET/POST /api/v2/bots/{bot}/budget` with `expected_revision`, `hub bot budget <bot> [--hour N|default] [--day N|default]`,
@@ -485,7 +502,9 @@ a link out of the worktree is refused, the whole is capped at 16 KB, and a resum
 them again only when they change. A bot's chat and its own thread use the local
 `bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
 task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. A bot never has two turns on
-one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. A task a bot
+one task at once: a wake about a task its turn is on goes into that turn, or waits for the next one there. A bot's own
+**Turns at once** caps its turns across all computers; at the limit its queued work waits and says so ("At its turn
+limit"), and its other bots keep their turns. A task a bot
 files for itself during a turn starts its own turn once that turn ends (or after 5 minutes), and not at all if that
 turn finished, declined or parked it. Only that
 computer knows which thread
@@ -524,8 +543,8 @@ and ask BotOps to make the change. It commits and pushes the update for the next
 the change is live on the next run once that checkout has it: push, and pull on the runner Mac
 if you edited elsewhere. Do not edit while the bot is running there.
 
-**You change a routine.** Routines are rows in Tico (`docs/routines.md`): edit one on the
-site under Settings → Rules, or a bot changes its own with `hub routine set`. The change is in
+**You change a routine.** Routines are automations in Tico (`docs/routines.md`): edit one on the
+Automations page, or a bot changes its own with `hub automation update`. The change is in
 the table at once; a sleeping Mac does not block it. **You change a bot's switches.** Tools
 read `tools:` from the Mac checkout each time a bot sends or posts; whether it may send without approval comes from the mail switch a person sets in Tico (`outbound_send` in bot.yaml only asks). Model, effort, computer, humans, name,
 status and reporting line are changed in **Settings → Bots**, not in the file.

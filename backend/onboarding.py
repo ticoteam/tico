@@ -90,9 +90,10 @@ def render(card, names, bot_name=""):
     """One card as a person reads it. A card is written for whichever company adopts it, so
     every word it shows carries the placeholders, not only its AGENT.md."""
     name = fill(bot_name or card["name"], names)
+    instructions = fill(card["instructions"], names, name)
     return {**card, "name": name,
             "summary": fill(card["summary"], names, name),
-            "instructions": fill(card["instructions"], names, name),
+            "instructions": instructions,
             "onboarding": [{key: fill(text, names, name) for key, text in item.items()}
                            for item in card.get("onboarding", [])],
             "first_routine": {key: fill(value, names, name) if isinstance(value, str) else value
@@ -1020,16 +1021,17 @@ class Onboarding:
         if declared.get("routine_armed") or not declared.get("template"):
             return None
         first = next(iter(self._template_routines(c, declared["template"])), None)
-        found = first and c.execute("SELECT s.id,coalesce(sc.enabled,1) AS enabled FROM schedules s "
-                                    "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
-                                    "WHERE s.bot=? AND s.routine_key=? AND s.deleted_at IS NULL",
-                                    (slug, first["id"])).fetchone()
-        if not found:
+        sid = first and c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?",
+                                  (slug, first["id"])).fetchone()
+        # The routine as it is now: its automation once it moved (backend/routines.py `row`).
+        found = sid and routines.row(c, sid["id"])
+        if not found or found["deleted_at"]:
             return None
         declared["routine_armed"] = first["id"]
         self._write_config(c, slug, declared)
         explicitly_disabled = c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? "
                                         "AND json_extract(detail_json,'$.enabled')=0 LIMIT 1", (found["id"],)).fetchone()
+
         if not found["enabled"] and not explicitly_disabled:
             routines.update(c, who.actor, found["id"], {"enabled": True})
             H.event(c, who.actor, "bot.routine_armed", slug, {"routine": first["id"]})

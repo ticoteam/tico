@@ -250,3 +250,22 @@ def test_hub_sql_shows_saved_destinations_to_the_owner_and_admins_only(api):
     _save(api, "extra", category="content")
     assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["extra"]]
     assert post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][0][0] == 0
+
+
+def test_stats_carry_a_daily_chart_and_the_callers_recent_posts(api):
+    """Market › Listening reads posts per day by source and the newest routed posts; a receiver sees only its own."""
+    _bots(api)
+    listening = _token(api, "listening")
+    api.app.state.judge = FakeJudge()
+    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
+        _post("1", "Creator asks how teams handle standups [creator] [content]"), _post("2", "Nothing to see")]},
+        token=listening)
+    post(api, "listening/runs", {"source": "reddit", "query": "q", "status": "ok", "items": [
+        _post("3", "A team lead asks for a hosted plan [lead]", author="@lead")]}, token=listening)
+    post(api, "listening/judge", {}, token=listening)
+    stats = get(api, "listening/stats")
+    assert [d["sources"] for d in stats["daily"]] == [{"x": 2, "reddit": 1}]
+    assert sorted(tuple(r["destinations"]) for r in stats["recent"]) == [("content", "creators"), ("leads",)]
+    mine = get(api, "listening/stats", token=_token(api, "influencer"))["recent"]
+    assert [(r["source"], r["destinations"]) for r in mine] == [("x", ["creators"])]
+    assert mine[0]["text"].startswith("Creator asks") and mine[0]["author"] == "@host1"

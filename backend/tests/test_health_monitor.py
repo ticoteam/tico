@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import diagnostics, health_monitor, providers, support
+from backend import diagnostics, health_monitor, providers, routines, support
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_goal_manager import BASE
@@ -442,10 +442,10 @@ def test_a_busy_process_is_reported_by_its_tico_name_only(environment, hq, proce
 def test_a_paused_bots_routines_are_not_a_finding(environment):
     api, _ = built(environment)                                           # pausing holds routines by design (#500)
     api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
-    r = api.post("/api/v2/bots/coo/routines", json={"key": "weekly", "cron": "30 16 * * 5", "title": "Weekly backlog",
-                                                    "text": "Review the backlog."}, headers=signed_in())
-    assert r.status_code == 200, r.text
-    with api.app.state.store.transaction() as c:
+    with api.app.state.store.transaction() as c:      # a routine as a template seeds it: its automation, on
+        made = routines.create(c, H.KEEPER, "coo", {"cron": "30 16 * * 5", "title": "Weekly backlog",
+                                                     "text": "Review the backlog."}, key="weekly")
+        assert made["automation"] and made["enabled"]
         c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
     assert scan(api) == []
 

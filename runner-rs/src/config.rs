@@ -138,6 +138,12 @@ fn sized(cpus: usize, memory_gb: f64) -> usize {
     4.max((cpus * TURNS_PER_CPU).min((memory_gb * TURNS_PER_GB) as usize).min(MAX_AUTO_TURNS))
 }
 
+/// The turns that may hold a place here: the owner's "Turns at once" from the heartbeat reply, or the machine's
+/// capacity when none is set. The owner's number may go above the machine's capacity; it is kept to 1..MAX_TURNS.
+pub fn turn_limit(server: Option<usize>, machine: usize) -> usize {
+    server.unwrap_or(machine).clamp(1, MAX_TURNS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +200,16 @@ mod tests {
         assert_eq!(machine_capacity(Some(&Value::from(1000))), 256);
         assert_eq!((sized(2, 16.0), sized(2, 2.0), sized(1, 1.0), sized(64, 512.0)), (10, 6, 4, 64));
         assert!(machine_capacity(Some(&Value::from("auto"))) >= 4);
+    }
+
+    #[test]
+    fn a_turn_limit_is_the_owners_number_kept_to_1_to_256_and_the_machine_when_automatic() {
+        assert_eq!(turn_limit(None, 5), 5);
+        assert_eq!(turn_limit(Some(1), 5), 1);
+        assert_eq!(turn_limit(Some(3), 2), 3);
+        assert_eq!(turn_limit(Some(256), 5), 256);
+        assert_eq!(turn_limit(Some(300), 5), 256);
+        assert_eq!(turn_limit(Some(0), 5), 1);
+        assert_eq!(turn_limit(None, 300), 256);
     }
 }

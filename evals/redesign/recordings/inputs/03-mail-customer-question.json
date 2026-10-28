@@ -1,0 +1,24 @@
+{
+  "id": "03-mail-customer-question",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "maya.lindqvist@acme.example",
+    "from_name": "Maya Lindqvist, Brightwater Dental",
+    "to": "dana@acme.example",
+    "date": "2026-10-26T16:03:00Z",
+    "subject": "Can I export closed tasks to CSV for an audit?",
+    "snippet": "Hi Dana, our clinic needs a list of every task closed last quarter for an audit on the 14th. Is there a CSV export, or should our admin pull it another way?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A customer question that known product facts can answer: reply."
+}

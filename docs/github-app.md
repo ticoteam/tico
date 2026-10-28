@@ -460,7 +460,7 @@ installed App's suite, such as a deploy or monitoring service with nothing to ru
 pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
 check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
-Rules page (`hub rule list`) rows for `pr_checks_done` and `pr_review` change what these do.
+Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
 A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link <task> <pr url> --wake-once`
 (`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The

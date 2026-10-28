@@ -665,7 +665,7 @@ impl Runner {
             }
             let local_free = {
                 let mut places = self.places.lock().unwrap();
-                if places.contains(&aid) || places.len() < self.capacity {
+                if places.contains(&aid) || places.len() < self.turn_limit.load(Ordering::SeqCst) {
                     places.insert(aid.clone());
                     true
                 } else {
@@ -2622,6 +2622,35 @@ mod tests {
         }).await.unwrap();
         assert!(runner.places.lock().unwrap().contains("a1"), "preparation resumes only after a new server grant");
         assert_eq!(seen.lock().unwrap().len(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_owners_turn_limit_decides_how_many_starts_this_computer_admits() {
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"reserved":true}"#)]).await;
+        let dir = std::env::temp_dir().join(format!("tico-turn-limit-gate-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "capacity": 2,
+                                   "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let start = |id: &str| json!({"id": id, "start_reservation_seconds": 180});
+        // The owner sets 1 under the machine's 2: a turn is running, so a second start waits and asks nothing.
+        runner.turn_limit.store(crate::config::turn_limit(Some(1), runner.capacity), Ordering::SeqCst);
+        runner.places.lock().unwrap().insert("a1".into());
+        let waited = tokio::time::timeout(Duration::from_millis(300),
+                                          runner.wait_start_place(&start("a2"), &lease_flags())).await;
+        assert!(waited.is_err() && seen.lock().unwrap().is_empty(),
+                "a start past the owner's limit reached the server");
+        // The owner raises it to 3 above the machine's 2: with two turns running, a third start is admitted.
+        runner.turn_limit.store(crate::config::turn_limit(Some(3), runner.capacity), Ordering::SeqCst);
+        runner.places.lock().unwrap().insert("a2".into());
+        assert!(runner.wait_start_place(&start("a3"), &lease_flags()).await.is_ok());
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].starts_with("POST /api/v2/attempts/a3/start-place"), "{}", seen[0]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

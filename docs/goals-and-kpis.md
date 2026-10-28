@@ -152,8 +152,7 @@ that report to no one under it ([Team chart](org-chart.md)). Only the picture mo
 CEO Bot gets no new access: it does the five things above and proposes each goal's [Why](#a-goals-why), nothing more.
 
 Its name is **CEO Bot** unless the owner gives it another in **Settings > Bots**. `GET /api/v2/ceo-bot` shows the name,
-the level and whether the regular checks are on. The Goals page also opens with a line to the [Strategy](#the-company-section)
-and each goal gets a [Why line](#a-goals-why).
+the level and whether the regular checks are on. Each goal gets a [Why line](#a-goals-why).
 
 ### How much your CEO Bot does
 
@@ -306,9 +305,15 @@ colour dot and its title (cut short; the whole title is in the tooltip) and its 
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
 Assistant, BotOps and the Librarian) stay out of this tree and its goal owner choices; the CEO Bot is in the tree, under the owner.
 New teams get no default goals for built-in bots. Existing built-in goals are hidden here and kept in storage.
-Message bots such as Inbox Manager follow separately under **Message bots**.
+Message bots such as Inbox Manager stay off the tree, as on the Org tab; one with goals shows at the end.
 
-Tapping any line opens that owner's panel (a sheet at the bottom on a phone). It lists their goals: tap one to edit its
+Tapping a goal opens it on its own (a sheet at the bottom on a phone, a side panel on a computer): its title, owner,
+what it supports, its bet, its metric with a target and the date it is due, its colour, and **Remove**. Handing it to
+another owner is for the owner of the goal it supports or someone above its owner. **+ Goal** at the top adds one; under a
+pointer each line has a **+** for that owner (a group's line: its lead), and on a phone a long press on a line does the
+same. A member sets goals for themselves and anyone below them; the owner sets them for anyone, the company included.
+
+Tapping a name opens that owner's panel (a sheet at the bottom on a phone). It lists their goals: tap one to edit its
 words, what it supports and its colour (or **Let CEO Bot set it**). Under each goal are its KPIs, its latest
 check-in, **Post update** and **Add KPI**. **Post update** (a check-in) is there for whoever may colour the goal: say in a
 sentence what is going on and, if you like, how it is going (on track, at risk or off track). On a goal no KPI judges, that
@@ -316,8 +321,7 @@ answer sets its colour for three weeks; a colour a person set stays, as does the
 and a colour, and the update is kept as your words. Tapping a KPI shows its history (a chart and the readings with their
 evidence), its definition and version, its owner, its targets and the CEO Bot's latest check-in, with a way back.
 **Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
-Someone with no goal opens on a new one; the team line opens the team goal. The
-[Strategy line](#the-company-section) sits above everything, each goal in a panel shows its
+Someone with no goal opens on a new one; the team line opens the team goal. Each goal in a panel shows its
 [Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
 top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
 waiting for your confirmation. Each line links to its task. Initial page load makes two requests, the tree and Needs you; the CEO Bot panel and

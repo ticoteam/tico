@@ -96,7 +96,7 @@ async function recruitNewSeat(seed = {}) {
     <div class="bot-editor-body"><p class="muted">Every bot starts as a Recruiting seat on the org chart: the role, its job description and who it reports to. You pick a candidate next.</p>
     <label>Role title<input name="title" maxlength="120" required value="${esc(title)}" placeholder="Customer support"></label>
     <label>Reports to<select name="reports_to">${recruitPlaces().map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('')}</select></label>
-    <label>Job description <span class="muted">(optional)</span><textarea name="description" rows="4" maxlength="8000" placeholder="${owner ? 'Leave it empty and your CEO Bot drafts one' : 'What should this role own? You can write it later'}">${esc(brief)}</textarea></label>
+    <label>Job description <span class="muted">(optional)</span><textarea name="description" rows="4" maxlength="8000" placeholder="${owner ? `Leave it empty and your ${esc(ceoBotName())} drafts one` : 'What should this role own? You can write it later'}">${esc(brief)}</textarea></label>
     <p class="muted">Connecting an agent you already run? <button class="linkish" type="button" data-recruit-botops>Ask BotOps</button></p>
     <p class="err" role="alert" data-recruit-error hidden></p></div>
     <div class="bot-editor-actions"><button class="primary" type="submit">Create seat</button><button class="ghost" type="button" data-recruit-close>Cancel</button></div></form>`;
@@ -134,7 +134,7 @@ function recruitAskBotOps() {
 }
 
 function recruitDraftLine(seat) {
-  const by = esc(seat.draft?.by || 'CEO Bot');
+  const drafter = seat.draft?.by || '', by = esc(ceoDefaultish(drafter) ? ceoBotName() : drafter);
   if (seat.draft?.state === 'drafting') return `<span class="recruit-spin" aria-hidden="true"></span>${by} is drafting the job description…`;
   if (seat.description_by === 'ceo_bot') return `Drafted by ${by}.${seat.can_edit ? ' Edit it as you like.' : ''}`;
   if (seat.description_by === 'chart') return seat.description ? 'From the org chart model.' : 'No job description yet.';

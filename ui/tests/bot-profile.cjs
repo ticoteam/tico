@@ -78,7 +78,7 @@ const picker = page => page.locator('[data-bot-profile]');
       // The choices come from the server, with the bot's own profile picked.
       await page.waitForFunction(() => document.querySelectorAll('[data-bot-profile] option').length === 6);
       assert.equal(await picker(page).inputValue(), 'custom');
-      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/settings/rules?bot=ops');
+      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/automations?q=Ops');
       const until = async (test, what) => { for (let i = 0; i < 100 && !test(); i++) await page.waitForTimeout(50); assert.ok(test(), what); };
       const save = () => page.locator('#bot-editor button[type=submit]').click();
       const ask = page.locator('dialog.settings-confirm');

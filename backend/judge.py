@@ -307,10 +307,11 @@ def gateway(settings, store=None, vault=None):
     if store is None:
         return None
 
-    def engine(state, questions, label=None):
+    def engine(state, questions, label=None, level=None):
+        """`level` is a caller's own (an automation's Decide step); without one, the company's Decisions level."""
         from .credentials import Vault
         with store.read() as c:
-            level = providers.load(c, settings)["decide_level"]
+            level = level or providers.load(c, settings)["decide_level"]
             if settings.gateway_key:
                 secret, url, bot = settings.gateway_key, settings.gateway_url, None
             else:
@@ -359,14 +360,14 @@ def ordered(steps):
     if len(steps) < 2:
         return steps[0] if steps else None
 
-    def engine(state, questions, label=None):
+    def engine(state, questions, label=None, level=None):
         J.validate(state, questions, label)
         failed, first, paid = None, None, []
-        slow = any(J.normalize_level(step.level()) != "low" for step in steps if hasattr(step, "level"))
+        slow = any(J.normalize_level(level or step.level()) != "low" for step in steps if hasattr(step, "level"))
         with J.within(SLOW_CHAIN_SECONDS if slow else CHAIN_SECONDS):
             for i, step in enumerate(steps):
                 try:
-                    result = step(state, questions, label)
+                    result = ask(step, state, questions, label, level)
                 except J.JudgeError as exc:
                     paid += getattr(exc, "paid", None) or []
                     if i == len(steps) - 1:
@@ -383,10 +384,29 @@ def ordered(steps):
     return engine
 
 
-def step_models(steps, default=J.MODEL):
+def takes_level(engine):
+    """Whether a decision engine takes a caller's `level` (the Gateway's steps and the chains around them do; Jev, a
+    company's own model and older test fakes do not)."""
+    import inspect
+    try:
+        params = inspect.signature(engine).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "level" or p.kind is p.VAR_KEYWORD for p in params)
+
+
+def ask(engine, state, questions, label=None, level=None):
+    """One call to `engine`, at `level` when one is given and the engine takes it (CONTRACT §2 Decide level)."""
+    if level and takes_level(engine):
+        return engine(state, questions, label, level=level)
+    return engine(state, questions, label)
+
+
+def step_models(steps, default=J.MODEL, level=None):
     """The model each of `steps` asks as (`default` for one that does not say: a test's fake). A step whose model follows
     the company's Decisions level says it now (`current_model`), so the spend reservation prices the model that will run."""
-    return [(getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
+    return [(J.decide_model(level) if level and hasattr(step, "current_model") else "")
+            or (getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
             for step in steps]
 
 
@@ -412,8 +432,9 @@ def server_engine(store, c, primary=None):
         return None
     asks_as = step_models(steps) + ([getattr(backup, "model", "")] if backup is not None else [])
 
-    def engine(state, questions, label=None):
-        return metered(store, asks_as, state, questions, label, lambda: chain(state, questions, label))
+    def engine(state, questions, label=None, level=None):
+        models = (step_models(steps, level=level) + asks_as[len(steps):]) if level else asks_as
+        return metered(store, models, state, questions, label, lambda: ask(chain, state, questions, label, level))
     engine.model, engine.provider = asks_as[0], getattr(chain, "provider", "")
     return engine
 

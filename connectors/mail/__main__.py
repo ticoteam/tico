@@ -2432,6 +2432,35 @@ def cmd_connector_event(args):
                provider_id + "\n")
 
 
+def cmd_mail_action(args):
+    """Carry out one mail action a Tico automation queued, read from stdin (connectors/mail/actions.py).
+
+    The runner claims it from the hub and reports what this prints: always one JSON object with `ok`, `detail` and
+    `retry` (false when trying again cannot help: a refusal, a message that is gone)."""
+    from . import actions
+    try:
+        request = json.load(sys.stdin)
+    except (ValueError, TypeError):
+        request = None
+    if not isinstance(request, dict) or not all(str(request.get(k) or "").strip() for k in ("id", "mailbox", "action")):
+        print(json.dumps({"ok": False, "retry": False, "detail": "the mail action is not an object with id, "
+                                                                 "mailbox and action"}))
+        return 2
+    try:
+        ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        result = actions.perform(ctx, request)
+    except Refused as e:
+        print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))
+        return 2
+    except Failure as e:
+        print(json.dumps({"ok": False, "retry": True, "detail": e.msg[:900]}))
+        return 1
+    ctx.audit("automation-" + request["action"], str(request.get("msg_id") or ""),
+              {"action": request["id"], **{k: result[k] for k in ("detail", "draft", "message") if result.get(k)}})
+    print(json.dumps(result, default=str))
+    return 0
+
+
 # ---------------------------------------------------------------- local persist (inbox bots phase 1)
 
 def sync_targets(args):
@@ -2973,6 +3002,8 @@ def build_parser():
 
     ce = base(sub.add_parser("connector-event", help=argparse.SUPPRESS), mailbox=False)
     ce.set_defaults(func=cmd_connector_event)
+    ma = base(sub.add_parser("mail-action", help=argparse.SUPPRESS), mailbox=False)
+    ma.set_defaults(func=cmd_mail_action)
 
     au = sub.add_parser("audit", help="print the mail audit log")
     au.add_argument("--since", default=None)

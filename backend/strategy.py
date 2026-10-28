@@ -740,9 +740,6 @@ def publish(c, actor, note="", revision=None):
     _event(c, actor, "published", {"n": n, "note": note})
     H.event(c, actor, "strategy.publish", f"v{n}", {"n": n})
     published = version(c, n)
-    from . import routines
-    routines.emit(c, EVENT, f"v{n}", {"n": n, "note": note, "published_by": actor}, title=f"Strategy v{n}",
-                  content=summary_text(c, published))
     H.hook(c, "strategy.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor, revision=0)
     if last:
         realign(c, actor, last, published)
@@ -800,7 +797,7 @@ def file_card(c, owner, proposal):
     requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.KEEPER
     title, body = GA._ask({"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so publishing never rolls back on it.
-    made = H.task_create(c, requester, title, body, owner, lint=False, lane="company", capped=False)
+    made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
     c.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES ('proposal',?,?,?,?)",
               (proposal["id"], owner, made["id"], H.now()))
     return made

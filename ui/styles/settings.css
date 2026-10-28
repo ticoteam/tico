@@ -670,10 +670,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .wh-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0 0 4px;font-size:var(--t-sm)}
 .wh-facts dt{color:var(--muted)}.wh-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .wh-facts code{overflow-wrap:anywhere}
-.wh-warn{margin:4px 0;padding:6px 10px;border-radius:6px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
 .wh-listeners{display:grid;gap:2px;font-size:var(--t-sm)}
-.wh-li{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:4px 0;min-width:0}
-.wh-li.wr-off .wr-text{color:var(--muted)}
 .wh-li-add{margin-top:4px}
 .wh-calls{display:grid}
 .wh-call{display:grid;grid-template-columns:5.5em minmax(0,1fr) minmax(0,1.4fr) 5em 4.5em auto;gap:4px 10px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
@@ -730,7 +727,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .ceo-log-entry:last-child{border-bottom:0}
 .ceo-log-entry .row{gap:8px;flex-wrap:wrap;align-items:baseline}
 .ceo-log-entry ul{margin:6px 0 0;padding-left:18px}
-/* Settings > Routines, the flat list of Tico's own routines (ui/app/settings-recurring.js) */
+/* Settings > System, the flat list of Tico's own jobs (ui/app/settings-recurring.js) */
 .sysr-list{display:grid}
 .settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}
 .sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
@@ -753,31 +750,9 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait-ink)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
-/* Settings > Rules: what wakes a bot (ui/app/settings-rules.js) */
-.wr-list{display:grid;gap:6px}
-.wr-group>summary{display:flex;gap:6px;align-items:center;padding:6px 0;font-weight:600;cursor:pointer;list-style:none}
-.wr-group>summary::-webkit-details-marker{display:none}
-.wr-group>summary::before{content:'▸';color:var(--muted);font-size:var(--t-xs);transition:transform .15s}
-.wr-group[open]>summary::before{transform:rotate(90deg)}
-.wr-group>summary .cnt{color:var(--muted);font-weight:400;font-size:var(--t-sm)}
+/* Webhook dialogs' small section heads (ui/app/settings-webhooks.js) */
 .wr-sub{margin:8px 0 2px;font-size:var(--t-xs);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
-.wr-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto minmax(0,auto);gap:4px 12px;padding:7px 0;border-top:1px solid var(--line);align-items:center;font-size:var(--t-sm)}
-.wr-row.wr-off .wr-text{color:var(--muted)}
-.wr-text{min-width:0;overflow-wrap:anywhere}
-.wr-text b{font-size:var(--t-xs);letter-spacing:.04em;color:var(--muted)}
-.wr-note{display:block}
-.wr-scope{font-size:var(--t-xs);white-space:nowrap;justify-self:start}
-.wr-usage{white-space:nowrap}
-.wr-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end}
-.wr-ctl .settings-cell-note{flex-basis:100%;margin:0;text-align:right}
-.wr-ctl .settings-cell-note:empty{display:none}
-.wr-filter{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-bottom:8px;font-size:var(--t-sm)}
-.wr-when{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
-.wr-when[hidden]{display:none}
 /* A swappable field (input or step list) sits in the grid as its label would. */
-.wr-field{display:contents}
-.wr-field[hidden]{display:none}
-@media (max-width:720px){.wr-row{grid-template-columns:minmax(0,1fr) auto}.wr-text{grid-column:1/-1}.wr-ctl{justify-content:flex-start}.wr-ctl .settings-cell-note{text-align:left}}
 /* Releases and Task Manager cards (ui/app/settings-release.js) */
 .rel-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .rel-line input[type=time]{width:auto;max-width:100%}
@@ -863,7 +838,6 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .settings-tier-seg button:disabled{opacity:.6;cursor:default}
 .settings-tier-row label.settings-tier-fast{flex-direction:row;align-items:center;gap:6px;padding-bottom:7px;color:var(--ink)}
 .settings-tier-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
-.wr-when .wr-wide{grid-column:1/-1}
 .task-rule-form textarea{flex:1 1 100%;min-width:0;width:100%;font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}
 /* Settings > Computers: Sleep when idle (ui/app/settings-hosted.js) */
 .sleep-row{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
@@ -872,26 +846,8 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .wh-since{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
 .wh-since input{width:auto}
 
-/* The task lifecycle remains readable without horizontal scrolling. */
-.task-setting-picker {display:flex;align-items:center;gap:12px;margin:16px 0}
-.task-setting-picker select {max-width:100%}
-.task-setting-section {border-top:1px solid var(--line);padding:20px 0}
-.task-setting-section h3 .muted {font-size:.8em;font-weight:normal;margin-right:8px}
-.task-setting-row {padding:14px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-.task-setting-action {margin:0 0 8px}
-.task-setting-action b {font-size:.8em;margin-right:6px;color:var(--muted)}
-.task-setting-meta {display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:.85em}
-.task-setting-step {padding:8px 0 12px 14px;border-left:2px solid var(--line);margin:14px 0}
-.task-setting-step h4 {margin:0 0 8px}
-@media(max-width:600px) {.task-setting-picker {display:block}.task-setting-picker select {display:block;width:100%;margin-top:8px}.task-setting-step {padding-left:8px}}
-/* Settings stage 1: one red line under a control that failed, the "admins only" line, the bot editor's waiting changes,
-   and a routine's switch and Edit on its row. */
+/* Settings stage 1: one red line under a control that failed, the "admins only" line, and the bot editor's waiting changes. */
 .field-err{grid-column:1/-1;flex-basis:100%;margin:4px 0 0;font-size:var(--t-sm);overflow-wrap:anywhere}
 .settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
 .bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
 .settings-confirm{max-width:min(440px,calc(100vw - 32px))}
-.rblock.has-acts{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px}
-.rblock.has-acts>.rocc,.rblock.has-acts>.field-err{grid-column:1/-1}
-.rrow-acts{display:flex;align-items:center;gap:8px;padding-right:4px}
-.rrow-switch{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-@media (max-width:720px){.rblock.has-acts{grid-template-columns:minmax(0,1fr)}.rrow-acts{padding:0 4px 8px 54px}}

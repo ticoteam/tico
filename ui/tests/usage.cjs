@@ -73,15 +73,14 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await page.goto('https://tico-ui.test/#/bot/support');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
 
-    // Over its limit: a marker beside the bot in the org tree, and a banner on its page that links to Usage.
+    // Over its limit: a marker beside the bot in the org tree, and a banner on its page that opens the bot in Budget.
     const mark = page.locator('#tree a.node[href="#/bot/support"] .tree-limit');
     await mark.waitFor();
     assert.equal(await mark.getAttribute('aria-label'), 'Over its daily limit');
     const banner = page.locator('#bot-limit-host .bot-limit');
     await banner.waitFor();
     assert.equal((await banner.innerText()).replace(/\s+/g, ' ').trim(), '⚠ Over its daily limit ($6.10 of $5.00). Raise limit');
-    await banner.locator('a', {hasText: 'Raise limit'}).click();
-    await page.locator('.use-row').first().waitFor();
+    assert.equal(await banner.locator('a', {hasText: 'Raise limit'}).getAttribute('href'), '#/strategy/budget/bot%3Asupport');
     asked.length = 0;
     await page.goto('https://tico-ui.test/#/updates');
 

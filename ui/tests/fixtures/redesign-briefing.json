@@ -1,0 +1,16 @@
+{
+  "briefing": {
+    "id": "br_44", "week": "2026-W44", "cadence": "daily", "title": "Release tooling buyers move to bundles",
+    "body": "Two of Acme's rivals now sell release checks inside a bigger bundle, and buyers on Reddit and X are asking for one bill.\n\n## Changes\n\n- Northwind bundled checks with its CI plan.\n\n## Signals\n\n- Pricing complaints doubled week over week.",
+    "items": [
+      {"text": "Northwind bundled release checks into its CI plan at no extra cost.", "kind": "change", "entity_ids": ["mk_northwind"]},
+      {"text": "Globex cut its starter price to $19 a seat.", "kind": "change", "entity_ids": ["mk_globex"]},
+      {"text": "Pricing complaints about release tools doubled week over week.", "kind": "signal", "entity_ids": []},
+      {"text": "Teams of 20 to 50 want one bill for CI and release checks.", "kind": "theme", "entity_ids": []},
+      {"text": "Release tooling spend: about $1.2B a year, growing 18%.", "kind": "size", "entity_ids": []}
+    ],
+    "bets": ["bet_1"],
+    "touched": [{"id": "bet_1", "n": 1, "statement": "Teams under 50 pick the tool that ships with their CI"}],
+    "created_by": "bot:librarian", "created": "2026-10-26T09:00:00Z", "updated": "2026-10-26T09:00:00Z"
+  }
+}

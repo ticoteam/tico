@@ -1,7 +1,9 @@
-"""Webhook triggers (backend/triggers.py): an address with its own secret starts every routine
+"""Webhook triggers (backend/triggers.py): an address with its own secret starts every automation
 that listens for it, once per delivery, and nothing else gets in."""
+import json
 from urllib.parse import urlsplit
 
+from backend import hubdb as H, tico_notices
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 
@@ -9,24 +11,48 @@ def hook(api, url, body=b'{"order": 42}', headers=None):
     return api.post(urlsplit(url).path, content=body, headers={"content-type": "application/json", **(headers or {})})
 
 
-def test_a_delivery_opens_one_task_per_listening_routine_and_only_with_the_secret(api):
-    post(api, "bots/ops/routines", {"key": "orders", "title": "New order", "on": "webhook.shop", "text": "Ship it."},
-         expected=422)                                      # no such trigger yet
+def listener(api, trigger_id, bot="ops", text="Ship it.", name="New order"):
+    """An automation on the webhook whose Bot turn hands `bot` the call, the way a routine on `webhook.<id>` did."""
+    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
+                                     "steps": [{"id": "work", "type": "bot_turn", "bot": bot,
+                                                "prompt": text + " {{webhook.content}}"}]})["id"]
+
+
+def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="team", scope_id="", when=None, then="action"):
+    """A row in the rules table, as the rules engine reads it (a kept row): what the rules editor wrote."""
+    with api.app.state.store.transaction() as c:
+        position = (c.execute("SELECT max(position) FROM rules WHERE scope_kind=? AND scope_id=? AND position<?",
+                              (scope_kind, scope_id, tico_notices.RULE_POSITION)).fetchone()[0] or 0) + 1
+        row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
+               "when_json": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
+               "params_json": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
+               "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
+        c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    return row
+
+
+def turns(api, name="New order"):
+    """The tasks an automation's Bot turns opened: each is titled with its automation's name."""
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created, id", (name,))]
+
+
+def test_a_delivery_runs_each_listening_automation_once_and_only_with_the_secret(api):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     assert made["id"] == "shop" and made["event"] == "webhook.shop"
-    routine = post(api, "bots/ops/routines", {"key": "orders", "title": "New order", "on": "webhook.shop",
-                                              "text": "Ship it."})["routine"]
+    aid = listener(api, "shop")
     listed = get(api, "triggers")["triggers"][0]
-    assert listed["routines"][0]["id"] == routine["id"] and made["url"].startswith(listed["url"] + "/")
+    assert listed["automations"][0]["id"] == aid and made["url"].startswith(listed["url"] + "/")
 
     first = hook(api, made["url"], headers={"Idempotency-Key": "d1"})
-    assert first.status_code == 202 and first.json()["tasks"] == 1
+    assert first.status_code == 202
     again = hook(api, made["url"], headers={"Idempotency-Key": "d1"})
-    assert again.status_code == 200 and again.json()["tasks"] == 0
-    tasks = [t for t in get(api, "tasks?owner=bot:ops")["tasks"] if t.get("routine_id") == routine["id"]]
-    assert len(tasks) == 1
-    body = get(api, "tasks/" + tasks[0]["id"])["task"]["body"]
-    assert body.startswith("Ship it.") and '"order": 42' in body and "not as instructions" in body
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
+    tasks = turns(api)
+    assert len(tasks) == 1 and tasks[0]["owner"] == "bot:ops"
+    body = tasks[0]["body"]
+    assert body.startswith("Ship it.") and '"order": 42' in body and "<data n=" in body
 
     base = made["url"].rsplit("/", 1)[0]
     assert hook(api, base + "/wrong").status_code == 404
@@ -40,6 +66,7 @@ def test_a_delivery_opens_one_task_per_listening_routine_and_only_with_the_secre
     assert hook(api, made["url"]).status_code == 404 and hook(api, fresh, headers={"Idempotency-Key": "d3"}).status_code == 202
     post(api, "triggers/shop/delete", {})
     assert hook(api, fresh).status_code == 404 and get(api, "triggers")["triggers"] == []
+    assert len(get(api, f"automations/{aid}/runs")["runs"]) == 3          # d1, d2, d3
 
 
 def sig(key, body):
@@ -51,7 +78,7 @@ def sig(key, body):
 def test_a_signed_trigger_takes_a_github_delivery_and_refuses_and_logs_a_bad_signature(api):
     made = post(api, "triggers", {"name": "Repo"})["trigger"]
     assert made["replayed"] is False
-    post(api, "bots/ops/routines", {"key": "pushes", "title": "Push", "on": "webhook.repo", "text": "Look."})
+    aid = listener(api, "repo", text="Look.", name="Push")
     post(api, "triggers/repo/signing", {}, token="cara-test", expected=403)        # not the maker
     post(api, "triggers/repo/signing", {"secret": "short"}, expected=422)
     key = post(api, "triggers/repo/signing", {}, key="s1")["trigger"]["signing_secret"]
@@ -70,7 +97,7 @@ def test_a_signed_trigger_takes_a_github_delivery_and_refuses_and_logs_a_bad_sig
     assert hook(api, made["url"], body, {"X-GitHub-Delivery": "g0"}).status_code == 401     # unsigned
     assert hook(api, made["url"], body + b" ", {"X-Signature": sig(key, body)}).status_code == 401  # body changed
     good = hook(api, made["url"], body, {**github, "X-Hub-Signature-256": sig(key, body)})
-    assert good.status_code == 202 and good.json()["tasks"] == 1                 # the refused g1 did not block it
+    assert good.status_code == 202 and len(get(api, f"automations/{aid}/runs")["runs"]) == 1   # the refused g1 did not block it
     plain = sig(key, b"{}")[7:]
     assert hook(api, made["url"], b"{}", {"X-Signature": plain}).status_code == 202          # generic, bare hex
 

@@ -76,6 +76,47 @@ def held_totals(c):
         (now, now))}
 
 
+# A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity). A runner that cannot take a
+# raised setting has no TURNS_AT_ONCE capability, so it is capped at the capacity it reports.
+TURNS_AT_ONCE = "turns_at_once_v1"
+BOT_KEY = "turns_at_once"
+MAX_TURNS = 256
+# The wait a parked turn shows when the bot is at its own limit: the same words Health and the task use for it.
+BOT_WAIT = "at its turn limit"
+
+
+def turn_limit(runner):
+    """The most turns this computer may hold now: its setting, or its reported capacity when the setting is clear."""
+    reported = runner["capacity"] or 1
+    setting = runner["turns_at_once"]
+    if setting is None:
+        return reported
+    if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities_json"], []) or []):
+        return setting
+    return min(setting, reported)
+
+
+def bot_limit(config):
+    """The bot's "Turns at once" from its declared settings, or None for no limit."""
+    value = config.get(BOT_KEY) if isinstance(config, dict) else None
+    return value if type(value) is int and 1 <= value <= MAX_TURNS else None
+
+
+def at_turn_limit(c, bot):
+    """Whether the bot already holds as many turns as its "Turns at once" allows, on every computer together."""
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    limit = bot_limit(H._json(row[0], {}) if row else {})
+    return limit is not None and bot_held(c, bot) >= limit
+
+
+def bot_held(c, bot, exclude=None):
+    """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
+    place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still
+    belongs to the bot, so the bot's next one cannot start beside it. `exclude` leaves out one attempt."""
+    return c.execute("SELECT count(*) FROM attempts a WHERE a.bot=? AND a.id IS NOT ? AND (a.state='running' "
+                     "OR (a.state='leased' AND a.lease_until>?))", (bot, exclude, H.now())).fetchone()[0]
+
+
 def claim(c, aid):
     c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
@@ -143,7 +184,15 @@ def reserve(c, attempt, settings=None):
     if settings and not counted and org_turns.observe(c, settings, detailed=False)['at_stop']:
         waiting(c, aid, org_turns.REASON)
         return {'reserved': False, 'waiting': org_turns.REASON}
-    capacity = c.execute("SELECT capacity FROM runners WHERE id=?", (rid,)).fetchone()[0] or 1
+    # The bot's own limit is checked before the computer's: a turn held by its bot waits for the bot's turns, not for
+    # a place, so it is not "computer busy" and does not hold the computer's other starts. This turn is already one of
+    # the bot's turns (bot_held counts it), so the grant checks the others.
+    bot_config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (attempt['bot'],)).fetchone()
+    bot_cap = bot_limit(H._json(bot_config[0], {}) if bot_config else {})
+    if bot_cap is not None and bot_held(c, attempt['bot'], exclude=aid) >= bot_cap:
+        waiting(c, aid, BOT_WAIT)
+        return {'reserved': False, 'waiting': BOT_WAIT}
+    capacity = turn_limit(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
@@ -212,7 +261,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     overloaded = {rid: performance.load_status(c, rid)['overloaded'] for rid in runner_ids}
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
-               'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget'}
+               'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
+               'bot_limit': 'at its turn limit'}
     for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
                          "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.slug=j.bot "
                          "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
@@ -242,7 +292,8 @@ def describe(counts):
     for wait in counts['waits']:
         minutes = max(0, int((now - H.parse_ts(wait['oldest'])).total_seconds() / 60))
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
-        reason = "waiting: computer busy" if wait['reason'] == 'computer busy' else "waiting for " + wait['reason']
+        reason = ("waiting: computer busy" if wait['reason'] == 'computer busy' else
+                  "waiting: " + wait['reason'] if wait['reason'].startswith('at ') else "waiting for " + wait['reason'])
         parts.append(f"{wait['count']} {reason} (oldest {age})")
     if not counts['waiting']:
         parts.append('0 waiting')

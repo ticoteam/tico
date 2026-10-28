@@ -199,9 +199,9 @@ async function useDetail(slug) {
   const routines = (data.routines || []).filter(r => r.runs);
   host.innerHTML = `<div class="use-chart" role="img" aria-label="Daily API-equivalent cost, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
     <div class="use-axis"><span>${esc(days[0]?.day || '')}</span><span>${peak ? useMoney(peak) + ' a day at most' : ''}</span><span>${esc(days[days.length - 1]?.day || '')}</span></div>
-    <table class="use-routines"><thead><tr><th>Routine</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
+    <table class="use-routines"><thead><tr><th>Automation</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
       `<tr><td>${esc(r.title)}</td><td class="tnum">${r.runs}</td><td class="tnum"><span class="use-cost">${useCost(r)}</span></td></tr>`).join('')
-      || '<tr><td colspan="3" class="muted">No routines.</td></tr>'}</tbody></table>
+      || '<tr><td colspan="3" class="muted">None.</td></tr>'}</tbody></table>
     <button type="button" class="ghost" data-use-csv>Export CSV</button>`;
 }
 

@@ -71,6 +71,15 @@ class Schema(HubCase):
                          "review PR")
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
+    def test_an_install_that_ran_the_first_rule_events_schema_gets_the_task_trigger_tables(self):
+        for table in ("rule_task_runs", "rule_task_state"):
+            self.conn.execute(f"DROP TABLE {table}")
+        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.RULE_EVENTS_SCHEMA) + 1}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertLessEqual({"rule_task_runs", "rule_task_state"}, names)
+
     def test_every_table_and_index_in_the_contract_exists(self):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}

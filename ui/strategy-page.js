@@ -20,13 +20,8 @@ const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
 const STRAT_CHECK_DAYS = 90;
 const stratCheckBy = () => new Date(Date.now() + STRAT_CHECK_DAYS * 864e5).toISOString().slice(0, 10);
 
-// The heading and the tabs, the same on each, so switching tabs never moves them.
-window.strategyHeadHtml = function strategyHeadHtml(tab) {
-  const link = (id, href, label) => `<a href="${href}" data-strat-tab="${id}"${tab === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`;
-  return `<div class="strat-head"><h1>Strategy</h1>
-      <nav class="tabs slim strat-tabs" aria-label="Strategy">${link('strategy', '#/strategy', 'Strategy')}${link('lenses', LENSES_ROUTE, 'Lenses')}${link('market', MARKET_ROUTE, 'Market')}</nav>
-      <span class="spacer"></span><div class="strat-actions" id="strat-actions"></div></div>`;
-};
+// The heading and the tabs, the same on each, so switching tabs never moves them (ui/app/redesign.js).
+window.strategyHeadHtml = tab => redesignStrategyHead(tab);
 
 window.strategyStop = function strategyStop() {
   STRAT_LOAD++;

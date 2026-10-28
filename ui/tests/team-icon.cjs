@@ -97,18 +97,18 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('#settings-team').count(),0);
     // A local hub's owner gets the Team card without the team icon; the Stale ticket review and Topic changed switches
-    // moved to Settings > Rules (ui/app/settings-recurring.js): one line with a link, no switch here.
+    // moved to Settings > System (ui/app/settings-recurring.js): one line with a link, no switch here.
     role = 'owner'; cloud = false;
     await page.reload();
     await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
     assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
     const moved = page.locator('#settings-team [data-settings-moved]');
-    assert.equal(await moved.innerText(),'Moved to Settings > Rules');
+    assert.equal(await moved.innerText(),'Moved to Settings > System');
     await moved.click();
-    await page.waitForFunction(() => !document.querySelector('#settings-recurring')?.hidden);
+    await page.waitForFunction(() => !document.querySelector('#settings-system')?.hidden);
     assert.deepEqual(ruleWrites,[]);
     assert.deepEqual(errors,[]);
-    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > Rules');
+    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > System');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

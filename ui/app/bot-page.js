@@ -204,45 +204,6 @@ function botGoalRender(slug, g, count) {
   const a = el.querySelector('[data-goal-open]');
   a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalOpen); };
 }
-// The Routines section of the bot's right rail: each routine on one line, its name and how often, and when
-// it runs next. No routines, no section. A row opens the routine: its instruction and schedule, editable by
-// whoever may edit it (ui/app/recurring.js).
-function botRecurringHTML(e, slug) {
-  const live = S.status?.schedules || [];
-  const rows = (e.schedules || live.filter(r => (r.employee || r.bot) === slug)).map(s => {
-    const st = live.find(x => (s.id ? x.id === s.id : (x.employee || x.bot) === slug && x.title === s.title)) || {};
-    return {...s, ...st, employee: slug, active: st.active != null ? st.active : s.active};
-  }).sort((a, b) => (a.active ? 0 : 1) - (b.active ? 0 : 1) || String(a.next || '~').localeCompare(String(b.next || '~')) || String(a.title).localeCompare(String(b.title)));
-  if (!rows.length) return '';
-  const words = r => { const w = cadenceZoned(r) || ''; return w.charAt(0).toUpperCase() + w.slice(1); };
-  const paused = r => r.enabled === false || r.enabled === 0;
-  const next = r => paused(r) ? '<span class="muted" title="kept, not running">paused</span>'
-    : r.held_by_bot ? '<span class="muted" title="fires again when the bot resumes">paused with the bot</span>'
-    : !r.active ? '<span class="muted">not armed</span>'
-    : r.on ? '<span class="muted">on event</span>'
-    : r.next ? `<span class="tnum" title="${esc(fmt(r.next))}">${esc(until(r.next))}</span>` : '';
-  return `<h2 class="rail-h">Routines</h2>
-    <ul class="bot-recurring-list">${rows.map(r => `<li class="${paused(r) ? 'paused' : ''}"><button type="button" data-routine="${esc(r.id || '')}" data-bot="${esc(slug)}" title="${esc(r.title + ' · ' + words(r))}">
-        <span class="ttl">${esc(r.title)}</span><span class="when">${esc(words(r))}</span>
-        <span class="bot-recurring-next">${next(r)}</span></button></li>`).join('')}</ul>`;
-}
-// One handler for the rail on the bot page and the Assistant's page.
-function bindRecurringRail(host) {
-  if (!host || host.dataset.railBound) return;
-  host.dataset.railBound = '1';
-  host.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-routine]'); if (!b || !b.dataset.routine) return;
-    const id = b.dataset.routine, bot = b.dataset.bot;
-    const r = routineById(id) || ((await get(`/v2/bots/${encodeURIComponent(bot)}/routines`).catch(() => ({}))).routines || []).find(x => x.id === id);
-    if (r) routineEditorOpen({...r, employee: bot});
-  });
-}
-function botRecurringPaint(e, slug) {
-  const host = $('#bot-recurring'); if (!host || !e) return;
-  host.innerHTML = botRecurringHTML(e, slug);
-  host.hidden = !host.innerHTML;
-  bindRecurringRail(host);
-}
 // Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
 // Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
@@ -309,11 +270,11 @@ function botQuarantineCard(slug) {
       <p class="muted" id="bot-quarantine-result"></p>
     </section>`;
 }
-// The banner at the top of a bot's page while it is over its spend limit; Usage is where a limit is raised.
+// The banner at the top of a bot's page while it is over its spend limit; Budget, open at the bot, is where a limit is raised.
 function botLimitHTML(slug) {
   const limit = overLimit(slug); if (!limit) return '';
   const usd = n => '$' + Number(n || 0).toFixed(2);
-  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/usage">Raise limit</a></section>`;
+  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/strategy/budget/${encodeURIComponent('bot:' + slug)}">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
@@ -428,8 +389,7 @@ async function pageBot(slug, tab) {
     </section>`,
       ...(limited ? {} : {
         updates: '<section class="rail-sec bot-latest" id="bot-latest" aria-label="Updates" hidden></section>',
-        files: '<section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>',
-        routines: '<section class="rail-sec bot-recurring" id="bot-recurring" aria-label="Routines" hidden></section>'})})}
+        files: '<section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>'})})}
   </aside>
   ${railEdgeHTML('right')}
   </div>
@@ -465,16 +425,13 @@ async function pageBot(slug, tab) {
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}
         ${botRepoHTML(e) ? `<dt>Repository</dt><dd>${botRepoHTML(e).replace(/^Repository /, '')}</dd>` : ''}
         ${botScreenRowHTML(slug)}
+        <dt>Automations</dt><dd><a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(slug))}" data-bot-automations>Open</a></dd>
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
     <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
         <button class="linkish" type="button" id="bot-goals-add">Add goal</button></header>
       <div id="bot-goals-list"><div class="empty">Loading…</div></div></section>
-    <section class="card" id="bot-routines"><header><h2>Routines</h2>${routineMayEdit({bot: slug}) ? `
-        <button class="linkish" type="button" data-new-routine="${esc(slug)}">New routine</button>` : ''}</header>
-      <div id="bot-routines-list">${botRoutinesHTML(e, slug)}</div>
-    </section>
 
 `}
   </div>
@@ -597,14 +554,13 @@ async function pageBot(slug, tab) {
     void botGoalsCardLoad(slug);
   }
 
-  // The right rail: Tasks with its tabs, Updates, Files and Routines, in the bot's own order (ui/app/bot-sidebar.js).
+  // The right rail: Tasks with its tabs, Updates and Files, in the bot's own order (ui/app/bot-sidebar.js).
   if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
   botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
   botSidebarApply(slug);
   if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); }
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
-  if (!limited) botRecurringPaint(e, slug);
   $('#pane-tasks').addEventListener('click', ev => {
     const tabButton = ev.target.closest('[data-bot-task-tab]');
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
@@ -612,7 +568,6 @@ async function pageBot(slug, tab) {
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
 
-  if (!limited) bindRoutineExpand($('#pane-more'));
   moreClampWatch();
   showBotTab(tab);
   if (typing) pq(BOT_PILL, '.p-text')?.focus();   // once the pane is shown; a hidden box cannot take it
@@ -637,7 +592,7 @@ function placeBotHead() {
 // The lists in More cut to their three newest rows on every width: [host, rows, keep the newest last]. Each
 // fills in its own time, so one observer cuts whatever has arrived; "Show more" undoes it for that list until
 // the page is redrawn, and "Show less" cuts it again.
-const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-routines-list', '.rlist>*'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
+const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
   ['#v2-history', '.sh-row'], ['#bot-recent-runs', 'tr:not(:first-child)']];
 const MORE_KEEP = 3;
 function moreClamp() {
@@ -716,7 +671,6 @@ function showBotTab(tab) {
   if (split || view === 'tasks') {
     once('tasks', isKeeper(BOT.slug) ? loadBotTasksV2 : loadBotIssues);
     if (isKeeper(BOT.slug)) once('files', slug => window.botFiles?.mount($('#bot-files'), {slug, get, esc, openFile: openFileLink}));
-    if (!BOT.limited) botRecurringPaint(S.emps.find(x => x.name === BOT.slug), BOT.slug);   // routines change under More; redraw on return
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));

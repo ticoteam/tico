@@ -124,6 +124,8 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-row.failed::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--fail)}
 .tl-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--accent);opacity:0;cursor:pointer}
 .tl-check-pad{flex:none;width:2px}
+/* A Needs you row keeps the task rows' columns: room for their checkbox and status (needs-you.js needRowHTML). */
+.tl-check-room{width:14px}
 .tl-row:hover .tl-check,.tl-check:focus-visible,.tl-check:checked,#task-body.has-sel .tl-check{opacity:1}
 .tl-check:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tl-chev,.tl-chev-pad{flex:none;width:16px;height:20px;margin-left:calc(var(--depth,0) * 22px)}
@@ -307,6 +309,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-sub.one{display:none}
   .tl-check{display:none}
   #task-body.has-sel .tl-check{display:inline-block;width:18px;height:18px;opacity:1}
+  .tl-check-room{display:none}
+  .tl-need > .tl-status-pad{display:none}
+  #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
   .tl-filters{flex-wrap:nowrap;flex:none}

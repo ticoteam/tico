@@ -19,7 +19,7 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
   const errors = [], posted = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = {regular_checks: true, level: 1, level_changed_by: '', level_changed_by_name: '', level_changed_at: '', level_history: [], levels: LEVELS,
-    name, daily_cap: 5, asked_today: {}};
+    name, asked_today: {}};
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});

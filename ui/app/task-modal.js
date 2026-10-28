@@ -735,7 +735,7 @@ function issueModalHTML(i) {
   const tag = boardTag(i, running);
   return `<div class="tmodal-head">${avatar(i.owner, 22, stateOf(i.owner))}<span class="who">${empName(i.owner)}</span>
       <span class="mono muted">#${esc(i.number)}</span>${statusPill(i)}${i.priority && i.priority !== 'p2' ? prioPill(i) : ''}
-      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="a routine">⟳</span>' : ''}
+      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="Scheduled">⟳</span>' : ''}
       <span class="spacer"></span><span class="muted tnum">${esc(ago(i.state === 'CLOSED' ? i.closedAt : i.updatedAt))}</span>
       <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
     <h2 class="tmodal-title">${esc(i.title)}</h2>

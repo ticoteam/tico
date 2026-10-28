@@ -101,9 +101,12 @@ Owners and admins change groups; everyone else reads them.
   (`{"name", "parent", "add": {"people": [], "bots": []}}`); `PATCH /api/v2/groups/{id}` renames it, moves it (`"parent": ""` is the top) and
   adds or removes teammates (`"add"`, `"remove"`); `DELETE /api/v2/groups/{id}` removes it, and the groups and teammates in it move up to
   its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one.
-- **With the tools**: `hub group list` and `hub group update [<group>] [--name] [--parent] [--add-human] [--add-bot] [--remove-human]
-  [--remove-bot]` (`hub_group_list`, `hub_group_update`); with no group given, `update` creates one from `--name`. BotOps does the same as the
-  person who asked it, with their own rights: a member is refused, an owner or an admin is not.
+- **With the tools**: `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
+  [--remove-bot]` and `hub group delete <group>` (`hub_group_list`, `hub_group_update`, `hub_group_delete`); with no group given, `update`
+  creates one from `--name`. `hub org reports-to <bot:slug|human:id> <manager>` (`hub_org_reports_to`) changes who a teammate reports to.
+  BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
+- **With the Strategy Bot**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
+  to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.
 
 Naming a group in an access list (`group:legal`, [permissions.md](permissions.md)) or in a human's `primary_for` names everyone in that
 group and in the groups nested in it.
