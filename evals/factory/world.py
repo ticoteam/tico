@@ -8,7 +8,9 @@ import hmac
 import json
 import os
 import random
+import sys
 import tempfile
+import traceback
 import uuid
 from pathlib import Path
 
@@ -22,6 +24,8 @@ import time_machine  # noqa: E402
 START = dt.datetime(2026, 10, 20, 9, tzinfo=dt.timezone.utc)
 SECRET = "factory-sim"
 REPO = "acme/app"
+PRIMARY = "fake"   # the bots' own login: a usage limit on it holds their turns (login_holds keys the login by this runtime)
+RUNTIME_OF = {"openai": "codex", "anthropic": "claude"}   # the runtime each AI provider signs in
 
 
 
@@ -34,7 +38,7 @@ class Refusal(Exception):
 class World:
     """One run of one scenario. Use as a context manager: it starts the clock and the server, and stops both."""
 
-    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0):
+    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4):
         self.board = board
         self.bot_slugs = list(bots)
         self.roles = {}
@@ -50,6 +54,17 @@ class World:
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
         self.next_pr = 100
+        self.signed_in = tuple(signed_in)   # runtimes the computer reports signed in; when set, readiness is structured
+        self.capacity = capacity            # the computer's slots, as its heartbeat says
+        self.enabled = []                   # the company's providers in order: their runtimes are the fallbacks
+        self.steer_bots = set()             # bots that read the inputs queued for their turn as it starts
+        self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
+        self.server_errors = []             # (when, route, status, body) for each call the server answered with a 5xx
+        self.input_reads = []               # (when, bot, attempt, message ids): the inputs a turn read as it started
+        self.attempt_posts = []             # (when, path, caller, bot, bot on, bot running) for each renew or events post
+        self.limit_windows = []             # one per limited turn: the bot's limit as the server holds it after the turn
+        self.down = False                   # the server is stopped (go_down): nothing reaches it until restart()
+        self.patches = []                   # (module, name, original) for each patch(), put back on __exit__
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -75,6 +90,7 @@ class World:
                             test_identities={"ana-test": Identity("human:ana", "owner", "ana@acme.example"),
                                              # The Release Manager ships between its turns, outside the sim's queue.
                                              "release-test": Identity("bot:release-manager", "bot", agent="hermes")})
+        self.settings = settings
         self.app = create_app(settings)
         self.client = TestClient(self.app)
         self.client.__enter__()
@@ -120,9 +136,38 @@ class World:
                 "text": "Look over the board for stuck tickets and get each one moving."})
 
     def __exit__(self, *exc):
-        self.client.__exit__(*exc)
+        for module, name, original in reversed(self.patches):
+            setattr(module, name, original)
+        if not self.down:
+            self.client.__exit__(*exc)
         self.travel.stop()
         uuid.uuid4 = self._uuid4
+
+    def go_down(self):
+        """The server stops: its API answers nothing until restart(). The database stays on disk, as a deploy or a crash
+        leaves it, and the runner's calls are held back by the run for as long as the server is down."""
+        self.client.__exit__(None, None, None)
+        self.down = True
+
+    def restart(self):
+        """The server starts again on the same database: a new app on the same settings, so its startup runs again
+        (lifespan: grace_leases), then one scheduler pass before the runner's next call."""
+        from fastapi.testclient import TestClient
+        from backend.app import create_app
+        from backend.scheduler import Scheduler
+        self.app = create_app(self.settings)
+        self.client = TestClient(self.app)
+        self.client.__enter__()
+        self.store = self.app.state.store
+        self.scheduler = Scheduler(self.store, self.app.state.execution)
+        self.down = False
+        self.scheduler_pass()
+
+    def patch(self, module, name, wrap):
+        """Replace module.name with wrap(original) for this run only: __exit__ puts the original back."""
+        original = getattr(module, name)
+        setattr(module, name, wrap(original))
+        self.patches.append((module, name, original))
 
     # ------------------------------------------------------------------ time
     def now(self):
@@ -136,6 +181,8 @@ class World:
             step = min(50, left)
             self.clock.shift(step)
             left -= step
+            if self.down:       # the server is stopped: no heartbeat, renewal or CI result reaches it
+                continue
             self.finish_ci()
             self.heartbeat(self.bot_slugs if ready is None else ready)
             if beat:
@@ -161,22 +208,63 @@ class World:
         return move_retry.tick(self.app.state.github_app, store=self.store, force=True)
 
     def heartbeat(self, ready):
-        self.post("runners/heartbeat", {"version": "test", "platform": "test",
-                                        "readiness": {slug: slug in ready for slug in self.bot_slugs}},
-                  token=self.runner["token"])
+        self.post("runners/heartbeat", {"version": "test", "platform": "test", "capacity": self.capacity,
+                                        "readiness": self.readiness(ready)}, token=self.runner["token"])
+
+    def readiness(self, ready):
+        """The computer's readiness: the flat map of bots when no runtime is set, else the structured document a runner
+        sends (each runtime signed in, each bot on its runtime)."""
+        if not self.signed_in:
+            return {slug: slug in ready for slug in self.bot_slugs}
+        return {"schema_version": 1,
+                "runtimes": {name: {"installed": True, "authenticated": "ready"} for name in self.signed_in},
+                "bots": {slug: {"ready": slug in ready, "runtime": PRIMARY, "repository_present": True,
+                                "configuration_valid": True} for slug in self.bot_slugs}}
 
     # ------------------------------------------------------------------ API
     def call(self, method, path, body=None, token="ana-test", ok=True):
-        headers = {"Authorization": "Bearer " + token}
-        if method == "post":
-            headers["Idempotency-Key"] = str(uuid.uuid4())
-        response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
-                                                **({"json": body} if body is not None else {}))
-        if response.status_code >= 400:
-            if ok:
-                raise Refusal(response.status_code, response.text)
+        """One API call: a refusal raises (or answers None when `ok` is off), and a server error is recorded and answers
+        None. Every route the sim calls goes through here, so a 5xx on any of them is found the same way."""
+        status, reply = self.request(method, path, body, token)
+        if status >= 500:
             return None
-        return response.json()
+        if status >= 400:
+            if ok:
+                raise Refusal(status, str(reply))
+            return None
+        return reply
+
+    def request(self, method, path, body=None, token="ana-test"):
+        """One API call that answers with its status and body rather than raising. A server error (a 500, or the app
+        raising) is a finding: it is recorded with its route and body, and the run goes on."""
+        headers = {"Authorization": "Bearer " + token}
+        if method == "post" and path.startswith("attempts/") and path.rsplit("/", 1)[-1] in ("renew", "events"):
+            caller = " > ".join(frame.name for frame in traceback.extract_stack()[-6:-1])
+            # The bot making the call: the nearest frame with a bot in scope, read for its slug, computer and turn.
+            frame, bot = sys._getframe(1), None
+            while frame is not None and bot is None:
+                owner = frame.f_locals.get("self")
+                bot = owner if hasattr(owner, "slug") and hasattr(owner, "available") else None
+                frame = frame.f_back
+            self.attempt_posts.append((self.now(), path, caller, bot.slug if bot else None,
+                                       bot.available if bot else None, bot.running if bot else None))
+        if method != "get":      # the server wants a key on every write, PUT included
+            headers["Idempotency-Key"] = str(uuid.uuid4())
+        route = f"{method.upper()} /api/v2/{path}"
+        try:
+            response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
+                                                    **({"json": body} if body is not None else {}))
+        except Exception:   # TestClient re-raises what the app raised; a live server would answer 500
+            status, reply = 500, "raised:\n" + traceback.format_exc()[-3000:]
+        else:
+            status = response.status_code
+            try:
+                reply = response.json()
+            except ValueError:
+                reply = response.text
+        if status >= 500:
+            self.server_errors.append((self.now(), route, status, str(reply)[:4000]))
+        return status, reply
 
     def post(self, path, body, token="ana-test"):
         return self.call("post", path, body, token)
@@ -190,7 +278,7 @@ class World:
     def update(self, task_id, token="ana-test", **fields):
         """Change a task; a refused change raises Refusal with the server's reason."""
         result = self.post("tasks/" + task_id, {"version": self.task(task_id)["version"], **fields}, token=token)
-        return result.get("task", result)
+        return result if result is None else result.get("task", result)
 
     def step_of(self, task):
         steps = {s["id"]: s["name"] for s in self.dev["steps"]}
@@ -204,6 +292,76 @@ class World:
         with self.store.read() as c:
             return [dict(r) for r in c.execute(query, args)]
 
+    # ------------------------------------------------------------------ the company's limits, sign-ins and bots
+    def set_pool(self, scope, hourly):
+        """A team's or a group's hourly limit, set as its owner sets it (an empty body lifts it)."""
+        self.call("put", f"usage/pools/{scope}", {"hourly_usd": hourly} if hourly is not None else {})
+
+    def add_group(self, gid, name):
+        """An org group in the roster, which a group limit names; the bots of the team of that name are in it."""
+        from backend.store import encode
+        with self.store.transaction() as c:
+            doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+            doc.setdefault("org_groups", {})[gid] = {"name": name}
+            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+
+    def enable_providers(self, enabled):
+        """The company's AI providers, in the order their runtimes fall back to, as the owner saves them."""
+        view = self.get("providers")
+        self.enabled = list(enabled)
+        self.call("put", "providers", {"enabled": self.enabled,
+                                       "model": (view.get("default") or {}).get("model") or "",
+                                       "expected_revision": view["revision"]})
+
+    def pause(self, slug):
+        """The owner pauses a bot: it claims nothing until it is resumed."""
+        revision = self.sql("SELECT revision FROM bot_config WHERE bot=?", (slug,))[0]["revision"]
+        self.post(f"bots/{slug}/control", {"action": "pause", "expected_revision": revision})
+
+    def runtime_fallbacks(self):
+        """The runtimes the enabled providers sign in, in the company's order."""
+        return [RUNTIME_OF[p] for p in self.enabled if p in RUNTIME_OF]
+
+    def turn_runtime(self, job_id):
+        """Where a turn the runner just claimed runs: its own login unless a hold keeps it off for this job, then the
+        first fallback that is signed in and not held. Returns (runtime, held)."""
+        from backend import login_holds
+        rid = self.runner["runner_id"]
+        with self.store.read() as c:
+            if not login_holds.holding(c, rid, "", PRIMARY, job_id):
+                return PRIMARY, False
+            for name in self.runtime_fallbacks():
+                if name in self.signed_in and not login_holds.holding(c, rid, "", name):
+                    return name, True
+        return PRIMARY, False
+
+    def limit_events(self, attempt, text):
+        """The runtime's error line for a turn that met its usage limit: the login hold reads the reset from its text."""
+        self.post(f"attempts/{attempt['id']}/events",
+                  {"events": [{"seq": 1, "kind": "error", "payload": {"error": text, "limit": True}}]},
+                  token=self.runner["token"])
+
+    def limit_window(self, slug):
+        """The bot's own limit as the server holds it after its limited turn: `since` (its status), the time its runs
+        may start again (execution.limit_until), and the constant that wait came from: the login hold's reset when the
+        hold names one, else LIMIT_COOLDOWN, or LIMIT_COOLDOWN_LONG after LIMIT_STRIKES limits in a row."""
+        from backend import execution, login_holds
+        from backend.store import H
+        with self.store.read() as c:
+            status = H.status(c, slug) or {}
+            if status.get("state") != "limited" or not status.get("since"):
+                return None
+            since = status["since"]
+            until = execution.limit_until(c, slug, since)
+            last = execution.last_limit(c, slug)
+            hold = login_holds.for_attempt(c, last["id"]) if last else {}
+            streak = execution.limit_streak(c, slug)
+        if hold and hold.get("until"):
+            source = "login hold reset"
+        else:
+            source = "LIMIT_COOLDOWN_LONG" if streak >= execution.LIMIT_STRIKES else "LIMIT_COOLDOWN"
+        return {"bot": slug, "since": since, "until": until, "source": source, "streak": streak}
+
     # ------------------------------------------------------------------ fake GitHub
     def hook(self, event, payload):
         body = json.dumps(payload).encode()
@@ -211,6 +369,10 @@ class World:
         response = self.client.post("/api/v2/github/webhook", content=body, headers={
             "X-GitHub-Event": event, "X-Hub-Signature-256": sign,
             "Content-Type": "application/json"})
+        if response.status_code >= 500:   # a server error is a finding the run's checks report, as for any other call
+            self.server_errors.append((self.now(), "POST /api/v2/github/webhook", response.status_code,
+                                       response.text[:4000]))
+            return
         assert response.status_code == 200, response.text
 
     def pr_url(self, number):
@@ -453,3 +615,19 @@ class World:
         rows = self.sql("SELECT bot, count(*) n, sum(held) held FROM jobs WHERE state='queued' "
                         + ("AND bot=? " if slug else "") + "GROUP BY bot", (slug,) if slug else ())
         return {r["bot"]: (r["n"], r["held"] or 0) for r in rows}
+
+    def queued_bots(self, slugs):
+        """The bots among `slugs` with a queued job that is not held, and how many queued jobs are held. The queue alone
+        is read, never the server's limit and hold checks: a check holds this count against what its scenario knows, so
+        a hold the server sets cannot hide the work it blocks. A held job is counted apart, so a hold that never lifts
+        shows as held jobs, not as a stall."""
+        slugs = sorted(slugs)
+        if not slugs:
+            return 0, 0
+        marks = ",".join("?" * len(slugs))
+        with self.store.read() as c:
+            bots = c.execute(f"SELECT DISTINCT bot FROM jobs WHERE state='queued' AND held=0 AND bot IN ({marks})",
+                             slugs).fetchall()
+            held = c.execute(f"SELECT count(*) FROM jobs WHERE state='queued' AND held=1 AND bot IN ({marks})",
+                             slugs).fetchone()[0]
+        return len(bots), held
