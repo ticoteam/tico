@@ -401,3 +401,16 @@ def test_snapshot_shares_one_company_default_across_runners(api, monkeypatch):
     assert {first['runner_id'], second['runner_id']} <= runners
     assert len(calls) == 1
     assert set(('running', 'starting', 'waiting', 'queued')) <= value.keys()
+
+
+def test_turns_in_use_reads_the_live_attempts_index_not_every_attempt(api):
+    """Every claim counts the company's turns: a scan of all attempts ever run took ~90 ms a call on a live install."""
+    from backend import org_turns
+    with api.app.state.store.read() as c:
+        sent = []
+        c.set_trace_callback(sent.append)
+        org_turns.in_use(c)
+        c.set_trace_callback(None)
+        count = next(sql for sql in sent if "count(*) FROM attempts" in sql)
+        plan = " | ".join(row[-1] for row in c.execute("EXPLAIN QUERY PLAN " + count))
+    assert "attempts_live_lease" in plan, plan

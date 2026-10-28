@@ -350,6 +350,32 @@ def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
     assert get(api, 'bots/finance/execution-review')['jobs'][0]['id'] == attempt['job_id']
 
 
+@pytest.mark.parametrize('evidence', ['text', 'pushes', 'tokens_out', 'segment_output', 'consumed_approval'])
+def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
+    """Each piece of positive evidence on its own makes a blind retry unsafe: partial text, a git push, output tokens
+    (top-level or in a fallback segment), or an approval the bot consumed during the run."""
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-' + evidence}, machine['token'])
+    body = {'outcome': 'failed', 'last_seq': 0, 'text': ''}
+    if evidence == 'text':
+        body['text'] = 'Synthetic partial output'
+    elif evidence == 'pushes':
+        body['pushes'] = [{'path': '/synthetic/worktree', 'count': 1}]
+    elif evidence == 'tokens_out':
+        body['tokens_out'] = 40
+    elif evidence == 'segment_output':
+        body['usage'] = {'input_tokens': 9_000, 'model': 'gpt-6-sol', 'runtime': 'codex',
+                         'segments': [{'input_tokens': 9_000, 'model': 'gpt-6-sol'},
+                                      {'output_tokens': 40, 'model': 'muse-spark-1.3'}]}
+    else:
+        with api.app.state.store.transaction() as c:
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+                      (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)))
+    post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+
+
 def test_a_sparse_failure_billed_only_for_its_prompt_still_goes_back_in_the_queue(api):
     """A provider bills the prompt and then errors: input tokens alone are not evidence the turn did anything."""
     machine, message, attempt = setup_attempt(api, bot='finance')
@@ -836,6 +862,56 @@ def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_p
     assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
     aged(api, attempt['id'], grace=True)
     assert [d['state'] for d in sweep(api)] == ['queued']     # one real stop: resumed, not dismissed
+
+
+def test_a_claim_expires_lapsed_leases_in_its_own_write_and_rechecks_one_job_under_the_lock(api, monkeypatch):
+    # TK-INSRN53V (102 bots): expiry inside the claim's write, then the full selection it forced there, held the lock
+    # 7-26 s. The route expires first in a short write; the read after it sees the requeued job; the claim's write
+    # rechecks that one job and hands it out on this same claim.
+    from backend.execution import Execution
+    machine, message, lapsed = setup_attempt(api)
+    expire(api, lapsed['id'])
+    ready(api, machine, ['ops'])
+    seen, inside = [], [False]
+    original_claim, original_expire, original_candidate = Execution.claim, Execution.expire, Execution.candidate
+
+    def claim_(self, c, *a, **k):
+        inside[0] = True
+        try:
+            return original_claim(self, c, *a, **k)
+        finally:
+            inside[0] = False
+
+    def expire_(self, c, **k):
+        seen.append(('expire', inside[0], c.write_transaction))
+        return original_expire(self, c, **k)
+
+    def candidate_(self, c, *a, **k):
+        seen.append(('candidate', inside[0], k.get('job_id')))
+        return original_candidate(self, c, *a, **k)
+    monkeypatch.setattr(Execution, 'claim', claim_)
+    monkeypatch.setattr(Execution, 'expire', expire_)
+    monkeypatch.setattr(Execution, 'candidate', candidate_)
+    attempt = claim(api, machine)
+    assert attempt and attempt['job_id'] == lapsed['job_id']
+    assert ('expire', False, True) in seen                       # its own write, before the claim's
+    assert not [s for s in seen if s[0] == 'expire' and s[1]]    # never under the claim's lock
+    assert [s for s in seen if s[0] == 'candidate' and s[1]] == [('candidate', True, lapsed['job_id'])]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (lapsed['id'],)).fetchone()[0] == 'expired'
+
+
+def test_an_idle_claim_with_nothing_lapsed_takes_no_write(api, monkeypatch):
+    from backend.tests.test_api import runner
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    claim(api, machine)                                          # the contact stamp is due once
+    store = api.app.state.store
+    writes = []
+    original = store.write
+    monkeypatch.setattr(store, 'write', lambda *a, **k: writes.append(a) or original(*a, **k))
+    assert claim(api, machine) is None and writes == []
 
 
 # A finished turn whose runner stalled before handing it in (Dev 242; Oct 17-18, results 15 to 76 minutes after the

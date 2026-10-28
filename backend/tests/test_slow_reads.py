@@ -82,8 +82,6 @@ def test_operations_does_not_query_each_computer(api):
         for n in range(6):
             c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES(?,?, 'ana',?,?)",
                       (f"rn{n}", f"Mac {n}", f"th{n}", H.now()))
-    _, statements = traced_get(api, "operations", "ana-test")
-    # traced_get returns the count. Re-read through traced to see the text.
     from backend.tests.test_task_privacy_reads import traced
     _, text = traced(api, lambda: get(api, "operations"))
     joined = "\n".join(text)

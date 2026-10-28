@@ -55,6 +55,36 @@ def test_watchers_receive_only_live_grants_for_active_bots_on_their_computer(api
     assert get(api, path, computer["token"], expected=403)["error"]["code"] == "forbidden"
 
 
+def test_a_watcher_with_nothing_to_send_answers_from_a_read_while_the_write_lock_is_held(api):
+    # TK-INSRN53V: this poll waited up to 11 s behind a claim's write. It writes only to record a value it sends.
+    import sqlite3
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.tests.test_api import headers
+    local(api)
+    computer = runner(api)
+    assign(api, computer, "ops")
+    row = jira(api)
+    post(api, f"credentials/{row['id']}/grants", {"subject": "bot:finance"})
+    holder = sqlite3.connect(api.app.state.store.settings.db_path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(api.get, "/api/v2/runner-watcher-credentials?bot=ops",
+                                  headers=headers(computer["token"]))
+            try:
+                answer = pending.result(timeout=2)
+            finally:
+                holder.rollback()
+    finally:
+        holder.close()
+    assert answer.status_code == 200 and answer.json() == {"credentials": []}
+    # A grant arriving makes the same poll send the value, and record that it did.
+    post(api, f"credentials/{row['id']}/grants", {"subject": "bot:ops"})
+    assert get(api, "runner-watcher-credentials?bot=ops", computer["token"])["credentials"][0]["value"] == JIRA
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='credential.sent_to_computer'").fetchone()[0] == 1
+
+
 # ------------------------------------------------------------------ a vault with no KMS key
 def test_the_vault_works_with_a_local_key_and_reads_it_back_after_a_restart(api):
     path = local(api)

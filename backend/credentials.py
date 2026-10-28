@@ -756,11 +756,21 @@ def install_credentials(app,store,delegate=None,propose=None):
     @app.get('/api/v2/runner-watcher-credentials')
     def watcher_credentials(request:Request,bot:str):
         who=request.state.identity
-        with store.transaction() as c:
+        def placed(c):
             migration_runner(c,who)
             if not c.execute('SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot '
                              'WHERE a.runner_id=? AND a.bot=? AND b.state=\'active\'',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That active bot is not on this Computer',403)
+        # Most watchers hold no credential: answer those from a read, so the poll never queues for the write lock.
+        # Sending a value records it, so that and its checks run in one write transaction, as before.
+        with store.read_transaction() as c:
+            placed(c)
+            held=granted(c,'bot:'+bot)
+            if not any(row['id'] in held for row in c.execute(
+                    "SELECT id FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")):
+                return {'credentials':[]}
+        with store.transaction() as c:
+            placed(c)
             values=[]
             held=granted(c,'bot:'+bot)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):

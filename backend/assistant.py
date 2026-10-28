@@ -84,7 +84,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return False
     # Saving what the person taught it (backend/learned.py checks the layer: theirs, or the company's for the owner).
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
-                "/api/v2/assistant/read-back", "/api/v2/assistant/learned"):
+                "/api/v2/assistant/read-back", "/api/v2/assistant/learned", "/api/v2/goals/read-back"):
         return True
     # Asking the settings catalogue for a change's plan changes no setting: it answers with the request, a refusal or a
     # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the

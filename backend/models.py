@@ -668,6 +668,12 @@ class LearnedEdit(Contract):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class GoalReadBack(Contract):
+    """Up to 20 changes the CEO Bot reads back in the owner's chat (backend/goal_read_back.py): each one an object with a
+    `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."""
+    changes: list[dict] = Field(min_length=1, max_length=20)
+
+
 class GoalWhy(Contract):
     why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 
