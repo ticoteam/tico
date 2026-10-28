@@ -8,7 +8,7 @@ database, made-up bots, and no request leaves the test server.
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, get, post, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act
 from backend.tests.test_mcp import call as mcp
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
@@ -144,17 +144,78 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
 
 
 def test_the_same_setting_on_two_bots_is_two_asks_but_another_value_on_one_waits(api, botops):
-    """Review 1 (delta 2): a waiting ask holds its setting on its own target only. Compact at for Finance and for Ops
+    """Review 1 (delta 2): a waiting ask holds its setting on its own target only. Run budgets for Finance and for Ops
     are two requests, each named for its bot; a second value for Finance waits for the first answer."""
-    first = ask(api, botops, "cara", "bot.compact_at", 80, bot="finance")
-    second = ask(api, botops, "cara", "bot.compact_at", 80, bot="ops")
+    first = ask(api, botops, "cara", "bot.budget", {"turns_per_hour": 10, "expected_revision": 1}, bot="finance")
+    second = ask(api, botops, "cara", "bot.budget", {"turns_per_hour": 10, "expected_revision": 1}, bot="ops")
     assert not first[0] and not second[0], (first, second)
     chosen = first[1]["asked"]["person"].split(":")[1]
     titles = sorted(task["title"].split(" asks you to change ")[1] for task, _ in asks(api, chosen))
-    assert titles == ["Compact at for finance", "Compact at for ops"], titles
-    err, got = ask(api, botops, "cara", "bot.compact_at", 70, bot="finance")
-    assert err and got["error"] == "already_asked" and "Compact at for finance" in got["detail"], got
+    assert titles == ["Bot run budget for finance", "Bot run budget for ops"], titles
+    err, got = ask(api, botops, "cara", "bot.budget", {"turns_per_hour": 12, "expected_revision": 1}, bot="finance")
+    assert err and got["error"] == "already_asked" and "Bot run budget for finance" in got["detail"], got
     assert len(asks(api, chosen)) == 2
+
+
+def test_two_people_asking_for_the_same_change_never_share_one_request(api, botops):
+    """Review 2: an identical card is reused (assistant.create_proposal), so a second person's identical ask must not
+    take over the first's request, nor Ana's own waiting card. Each accepted request keeps its own requester and is
+    told once."""
+    err, got = ask(api, botops, "ben", "team.rules.go_ahead_days", 3)
+    assert not err and got["asked"]["person"] == "human:ana", got
+    err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)
+    assert err and got["error"] == "already_waiting" and "already asked them" in got["detail"], got
+    [(task, first)] = asks(api, "ana")
+    assert task["requester"] == "human:ben", task
+    post(api, f"assistant/actions/{first['id']}/cancel", {}, "ana-test")
+    assert len(told(api, "ben", first["id"])) == 1                             # Ben hears; Cara asked nothing
+    err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)          # once settled, hers is her own
+    assert not err, got
+    [(task, second)] = [(t, card) for t, card in asks(api, "ana") if card["id"] != first["id"]]
+    assert task["requester"] == "human:cara" and task["status"] == "open", task
+    assert post(api, f"assistant/actions/{second['id']}/confirm", {}, "ana-test")["action"]["status"] == "done"
+    assert len(told(api, "cara", second["id"])) == 1 and not told(api, "ben", second["id"])
+    assert len(told(api, "ben", first["id"])) == 1
+    # Ana's own waiting card for the same change is hers: nobody's ask adopts it.
+    ana = turn(api, botops, person="ana-test", text="Make bots wait 5 days")
+    err, own = mcp(api, "hub_settings_set", {"key": "team.rules.go_ahead_days", "value": 5}, ana["token"])
+    finish(api, botops, ana)
+    assert not err and own.get("needs_confirm"), own
+    err, got = ask(api, botops, "ben", "team.rules.go_ahead_days", 5)
+    assert err and got["error"] == "already_waiting" and "their own card" in got["detail"], got
+    with api.app.state.store.read() as c:
+        held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (own["action"]["id"],)).fetchone()
+    assert held["ask_json"] is None
+
+
+def test_an_asked_confirm_cut_off_by_a_restart_settles_its_request_once_without_running_again(api, botops):
+    """Review 2: a confirm claimed as running and never settled (a restart mid-run) is failed by the Assistant's own
+    expiry, which now settles its ask: the task declined and the asker told once that it may not have finished.
+    One the old expiry left failed with its task open is settled by the hourly sweep, once."""
+    from backend import approval_expiry
+    before = times(api)
+    assert not ask(api, botops, "cara", "release.times", "06:00")[0]
+    [(_, cut)] = asks(api, "ben")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE assistant_actions SET status='running', running_since=? WHERE id=?",
+                  (H.shift(H.now(), seconds=-300), cut["id"]))
+    r = api.get("/api/v2/assistant", headers=headers("ben-test"))                # the Assistant's own expiry runs
+    assert r.status_code == 200, r.text
+    [(task, card)] = asks(api, "ben")
+    assert (card["status"], task["status"]) == ("failed", "declined"), (card, task)
+    [said] = told(api, "cara", cut["id"])
+    assert "cut off" in said and "may or may not have changed" in said, said
+    assert not ask(api, botops, "cara", "release.times", "06:30")[0]           # settled, so asked afresh
+    [orphan] = [card for _, card in asks(api, "ben") if card["id"] != cut["id"]]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE assistant_actions SET status='failed' WHERE id=?", (orphan["id"],))   # as before this fix
+    for _ in range(2):
+        with api.app.state.store.transaction() as c:
+            approval_expiry.sweep(c)
+    status = {card["id"]: (card["status"], task["status"]) for task, card in asks(api, "ben")}
+    assert status[orphan["id"]] == ("failed", "declined"), status
+    assert len(told(api, "cara", cut["id"])) == 1 and len(told(api, "cara", orphan["id"])) == 1
+    assert times(api) == before                                                # nothing ran again
 
 
 def test_a_bot_that_made_an_incoming_trigger_may_change_it_as_its_route_allows(api):
@@ -204,7 +265,7 @@ def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, bot
 def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api, botops):
     """The same from Cara's Assistant: with her words cited, Ben gets the request and she is told in her Assistant
     chat; without them, nothing is asked. The raw refusal of her release time names who may, as `hub settings` does."""
-    from backend.tests.test_api import as_member, headers
+    from backend.tests.test_api import as_member
     from backend.tests.test_assistant import assistant_turn
     from backend.tests.test_settings_assistant import mcp as assistant_mcp
     as_member(api, "cara@acme.example")

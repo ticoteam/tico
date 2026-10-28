@@ -17,7 +17,9 @@ MAX_OPEN = 5            # asks one person may have waiting at once
 TOLD = {"done": "{name} confirmed it: {what} is done.",
         "cancelled": "{name} said no to {what}: nothing changed.",
         "failed": "{name} confirmed {what}, but it did not go through: {error}",
-        "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed."}
+        "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
+        "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "
+                       "changed: check it, and ask again if it didn't."}
 
 
 def _name(c, actor):
@@ -77,9 +79,16 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
     outcome settles the task and tells the asker). The same card asked for again is the same request; another value
     for the same setting on the same target waits for the first answer."""
     action = card["action"]
-    held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
-    if held and held["ask_json"]:
-        return json.loads(held["ask_json"])["task"]
+    if card.get("repeated"):
+        # The card was already waiting (assistant.create_proposal reuses an identical pending one). Only the same
+        # person's ask is the same request; anyone else's, or the person's own card, is never taken over silently.
+        held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
+        ask = json.loads(held["ask_json"]) if held and held["ask_json"] else None
+        if ask and ask["asker"] == asker.actor:
+            return ask["task"]
+        by = f"{_name(c, ask['asker'])} already asked them for" if ask else "they already have their own card for"
+        raise Problem("already_waiting", f"{_name(c, chosen.actor)} has exactly this change waiting: {by} it. Nothing "
+                      "was asked; ask again once it is settled", 409)
     on = {k: str(v) for k, v in (target or {}).items() if v}
     what = _what(c, e, on)
     for row in c.execute("SELECT ask_json FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
@@ -138,7 +147,34 @@ def sweep(c, at=None):
                       (at, row["id"]))
             settled(c, row, "expired")
             gone.append(row["id"])
-    return gone
+    return gone + recover(c, at, orphans=True)
+
+
+def interrupted(c, at, ttl_s, orphans=False):
+    """The asked cards whose confirm never settled (a restart mid-run): those still `running` past `ttl_s`, and with
+    `orphans` (the hourly sweep) those already marked failed without settling their ask (their task still open)."""
+    rows = H._rows(c.execute("SELECT * FROM assistant_actions WHERE ask_json IS NOT NULL AND ((status='running' AND "
+                             "running_since<?) OR (? AND status='failed')) ORDER BY created",
+                             (H.shift(at, seconds=-ttl_s), int(orphans))))
+    ended = ("done", "declined", "closed")
+    return [r for r in rows if r["status"] == "running"
+            or (H.task(c, json.loads(r["ask_json"])["task"]) or {}).get("status") not in (None, *ended)]
+
+
+def recover(c, at=None, orphans=False):
+    """A confirm cut off before it finished settles its ask once: the task declined, and the asker told it may or may
+    not have changed. Nothing is run again. The Assistant's expiry calls it before its own (backend/assistant.py)."""
+    from .assistant import RUNNING_TTL_S
+    from .batch_work import isolated
+    at, done = at or H.now(), []
+    for row in interrupted(c, at, RUNNING_TTL_S, orphans):
+        with isolated(c, "settings_asks", row["id"]):
+            c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result_json=? "
+                      "WHERE id=? AND status='running'",
+                      (at, json.dumps({"status_code": 0, "error": "It did not finish; ask again"}), row["id"]))
+            settled(c, row, "interrupted")
+            done.append(row["id"])
+    return done
 
 
 def acting(chosen):

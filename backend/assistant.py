@@ -1757,7 +1757,9 @@ def install(app, store, auth, mutate, onboarding):
                          (H.shift(H.now(), seconds=-RUNNING_TTL_S),)).fetchone()
 
     def expire(c):
-        """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
+        """A confirm that never settled (a restart, a dropped connection) fails after two minutes; an asked one also
+        settles its ask (backend/settings_asks.py), its asker told it may not have finished."""
+        settings_asks.recover(c)
         c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result_json=? "
                   "WHERE status='running' AND running_since<?",
                   (H.now(), json.dumps({"status_code": 0, "error": "It did not finish; ask again"}),

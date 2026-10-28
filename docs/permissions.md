@@ -556,10 +556,13 @@ settings). On the person's yes, `hub settings ask <key> <value>` (`--to <person>
 person who may: the setting's Confirm card in their BotOps chat and a task on their list that the asker requested. Only
 their tap changes it, with their rights; their tap or cancel settles the task, done or declined, and the asker is told
 in the chat they asked from. A card nobody taps expires after a day (the hourly approval expiry sweep), which declines
-the task and tells the asker too. The Assistant cites the person's words for it; a bot on its own rights never asks, a
-person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each person's own, by
-them), and someone who may change it is told to set it. A person has at most five asks waiting at once, one per
-setting (asking again for one that waits is refused, `already_asked`).
+the task and tells the asker too; a confirm cut off before it finished (a restart) declines it and tells the asker it
+may or may not have changed, and nothing runs again. The Assistant cites the person's words for it; a bot on its own
+rights never asks, a person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each
+person's own, by them), and someone who may change it is told to set it. A person has at most five asks waiting at once,
+one per setting and target (asking again for one that waits is refused, `already_asked`). The same ask again is the same
+request; one for exactly the change already waiting for that person on someone else's ask or on their own card is
+refused (`already_waiting`), so every accepted request has its own requester and is told once.
 
 `backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
