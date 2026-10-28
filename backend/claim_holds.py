@@ -99,8 +99,13 @@ def started(c, job_id):
     held."""
     row = c.execute("SELECT bot FROM jobs WHERE id=?", (job_id,)).fetchone()
     if row:
-        c.execute("DELETE FROM service_health WHERE service=?", (CHECK + row["bot"],))
+        check_passed(c, row["bot"])
     clear(c, job_id, "Its held run started.")
+
+
+def check_passed(c, bot):
+    """The bot's claim check read cleanly again: Health stops naming it."""
+    c.execute("DELETE FROM service_health WHERE service=?", (CHECK + bot,))
 
 
 def clear(c, job_id, note="Its held run is no longer held."):

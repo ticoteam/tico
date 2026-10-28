@@ -225,8 +225,8 @@ def refusal(c, row, config, woken=False, result=False, *, message=None):
 def missing(c, settings, runner, body, failed=None, waiting=None):
     """The highest ranked eligible task without an unfinished run. Reads only, including on idle claims. A bot whose
     claim check raised is passed over as the claim passes it over: `failed` (the claim's ClaimFaults) records it, and
-    `waiting` says its check is still backing off."""
-    from . import claim_holds
+    each bot whose check reads cleanly, and `waiting` says its check is still backing off. A task whose own checks raise
+    is passed over and logged; the bot's other tasks are still looked at."""
     from . import execution as E
     from .batch_work import report, shared_check, shared_scope, storage_error
     from .shared_bots import follow
@@ -254,6 +254,9 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             with shared_check():
                 why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready,
                                               held_bots)
+                if not why:
+                    config = follow(c, slug, config)
+                    scope = E.claim_scope(c, slug)
         except Exception as exc:
             # One bot's raising check must not stop the other bots' open tasks from starting.
             if storage_error(exc) or shared_scope(exc) == "team":
@@ -263,34 +266,49 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             else:
                 report("auto task check", slug, exc)
             continue
+        if failed is not None:
+            failed.clean.add(slug)
         if why:
             continue
-        config = follow(c, slug, config)
-        scope = E.claim_scope(c, slug)
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
                                      "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
-            if not startable(c, row) or refusal(c, row, config) or not H.task_private_readable(c, row['owner'], row):
-                continue
-            # A bot limited to one task (execution.scoped_sql) starts only that task or a direct subtask: a start
-            # queued for any other would wait, unclaimable, until the limit is lifted.
-            if scope and not E.in_scope(c, scope, row['id']):
-                continue
-            lane = E.job_lane(c, slug, config, {'refs': {'task': row['id']}},
-                              H.conversation(c, row['conversation_id']), E.lanes_on(runner), E.roots_on(runner))
-            if (slug, lane) in busy:
-                continue
-            # Failed/uncertain work belongs to explicit recovery, never an automatic retry. A job its claim holds is
-            # still the task's run, waiting for its bot's release: no second one is filed beside it.
-            if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id "
-                         "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
-                         f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
-                         f"AND ({H.unheld_sql()} OR j.hold_reason=?) OR carrier.state NOT IN ('completed','cancelled') "
-                         f"AND {H.unheld_sql('carrier')}) LIMIT 1",
-                         (slug, row['id'], claim_holds.REASON)).fetchone():
-                continue
-            return row
+            try:
+                if found := _startable_task(c, row, slug, config, scope, runner, busy):
+                    return found
+            except Exception as exc:
+                # One task whose checks raise is that task's alone: no run exists to hold, so it is logged and passed
+                # over, and the other tasks still start.
+                if storage_error(exc) or shared_scope(exc) == "team":
+                    raise
+                report("auto task", row['id'], exc)
     return None
+
+
+def _startable_task(c, row, slug, config, scope, runner, busy):
+    """`row` when the backfill may start it now, else None."""
+    from . import claim_holds
+    from . import execution as E
+    if not startable(c, row) or refusal(c, row, config) or not H.task_private_readable(c, row['owner'], row):
+        return None
+    # A bot limited to one task (execution.scoped_sql) starts only that task or a direct subtask: a start queued for
+    # any other would wait, unclaimable, until the limit is lifted.
+    if scope and not E.in_scope(c, scope, row['id']):
+        return None
+    lane = E.job_lane(c, slug, config, {'refs': {'task': row['id']}},
+                      H.conversation(c, row['conversation_id']), E.lanes_on(runner), E.roots_on(runner))
+    if (slug, lane) in busy:
+        return None
+    # Failed/uncertain work belongs to explicit recovery, never an automatic retry. A job its claim holds is still the
+    # task's run, waiting for its bot's release: no second one is filed beside it.
+    if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                 "JOIN conversations cv ON cv.id=m.conversation_id "
+                 "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
+                 f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
+                 f"AND ({H.unheld_sql()} OR j.hold_reason=?) OR carrier.state NOT IN ('completed','cancelled') "
+                 f"AND {H.unheld_sql('carrier')}) LIMIT 1",
+                 (slug, row['id'], claim_holds.REASON)).fetchone():
+        return None
+    return row
 
 
 def enqueue(c, row):

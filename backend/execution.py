@@ -70,11 +70,13 @@ class ClaimFaults:
     """What one claim could not check or start, kept for the whole claim. `jobs`: (job id, error name) pairs to hold.
     `bots`: the bots whose bot-wide check raised, with the error name; the claim passes each over for the rest of its
     call, so its error is logged once and none of its runs is held. `holds`: the jobs the claim has held, which
-    CLAIM_HOLDS bounds, so one wide failure cannot hold a whole backlog in one claim."""
+    CLAIM_HOLDS bounds, so one wide failure cannot hold a whole backlog in one claim. `clean`: the bots whose check
+    the backfill read without error, so a back-off left from an earlier failure ends."""
 
     def __init__(self):
         self.jobs, self.bots, self.holds = [], {}, 0
         self.new_bots = []          # (bot, exception) whose failure Health has not recorded yet
+        self.clean = set()
 
     def __bool__(self):
         return bool(self.jobs or self.new_bots)
@@ -2845,8 +2847,8 @@ class Execution:
         if row is None and people_only:
             return self.held_answer(c, who.runner_id)
         if row is None and (auto_tasks.missing(c, self.store.settings, runner, body, failed, self.check_waiting)
-                            or failed):
-            return None         # a bot whose check raised is recorded under the writer lock, as above
+                            or failed or failed is not None and failed.clean & self.check_backoff.keys()):
+            return None         # a bot whose check raised, or passes again, is recorded under the writer lock
         if row is not None and selected is not None:
             selected.append(row)
         return None if row else {"attempt": None}
@@ -3006,6 +3008,7 @@ class Execution:
                 and (pending := auto_tasks.missing(c, self.store.settings, runner, body, failed, self.check_waiting))):
             auto_tasks.enqueue(c, pending)
             row = self.pick(c, who, body, runner, now, failed=failed, passed=passed)
+        self.hold_failed(c, failed)
         if not row:
             return {"attempt": None}
         # The job's preparation runs in a savepoint of its own. An error rolls back its writes: a check of one bot
@@ -3341,7 +3344,11 @@ class Execution:
     def hold_failed(self, c, failed):
         """Record what the claim's ClaimFaults found, and clear it: each job it could not evaluate or start is held, and
         each bot whose check raised is logged once, named in Health (claim_holds.check_failed) and passed over until
-        its back-off ends (check_waiting)."""
+        its back-off ends (check_waiting). A bot whose check passes again loses its back-off and its Health finding."""
+        for bot in failed.clean - failed.bots.keys():
+            if self.check_backoff.pop(bot, None):
+                claim_holds.check_passed(c, bot)
+        failed.clean.clear()
         while failed.jobs:
             job_id, error = failed.jobs.pop(0)
             claim_holds.hold(c, self.store.settings, job_id, error)

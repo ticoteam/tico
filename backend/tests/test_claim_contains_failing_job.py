@@ -11,8 +11,8 @@ import sqlite3
 
 import pytest
 
-from backend import (batch_work, claim_holds, execution, gateway_connection, health, health_monitor, providers,
-                     read_cache, read_deps, run_backoff, task_privacy as privacy, turn_budgets, wake_presets)
+from backend import (auto_tasks, batch_work, claim_holds, execution, gateway_connection, health, health_monitor,
+                     providers, read_cache, read_deps, run_backoff, task_privacy as privacy, turn_budgets, wake_presets)
 from backend.store import H
 from backend.tests.test_api import (  # noqa: F401 (api is a fixture)
     api, assign, claim, get, headers, post, ready, runner, setup_attempt)
@@ -750,6 +750,74 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
     assert len(calls) == seen
     with api.app.state.store.transaction() as c:
         assert "claim_check" in {f["check_id"] for f in health_monitor.findings(c, api.app.state.store.settings)}
+
+
+def open_task_only(api, machine, bots):
+    """Each bot has one open task and nothing queued: only the claim's backfill starts them."""
+    for bot in bots:
+        assign(api, machine, bot)
+    ready(api, machine, list(bots))
+    tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
+                                      "body": "Build the requested feature."}) for bot in bots}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled'")
+    return tasks
+
+
+def claim_check_bots(api):
+    with api.app.state.store.transaction() as c:
+        return [r[0] for r in c.execute("SELECT service FROM service_health WHERE service GLOB 'claim_check:*'")]
+
+
+def test_a_task_whose_backfill_check_raises_does_not_stop_another_bots_task(api, monkeypatch):
+    """An error in one open task's own checks belongs to that task: the backfill passes it over and the next bot's task
+    still starts."""
+    machine = runner(api, "ana")
+    tasks = open_task_only(api, machine, ("ops", "cpo"))
+    real = auto_tasks.refusal
+
+    def raising(c, row, *args, **kwargs):
+        if row["owner"] == "bot:ops":
+            raise RuntimeError("ops's open task cannot be read")
+        return real(c, row, *args, **kwargs)
+    monkeypatch.setattr(auto_tasks, "refusal", raising)
+    turn = claim(api, machine)
+    assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
+
+
+def test_a_bot_check_that_raises_in_the_backfill_alone_is_recorded_and_backed_off(api, monkeypatch):
+    """A bot whose only work is an open task: its raising check is recorded and backed off even though the claim has
+    nothing to hand out, so later polls neither run the check again nor lose the Health finding. The claims skip the
+    idle read, as one does whenever there is something to write first, so the writer's backfill meets the error."""
+    machine = runner(api, "ana")
+    open_task_only(api, machine, ("ops",))
+    monkeypatch.setattr(execution.Execution, "idle_claim", lambda *args, **kwargs: None)
+    calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+    assert claim(api, machine) is None
+    seen = len(calls)
+    assert seen and claim_check_bots(api) == ["claim_check:ops"]
+    for _ in range(3):
+        assert claim(api, machine) is None
+    assert len(calls) == seen
+
+
+def test_a_bot_check_that_passes_again_in_the_backfill_ends_its_back_off_and_finding(api, monkeypatch):
+    """Once the bot's check reads cleanly in the backfill, Health stops naming it and a later failure backs off from
+    the first wait again, though no run of the bot started."""
+    machine = runner(api, "ana")
+    open_task_only(api, machine, ("ops",))
+    monkeypatch.setattr(auto_tasks, "refusal", lambda *a, **k: "auto_start_off")
+    real = run_backoff.refusal
+    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+    assert claim(api, machine) is None
+    assert claim_check_bots(api) == ["claim_check:ops"]
+    monkeypatch.setattr(run_backoff, "refusal", real)
+    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_MAX + 1))
+    assert claim(api, machine) is None
+    assert claim_check_bots(api) == []
+    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+    assert claim(api, machine) is None
+    assert api.app.state.execution.check_backoff["ops"][1] == 1
 
 
 @pytest.mark.parametrize("check", ["bot", "job"])
