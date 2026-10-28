@@ -122,11 +122,13 @@ def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api,
 
 
 def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
-    """Sending outside the company stays the owner's at every level (docs/ceo-bot.md, "What stays yours"). The CEO Bot's
-    mail setting reads as off with no forward targets, whatever a person stored for it, and nobody can turn it on: its
-    mail connector then takes neither a forward target nor the sender of the thread it answers without a send approval
-    for that exact message. Another bot with the same setting still sends to both. Synthetic addresses; nothing is sent
-    and no mail provider is called (check_send only decides)."""
+    """Sending outside the company stays the owner's at every level (docs/ceo-bot.md, "What stays yours"). The CEO Bot
+    has no forward targets, whatever a person stored for it, and nobody can add one; its mail connector takes neither a
+    forward target nor the sender of the thread it answers without a send approval for that exact message, an outside
+    address beside a colleague on To needs one too, and one only on Cc is refused. Mail inside the company follows the switch a person
+    sets (`internal_send`), as any bot's does; `outbound_send` reads off, for a connector from before this rule. Another
+    bot with the same setting still sends to all of them. Synthetic addresses; nothing is sent and no mail provider is
+    called (check_send only decides)."""
     import hashlib
 
     from backend.store import H
@@ -134,36 +136,51 @@ def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
     from connectors.mail import policy as pl
     ceo, ops = with_ceo_bot(api), bot(api, "ops")
     sender, forward, body = "ava@creator.example", "me@personal.example", "Thanks, we have it.\n"
+    colleague, lead = "ben@acme.example", "cy@acme.example"
     with api.app.state.store.transaction() as c:          # a person turned sending on for both, as before this rule
         for slug in ("goal-manager", "ops"):
             c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) "
                       "VALUES(?,1,?,?,'human:ana')", (slug, f'["{forward}"]', H.now()))
     seen = setting(api, ceo, bot="goal-manager")
-    assert (seen["outbound_send"], seen["forward_to"]) == (False, []) and seen["per_message"], seen
-    assert setting(api, bot="goal-manager")["outbound_send"] is False           # the owner reads what applies
-    for asked in ({"outbound_send": True}, {"forward_to": [forward]}):
-        r = change(api, asked, bot="goal-manager")
-        assert r.status_code == 422 and "each message" in r.text, r.text
+    assert (seen["outbound_send"], seen["internal_send"], seen["forward_to"]) == (False, True, []), seen
+    assert seen["per_message"] and setting(api, bot="goal-manager")["forward_to"] == []   # the owner reads what applies
+    r = change(api, {"forward_to": [forward]}, bot="goal-manager")
+    assert r.status_code == 422 and "each message" in r.text, r.text
 
     pol = pl.builtin("goal-manager", env={"TICO_INTERNAL_DOMAINS": "acme.example"})
-    approval = "11111111-2222-3333-4444-555555555555"
+    sha = hashlib.sha256(body.strip().encode()).hexdigest()
+    yes = {"11111111-2222-3333-4444-555555555555": ([sender], []), "21111111-2222-3333-4444-555555555555": ([], [sender])}
+    to_sender = next(iter(yes))
     saved = pl.SERVER_GET, pl.HUB_GET
-    pl.HUB_GET = lambda path: {"id": approval, "kind": "send", "decision": "approved", "consumed_at": None, "payload": {
-        "to": [sender], "cc": [], "subject": "Re: help", "mailbox": "box@acme.example",
-        "body_sha256": hashlib.sha256(body.strip().encode()).hexdigest()}} if path == f"approvals/{approval}" else None
+    pl.HUB_GET = lambda path: next(({"id": n, "kind": "send", "decision": "approved", "consumed_at": None, "payload": {
+        "to": to, "cc": cc, "subject": "Re: help", "mailbox": "box@acme.example", "body_sha256": sha}}
+        for n, (to, cc) in yes.items() if path == f"approvals/{n}"), None)
 
     def send(slug, token, to, **kw):
         pl.SERVER_GET = lambda s: get(api, f"bots/{s}/mail-settings", token=token)
         return pl.check_send(pol, slug, "box@acme.example", to, manifest={}, verbs=["send"], body=body, **kw)
 
     reply = {"thread_id": "t-1", "thread_senders": [sender]}
+    inside = (([colleague], {}), ([colleague], {"cc": [lead]}))
+    outside = (([sender], reply), ([forward], {}), ([colleague], {"cc": [sender]}), ([colleague, sender], {}))
     try:
-        assert send("ops", ops, [sender], **reply).allowed and send("ops", ops, [forward]).allowed
-        for to, extra in (([sender], reply), ([forward], {})):
+        for to, extra in inside + outside[:2] + outside[3:]:            # the ordinary bot's paths are as they were
+            assert send("ops", ops, to, **extra).allowed, (to, extra)
+        for to, extra in inside:
+            assert send("goal-manager", ceo, to, **extra).allowed, (to, extra)
+        for to, extra in outside:
             d = send("goal-manager", ceo, to, **extra)
-            assert (d.allowed, d["gate"]) == (False, "outbound_send") and "each message" in d["reason"], d
-        assert send("goal-manager", ceo, [sender], approval=approval, **reply).allowed
-        assert not send("goal-manager", ceo, [forward], approval=approval).allowed   # the yes names another address
+            assert (d.allowed, d["gate"]) == (False, "outbound_send") and "each message" in d["reason"], (to, d)
+        assert send("goal-manager", ceo, [sender], approval=to_sender, **reply).allowed
+        assert send("goal-manager", ceo, [colleague, sender], approval=to_sender).allowed    # it names the outside one
+        assert not send("goal-manager", ceo, [forward], approval=to_sender).allowed   # the yes names another address
+        for approval in yes:                # an outside address only on Cc stays refused: a Tico yes names one on To
+            assert not send("goal-manager", ceo, [colleague], cc=[sender], approval=approval).allowed
+
+        assert change(api, {"outbound_send": False}, bot="goal-manager").status_code == 200
+        assert setting(api, ceo, bot="goal-manager")["internal_send"] is False
+        d = send("goal-manager", ceo, [colleague])
+        assert (d.allowed, d["gate"]) == (False, "outbound_send"), d                  # off inside too, as for any bot
     finally:
         pl.SERVER_GET, pl.HUB_GET = saved
 

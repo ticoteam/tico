@@ -171,7 +171,8 @@ At every level, these stay yours, and the server refuses the CEO Bot each one:
 - anything that raises cost: a new routine or a routine that runs more often, a bot's model, fallback or wake settings;
 - publishing to a public roadmap without your approval, and publishing a strategy version at all;
 - sending anything outside the company, such as a calendar invitation or an email to someone outside it. Its mail
-  sending stays off and nobody can turn it on, so each email outside needs your send approval for that message;
+  sending covers people in the company only, so each email to anyone outside needs your send approval for that exact
+  message;
 - adding, removing or bringing back bots;
 - changing a goal, or a goal's KPI target;
 - writing the strategy draft or a bet (it proposes instead);

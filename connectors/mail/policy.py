@@ -815,8 +815,12 @@ def switch(slug, manifest=None):
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
     if out["per_message"]:
-        # The CEO Bot (backend/mail_settings.py): off whatever is stored, and nobody turns it on, so no hint to.
-        out["on"], out["forward_to"], out["detail"] = False, [], "off in Tico: " + out["per_message"]
+        # The CEO Bot (backend/mail_settings.py): no forward targets, and the switch a person sets covers mail inside
+        # the company only (`internal_send`); `outbound_send` reads off for a connector from before that rule.
+        out["on"] = bool(row.get("internal_send")) and not out["onboarding"]
+        out["forward_to"] = []
+        out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico for mail inside the company, set by {who}; "
+                         + out["per_message"])
     return out
 
 

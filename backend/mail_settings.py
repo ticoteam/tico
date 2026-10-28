@@ -13,9 +13,10 @@ runner-rs/src/declared_access.rs); Health raises an alert when it asks for more 
 take exactly that request with `from_request` once they have read it.
 
 The CEO Bot never sends outside the company without a person's yes for that message, at any level (backend/ceo_acts.py
-`PERSON_ONLY`, "send"): its setting reads as off with no forward targets, whatever is stored (`per_message`), and nobody
-turns it on. Its mail connector then takes neither a forward target, nor the sender of a thread it answers, nor an
-allowance, without a send approval for the exact message.
+`PERSON_ONLY`, "send"): it has no forward targets, and its mail connector takes neither the sender of a thread it
+answers, nor an allowance, nor an Issue or an owner's message, for an outside address: only a Tico send approval for the
+exact message (`per_message`). A person may still turn its sending on for mail inside the company, which reads as
+`internal_send`; `outbound_send` reads as off, so a connector from before this rule sends nothing without an approval.
 """
 
 import json
@@ -98,7 +99,8 @@ def view(c, bot):
              "requested": request, "unapproved": unapproved(setting, request)}
     if why := per_message(c, bot):
         # What applies, to the bot and to every person who reads it; nothing a person could approve is asked.
-        found.update({"set": True, "outbound_send": False, "forward_to": [], "per_message": why, "unapproved": None})
+        found.update({"set": True, "outbound_send": False, "internal_send": found["outbound_send"], "forward_to": [],
+                      "per_message": why, "unapproved": None})
     return found
 
 
@@ -132,8 +134,10 @@ def update(c, auth, who, bot, body):
         raise Problem("forward_to", "Not an email address: " + ", ".join(bad[:3]), 422)
     if len(targets) > MAX_TARGETS:
         raise Problem("forward_to", f"At most {MAX_TARGETS} forward addresses", 422)
-    if (on or targets) and (why := per_message(c, bot)):
-        raise Problem("per_message", why[0].upper() + why[1:], 422)
+    if why := per_message(c, bot):
+        if body.forward_to or body.from_request and targets:
+            raise Problem("per_message", why[0].upper() + why[1:], 422)
+        targets = []                    # nor one stored before this rule: the switch covers mail inside the company
     c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET outbound_send=excluded.outbound_send, "
               "forward_to_json=excluded.forward_to_json, updated=excluded.updated, updated_by=excluded.updated_by",

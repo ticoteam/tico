@@ -613,9 +613,10 @@ hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yam
 
 The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
 
-The CEO Bot is the exception: sending outside the company stays the owner's at every level, so its switch reads as off
-with no forward addresses, and turning it on is refused. Each email it sends outside needs a send approval for that
-message ([What stays yours](ceo-bot.md#what-stays-yours)).
+The CEO Bot is the exception: sending outside the company stays the owner's at every level. Its switch covers mail to
+people in the company only, it has no forward addresses, and each email with anyone outside on To or Cc needs a Tico
+send approval for that exact message: an approval Issue or a message telling it to send does not count
+([What stays yours](ceo-bot.md#what-stays-yours)).
 
 `outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
 repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
