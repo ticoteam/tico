@@ -261,29 +261,34 @@ def _bot_line(c, bot, ctx):
     """The connection without its tool, and the bot's filled-in configuration that names the tool."""
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? '
                        'AND r.revoked_at IS NULL', (bot,)).fetchone()
-    signed_in = None
     computer = {'runner_id': runner['id'], 'label': runner['label']} if runner else None
     from . import providers
     from .shared_bots import follow
     row = c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()
     config = providers.fill(ctx['providers'], follow(c, bot, json.loads(row[0] or '{}') if row else {}))
-    runtime = config.get('runtime')
     line = {'profile': None, 'source': 'computer', 'computer': computer}
-    if runner:
-        report = readiness_document(runner['readiness_json'])
-        bot_report = report.get('bots', {}).get(bot, {})
-        line['profile'] = bot_report.get('profile') or None
-        if problem := login_upgrade(runner, report, bot=bot):
-            return {**line, 'signed_in': None, 'problem': problem}, config
-        if bot_report.get('data_problem'):
-            # Signed in, but its turns can't save a session: the folder is what to fix, not a sign-in.
-            return {**line, 'signed_in': None, 'problem': bot_report['data_problem'], 'detail': {'runtime': runtime}}, config
-        state = bot_report.get('sign_in') or report.get('runtimes', {}).get(runtime, {}).get('authenticated')
-        signed_in = True if state == 'ready' else False if state in ('missing', 'failed', 'rejected') else None
-        from .readiness import login_warning
-        if warning := login_warning(report, runtime, config.get('harness') or ''):
-            line['warning'] = warning
-    return {**line, 'signed_in': signed_in, 'problem': ''}, config
+    if not runner:
+        return {**line, 'signed_in': None, 'problem': ''}, config
+    return {**line, **_sign_in(runner, readiness_document(runner['readiness_json']), bot, config)}, config
+
+
+def _sign_in(runner, report, bot, config):
+    """A placed bot's login on its computer: {profile, signed_in, problem} plus `detail` or `warning` when they apply.
+    Shared by the one-bot line and the Operations batch so the two name a connection alike."""
+    runtime = config.get('runtime')
+    bot_report = report.get('bots', {}).get(bot, {})
+    out = {'profile': bot_report.get('profile') or None}
+    if problem := login_upgrade(runner, report, bot=bot):
+        return {**out, 'signed_in': None, 'problem': problem}
+    if bot_report.get('data_problem'):
+        # Signed in, but its turns can't save a session: the folder is what to fix, not a sign-in.
+        return {**out, 'signed_in': None, 'problem': bot_report['data_problem'], 'detail': {'runtime': runtime}}
+    state = bot_report.get('sign_in') or report.get('runtimes', {}).get(runtime, {}).get('authenticated')
+    signed_in = True if state == 'ready' else False if state in ('missing', 'failed', 'rejected') else None
+    from .readiness import login_warning
+    if warning := login_warning(report, runtime, config.get('harness') or ''):
+        out['warning'] = warning
+    return {**out, 'signed_in': signed_in, 'problem': ''}
 
 
 def connections(c, runner_id, settings, ctx=None):
@@ -346,20 +351,7 @@ def connections_by_runner(c, settings, ctx=None):
                 line.update(computer=None, signed_in=None, problem="")
                 items.append((bot, line))
                 continue
-            bot_report = report.get("bots", {}).get(bot, {})
-            line["profile"] = bot_report.get("profile") or None
-            if problem := login_upgrade(runner, report, bot=bot):
-                line.update(signed_in=None, problem=problem)
-            elif bot_report.get("data_problem"):
-                line.update(signed_in=None, problem=bot_report["data_problem"],
-                            detail={"runtime": runtime})
-            else:
-                state = bot_report.get("sign_in") or report.get("runtimes", {}).get(runtime, {}).get("authenticated")
-                signed_in = True if state == "ready" else False if state in ("missing", "failed", "rejected") else None
-                from .readiness import login_warning
-                if warning := login_warning(report, runtime, config.get("harness") or ""):
-                    line["warning"] = warning
-                line.update(signed_in=signed_in, problem="")
+            line.update(_sign_in(runner, report, bot, config))
             if line["profile"]:
                 needed.add(connection_id(rid, line["profile"]))
             items.append((bot, line))

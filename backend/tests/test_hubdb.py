@@ -1203,10 +1203,10 @@ class WaitingWithDependency(HubCase):
         self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
                      private=True)
         # A task that waits on a person itself (set before asks became subtasks, or one with an open question to
-        # them): a new note or owner clears it.
+        # them): a new note is detail beneath the wait and keeps it (backend/task_holds.py); a new owner clears it.
         legacy = lambda: self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (ANA, task['id']))
         legacy()
-        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], note='Still down')['waiting_on'])
+        self.assertEqual(H.task_update(self.conn, CMO, task['id'], note='Still down')['waiting_on'], ANA)
         legacy()
         self.assertIsNone(H.task_update(self.conn, CMO, task['id'], owner='seo')['waiting_on'])
         self.assertEqual((stored('cmo'), stored('seo')), (0, 0), "the handoff recounts the old owner too")

@@ -325,6 +325,11 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
     for here, field, other in ((from_id, out_field, to_id), (to_id, in_field, from_id)):
         H._task_event(conn, here, actor, field, None if added else other, other if added else None, note)
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, here))
+    if added and kind == "blocks":
+        # A blocker added changes what the task waits on (backend/task_holds.py). One taken off is recomputed by
+        # remove_blocker after reconcile; a child moved in or out by set_parent and task_create.
+        from . import task_holds
+        task_holds.refresh(conn, to_id)
 
 
 def _mine(conn, actor, row, mover):
@@ -493,6 +498,14 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     if old and row["status"] not in ("done", "closed", "declined"):
         # The old parent may have nothing left open now.
         H._parent_finished(conn, {**row, "status": "closed"}, row["status"], actor, parent=old)
+    # What each parent waits on changed: the old one lost a child (a hold cleared, when it was open), the new one
+    # gained one (backend/task_holds.py).
+    from . import task_holds
+    if old:
+        live = row["status"] not in ("done", "closed", "declined")
+        task_holds.refresh(conn, old, f"{task_holds.title(conn, row)} moved away" if live else None)
+    if new:
+        task_holds.refresh(conn, new)
     from .roadmap_flow import changed, sync
     changed(conn, child_id)
     if old:
@@ -598,12 +611,16 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     if actor != H.KEEPER:
         H._task_private_writer(conn, actor, row)
         _blocker_gate(conn, actor, row, _mover(conn, actor, mover))
+    blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
     from .task_blocked import reconcile
     reconcile(conn, task_id)
+    from . import task_holds
+    # The blocker taken off is a hold cleared: the last one sends a bot's task back to work (task_holds.refresh).
+    task_holds.refresh(conn, task_id, f"{task_holds.title(conn, blocker)} no longer blocks it" if blocker else None)
     from .check_blocked import changed
     changed(conn, task_id)
     from .blocker_asks import unjoined

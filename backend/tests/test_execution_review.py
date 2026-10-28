@@ -350,6 +350,32 @@ def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
     assert get(api, 'bots/finance/execution-review')['jobs'][0]['id'] == attempt['job_id']
 
 
+@pytest.mark.parametrize('evidence', ['text', 'pushes', 'tokens_out', 'segment_output', 'consumed_approval'])
+def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
+    """Each piece of positive evidence on its own makes a blind retry unsafe: partial text, a git push, output tokens
+    (top-level or in a fallback segment), or an approval the bot consumed during the run."""
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-' + evidence}, machine['token'])
+    body = {'outcome': 'failed', 'last_seq': 0, 'text': ''}
+    if evidence == 'text':
+        body['text'] = 'Synthetic partial output'
+    elif evidence == 'pushes':
+        body['pushes'] = [{'path': '/synthetic/worktree', 'count': 1}]
+    elif evidence == 'tokens_out':
+        body['tokens_out'] = 40
+    elif evidence == 'segment_output':
+        body['usage'] = {'input_tokens': 9_000, 'model': 'gpt-6-sol', 'runtime': 'codex',
+                         'segments': [{'input_tokens': 9_000, 'model': 'gpt-6-sol'},
+                                      {'output_tokens': 40, 'model': 'muse-spark-1.3'}]}
+    else:
+        with api.app.state.store.transaction() as c:
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
+                      (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)))
+    post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+
+
 def test_a_sparse_failure_billed_only_for_its_prompt_still_goes_back_in_the_queue(api):
     """A provider bills the prompt and then errors: input tokens alone are not evidence the turn did anything."""
     machine, message, attempt = setup_attempt(api, bot='finance')
