@@ -204,7 +204,17 @@ ENTRIES = TEAM_RULES + [
                     ("create_product_repositories", (True,))),
       why="A Run workflows or Edit workflow files tick (a kept one coming back too), turning Create product "
           "repositories back on (the owner only), or taking access away needs a Confirm card: running or editing "
-          "workflows starts CI, which uses the repository's secrets"),
+          "workflows starts CI, which uses the repository's secrets. Run workflows for one repository on the "
+          "person's yes in conversation is bot.run_workflows"),
+    # One repository's Run workflows on the person's yes in conversation (backend/run_workflows_yes.py): the carrier
+    # reads the change back, the person says yes, the change cites both; with no yes it is their Confirm card.
+    S("bot.run_workflows", "Run workflows (one repository)", REPOS, "admin", "yes", "POST",
+      "bots/{bot}/repositories/run-workflows", value="json", card=_card("repos", "set-repos"),
+      words="run workflows actions ci runs yes turn on off repository",
+      why="Read the change back with POST bots/{bot}/repositories/run-workflows/read-back {repository, on}; the "
+          "person's plain yes to it is the yes the change cites ({repository, on, read_back, yes}). Only that "
+          "repository's tick changes; the next run there is the check. The Assistant's yes counts only while "
+          "\"Assistant acts without asking\" is on; otherwise, and with no yes, it is the person's Confirm card"),
     # CEO bot
     S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
       card=_card("ceo")),

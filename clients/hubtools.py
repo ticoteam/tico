@@ -3189,7 +3189,8 @@ def _pointer(data, pointer):
 
 @tool("hub_settings_find", "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
       "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
-      "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
+      "person gets a Confirm card for them; yes: BotOps or the Assistant reads the change back and the person's plain "
+      "yes in conversation, cited, makes it, else a Confirm card; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
       "person), the route and body it writes, and the `card` link. Then `hub_settings_show` or `hub_settings_set` with its key.",
       {"words": _s("What the setting is about, e.g. sql, budget, release time")}, required=("words",))
 def settings_find(api, args):
@@ -3227,11 +3228,14 @@ def settings_set(api, args):
     if "run" not in planned:
         return planned                      # the Confirm card
     run = planned["run"]
-    who.call(run["method"], run["path"], run["body"], _key(args))
+    done = who.call(run["method"], run["path"], run["body"], _key(args))
+    if isinstance(done, dict) and done.get("needs_confirm"):
+        return done                         # the route made the person's Confirm card: nothing changed yet
     # The value read back after the change, where Settings shows one; else the value sent.
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {"key": args["key"], "name": planned["setting"]["name"], "where": planned["setting"]["where"],
-            "value": shown["value"] if "value" in shown else planned["value"]}
+            "value": shown["value"] if "value" in shown else planned["value"],
+            **({"reply": done["reply"]} if isinstance(done, dict) and done.get("reply") else {})}
 
 
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "

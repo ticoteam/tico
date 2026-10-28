@@ -7,6 +7,9 @@ where it sits in Settings, who may change it, its class and the route it writes:
   direct       runs at once, as the person (BotOps or their Assistant acting for them has exactly their rights)
   confirm      BotOps or the Assistant acting for a person puts it to them as a Confirm card; the person's own call
                runs at once
+  yes          a person's yes in conversation: BotOps or the Assistant acting for a person reads the change back, and
+               the person's plain yes to it, cited, makes it (their rights read again then); with no yes it is their
+               Confirm card. The route checks the yes (Run workflows for one repository, backend/run_workflows_yes.py)
   person       only the person themselves, in Settings: BotOps or the Assistant is told why, with the link to the card
 
 The Assistant acts for its person with the same entries and classes as BotOps (`ACTING_FOR`). A direct entry runs on the
@@ -30,7 +33,7 @@ from dataclasses import dataclass, field as _field
 
 from .store import Problem
 
-CLASSES = ("direct", "confirm", "person")
+CLASSES = ("direct", "confirm", "yes", "person")
 # Who may change a setting: the check made before the route's own, so a refusal names who can.
 WHO = {
     "owner": "the owner",
@@ -329,7 +332,16 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
         kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
+    # A yes entry runs on the person's yes the request cites (the route checks it); without one it is their card.
+    if kind == "yes":
+        from .run_workflows_yes import rule_off
+        if isinstance(body, dict) and body.get("read_back") and body.get("yes") and not rule_off(c, who):
+            kind = "direct" if acting_for else kind
+        else:
+            body = {k: v for k, v in body.items() if k not in ("read_back", "yes")}
+            request["body"] = body
+            kind = "confirm"
+    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct and e.kind != "yes")):
         if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})

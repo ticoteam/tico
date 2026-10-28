@@ -421,11 +421,12 @@ def stopped(before, after):
 
 
 def started(before, after):
-    """What a change gives that only a person's own click may: `workflows_started`, the repositories the bot may now run
+    """What a change gives that only a person's own click (or yes) may: `workflows_started`, the repositories the bot may now run
     workflows in (a tick, or a kept tick coming back into effect) or may once its grant applies (a tick kept on a grant
     not in effect yet), `workflow_edits_started` the same for editing workflow files, and `product_creation_started`
     when Create product repositories turns back on. BotOps acting for a person puts these on a Confirm card
-    (`bot_set`)."""
+    (`bot_set`). Run workflows for one repository also comes on a person's yes in conversation, through its own route
+    (backend/run_workflows_yes.py), never through this one."""
     out = {}
     for flag, *_ in FLAGS:
         names = []
@@ -854,6 +855,19 @@ class RepoAccessUpdate(Contract):
     all_repos: list[TickedRepo] | None = None
 
 
+class RunWorkflowsReadBack(Contract):
+    # owner/name, or a name alone when it names one of the bot's repositories
+    repository: str
+    on: bool
+
+
+class RunWorkflowsChange(RunWorkflowsReadBack):
+    # The carrier's read-back (`run-workflows/read-back`) and the person's yes to it, both in this conversation; left
+    # out by a person's own click, and by a carrier that has no yes yet (the change is then their Confirm card).
+    read_back: str | None = None
+    yes: str | None = None
+
+
 class RepoUpdate(Contract):
     enabled: bool | None = None
     setup_command: str | None = None
@@ -961,7 +975,8 @@ def install(app, store, service):
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked. Letting a bot run workflows or edit workflow files, or turning Create
             # product repositories back on, is the person's own click too: BotOps puts it on a Confirm card, which runs
-            # as their own session.
+            # as their own session. The one other opening is Run workflows for one named repository on the person's yes
+            # in conversation, through its own route (`run-workflows`, backend/run_workflows_yes.py), never this one.
             # The change is tried as that click would make it first, so what their click could not do (no write
             # access, an admin turning product repositories on) is refused now rather than put on a card.
             before = access(c, bot, org)
@@ -991,6 +1006,44 @@ def install(app, store, service):
                               'create product repositories, themselves in Settings > Repositories', 403)
             raise Problem('forbidden', 'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
                           'who manages it makes that change in Settings > Repositories', 403)
+
+    def org_of(c):
+        row = service.row(c)
+        return row['org'] if row else store.settings.github_owner
+
+    @app.post('/api/v2/bots/{bot}/repositories/run-workflows/read-back')
+    def run_workflows_read_back(request: Request, bot: str, body: RunWorkflowsReadBack):
+        """BotOps or the person's Assistant, acting for them, asks them about one repository's Run workflows: the server
+        writes the question as its reply in this conversation, and the person's plain yes to it is the yes the change
+        cites (backend/run_workflows_yes.py)."""
+        from . import run_workflows_yes as Y
+        who = request.state.identity
+        with store.transaction() as c:
+            validate_identity(c, who)
+            return Y.read_back(c, app.state.auth, who, bot, org_of(c), body.repository, body.on)
+
+    @app.post('/api/v2/bots/{bot}/repositories/run-workflows')
+    def run_workflows_set(request: Request, bot: str, body: RunWorkflowsChange):
+        """Run workflows on or off for one repository of one bot, and nothing else: a person's own click, or BotOps or
+        their Assistant on that person's yes in conversation; without one, the person's Confirm card."""
+        from . import run_workflows_yes as Y
+        who = request.state.identity
+        if app.state.auth.system_bot(bot) and who.role != 'owner':
+            raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
+        carrier = Y.carrier_of(who)
+        if carrier == 'assistant':
+            made = getattr(app.state, 'assistant_propose', None)
+            asked = request.headers.get('x-tico-on-behalf-of')
+            propose = made and (lambda c, who, method, path, data, summary:
+                                made(c, who, method, path, data, summary, asked, what=summary))
+        else:
+            made = getattr(app.state, 'botops_propose', None)
+            propose = made and (lambda c, who, method, path, data, summary:
+                                made(c, who, method, path, data, summary, what=summary))
+        with store.transaction() as c:
+            validate_identity(c, who)
+            return Y.change(c, app.state.auth, who, bot, org_of(c), body.repository, body.on, body.read_back,
+                            body.yes, propose)
 
     def computer(request):
         who = request.state.identity

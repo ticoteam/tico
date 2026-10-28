@@ -53,6 +53,7 @@ SAMPLES = {
     "bot.profile": {"description": "Keeps the books."},
     "bot.repositories": {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "write",
                                                         "run_workflows": True}]},
+    "bot.run_workflows": {"repository": "Acme/product", "on": True},
     "repo.setup_command": "make setup",
     "repos.new_bot_default": "own",
     "release.times": "09:30",
@@ -141,6 +142,10 @@ def _objects(api, machine):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
+        # Finance reaches Acme/product with write, so Run workflows for that one repository has a tick to change.
+        c.execute("INSERT INTO bot_repo_access VALUES('finance','Acme/product','write')")
+        c.execute("UPDATE bot_config SET config_json=json_set(COALESCE(config_json,'{}'),'$.repo_access_mode','chosen') "
+                  "WHERE bot='finance'")
         c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
                   "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
                   ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
@@ -177,7 +182,8 @@ def expected(c, e, role, person):
         return "refused"
     kind = settings_catalog.kind_for(e, settings_catalog.parse(e, _sample(e))
                                      if e.value == "json" else {})
-    return {"direct": "ran", "confirm": "card", "person": "refused"}[kind]
+    # A yes entry with no yes in the conversation is the person's Confirm card (Product, Oct 27: amended test 3).
+    return {"direct": "ran", "confirm": "card", "yes": "card", "person": "refused"}[kind]
 
 
 def outcome(answer):
