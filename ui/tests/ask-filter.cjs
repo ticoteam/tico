@@ -88,8 +88,11 @@ async function shot(target, name) {
     await card.locator('input[name="budget"]').fill('15');
     await card.locator('textarea[name="criteria"]').fill('Strategy and positioning\nPricing');
     await shot(page.locator('#set-ask-filter-card'), 'ask-filter-settings');
+    // A save reloads and repaints the card, which resets the replay day to today: wait for that repaint before filling it.
+    await card.evaluate(f => { f.dataset.beforeSave = '1'; });
     await card.locator('button[type="submit"]').click();
     for (let i = 0; i < 50 && !saved.length; i++) await page.waitForTimeout(20);
+    await page.waitForFunction(() => !document.querySelector('#set-ask-filter form.ask-filter[data-before-save]'));
     assert.deepEqual(saved, [{mode: 'on', budget: 15, chores_budget: 5, criteria: ['Strategy and positioning', 'Pricing'], team: false}]);
 
     // Replay a day: every page read, what On would keep off the plate first, nothing else posted.
