@@ -65,6 +65,7 @@ async function open(browser, {role = 'owner', hash = '#/settings', refuse = fals
       return json({id: 'r1', enabled: req.postDataJSON().enabled});
     }
     // What the tabs the links open read first, empty.
+    if (p === '/api/v2/billing') return json({state: 'no_gateway'});
     if (p === '/api/v2/listening/destinations') return json({destinations: [], categories: [], receivers: []});
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));

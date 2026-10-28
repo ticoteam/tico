@@ -12,7 +12,7 @@ async function open(browser, role, hash) {
   const manage = role === 'owner';
   const state = {revision: 7};
   page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
@@ -30,10 +30,19 @@ async function open(browser, role, hash) {
       users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: state.revision}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
-    if (p === '/api/v2/bots/ops/pause-state') return json({state: state.paused ? 'paused' : 'active', revision: state.revision,
-      can_control: manage, operator: 'Ana', paused_by: state.record || null, open_tasks: state.tasks || 0, company_paused: !!state.billing});
+    if (p === '/api/v2/bots/ops/pause-state') {
+      const snapshot = {state: state.paused ? 'paused' : 'active', revision: state.revision,
+        can_control: manage, operator: 'Ana', paused_by: state.record || null, open_tasks: state.tasks || 0, company_paused: !!state.billing};
+      state.reads = (state.reads || 0) + 1;
+      const held = state.holdNext;
+      if (held) { delete state.holdNext; held.captured(); await held.wait; }
+      const result = await json(snapshot);
+      held?.finished();
+      return result;
+    }
     if (p === '/api/v2/bots/ops/control') {
       const body = req.postDataJSON(); posts.push(body);
+      if (body.expected_revision !== state.revision) return json({error: {detail: 'Stale revision', code: 'version_conflict'}}, 409);
       if (state.fail) return json({error: {detail: 'Changed elsewhere', code: 'version_conflict'}}, 409);
       state.paused = body.action === 'pause'; state.revision++;
       state.record = state.paused ? {name: 'Ana', at: '2026-10-28T12:30:00Z'} : null;
@@ -46,9 +55,49 @@ async function open(browser, role, hash) {
   return {page, errors, posts, state};
 }
 
+function heldRead(state) {
+  let captured, release, finished;
+  const hold = {captured: new Promise(resolve => { captured = resolve; }),
+    finished: new Promise(resolve => { finished = resolve; }), release: () => release()};
+  state.holdNext = {captured, finished, wait: new Promise(resolve => { release = resolve; })};
+  return hold;
+}
+async function staleReadAfterControl(browser, action) {
+  const {page, errors, state} = await open(browser, 'owner', '#/bot/ops/info');
+  let held;
+  try {
+    await page.locator('[data-bot-pause-action]').waitFor();
+    await page.waitForFunction(() => !BOT.pauseLoading);
+    if (action === 'resume') {
+      state.paused = true;
+      await page.evaluate(() => botPauseLoad());
+    }
+    const revision = state.revision, readsBefore = state.reads;
+    held = heldRead(state);
+    await page.evaluate(() => { void botPauseLoad(); });
+    await held.captured;
+    await page.locator(`[data-bot-pause-action="${action}"]`).click();
+    const next = action === 'pause' ? 'resume' : 'pause';
+    await page.locator(`[data-bot-pause-action="${next}"]`).waitFor();
+    // The older GET arrives only after the POST has succeeded and pauseBusy is false.
+    held.release(); await held.finished;
+    await page.waitForFunction(() => !BOT.pauseLoading);
+    assert.deepEqual(await page.evaluate(() => [BOT.pauseState.state, BOT.pauseState.revision]),
+      [action === 'pause' ? 'paused' : 'active', revision + 1], `${action}: old GET cannot replace the committed state or revision`);
+    assert.ok(state.reads >= readsBefore + 2, 'discarding the stale GET starts a new authoritative read');
+    // A subsequent action must use the current revision, including the toast's shortcut.
+    if (action === 'pause') await page.locator('.toast button').filter({hasText: 'Unpause'}).last().click();
+    else await page.locator('[data-bot-pause-action="pause"]').click();
+    await page.waitForFunction(() => !BOT.pauseBusy && !BOT.pauseLoading);
+    assert.equal(state.revision, revision + 2);
+    assert.deepEqual(errors, []);
+  } finally { held?.release(); await page.close(); }
+}
+
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
+    for (const action of (process.env.RACE_ACTION ? [process.env.RACE_ACTION] : ['pause', 'resume'])) await staleReadAfterControl(browser, action);
     const {page, errors, posts, state} = await open(browser, 'owner', '#/bot/ops/info');
     const strip = page.locator('#bot-control-host');
     await strip.getByRole('button', {name: 'Pause', exact: true}).waitFor();
@@ -96,6 +145,6 @@ async function open(browser, role, hash) {
     assert.equal(await member.page.locator('#bot-control-host button').count(), 0);
     assert.deepEqual(member.errors, []);
     await member.page.close();
-    console.log('bot pause strip: 1 passed, 0 failures');
+    console.log('bot pause strip: 3 passed, 0 failures');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error); process.exitCode = 1;});

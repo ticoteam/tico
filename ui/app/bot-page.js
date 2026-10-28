@@ -70,17 +70,27 @@ async function botPauseLoad() {
   const view = BOT;
   if (!view || view.pauseLoading || view.pauseBusy) return;
   view.pauseLoading = true;
+  const generation = view.pauseGeneration || 0;
   try {
     const value = await get(`/v2/bots/${encodeURIComponent(view.slug)}/pause-state`, {fresh: true});
-    if (BOT !== view || view.pauseBusy) return;
+    if (BOT !== view || view.pauseBusy || generation !== (view.pauseGeneration || 0)) return;
     view.pauseState = value;
     if (!view.pauseRetry) view.pauseError = '';
   } catch (error) {
-    if (BOT === view && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
-  } finally { view.pauseLoading = false; if (BOT === view) botPauseDraw(); }
+    if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
+  } finally {
+    view.pauseLoading = false;
+    if (BOT === view) {
+      botPauseDraw();
+      // The control may have finished while this older read waited on billing. Re-read its committed state.
+      if (generation !== (view.pauseGeneration || 0) && !view.pauseBusy && !view.pauseRetry) void botPauseLoad();
+    }
+  }
 }
 async function botPauseChange(view, action) {
   if (BOT !== view || view.pauseBusy || !view.pauseState?.can_control || view.pauseState.company_paused) return;
+  // Invalidate any refresh already in flight, even if it arrives after the control finishes.
+  view.pauseGeneration = (view.pauseGeneration || 0) + 1;
   view.pauseBusy = true; view.pauseError = ''; view.pauseRetry = null; botPauseDraw();
   try {
     const result = await post(`/v2/bots/${encodeURIComponent(view.slug)}/control`, {action, expected_revision: view.pauseState.revision});
