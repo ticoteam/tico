@@ -17,9 +17,12 @@ month.
 """
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from .store import H
+
+log = logging.getLogger(__name__)
 
 KEY = "usage_limits"                       # the company default, in registry_metadata
 WARN = 80
@@ -297,9 +300,27 @@ def state(c, bot, at=None, default=None):
     return result
 
 
+# The holds already logged by this process, {(scope, period key)}, so a claim every second logs a hold once.
+LOGGED = set()
+
+
 def blocked(c, bot, at=None, default=None):
     """The period (`hourly`, `daily`, `weekly` or `monthly`) when the bot may take no new job, else None."""
-    return state(c, bot, at, default)["blocked"]
+    found = state(c, bot, at, default)
+    met = found["blocked_by"]
+    if met:
+        scope = "bot:" + bot if met["scope"] == "bot" else met["scope"]
+        key = (scope, bounds(at)[met["period"]][0])
+        if key not in LOGGED:
+            if len(LOGGED) > 1000:
+                LOGGED.clear()
+            LOGGED.add(key)
+            # Runs still going are priced only as they end, so the hour's final total can pass the cap by them: the
+            # log keeps how many were out when the hold began, beside what had finished.
+            going = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
+            log.warning("usage limit holds %s for %s: $%.2f finished against $%.2f, %d runs going across the team",
+                        scope, key[1], met.get("spent") or 0, met.get("limit") or 0, going)
+    return found["blocked"]
 
 
 def why(met):

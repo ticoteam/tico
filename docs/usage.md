@@ -46,7 +46,8 @@ it.
   reads "Paused: over its hourly limit" (its own) or "Paused: the team is over its hourly limit" on its page and in Tasks, and a run
   already going finishes. A group's or the team's total is shown only to the owner and administrators.
 - What counts is the estimate of the runs the bots finished that started in the UTC clock hour, the UTC day, the week from Monday
-  00:00 UTC, or the UTC month. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
+  00:00 UTC, or the UTC month. Runs still going are counted when they end, so a period's total can pass its limit by what
+  was running when the hold began; the server logs each hold once per limit and period, with how many runs were going. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
   the default limit), for every level.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
