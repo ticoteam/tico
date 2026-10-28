@@ -153,6 +153,8 @@ STABLE = [
     ("/api/v2/bots/{bot}", "get", "Bots", "getBot",
      "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
      "BotDetail"),
+    ("/api/v2/bots/{bot}/pause-state", "get", "Bots", "getBotPauseState",
+     "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts", None),
     ("/api/v2/bots/{bot}/routines", "get", "Bots", "listBotRoutines",
      "A bot's routines, its recurring work (Read on the bot; add include_deleted=true for removed ones)", "RoutineList"),
     ("/api/v2/bots/{bot}/access", "get", "Bots", "getBotAccess",
