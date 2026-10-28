@@ -4,8 +4,7 @@
 A bot's own limit wins; a bot with none follows the company default; the default is no limit. A pool is a cap on the
 combined spend of several bots: `company` covers every bot, `group:<id>` the bots in that group and in the groups nested
 under it. A bot takes no new job while any limit it is under is met, its own or a pool's. What counts against a limit is
-the estimate of the runs the bots have finished in the period (backend/usage.py prices each run as it completes), plus,
-for each run that started in the period and is still going, what the bot's runs have cost on average (`running`). Runs
+the estimate of the runs the bots have finished in the period (backend/usage.py prices each run as it completes). Runs
 on a ChatGPT or Claude sign-in are flat cost, so their API-equivalent counts only when the company opts in.
 
   80%   one notice to the bot's operator (the company owner when it has none, and always for a pool), once per period
@@ -237,55 +236,6 @@ def by_bot(c, start, end, subscription, default=None):
     return memo[key]
 
 
-# How many of a bot's latest finished runs set what one of its running runs is expected to cost.
-ESTIMATE_RUNS = 20
-
-
-def running(c, start, end, subscription, default=None):
-    """{bot: (runs, estimate)} for the runs that started in [start, end) and are still going. A run is priced only as
-    it ends, so without this a period that has just turned over reads $0 while dozens of runs are out, and every queued
-    job passes the limit until the first of them finishes. Each running run counts what the bot's last ESTIMATE_RUNS
-    finished runs cost on average (subscription runs at $0 unless they count); a bot with none counts the average of
-    the others."""
-    memo = default.memo if isinstance(default, Default) else {}
-    key = ("running", start, end, bool(subscription))
-    if key not in memo:
-        out = {row[0]: row[1] for row in c.execute(
-            "SELECT t.bot, count(*) FROM attempts a JOIN turns t ON t.id=a.id "
-            "WHERE a.state IN ('leased','running') AND t.finished IS NULL AND t.started >= ? AND t.started < ? "
-            "GROUP BY t.bot", (start, end))}
-        averages = {bot: average_run(c, bot, subscription, memo) for bot in out}
-        known = [v for v in averages.values() if v is not None]
-        others = sum(known) / len(known) if known else 0.0
-        memo[key] = {bot: (runs, runs * (averages[bot] if averages[bot] is not None else others))
-                     for bot, runs in out.items()}
-    return memo[key]
-
-
-def average_run(c, bot, subscription, memo):
-    """What one of the bot's last ESTIMATE_RUNS finished runs cost on average, counting only what a limit counts, else
-    None when it has none. Read through turns(bot, started), so a claim pays for twenty rows a bot, not a week of runs."""
-    key = ("average", bot, bool(subscription))
-    if key not in memo:
-        row = c.execute(
-            "SELECT count(*), coalesce(sum(CASE WHEN ? OR coalesce(billing, 'api') != 'subscription' THEN est_cost_usd END), 0) "
-            "FROM (SELECT est_cost_usd, billing FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY started DESC LIMIT ?)",
-            (1 if subscription else 0, bot, ESTIMATE_RUNS)).fetchone()
-        memo[key] = float(row[1]) / row[0] if row[0] else None
-    return memo[key]
-
-
-def committed(c, bots, start, end, subscription, default=None):
-    """What a limit over `bots` (None: every bot) counts in [start, end): the finished runs' estimate, the running runs'
-    expected cost and how many runs are going."""
-    amounts = by_bot(c, start, end, subscription, default)
-    live = running(c, start, end, subscription, default)
-    if bots is None:
-        return sum(amounts.values()), sum(v[1] for v in live.values()), sum(v[0] for v in live.values())
-    return (sum(amounts.get(b, 0.0) for b in bots), sum(live.get(b, (0, 0.0))[1] for b in bots),
-            sum(live.get(b, (0, 0.0))[0] for b in bots))
-
-
 def spent(c, bot, start, end, subscription, default=None):
     """The estimate for the bot's runs that started in [start, end)."""
     return by_bot(c, start, end, subscription, default).get(bot, 0.0)
@@ -310,13 +260,11 @@ def pool_state(c, scope, at=None, default=None):
         if not cap:
             continue
         _, start, end = when[name]
-        bots = None if scope == COMPANY else members(c, scope, default)
-        amount, expected, runs = committed(c, bots, start, end, default["count_subscription"], default)
+        amount = pool_spent(c, scope, start, end, default["count_subscription"], default)
         result[label_ + "_spent"] = round(amount, 6)
-        result["percent"] = max(result["percent"], int(100 * (amount + expected) / cap))
-        if amount + expected >= cap and not result["blocked"]:
+        result["percent"] = max(result["percent"], int(100 * amount / cap))
+        if amount >= cap and not result["blocked"]:
             result["blocked"] = name
-            result["running"] = {"runs": runs, "expected": round(expected, 6)}
     return result
 
 
@@ -333,13 +281,12 @@ def state(c, bot, at=None, default=None):
         if not cap:
             continue
         _, start, end = when[name]
-        amount, expected, runs = committed(c, [bot], start, end, default["count_subscription"], default)
+        amount = spent(c, bot, start, end, default["count_subscription"], default)
         result[label_ + "_spent"] = round(amount, 6)
-        result["percent"] = max(result["percent"], int(100 * (amount + expected) / cap))
-        if amount + expected >= cap and not result["blocked"]:
+        result["percent"] = max(result["percent"], int(100 * amount / cap))
+        if amount >= cap and not result["blocked"]:
             result["blocked"] = name
-            result["blocked_by"] = {"scope": "bot", "period": name, "spent": round(amount, 6), "limit": cap,
-                                    "running": runs, "running_usd": round(expected, 6)}
+            result["blocked_by"] = {"scope": "bot", "period": name, "spent": round(amount, 6), "limit": cap}
     if not result["blocked"]:
         for scope in scopes_of(c, bot, default):
             found = pool_state(c, scope, at, default)
@@ -348,8 +295,7 @@ def state(c, bot, at=None, default=None):
                 label_ = dict(PERIODS)[period]
                 result["blocked"] = period
                 result["blocked_by"] = {"scope": scope, "name": label(c, scope, default), "period": period,
-                                        "spent": found[label_ + "_spent"], "limit": found[period + "_usd"],
-                                        "running": found["running"]["runs"], "running_usd": found["running"]["expected"]}
+                                        "spent": found[label_ + "_spent"], "limit": found[period + "_usd"]}
                 break
     return result
 
@@ -368,11 +314,12 @@ def blocked(c, bot, at=None, default=None):
         if key not in LOGGED:
             if len(LOGGED) > 1000:
                 LOGGED.clear()
-            # The log says how the hold was reached: what had finished and what was still running, against the cap.
             LOGGED.add(key)
-            log.warning("usage limit holds %s for %s: $%.2f finished and %s running (~$%.2f expected) against $%.2f",
-                        scope, key[1], met.get("spent") or 0, met.get("running", 0), met.get("running_usd") or 0,
-                        met.get("limit") or 0)
+            # Runs still going are priced only as they end, so the hour's final total can pass the cap by them: the
+            # log keeps how many were out when the hold began, beside what had finished.
+            going = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
+            log.warning("usage limit holds %s for %s: $%.2f finished against $%.2f, %d runs going across the team",
+                        scope, key[1], met.get("spent") or 0, met.get("limit") or 0, going)
     return found["blocked"]
 
 
@@ -415,8 +362,7 @@ def warning(c, actor, at=None):
     name = (H.bot(c, bot) or {}).get("display_name") or bot
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
     if met["scope"] == "bot":
-        going = f" and {met['running']} running" if met.get("running") else ""
-        return (f"{name} is over its {met['period']} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}{going}); "
+        return (f"{name} is over its {met['period']} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
                 f"it starts again at {reset} or when a person raises the limit.")
     return (f"{name} is waiting: {met['name']} is over its {met['period']} limit; "
             f"it starts again at {reset} or when a person raises the limit.")
@@ -429,7 +375,7 @@ def overlay(c, row, default=None):
         return row
     met = over(c, row["bot"], default=default)
     if met and met["scope"] != "bot":
-        met = {k: v for k, v in met.items() if k not in ("spent", "limit", "running", "running_usd")}
+        met = {k: v for k, v in met.items() if k not in ("spent", "limit")}
     return {**row, "state": "paused", "focus": why(met), "limit": met} if met else row
 
 
