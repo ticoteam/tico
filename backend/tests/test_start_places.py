@@ -278,6 +278,19 @@ def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
     assert claim(api, computer, 'finance') is not None
 
 
+def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
+    """A Gateway turn whose turn users are all busy waits like one at a busy login rather than failing at the server."""
+    from backend import start_places
+    from backend.tests.test_task_lanes import task_bot, new_task
+    computer = task_bot(api, lanes=True)
+    new_task(api, 'Work that waits for a turn user')
+    aid = claim(api, computer)['id']
+    post(api, f'attempts/{aid}/start-place', {'waiting': 'Docker turn user'}, computer['token'])
+    with api.app.state.store.read() as c:
+        assert start_places.is_waiting(c, aid)
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token'])['reserved'] is True
+
+
 def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     from backend.tests.test_task_lanes import task_bot, new_task
     computer = task_bot(api, lanes=True)

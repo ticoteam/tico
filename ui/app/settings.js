@@ -80,10 +80,11 @@ let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY
 let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'ceo', 'devices', 'repos', 'tasks', 'inbox', 'inbound', 'recurring',
-  'webhooks', 'listening', 'health', 'history', 'gateway', 'billing'];
+const SETTINGS_TABS = ['general', 'people', 'bots', 'ceo', 'devices', 'repos', 'tasks', 'inbox', 'inbound', 'system',
+  'webhooks', 'health', 'history', 'gateway', 'billing'];
+// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab, now the Models card.
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
-  rules: 'recurring', routines: 'recurring', chat: 'models'};   // chat: the old Chat tab, now the Models card
+  rules: 'system', routines: 'system', recurring: 'system', chat: 'models'};
 let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
@@ -206,9 +207,8 @@ function pageSettings() {
       <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
-        <button type="button" data-settings-tab="recurring" role="tab">Rules</button>
+        <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
-        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="listening" role="tab">Listening</button>' : ''}
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
         <button type="button" data-settings-tab="history" role="tab">History</button>
         ${settingsIsAdmin() ? '<button type="button" data-settings-tab="gateway" role="tab">Gateway</button>' : ''}
@@ -219,7 +219,7 @@ function pageSettings() {
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
-          <a href="#/settings/routines" data-settings-moved>Moved to Settings &gt; Rules</a></p>
+          <a href="#/settings/system" data-settings-moved>Moved to Settings &gt; System</a></p>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
           <div><strong>Team icon</strong><p class="settings-cell-note">PNG, JPEG or WebP, up to 1 MB.</p>
@@ -257,24 +257,18 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-gateway" role="tabpanel" hidden><div id="set-gateway-page">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-billing" role="tabpanel" hidden><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
-    <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
+    <div class="settings-pane" id="settings-system" role="tabpanel" hidden>
       <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
-      <section class="card" id="set-rules-card"><header><h2>What wakes a bot</h2></header><div id="set-rules">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
       <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
-      <section class="card"><header><h2>Bot routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
     <div class="settings-pane" id="settings-webhooks" role="tabpanel" hidden>
       <section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
         `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
         <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>
-    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-listening" role="tabpanel" hidden>
-      <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
-    </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
-      <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
@@ -302,8 +296,10 @@ function pageSettings() {
     const button = event.target.closest('[data-settings-tab]');
     if (button) settingsShow(button.dataset.settingsTab);
   };
-  // Opening More on a phone shows its tabs at the end of the scrolling row.
-  $('#settings-more').addEventListener('toggle', event => { if (event.target.open) settingsTabIntoView(event.target.lastElementChild); });
+  // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
+  $('#settings-more').addEventListener('toggle', event => {
+    if (event.target.open) settingsTabIntoView(event.target.querySelector('[data-settings-tab].cur') || event.target.lastElementChild);
+  });
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -345,7 +341,7 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), listening: settingsIsAdmin(), gateway: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), gateway: settingsIsAdmin(), ceo: settingsCeoBotShown()};
   const shown = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab);
   // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
@@ -354,7 +350,7 @@ function settingsShow(tab) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'recurring', 'webhooks', 'listening', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'system', 'webhooks', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -364,7 +360,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); void askFilterSettingsLoad(); }
+  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
@@ -406,20 +402,17 @@ function settingsShow(tab) {
   if (inboxPane) { inboxPane.hidden = SETTINGS_TAB !== 'inbox'; if (SETTINGS_TAB === 'inbox') void window.mountGoogleConnect?.($('#set-google')); }
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
-  const recurring = $('#settings-recurring');
-  if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); void renderSettingsRules(); void renderReleaseCard(); void renderTaskManagerCard(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
+  const system = $('#settings-system');
+  if (system) { system.hidden = SETTINGS_TAB !== 'system'; if (SETTINGS_TAB === 'system') { void renderSystemRoutines(); void renderReleaseCard(); void renderTaskManagerCard(); } }
   const webhooksPane = $('#settings-webhooks');
   if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
-  const listeningPane = $('#settings-listening');
-  if (listeningPane) { listeningPane.hidden = SETTINGS_TAB !== 'listening'; if (SETTINGS_TAB === 'listening' && !formBusy(listeningPane)) void renderSettingsListening(); }
   settingsRevealSoon(SETTINGS_REVEAL);
 }
-// While Settings is the page, the address bar names the tab shown: #/settings/<tab>, or #/settings/rules?task=<id> while
-// the rules are narrowed to one task's or bot's. It replaces the entry: no hashchange, no new history step.
+// While Settings is the page, the address bar names the tab shown: #/settings/<tab>. It replaces the entry: no
+// hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  const f = SETTINGS_TAB === 'recurring' && RULES_FOR ? rulesFor() : null;
-  SETTINGS_ADDRESS = f ? `${SETTINGS}/rules?${f.kind}=${encodeURIComponent(f.id)}` : `${SETTINGS}/${SETTINGS_TAB}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
@@ -572,11 +565,9 @@ async function loadSettings() {
       issues: operations.issues || [], history, limits,
       schedulerEnabled: operations.scheduler_enabled, loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
-    if (TASK_SETTINGS && !formBusy($('#set-task-settings'))) taskSettingsPaint();
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
-    if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     void renderSettingsHosted();
     void renderSettingsSleep();

@@ -9,6 +9,7 @@ nothing else: a change to a definition or a target it is judged against is a pro
 person confirms.
 """
 
+import json
 import re
 
 from fastapi import Request
@@ -117,7 +118,7 @@ def install(app, store, auth, mutate, settings):
         if who.role not in ("human", "bot"):
             return False
         roster, entries, archived = org_shape(c)
-        return who.actor in G.above(owner, roster, entries, archived)
+        return who.actor in G.above(owner, roster, entries, archived, True)
 
     def parent_owner(c, row):
         parent = G.goal(c, row["parent_id"]) if row.get("parent_id") else None
@@ -839,6 +840,12 @@ def install(app, store, auth, mutate, settings):
             if not room:
                 raise Problem("not_found", "No CEO Bot chat", 404)
             changes = [read_back_plan(c, who, n, raw) for n, raw in enumerate(body.changes, 1)]
+            seen = set()
+            for change in changes:
+                signature = json.dumps(change["steps"], sort_keys=True)
+                if signature in seen:
+                    raise Problem("validation", "A change is repeated; include each change only once", 422)
+                seen.add(signature)
             read_back_trial(c, who, changes)
             text = GR.text(changes)
             # The turn's reply: its closing text is not posted after it (backend/execution.py), so the owner's next

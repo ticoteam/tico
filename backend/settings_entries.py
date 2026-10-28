@@ -15,9 +15,8 @@ SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-ceo-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
      "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
-     "settings-repositories.js", "settings-rules.js", "settings-storage.js", "settings-webhooks.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
-     "recurring.js"])
+     "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js"])
 
 
 def _card(tab, card=""):
@@ -25,7 +24,7 @@ def _card(tab, card=""):
 
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
-RULES, HOOKS, TASKS, REPOS = "Settings > Rules", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
+RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
 INBOUND, CEO = "Settings > Email & Phone", "Settings > CEO bot"
 
 _RULE_NAMES = {
@@ -45,9 +44,9 @@ _RULE_NAMES = {
     "stall_triage": ("Quiet task triage", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
-               "stale_review": (RULES + " > What Tico runs on its own", _card("recurring", "set-system-card")),
-               "topic_fresh": (RULES + " > What Tico runs on its own", _card("recurring", "set-system-card")),
-               "stall_triage": (RULES + " > What Tico runs on its own", _card("recurring", "set-system-card"))}
+               "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
+               "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
+               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
 _ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
 
 TEAM_RULES = [
@@ -60,8 +59,6 @@ TEAM_RULES = [
        words="wait days go ahead")]
 
 _USD = "hourly_usd, daily_usd, weekly_usd, monthly_usd"
-# A wake rule that sends a webhook or forwards the call sends outside: confirm, like an outgoing webhook.
-_SENDS_OUT = (("params.action", ("send_webhook", "forward")),)
 
 ENTRIES = TEAM_RULES + [
     # General
@@ -142,6 +139,8 @@ ENTRIES = TEAM_RULES + [
       "enabled", card=_card("devices")),
     S("computer.member_bots", "Takes member bots", COMPUTERS, "admin", "confirm", "POST",
       "computers/{computer}/member-bots", "accepts", card=_card("devices")),
+    S("computer.turns_at_once", "Turns at once", COMPUTERS, "admin", "direct", "POST",
+      "computers/{computer}/turns-at-once", value="json", card=_card("devices")),
     S("computer.revoke", "Revoke a computer", COMPUTERS, "operator", "confirm", "POST", "computers/{computer}/revoke",
       value="json", card=_card("devices")),
     S("sleep.hours", "Sleep when idle", COMPUTERS + " > Sleep when idle", "admin", "direct", "POST", "sleep", "hours",
@@ -174,6 +173,8 @@ ENTRIES = TEAM_RULES + [
       "compact_at", "int", _card("bots")),
     S("bot.keep_tasks_going", "Keep tasks going", BOTS + " > Bot editor", "bot", "direct", "POST",
       "bots/{bot}/keep-tasks-going", "keep_tasks_going", card=_card("bots")),
+    S("bot.turns_at_once", "Turns at once", BOTS + " > Bot editor", "bot", "direct", "POST",
+      "bots/{bot}/turns-at-once", "turns_at_once", card=_card("bots")),
     S("bot.definition", "Bot definition", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/definition",
       value="json", card=_card("bots"), words="name description reports to status repo shared"),
     S("bot.archive", "Archive a bot", BOTS + " > Bot editor", "bot", "confirm", "POST", "bots/{bot}/archive",
@@ -221,33 +222,23 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("repos", "set-repos")),
     # Rules
     S("rules.system", "What Tico runs on its own", RULES + " > What Tico runs on its own", "admin", "direct", "PUT",
-      "system-routines/{id}", value="json", card=_card("recurring", "set-system-card"), words="schedule routine"),
+      "system-routines/{id}", value="json", card=_card("system", "set-system-card"), words="schedule routine"),
     S("rules.task_rule", "Task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "PUT", "task-rules/{id}",
-      value="json", card=_card("recurring", "set-system-card")),
+      value="json", card=_card("system", "set-system-card")),
     S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
-      "task-rules", value="json", card=_card("recurring", "set-system-card")),
-    S("rules.wake", "What wakes a bot", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules/{id}",
-      value="json", card=_card("recurring", "set-rules-card"), words="rule event trigger", confirm_when=_SENDS_OUT),
-    S("rules.wake.create", "New wake rule", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules",
-      value="json", card=_card("recurring", "set-rules-card"), confirm_when=_SENDS_OUT),
+      "task-rules", value="json", card=_card("system", "set-system-card")),
     S("release.on", "Daily release", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "on",
-      card=_card("recurring", "set-release-card"), read="release-schedule#on"),
+      card=_card("system", "set-release-card"), read="release-schedule#on"),
     S("release.times", "Release times", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule",
-      "times", "list", _card("recurring", "set-release-card"), "release-schedule#times", words="release schedule"),
+      "times", "list", _card("system", "set-release-card"), "release-schedule#times", words="release schedule"),
     S("release.bot", "Release bot", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "bot",
-      "text", _card("recurring", "set-release-card"), "release-schedule#bot"),
+      "text", _card("system", "set-release-card"), "release-schedule#bot"),
     S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
-      "release-schedule", "writer", "text", _card("recurring", "set-release-card"), "release-schedule#writer"),
+      "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
     S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
-      value="json", card=_card("recurring", "set-task-manager-card")),
+      value="json", card=_card("system", "set-task-manager-card")),
     S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
-      "task-manager/turn-off", value="json", card=_card("recurring", "set-task-manager-card")),
-    S("rules.routine", "A bot's routine", RULES + " > Bots routines", "bot", "direct", "POST", "routines/{id}",
-      value="json", card=_card("recurring"), words="cron schedule"),
-    S("rules.routine.create", "New bot routine", RULES + " > Bots routines", "bot", "direct", "POST",
-      "bots/{bot}/routines", value="json", card=_card("recurring")),
-    S("rules.routine.delete", "Delete a bot routine", RULES + " > Bots routines", "bot", "confirm", "POST",
-      "routines/{id}/delete", value="json", card=_card("recurring")),
+      "task-manager/turn-off", value="json", card=_card("system", "set-task-manager-card")),
     # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
     # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
     # together.
@@ -317,7 +308,7 @@ ENTRIES = TEAM_RULES + [
 NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
                "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
                "bot.budget", "ceo.checks", "ceo.level",
-               "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
+               "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
@@ -334,7 +325,6 @@ ALIASES = {
     ("POST", "runners/{x}/inbox-only"): "computer.inbox_only",
     ("POST", "inbound/phone-requests/{x}"): "inbound.phone_request.accept",
     ("POST", "system-routines/{x}"): "rules.system",
-    ("POST", "rules/suggestions/{x}/{x}"): "rules.wake",
     ("POST", "tags/{x}"): "tasks.tag",
 }
 
@@ -352,7 +342,6 @@ NOT_SETTINGS = {
     ("POST", "release/now"): "starts one release (`hub release now`)",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",
-    ("POST", "routines/{x}/run"): "runs a routine once",
     ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",
     ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
     ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",

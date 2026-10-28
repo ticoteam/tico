@@ -208,7 +208,7 @@ function onbSampleHTML(state, done) {
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
-  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines',
+  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'automations',
   open_seats: 'open seats', coworkers: 'coworkers'}[field] || field)).join(', ');
 // The company file chosen at install that could not be imported (backend/company_import.py `start`): said in words,
 // on every step, until an import works. No sample team took its place.

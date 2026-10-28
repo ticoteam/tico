@@ -425,9 +425,6 @@ class Inbound:
                              str(item.get('subject',''))[:300].replace(code,'••••••') if code else str(item.get('subject',''))[:300],
                              text[:300].replace(code,'••••••') if code else text[:300],text,code,bool(item.get('spam')),bool(item.get('truncated'))))
                 if inserted.rowcount:
-                    from .routines import emit
-                    emit(c,'inbound.received',item['delivery_id'],{'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
-                                                                'kind':item['kind'],'has_code':bool(code)})
                     H.hook(c,'inbound.received',item['delivery_id'],lambda: {'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
                                                                            'kind':item['kind']},'keeper',revision=0)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.

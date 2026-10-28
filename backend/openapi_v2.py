@@ -26,6 +26,7 @@ TAGS = {
     "Subscriptions": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
+    "Computers": "The computers that run bots: what each one runs at once.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
     "Tasks": "Work assigned to people and bots.",
     "Updates": "Daily and weekly updates bots post to people.",
@@ -74,6 +75,10 @@ STABLE = [
     ("/api/v2/subscriptions/refresh", "post", "Subscriptions", "refreshSubscriptionWeekly", "Request a bounded weekly allowance read on its computer", "SubscriptionRefreshResult"),
     ("/api/v2/bots/{bot}/keep-tasks-going", "post", "Bots", "setKeepTasksGoing",
      "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap", None),
+    ("/api/v2/bots/{bot}/turns-at-once", "post", "Bots", "setBotTurnsAtOnce",
+     "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise", None),
+    ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
+     "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
@@ -153,8 +158,6 @@ STABLE = [
     ("/api/v2/bots/{bot}", "get", "Bots", "getBot",
      "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
      "BotDetail"),
-    ("/api/v2/bots/{bot}/routines", "get", "Bots", "listBotRoutines",
-     "A bot's routines, its recurring work (Read on the bot; add include_deleted=true for removed ones)", "RoutineList"),
     ("/api/v2/bots/{bot}/access", "get", "Bots", "getBotAccess",
      "Who may see, read and write to a bot (its managers only; docs/permissions.md)", "BotAccessView"),
     ("/api/v2/bots/{bot}/access", "put", "Bots", "setBotAccess",
@@ -165,7 +168,7 @@ STABLE = [
     ("/api/v2/bots/{bot}/onboarded", "post", "Bots", "markBotOnboarded",
      "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; "
      "403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to "
-     "`onboarded`) and its routines start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it "
+     "`onboarded`) and its automations start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it "
      "onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
      "BotOnboarded"),
     ("/api/v2/bots/{bot}/tools", "get", "Bots", "listBotTools",
@@ -539,20 +542,23 @@ STABLE = [
      "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
-     "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits", "UsageLimits"),
+     "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a "
+     "lead who is not an administrator gets the groups it leads and those below)", "UsageLimits"),
     ("/api/v2/usage/limits", "put", "Usage", "setUsageDefault",
      "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs "
      "count toward every limit (owner and bot administrators)", "UsageDefaultView"),
     ("/api/v2/usage/limits/{bot}", "put", "Usage", "setBotUsageLimit",
-     "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and "
-     "administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until "
-     "the period turns over or the limit is raised", "BotUsageLimit"),
+     "A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; empty "
+     "follows the team default. Owner and administrators, the person who runs the bot within the team default, and a group "
+     "lead for the bots in the group and those below. A bot over a limit takes no new job until the period turns over or the "
+     "limit is raised", "BotUsageLimit"),
     ("/api/v2/usage/pools/company", "put", "Usage", "setTeamUsageLimit",
-     "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot "
+     "A limit on every bot's estimated spend together, per hour, day, week and month; null removes a field, one left out stays. Over it, no bot "
      "takes a new job (owner and bot administrators)", "UsagePoolLimit"),
     ("/api/v2/usage/pools/groups/{group}", "put", "Usage", "setGroupUsageLimit",
-     "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none "
-     "of them takes a new job (owner and bot administrators)", "UsagePoolLimit"),
+     "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none "
+     "of them takes a new job (owner and bot administrators; also the lead of the group or one above "
+     "it, within the parent group's limit)", "UsagePoolLimit"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -596,7 +602,7 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
-PERIODS = ("hourly", "daily", "weekly", "monthly")   # the spend limit periods (backend/usage_limits.py)
+PERIODS = ("per_30m", "hourly", "daily", "weekly", "monthly")   # the spend limit periods (backend/usage_limits.py); the 30-minute one
 GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
                         "description": "Skipped items in the last attempt, by fixed code and step"}
 GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
@@ -742,25 +748,18 @@ SCHEMAS = {
     "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
     "Bot": obj({"slug": "s", "display_name": "s", "state": "s", "online": "b", "queued": "i", "description": "s",
                 "reports_to": "n", "team": "n", "operator": "n", "owners": "a", "status": {"type": ["object", "null"]},
-                "keep_tasks_going": {"type": ["integer", "null"]}, "task_flow": ref("TaskFlow"),
+                "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
+                "task_flow": ref("TaskFlow"),
                 "access": ref("Access"), "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}, "can_complete_onboarding": {"type": "boolean", "description": "While onboarding: whether the caller may mark its onboarding complete"}, "onboarding_ready": {"type": ["object", "null"], "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"}},
                required=["slug", "display_name", "state", "owners", "access"]),
     "BotDetail": obj({"slug": "s", "display_name": "s", "description": "s", "state": "s", "online": "b", "queued": "i",
                       "status": {"type": ["object", "null"]}, "reports_to": "n", "reports_to_name": "s",
                       "operator": "n", "operator_name": "s", "team": "n", "owners": "a", "goals": "s",
-                      "keep_tasks_going": {"type": ["integer", "null"]}, "task_flow": ref("TaskFlow"),
+                      "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
+                      "task_flow": ref("TaskFlow"),
                       "access": ref("Access"), "onboarding_state": "s", "template": "s", "template_version": "s",
                       "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}, "can_complete_onboarding": {"type": "boolean", "description": "While onboarding: whether the caller may mark its onboarding complete"}, "onboarding_ready": {"type": ["object", "null"], "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"}},
                      required=["slug", "display_name", "state", "owners", "access"]),
-    "Routine": obj({"id": "s", "bot": "s", "key": "n", "title": "s", "cron": "s", "on": "s", "kind": "s",
-                    "timezone": "s", "enabled": "b", "text": "s", "last_fired": "n", "next_due": "n",
-                    "deleted_at": "n", "updated_at": "n", "active": "b",
-                    "held_by_bot": {"type": ["string", "null"], "description":
-                                    "Set while an enabled routine waits on its bot rather than its own switch: the "
-                                    "bot's state (paused, planned, quarantined, archived) or needs_setup. The routine "
-                                    "stays enabled and fires again once the bot is active and set up."}},
-                   required=["id", "bot", "title", "cron", "on", "kind", "timezone", "enabled", "active"]),
-    "RoutineList": obj({"routines": items(ref("Routine"))}, required=["routines"]),
     "Audience": obj({"everyone": "b", "people": items({"type": "string"}), "teams": items({"type": "string"}),
                      "bots": items({"type": "string"})}, required=["everyone", "people", "teams", "bots"]),
     "BotAccessView": obj({"bot": "s", "see": ref("Audience"), "read": ref("Audience"), "write": ref("Audience"),
@@ -983,7 +982,9 @@ SCHEMAS = {
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
                          "slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, "
-                         "lane_held, uncertain, scoped, cooling_off, run_hold, budget, backoff, readiness_unknown, sign_in_rejected, not_isolated, "
+                         "lane_held, uncertain, scoped, bot_limit, cooling_off, run_hold, budget, backoff, "
+                         "readiness_unknown, "
+                         "sign_in_rejected, not_isolated, "
                          "isolation_unknown, profile, config, check_model, unreadable), why, drain_progress (counts of running "
                          "and handed-back turns on update holds), since (setup only: when the "
                          "bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller "
@@ -1125,10 +1126,10 @@ SCHEMAS = {
                        "level_changed_by": "s", "level_changed_by_name": "s", "level_changed_at": "s",
                        "level_history": items(obj({"level": "i", "was": "i", "by": "s", "by_name": "s", "at": "s"},
                                                   required=["level", "was", "by", "at"])),
-                       "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
+                       "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
                                                          "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
                        "level3_offer": ref("CeoBotLevel3Offer")},
-                      required=["name", "regular_checks", "level", "levels", "daily_cap"]),
+                      required=["name", "regular_checks", "level", "levels"]),
     "CeoBotLogEntry": obj({"id": "s", "created": "s", "kind": {"type": "string", "enum": [
                                "decision", "cost", "publish", "send", "bots", "target", "vision", "instructions",
                                "person_task"]},
@@ -1207,13 +1208,15 @@ SCHEMAS = {
                                       "administrators only)", "additionalProperties": True},
                        **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
     "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
-    "UsagePoolView": obj({**{p + "_usd": NUM_N for p in PERIODS}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+    "UsagePoolView": obj({**{p + "_usd": NUM_N for p in PERIODS}, **{p + "_spent": NUM_N for p in ("30m", "hour", "day", "week", "month")},
                           "percent": "i", "blocked": {"enum": [*PERIODS, None]}}),
     "UsagePoolLimit": obj({"scope": {"type": "string", "description": "company or group:<id>"}, "limit": ref("UsagePoolView")}),
     "UsageLimits": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"}),
                         "may_edit_default": "b",
                         "pools": {"type": ["object", "null"], "description": "Owner and administrators: company (UsagePoolView) and "
-                                  "groups, {id: UsagePoolView with name and parent}", "additionalProperties": True},
+                                  "groups, {id: UsagePoolView with name and parent}. A lead who is "
+                                  "not an administrator: company null and only the groups it leads and those below, each "
+                                  "with may_edit true", "additionalProperties": True},
                         "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
@@ -1256,7 +1259,7 @@ SCHEMAS.update({
 })
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
 
-# The named events routines, rules and outgoing webhooks listen for (backend/event_catalog.py).
+# The named events automations and outgoing webhooks listen for (backend/event_catalog.py).
 TAGS["Events"] = "The catalog of named events (docs/routines.md)."
 STABLE.append(("/api/v2/event-types", "get", "Events", "listEventTypes",
                "Every named event with its description, version and an example payload (`group` narrows it)", "EventTypeList"))
@@ -1287,6 +1290,109 @@ SCHEMAS.update({
                       "revision": "i", "released": "b"}),
     "BotReleased": obj({"bot": "s", "released": {"type": "object"}}),
     "TeamBudgetState": obj({"turns_per_hour": "i", "turns_per_day": "i", "defaults": {"type": "object"}}),
+    "TaskCapRow": obj({"sender": "s", "receiver": "s", "per_day": "i", "count": "i", "closed": "i", "updated": "s", "updated_by": "s"}),
+    "TaskCapProposal": obj({"id": "s", "sender": "s", "receiver": "s", "per_day": "i", "status": "s", "proposed_by": "s", "created": "s"}),
+    "TaskCaps": obj({"caps": items(ref("TaskCapRow")), "proposals": items(ref("TaskCapProposal"))}),
+    "TaskCapWrite": obj({"cap": {"type": "object"}, "approval": "s", "status": "s"}),
+})
+STABLE.extend([
+    ("/api/v2/task-caps", "get", "Tasks", "getTaskCaps",
+     "Task caps with today's count and the tasks closed before the receiver acted, per pair; for the owner and admins, the "
+     "changes bots asked for, waiting as approvals", "TaskCaps"),
+    ("/api/v2/task-caps", "put", "Tasks", "setTaskCap",
+     "Cap the tasks one teammate sends another a day (0 blocks, null removes). The receiver must be a manager above the "
+     "sender. A bot's own change comes back as a pending approval a person decides", "TaskCapWrite"),
+    ("/api/v2/task-caps", "delete", "Tasks", "removeTaskCap",
+     "Remove the cap between two teammates (?sender=&receiver=); a bot's removal is an approval too", "TaskCapWrite"),
+])
+
+# The audit trail (backend/audit_log.py).
+STABLE.extend([
+    ("/api/v2/audit", "get", "Team", "listAudit",
+     "Who changed caps, spend, groups and automations, newest first (owner: all; others: their own)", "AuditPage"),
+])
+SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "properties": {
+    "rows": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+    "next": {"type": ["string", "null"]}}}})
+
+# Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
+STABLE.extend([
+    ("/api/v2/approvals", "post", "Needs you", "requestApproval",
+     "Ask a person to approve an action. Kinds task_cap and spend_limit are proposals "
+     "the top of the org decides; the hub applies one on approve, audited with via approval:<id>, and tells BotOps",
+     "ApprovalRequested"),
+])
+SCHEMAS.update({"ApprovalRequested": obj({"id": "s", "kind": "s", "approval": "s", "status": "s"}, required=["id", "kind"])})
+# Automations (backend/automations.py).
+TAGS["Automations"] = ("A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
+                       "one permission rule for UI, CLI and MCP.")
+STABLE.extend([
+    ("/api/v2/automations", "get", "Automations", "listAutomations",
+     "The automations you may see, newest first, each with can_edit; paged by cursor", "AutomationList"),
+    ("/api/v2/automations", "post", "Automations", "createAutomation",
+     "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves "
+     "it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+     "Automation"),
+    ("/api/v2/automations/guide", "get", "Automations", "getAutomationGuide",
+     "How BotOps builds and edits automations, with the flow format generated from the hub's code", "AutomationGuide"),
+    ("/api/v2/automations/question-sets", "get", "Automations", "listQuestionSets",
+     "The saved question sets a Decide step may name (`set`), each with its questions", "QuestionSets"),
+    ("/api/v2/automations/{aid}", "get", "Automations", "getAutomation",
+     "One automation with set questions filled in, today's counts and, for a schedule, next_run", "Automation"),
+    ("/api/v2/automations/{aid}", "patch", "Automations", "updateAutomation",
+     "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets "
+     "`pending`, a proposal a person restores", "Automation"),
+    ("/api/v2/automations/{aid}", "delete", "Automations", "deleteAutomation",
+     "Delete it; its runs stay. A built-in one is refused", "AutomationDeleted"),
+    ("/api/v2/automations/{aid}/delete", "post", "Automations", "deleteAutomationPost",
+     "The same delete, for clients that only POST", "AutomationDeleted"),
+    ("/api/v2/automations/{aid}/run", "post", "Automations", "runAutomation",
+     "Run it now with `input` standing in for the trigger's output; answers the run", "AutomationRunNow"),
+    ("/api/v2/automations/{aid}/runs", "get", "Automations", "listAutomationRuns",
+     "Its runs, newest first (limit, before → next), step detail for 30 days, and daily run and drop counts",
+     "AutomationRuns"),
+    ("/api/v2/automations/{aid}/versions", "get", "Automations", "listAutomationVersions",
+     "Its versions, newest first; status=pending for proposals", "AutomationVersions"),
+    ("/api/v2/automations/{aid}/versions/{n}/restore", "post", "Automations", "restoreAutomationVersion",
+     "Make a version current: a pending one keeps its number, an older one is saved as a new version; a draft's first "
+     "pending version turns it on", "Automation"),
+    ("/api/v2/automations/{aid}/versions/{n}", "delete", "Automations", "discardAutomationVersion",
+     "Discard a pending version (409 for any other)", "Automation"),
+    ("/api/v2/inboxes/{inbox}", "get", "Automations", "getInboxSend",
+     "An inbox's send switch (on by default): email address, slack:dm or slack:#<channel>", "InboxSwitch"),
+    ("/api/v2/inboxes/{inbox}", "patch", "Automations", "setInboxSend",
+     "Turn the send switch on or off (the inbox's person, or the owner); off, send_reply saves a draft", "InboxSwitch"),
+    ("/api/v2/people/{person}/assistant", "get", "Automations", "getPersonAssistant",
+     "The bot behind a person's Assistant, or null until it is first used", "PersonAssistant"),
+])
+_RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started": "s",
+            "finished": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped"]},
+            "cost": "f", "summary": "n", "steps": {"type": ["array", "null"], "items": {"type": "object"},
+                                                   "description": "Each step's status, outputs and cost; null after 30 days"}},
+           required=["id", "automation_id", "version", "status", "steps"])
+SCHEMAS.update({
+    "Automation": obj({"id": "s", "name": "s", "owner": "s", "enabled": "b", "trigger": {"type": "object"},
+                       "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
+                       "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
+                       "last_run": {"type": ["object", "null"]},
+                       "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
+                       "next_run": {"type": ["string", "null"]}, "pending": "i", "warning": "s"},
+                      required=["id", "can_edit"]),
+    "AutomationList": obj({"automations": items(ref("Automation")), "next": {"type": ["integer", "null"]}}),
+    "AutomationDeleted": obj({"id": "s", "deleted": "b"}),
+    "AutomationRun": _RUN,
+    "AutomationRunNow": obj({"run": ref("AutomationRun")}),
+    "AutomationRuns": obj({"runs": items(ref("AutomationRun")), "next": {"type": ["string", "null"]},
+                           "daily": items(obj({"day": "s", "runs": "i", "dropped": "i"}))}),
+    "AutomationVersions": obj({"versions": items(obj({"n": "i", "actor": "s", "at": "s",
+                                                      "status": {"enum": ["active", "pending"]}, "summary": "s",
+                                                      "flow": {"type": "object"}},
+                                                     required=["n", "actor", "at", "status", "flow"])),
+                               "next": {"type": ["integer", "null"]}}),
+    "AutomationGuide": obj({"text": "s"}),
+    "QuestionSets": obj({"sets": items(obj({"id": "s", "summary": "s", "questions": {"type": "object", "description": "Keyed by question id, in judge.py's format"}}))}),
+    "InboxSwitch": obj({"inbox": "s", "send": "b"}),
+    "PersonAssistant": obj({"bot": {"type": ["string", "null"]}}),
 })
 
 # Bot profiles (backend/profiles.py).

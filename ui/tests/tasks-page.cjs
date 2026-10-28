@@ -125,9 +125,6 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/routines') return json({routines: [
-      {id: 'digest', title: 'Weekly metrics digest', employee: 'analyst', cron: '0 9 * * 1', active: true, enabled: true, next: inDays(3)},
-      {id: 'sweep', title: 'Inbox sweep', employee: 'support', cron: '*/30 * * * *', active: true, enabled: true, next: inDays(0.01)}]});
     if (p === '/api/v2/tasks/labels') return json({labels: [...new Set(tasks.flatMap(x => x.labels))].sort(), tags: []});
     if (p === '/api/v2/task-types') return json({types});
     if (p.startsWith('/api/v2/preferences/')) {
@@ -234,8 +231,9 @@ async function listAndTabs(browser) {
   // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
   const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
   assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
+    ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
   assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
+  assert.equal(await page.locator('#task-view [data-view="routines"], #task-view [data-view="recurring"]').count(), 0, 'no Routines tab: routines are Automations');
   assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
   assert.deepEqual((await groupNames(page)).map(s => s.toLowerCase()), ['needs you', 'needs sam', 'needs someone', 'waiting', 'doing']);
@@ -478,7 +476,7 @@ async function typeSelection(browser) {
     await prefHeld;
     return route.fulfill({contentType: 'application/json', body: JSON.stringify({value: {type: 'marketing', view: 'list', views: 2, group: {list: 'owner'}}})});
   });
-  await page.goto('https://tico-ui.test/#/goals');
+  await page.goto('https://tico-ui.test/#/updates');
   const delayedPreferenceRead = page.waitForResponse(response => {
     const url = new URL(response.url());
     return url.pathname === '/api/v2/preferences/tasks.view' && response.request().method() === 'GET';
@@ -623,8 +621,7 @@ async function properties(browser) {
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
-    ['Part of', 'Add parent'], ['Wake rules', 'Defaults']]);
-  assert.equal(await props.locator('[data-wake-rules]').getAttribute('href'), '#/settings/rules?task=t-checkout');
+    ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
   assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
@@ -986,11 +983,8 @@ async function views(browser) {
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
-  await page.locator('#task-view [data-view="recurring"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('.rrow').length === 2);
-  assert.equal(await page.locator('#task-bar').isHidden(), true);
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Closed, Recurring: ok');
+  console.log('Needs you, Done, Closed: ok');
   await page.close();
 }
 
@@ -1304,8 +1298,8 @@ async function recheckPhone(browser) {
   // Closing the phone sheet (✕ or Esc) stays on Tasks: no extra step back through history.
   for (const how of ['x', 'esc']) {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/issues'});
-    await page.evaluate(() => { location.hash = '#/goals'; });
-    await page.waitForFunction(() => S.route === '#/goals' && !document.querySelector('.tasks-page'));
+    await page.evaluate(() => { location.hash = '#/updates'; });
+    await page.waitForFunction(() => S.route === '#/updates' && !document.querySelector('.tasks-page'));
     await page.evaluate(() => { location.hash = '#/issues'; });
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row'));
     await page.locator('[data-task-key="tt-checkout"] .tl-title').click();

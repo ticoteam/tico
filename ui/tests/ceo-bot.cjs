@@ -1,6 +1,6 @@
-// The CEO Bot on every install (backend/ceo_bot.py): the built-in bot is on the org chart by its name, the CEO Bot unless the owner
-// renamed it, with the bots and the Heads' departments the server hangs under it, and the Goals page calls it by that name. A bot
-// still named "Goal Manager" (an install the upgrade has not reached) shows as the CEO Bot; the old name is never shown. There is no
+// The CEO Bot on every install (backend/ceo_bot.py): the built-in bot is on the org chart by its name, the Strategy Bot unless the
+// owner renamed it, with the bots and the Heads' departments the server hangs under it, and Strategy's rail calls it by that name.
+// A bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot; the old names are never shown. There is no
 // switch to flip. A person may hide it from their own chart (Hide from my chart) and bring it back from Settings > Bots.
 // Fixtures only, no network.
 const {chromium} = require('playwright');
@@ -53,12 +53,11 @@ async function open(browser, server, width = 1440) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: [], owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: []});
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/#/goals');
   await page.locator('#goal-tree .gt-row').first().waitFor();
-  await page.locator('#goal-manager-panel h2').waitFor();
+  await page.locator('#sbot h2').waitFor({state: 'attached'});
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
@@ -73,7 +72,7 @@ const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().e
   return out;
 });
 
-async function check(page, name = 'CEO Bot') {
+async function check(page, name = 'Strategy Bot') {
   // On the chart, by its name, under the owner, with the Head's department, the Head, its report and the bot with
   // no manager under it.
   const ceo = page.locator('#tree a.node[data-org="b:goal-manager"]');
@@ -85,18 +84,19 @@ async function check(page, name = 'CEO Bot') {
   assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'b:goal-manager', 'p:ana']);
   assert.deepEqual(await above(page, 'b:scribe'), ['b:goal-manager', 'p:ana']);
   assert.equal(await page.locator('#tree a.node[data-org="b:coo"]').count(), 0, 'the Assistant stays off the chart');
-  // The Goals page tree nests it the same way, and its panel and labels use its name.
+  // The Goals tab's tree nests it the same way, and Strategy's rail and its labels use its name.
   assert.deepEqual(await goalLines(page), ['bot:goal-manager@1', 'bot:scribe@2', 'group:Marketing@2', 'bot:cmo@3', 'bot:seo@4']);
-  assert.equal(await page.locator('#goal-manager-panel h2').innerText(), name);
-  assert.equal(await page.locator('#goal-manager-panel').getAttribute('aria-label'), name);
-  assert.equal(await page.locator('#goal-manager-panel .p-text').getAttribute('aria-label'), `Message to the ${name}`);
-  assert.doesNotMatch(await page.locator('#main').innerText(), /Goal Manager/);
+  assert.equal(await page.locator('#sbot h2').textContent(), name);
+  assert.equal(await page.locator('#sbot').getAttribute('aria-label'), name);
+  await page.locator('#sbot .p-text').waitFor({state: 'attached'});
+  assert.equal(await page.locator('#sbot .p-text').getAttribute('aria-label'), `Message to the ${name}`);
+  assert.doesNotMatch(await page.locator('body').innerText(), /Goal Manager|CEO Bot/);
 }
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     // Its name, the name of a bot the upgrade has not reached yet (never shown), and a name the owner gave it.
-    for (const [sent, shown] of [['CEO Bot', 'CEO Bot'], ['Goal Manager', 'CEO Bot'], ['Atlas', 'Atlas']]) {
+    for (const [sent, shown] of [['CEO Bot', 'Strategy Bot'], ['Goal Manager', 'Strategy Bot'], ['Atlas', 'Atlas']]) {
       const {page, errors} = await open(browser, {name: sent});
       await check(page, shown);
       assert.deepEqual(errors, []);
@@ -137,7 +137,7 @@ async function check(page, name = 'CEO Bot') {
       assert.deepEqual(await above(page, 'g:marketing'), []);
       assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing']);
       assert.equal(await page.locator('#tree a.node[data-org="b:scribe"]').count(), 1);
-      assert.equal(await page.locator('#goal-manager-panel h2').innerText(), 'Atlas', 'Goals still has it');
+      assert.equal(await page.locator('#sbot h2').textContent(), 'Atlas', 'Strategy still has it');
       assert.ok((await goalLines(page)).includes('bot:goal-manager@1'), 'and its line on the Goals tree');
       // Settings > Bots: still listed, saying where it is, and Show on my chart brings it back.
       await page.evaluate(() => { location.hash = '#/settings'; });

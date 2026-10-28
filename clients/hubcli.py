@@ -118,6 +118,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
+    hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
+    hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
@@ -183,7 +185,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            to 60 s and prints the run with its summary; --draft: the owner's draft
     hub lens show <run-id>                 one run: answers, result, changes
     hub lens runs [--lens ID]              runs, newest first, with their summaries
-    hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
+    hub approval request --kind send|spend|publish|merge|support|task_cap|spend_limit --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
     hub approval show <id>
@@ -219,17 +221,27 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            change a declared tool in place (BotOps: as the requester); never remove
                                            and add it again. `--scope KEY=` takes a key off, `--note ""` clears it
     hub tool remove <bot> <tool-id>        ask BotOps to remove one (or withdraw a pending request)
-    hub routine list [--bot X]             the routines a bot runs on a schedule (yours by default)
-    hub routine set <key> --title "..." (--cron "0 7 * * 1-5" | --on meeting.ready)
-                    [--text "..."|--text-file f] [--timezone Z] [--bot X] [--disabled]
-                                           create or update one by its key; Tico's row is the routine
-    hub routine update <id|key> [--title ...] [--text ...|--text-file f] [--cron ...|--on ...]
-                    [--timezone Z] [--enable|--disable] [--bot X]
-                                           --enable / --disable turn it on or off; another bot's, as the requester (BotOps)
-    hub routine delete <id>
-    hub trigger list                       webhooks people and bots made; a routine runs --on webhook.<id>
+    hub automation list [--owner O]        automations you may see, each with can_edit
+    hub automation show <id>               trigger, steps, version, today's counts, next run
+    hub automation create --file F         a new one from a JSON flow ({name, owner, trigger, steps}); - reads stdin
+    hub automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
+                                           new trigger/steps/batch = a new version; a bot without rights proposes one
+                                           (BotOps: the asker's rights; what it creates is off unless enabled is sent)
+    hub automation delete <id>
+    hub automation run <id> [--input JSON] run now with a sample trigger output; prints the run
+    hub automation runs <id> [--limit N] [--before RUN]
+    hub automation versions <id> [--pending]
+    hub automation restore <id> <n>        make version n current (a pending one keeps its number)
+    hub automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
+    hub automation question-sets           the question sets a Decide step may name (set: id@version)
+    hub automation guide                   how BotOps builds automations, with the flow format
+    hub audit [--object O] [--limit N] [--before B]
+                                           who changed caps, spend, groups, automations and inboxes; the owner sees all
+    hub automation inbox <inbox> [--send on|off]
+                                           an inbox's send switch (email, slack:dm, slack:#chan); off = drafts only
+    hub trigger list                       webhooks people and bots made; an automation runs on one
     hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
-    hub trigger show <id>                  address, settings, 24-hour counts, routines
+    hub trigger show <id>                  address, settings, 24-hour counts, automations
     hub trigger update <id> [--name N] [--preset none|hmac|github|standard|stripe|slack] [--type-from H|/pointer]
                     [--hourly 1-600] [--keep-days 1-30] [--unheard log|note]
     hub trigger rotate <id>                a new secret; the old address stops
@@ -242,7 +254,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub trigger replay <id> <delivery>     run a stored call again as a new occurrence
     hub trigger recover <id> [--since HOURS]
                                            run again the calls refused in the last hours (a fixed secret) whose body is kept
-    hub event-types [--group task]         every event Tico names, with an example payload (routines, rules, webhooks)
+    hub event-types [--group task]         every event Tico names, with an example payload (automations, wake rules, webhooks)
     hub trigger relay create|rotate|delete <trigger>
                                            a second address through Tico Gateway (shown once); hub relay status
     hub relay set <trigger> --wake on|off  whether a delivery to that address starts a sleeping server
@@ -282,6 +294,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            CEO Bot: draft the job description of a seat the owner opened
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
+    hub org reports-to <bot:slug|human:id> <manager> [--on-behalf-of turn]
+                                           change who a teammate reports to, as the person who asked
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
     hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
@@ -350,7 +364,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot ready --summary S              an onboarding bot says it is ready, with what it learned
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
-    hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
+    hub bot go-live <bot> [--computer C] [--no-setup]
                                            place it if needed, turn it on, start its setup; waits for the computer
                                            to get its repository and finishes by itself (`--help`: the file's shape)
     hub bot model <bot> [<model>] [--effort E]
@@ -379,11 +393,13 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            add a human to the roster and sign-in list (a Confirm card first, unless they are in the team's domain)
     hub human list                         the humans on the roster
     hub group list                         the groups (they nest), with their humans and bots
-    hub group update [<group>] [--name N] [--parent G|''] [--add-human H ...] [--add-bot B ...]
-                     [--remove-human H ...] [--remove-bot B ...]
-                                           an owner or admin, or BotOps as the person who asked: with no <group>,
-                                           create one from --name; else rename, move or fill it. A teammate is in
-                                           one group at a time
+    hub group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
+                     [--add-bot B ...] [--remove-human H ...] [--remove-bot B ...] [--on-behalf-of turn]
+                                           an owner or admin (a lead in its groups), or BotOps / the Strategy Bot as
+                                           the person who asked: with no <group>, create one from --name; else
+                                           rename, move, lead or fill it. A teammate is in one group at a time
+    hub group delete <group> [--on-behalf-of turn]
+                                           delete a group; its teammates and groups move up to its parent
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -463,7 +479,8 @@ if __package__ in (None, ""):                          # run as a script: python
 # before a request is made. The server is the authority when they disagree.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
+# task_cap and spend_limit: proposals (backend/proposals.py).
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
 ASKED = ("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
@@ -480,54 +497,8 @@ def task_update_status(value):
     return value
 
 
-# `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
-# the bot already has (`hub routine list <bot>`); go-live checks the live ones match before turning the bot on.
-ROUTINES_EXAMPLE = ('[{"id": "<bot>:<routine>", "title": "Weekday review", "cron": "0 9 * * 1-5", '
-                    '"timezone": "America/Los_Angeles", "enabled": true}]')
-ROUTINE_FIELDS = {"id": str, "title": str, "cron": str, "timezone": str, "enabled": bool, "on": str}
-ROUTINE_REQUIRED = ("id", "title", "timezone")
-ROUTINES_HELP = f"""--routines-file is a JSON array with one object per Routine the bot has, as it must be live:
-
-  {ROUTINES_EXAMPLE}
-
-  id        required  the Routine's id, <bot>:<routine> (`hub routine list <bot>` shows it)
-  title     required  its title
-  timezone  required  an IANA zone, e.g. America/Los_Angeles
-  cron      optional  its cron, "" when it runs on an event (default "")
-  on        optional  the event it runs on instead, e.g. meeting.ready (default "")
-  enabled   optional  true or false (default true)
-
-No other fields. Go-live refuses when a live Routine differs, or when an enabled Routine is not listed; it creates
-nothing (set Routines with `hub routine set`).
-
-When the computer does not have the bot's repository yet, go-live keeps the placement and answers
+GO_LIVE_HELP = """When the computer does not have the bot's repository yet, go-live keeps the placement and answers
 waiting_for_repository: the computer clones it, and Tico finishes going live when it reports the repository."""
-
-
-def read_routines_file(path):
-    """The --routines-file entries, or a CliError naming the bad field and showing the expected shape."""
-    expected = f". Expected {ROUTINES_EXAMPLE} (see `hub bot go-live --help`)"
-    try:
-        data = json.loads(Path(path).read_text())
-    except OSError as exc:
-        raise CliError(f"--routines-file {path}: cannot read it ({exc.strerror or exc})" + expected) from None
-    except ValueError as exc:
-        raise CliError(f"--routines-file {path} is not JSON ({exc})" + expected) from None
-    if not isinstance(data, list):
-        raise CliError(f"--routines-file {path}: the top level is {type(data).__name__}, not an array" + expected)
-    names = {str: "a string", bool: "true or false"}
-    for i, entry in enumerate(data):
-        if not isinstance(entry, dict):
-            raise CliError(f"--routines-file {path}: [{i}] is {type(entry).__name__}, not an object" + expected)
-        for key in ROUTINE_REQUIRED:
-            if key not in entry:
-                raise CliError(f"--routines-file {path}: [{i}].{key} is missing" + expected)
-        for key, value in entry.items():
-            if key not in ROUTINE_FIELDS:
-                raise CliError(f"--routines-file {path}: [{i}].{key} is not a field" + expected)
-            if not isinstance(value, ROUTINE_FIELDS[key]):
-                raise CliError(f"--routines-file {path}: [{i}].{key} must be {names[ROUTINE_FIELDS[key]]}" + expected)
-    return data
 
 
 def out(obj):
@@ -939,6 +910,15 @@ def parser():
         s.add_argument(argument)
         s.add_argument("--task", help="task id; defaults to this run's task")
         s.set_defaults(fn="task worktree " + operation)
+    s = task.add_parser("caps", help="the task caps: today's count per pair, the tasks closed before the "
+                        "receiver acted, and the changes bots asked for")
+    s.set_defaults(fn="task caps")
+    cap = task.add_parser("cap", help="set a task cap: how many tasks sender may create for receiver a day").add_subparsers(dest="cap_sub")
+    s = cap.add_parser("set", help="sender receiver --per-day N; 0 blocks the pair, and with no --per-day the cap is removed")
+    s.add_argument("sender", help="bot:<slug> or person:<id>")
+    s.add_argument("receiver", help="bot:<slug> or person:<id>, a manager above the sender")
+    s.add_argument("--per-day", dest="per_day", type=int, help="tasks a day; 0 blocks the pair")
+    s.set_defaults(fn="task cap set")
     s = task.add_parser("create")
     s.add_argument("--visibility", choices=["public", "private"])
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
@@ -1288,7 +1268,24 @@ def parser():
     scope.add_argument("--person", help="only what involves this person")
     scope.add_argument("--team", help="only what involves this team")
     s.set_defaults(fn="replay show")
-    goal = sub.add_parser("goal", help="goals: list yours, show one, set one, set its colour, edit it").add_subparsers(dest="sub")
+    goal = sub.add_parser("goal", help="goals: list, read-back, create and edit",
+                          description="Read back goal changes in the owner's CEO Bot chat. Saves nothing without a plain yes; "
+                                      "cite that yes with --on-behalf-of turn (or its message id) on each save.").add_subparsers(dest="sub")
+    s = goal.add_parser("read-back", help="Tico writes the draft; saves nothing without a plain yes",
+                        description="Post 1 to 20 changes as Tico's read-back. Saves nothing without a plain yes. "
+                                    "Returns message_id, text and exact method/path/body_json steps. After yes, use goal save "
+                                    "for each agreed step; replace {new} with the first save's goal id using --created-goal. "
+                                    "On not_agreed read back again; never retry the save.")
+    s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
+                                  "and that change's fields")
+    s.set_defaults(fn="goal read-back")
+    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes")
+    s.add_argument("method", choices=["POST"])
+    s.add_argument("path", help="the step's /api/v2 path")
+    s.add_argument("body_json", help="the step's exact body_json string, unchanged")
+    s.add_argument("--created-goal", dest="created_goal", help="first save's goal id, to replace {new} in later paths")
+    s.add_argument("--on-behalf-of", required=True, help="turn or the message id of the owner's plain yes")
+    s.set_defaults(fn="goal save")
     s = goal.add_parser("list", help="what you are for: your goals, the chain above them, your reports' goals")
     s.add_argument("--owner", help="someone else's: a bot slug or a person id")
     s.add_argument("--all", action="store_true", help="every live goal in the company")
@@ -1305,6 +1302,7 @@ def parser():
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--top", action="store_true", help="put it first in the owner's order")
     s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (hub strategy show lists them)")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="goal create")
     s = goal.add_parser("status", help="set the colour by hand: red, yellow or green with one sentence, done or dropped "
                                      "when it ends; it sticks until a person hands it back (status auto)")
@@ -1322,6 +1320,7 @@ def parser():
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
     s.add_argument("--bet", dest="bet_id", help='the strategy bet it serves; "" unlinks it')
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="goal update")
     s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
@@ -1398,6 +1397,7 @@ def parser():
     s.add_argument("--owner", help="me (default), company, a bot slug or a person id")
     kpi_flags(s)
     target_flags(s)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi create")
     s = kpi.add_parser("update", help="a change to what it measures is a new definition version")
     s.add_argument("id")
@@ -1409,10 +1409,18 @@ def parser():
     s.add_argument("goal_id")
     s.add_argument("kpi_id")
     target_flags(s)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi link")
+    s = kpi.add_parser("target", help="set or remove the target on a goal's measure")
+    s.add_argument("goal_id")
+    s.add_argument("kpi_id")
+    target_flags(s)
+    s.add_argument("--on-behalf-of", help="turn or the message id of the owner's plain yes")
+    s.set_defaults(fn="kpi target")
     s = kpi.add_parser("unlink", help="take a KPI off a goal")
     s.add_argument("goal_id")
     s.add_argument("kpi_id")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="kpi unlink")
     s = kpi.add_parser("log", help="a reading: a fact with its period; to correct one, supersede it")
     s.add_argument("kpi_id")
@@ -1450,6 +1458,7 @@ def parser():
     s.add_argument("decision", choices=["confirm", "reject"])
     s.add_argument("--note", default="")
     s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="proposal decide")
 
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
@@ -1778,46 +1787,70 @@ def parser():
     s.add_argument("id", help="the tool id from `hub tool list --bot`")
     s.set_defaults(fn="tool remove")
 
-    routine = sub.add_parser("routine", help="what this bot is told on a schedule (docs/routines.md)").add_subparsers(dest="sub")
-    s = routine.add_parser("list")
-    s.add_argument("--bot", help="another bot's routines; yours by default")
-    s.set_defaults(fn="routine list")
-    s = routine.add_parser("set", help="create a routine, or update the one with this key")
-    s.add_argument("key", help="a stable name, letters, digits, dots, dashes or underscores")
-    s.add_argument("--title", required=True)
-    s.add_argument("--cron", help="five fields, in --timezone (America/Los_Angeles by default)")
-    s.add_argument("--on", help="a Tico event instead of a time: meeting.ready, release_published, or webhook.<id> (hub trigger list)")
-    s.add_argument("--text", default="", help="what the bot is told each time")
-    s.add_argument("--text-file", dest="text_file")
-    s.add_argument("--timezone")
-    s.add_argument("--bot", help="set it on another bot you own; yourself by default")
-    s.add_argument("--disabled", action="store_true", help="keep it, but do not run it yet")
-    s.set_defaults(fn="routine set")
-    s = routine.add_parser("update", help="change one routine by its id or key; --enable or --disable turns it on or off")
-    s.add_argument("id", help="the routine id from `hub routine list`, or its key")
-    s.add_argument("--title")
-    s.add_argument("--text")
-    s.add_argument("--text-file", dest="text_file")
-    s.add_argument("--cron")
-    s.add_argument("--on")
-    s.add_argument("--timezone")
-    s.add_argument("--bot", help="the bot it belongs to, when it is not yours")
+    auto = sub.add_parser("automation", help="automations: a trigger and steps").add_subparsers(dest="sub")
+    s = auto.add_parser("list")
+    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--cursor", type=int, help="`next` from the page before")
+    s.set_defaults(fn="automation list")
+    s = auto.add_parser("show")
+    s.add_argument("id")
+    s.set_defaults(fn="automation get")
+    s = auto.add_parser("create", help="save a new automation from a JSON flow")
+    s.add_argument("--file", required=True, help="a JSON object {name, owner, trigger, steps, ...}; - reads stdin")
+    s.set_defaults(fn="automation create")
+    s = auto.add_parser("update", help="change one; a new trigger, steps or batch is a new version")
+    s.add_argument("id")
+    s.add_argument("--file", help="a JSON object with the fields to change; - reads stdin")
+    s.add_argument("--name")
+    s.add_argument("--summary", help="a few words on the change")
     switch = s.add_mutually_exclusive_group()
     switch.add_argument("--enable", action="store_true")
     switch.add_argument("--disable", action="store_true")
-    s.set_defaults(fn="routine update")
-    s = routine.add_parser("delete")
-    s.add_argument("id", help="the routine id from `hub routine list`")
-    s.set_defaults(fn="routine delete")
-    s = routine.add_parser("run", help="run a scheduled routine now")
+    s.set_defaults(fn="automation update")
+    s = auto.add_parser("delete")
     s.add_argument("id")
-    s.set_defaults(fn="routine run")
+    s.set_defaults(fn="automation delete")
+    s = auto.add_parser("run", help="run it now and print the run")
+    s.add_argument("id")
+    s.add_argument("--input", help="a JSON object standing in for the trigger's output")
+    s.set_defaults(fn="automation run")
+    s = auto.add_parser("runs")
+    s.add_argument("id")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--before", help="`next` from the page before")
+    s.set_defaults(fn="automation runs")
+    s = auto.add_parser("versions")
+    s.add_argument("id")
+    s.add_argument("--pending", action="store_true", help="proposals only")
+    s.set_defaults(fn="automation versions")
+    s = auto.add_parser("restore")
+    s.add_argument("id")
+    s.add_argument("n", type=int)
+    s.set_defaults(fn="automation restore")
+    s = auto.add_parser("discard", help="drop a pending version (a proposal)")
+    s.add_argument("id")
+    s.add_argument("n", type=int)
+    s.set_defaults(fn="automation discard")
+    s = auto.add_parser("question-sets", help="the question sets a Decide step may name")
+    s.set_defaults(fn="automation question-sets")
+    s = auto.add_parser("guide", help="how BotOps builds automations, with the flow format")
+    s.set_defaults(fn="automation guide")
+    s = auto.add_parser("inbox", help="read or set an inbox's send switch")
+    s.add_argument("inbox", help="an email address, slack:dm or slack:#<channel>")
+    s.add_argument("--send", choices=["on", "off"], help="leave out to read it")
+    s.set_defaults(fn="automation inbox")
+    s = sub.add_parser("audit", help="who changed caps, spend, groups, automations and inboxes, newest first (the owner sees all)")
+    s.add_argument("--object", help="one object, such as automation:<id> or inbox:<address>")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--before", help="`next` from the page before")
+    s.set_defaults(fn="audit")
 
     s = sub.add_parser("event-types", help="every event Tico names, with a one-line description and an example payload")
     s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
                                    "inbound, health, webhook, tico, custom")
     s.set_defaults(fn="event-types")
-    trigger = sub.add_parser("trigger", help="webhooks that start routines (Settings > Webhooks)").add_subparsers(dest="sub")
+    trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
     s = trigger.add_parser("create", help="make a webhook trigger; the address with its secret is shown once")
@@ -1834,7 +1867,7 @@ def parser():
     s.add_argument("--type-from", dest="type_from", help="a header name or a JSON pointer (/type); empty for the preset's default")
     s.add_argument("--hourly", type=int, help="calls an hour, 1-600 (60 by default)")
     s.add_argument("--keep-days", dest="keep_days", type=int, help="days calls stay readable and can run again, 1-30 (7 by default)")
-    s.add_argument("--unheard", choices=["log", "note"], help="note: tell the maker, at most hourly, when no routine or rule acted")
+    s.add_argument("--unheard", choices=["log", "note"], help="note: tell the maker, at most hourly, when no automation or rule acted")
     s.set_defaults(fn="trigger update")
     s = trigger.add_parser("rotate", help="a new secret; the old address stops working")
     s.add_argument("id")
@@ -2146,6 +2179,11 @@ def parser():
     s.add_argument("--set", type=lambda text: [x.strip() for x in text.split(",") if x.strip()], metavar="A,B,C",
                    help="its reports in the new order, comma-separated; the ones left out keep their places")
     s.set_defaults(fn="org order")
+    s = org.add_parser("reports-to", help="change who a teammate reports to, as the person who asked")
+    s.add_argument("teammate", help="bot:<slug> or human:<id>")
+    s.add_argument("reports_to", metavar="manager", help="a bot's slug or human:<id>")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="org reports-to")
     org.add_parser("models", help="the published starter org chart models that recommendations come from").set_defaults(fn="org models")
     health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
     s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
@@ -2377,12 +2415,10 @@ def parser():
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
     s.set_defaults(fn="bot place")
     s = bot.add_parser("go-live", help="place it if needed, turn it on and start its setup (BotOps)",
-                       formatter_class=argparse.RawDescriptionHelpFormatter, epilog=ROUTINES_HELP)
+                       formatter_class=argparse.RawDescriptionHelpFormatter, epilog=GO_LIVE_HELP)
     s.add_argument("bot")
     s.add_argument("--computer")
     s.add_argument("--no-setup", dest="no_setup", action="store_true", help="do not start its setup chat")
-    s.add_argument("--routines-file", dest="routines_file",
-                   help="the bot's live Routines as a JSON array, checked before it is turned on: " + ROUTINES_EXAMPLE)
     s.set_defaults(fn="bot go-live")
     s = bot.add_parser("restore", help="bring an archived bot back, as the person who asked (BotOps)")
     s.add_argument("bot")
@@ -2395,6 +2431,11 @@ def parser():
     s.add_argument("bot")
     s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else 0 if v == 'off' else int(v), default=argparse.SUPPRESS)
     s.set_defaults(fn="bot keep-tasks-going")
+    s = bot.add_parser("turns-at-once",
+                       help="read or set the most turns the bot runs at once across all computers: N or unlimited")
+    s.add_argument("bot")
+    s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else int(v), default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot turns-at-once")
     s = bot.add_parser("budget", help="read or set a bot's runs per hour and per day, or release it from a hold")
     s.add_argument("bot")
     s.add_argument("action", nargs="?", choices=["release"], help="release the bot from a hold instead of changing a budget")
@@ -2411,7 +2452,7 @@ def parser():
     s.add_argument("--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest")
     s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")
     s.add_argument("--sweeps", type=lambda v: {"on": True, "off": False}[v], metavar="on|off",
-                   help="custom: whether stall checks and routines may wake it")
+                   help="custom: whether stall checks and automations may wake it")
     s.add_argument("--takes", choices=["all", "review", "watcher", "none"], help="custom: which tasks it may be given")
     s.add_argument("--confirm-drop-rules", dest="confirm_drop_rules", action="store_true", default=None,
                    help="leaving custom deletes the wake rules it copied into the rules table")
@@ -2537,7 +2578,7 @@ def parser():
     groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(dest="sub")
     groups.add_parser("list", help="the groups with their humans and bots").set_defaults(fn="group list")
 
-    s = groups.add_parser("update", help="create (no group given), rename, move or fill a group (an owner or an admin)")
+    s = groups.add_parser("update", help="create (no group given), rename, move, lead or fill a group (an owner or an admin)")
     s.add_argument("group", nargs="?", help="the group's id; leave out to create one from --name")
     s.add_argument("--name")
     s.add_argument("--parent", help="the group it is in; an empty one is the top")
@@ -2545,7 +2586,13 @@ def parser():
     s.add_argument("--add-bot", dest="add_bots", action="append", metavar="BOT", help="put a bot in it")
     s.add_argument("--remove-human", dest="remove_humans", action="append", metavar="HUMAN")
     s.add_argument("--remove-bot", dest="remove_bots", action="append", metavar="BOT")
+    s.add_argument("--lead", help="bot:<slug> or person:<id>; an empty one clears it")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="group update")
+    s = groups.add_parser("delete", help="delete a group; its teammates and groups move up to its parent")
+    s.add_argument("group")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="group delete")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
@@ -2563,6 +2610,11 @@ def parser():
     s.add_argument("computer", help="the computer's label or id")
     s.add_argument("--hours", type=int, default=24)
     s.set_defaults(fn="computer performance")
+    s = comp.add_parser("turns-at-once",
+                        help="set how many turns a computer runs at once: N, or automatic for its own capacity")
+    s.add_argument("computer", help="the computer's id")
+    s.add_argument("limit", type=lambda v: None if v == "automatic" else int(v), help="N (1 to 256), or automatic")
+    s.set_defaults(fn="computer turns-at-once")
     cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(dest="sub")
     s = cred.add_parser("request", help="open a card in the chat for the person to type the credential into")
     s.add_argument("env", help="the variable's name, like JIRA_BASIC_AUTH")
@@ -2673,60 +2725,6 @@ def parser():
     who.add_argument("--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions")
     who.add_argument("--automatic", action="store_true", help="suggestions go to the Automatic bot (Product Manager, then Head of Product)")
     s.set_defaults(fn="roadmap settings")
-    rule = sub.add_parser("rule", help="wake rules: what a message does to a bot, and which rule decided it (docs/tasks.md)").add_subparsers(dest="sub")
-    s = rule.add_parser("list", help="the built-in rules and the rules set for the team, a type, a department, a bot or a task, with 7-day runs and no-op rate")
-    s.add_argument("--scope-kind", dest="scope_kind", choices=["builtin", "team", "type", "department", "bot", "task"])
-    s.add_argument("--scope-id", dest="scope_id")
-    s.add_argument("--event")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="rule list")
-
-    def rule_fields(s):
-        s.add_argument("--event", help="the event, or * for every event that is not always-wake; webhook.received and tico.notice "
-                                       "(or a prefix like webhook.*) have no task")
-        s.add_argument("--then", choices=["ignore", "note", "batch", "wake", "ask", "action"],
-                       help="wake starts a run, note and ignore wait; ask raises a Needs-you; action runs params.action")
-        s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}; '
-                                      'for a webhook event only {"trigger":"shop","type":"order.*"}')
-        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"assign","owner":"ops"}, '
-                                        '{"action":"add_tag","tag":"urgent"} or {"action":"remove_tag","tag":["triage"]}; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
-                                        'or {"action":"send_webhook","webhook":"<id>","type":"custom.order","data":{"id":"{{data.order}}"}}; '
-                                        '{"action":"create_task","owner":"ops","title":"Order {{data.order}}","body":"..."} or '
-                                        '{"action":"forward","webhook":"<id>"} (webhook.received only); '
-                                        '{"bot":"ops","text":"..."} on a wake rule for a webhook event')
-        s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None, help="--off turns the rule off")
-        s.add_argument("--position", type=int, help="order inside its scope; lower first")
-        s.add_argument("--note", help="why the rule exists")
-        s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
-
-    s = rule.add_parser("set", help="make a rule: the most specific scope wins (task, bot, department, type, team, built-in)")
-    s.add_argument("--scope-kind", dest="scope_kind", required=True, choices=["team", "type", "department", "bot", "task"])
-    s.add_argument("--scope-id", dest="scope_id", help="the type, department, bot or task; not for the team")
-    rule_fields(s)
-    s.set_defaults(fn="rule set")
-    s = rule.add_parser("update", help="change a rule you may edit; built-in rules are read-only (override one with set)")
-    s.add_argument("id")
-    rule_fields(s)
-    s.add_argument("--expected-revision", dest="expected_revision", type=int, help="the revision you read; default the current one")
-    s.set_defaults(fn="rule update")
-    s = rule.add_parser("delete", help="delete a rule you may edit")
-    s.add_argument("id")
-    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
-    s.set_defaults(fn="rule delete")
-    s = rule.add_parser("suggestions", help="the rules Tico suggests making a note, each with its 7-day runs and no-op share (the ones you may change)")
-    s.add_argument("--status", choices=["open", "all"], help="open (default), or all: also applied and dismissed in the last 30 days")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="rule suggestions")
-    s = rule.add_parser("apply", help="make a suggested rule a note, as the person who asked; a built-in gets a team rule")
-    s.add_argument("id", help="the suggestion's id")
-    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
-    s.set_defaults(fn="rule apply")
-    s = rule.add_parser("dismiss", help="decline a suggestion, or take an applied one back")
-    s.add_argument("id", help="the suggestion's id")
-    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
-    s.set_defaults(fn="rule dismiss")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")
@@ -2801,8 +2799,6 @@ RENAMED = [
     (("integration",), ("tool", "show"), (), None),
     (("queries",), ("tool", "query-search"), (), None),
     (("learn",), ("tool", "learn"), (), None),
-    (("routine", "on"), ("routine", "update"), ("--enable",), None),
-    (("routine", "off"), ("routine", "update"), ("--disable",), None),
     (("status",), ("bot", "status"), (), None),
     (("recent",), ("bot", "recent"), (), None),
     (("turns",), ("run", "list"), (), None),
@@ -2838,7 +2834,7 @@ def rename_argv(argv):
         return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
         return argv, None                              # `hub notice list` is new; only `hub notice <text>` is the old send
-    if argv[:2] == ["org", "order"]:                   # `hub org` alone is the old `hub team show`; this one is new
+    if argv[:2] in (["org", "order"], ["org", "reports-to"]):   # `hub org` alone is the old `hub team show`
         return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[:len(old)]) == old:

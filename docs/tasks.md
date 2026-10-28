@@ -159,9 +159,13 @@ Only a Doer starts its open tasks by itself; a Reviewer starts only its review a
 Monitor starts a task when it is handed to them ([Profiles](how-it-works.md#profiles)). A Responder is given no task at all,
 and a Reviewer is given only a review or QA subtask: filing any other task for it is refused with the reason.
 
+`hub bot turns-at-once <bot> 2` caps how many of the bot's turns run at once across every computer; `unlimited` lifts
+it. The bot editor and `POST /api/v2/bots/{bot}/turns-at-once` (MCP tool `hub_bot_turns_at_once`) set the same value. At
+the limit its queued work waits and says so, on every computer.
+
 `hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
 Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
-the same permissions and revision check. **Settings → Rules** lists **Start assigned tasks** using
+the same permissions and revision check. **Settings → System** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
 Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
@@ -424,11 +428,11 @@ suggestions cover the quiet week.
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > Rules** and switch on **Stale ticket review**. It is off by
+**Turn it on.** Go to **Settings > System** and switch on **Stale ticket review**. It is off by
 default, and an owner or an admin can turn it on or off, pick how often it runs, or run it now. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
-**What it looks for.** Once an hour (or on the schedule picked in Settings > Rules), Tico checks every open, doing, waiting and review task that is
+**What it looks for.** Once an hour (or on the schedule picked in Settings > System), Tico checks every open, doing, waiting and review task that is
 not snoozed and has no run going. A task is a candidate when one of these is true:
 
 - every pull request linked to it is merged, closed or shipped;
@@ -537,8 +541,8 @@ is due later or waits on someone else, and the bot hears why. Hourly, `backend/a
 Whether a message about a task wakes its bot or waits is decided by wake rules, each with an id (`parked`, `own_write`,
 `same_state`, `bot_to_bot`, `batch_*`, `assignment`, `stall`, ...). A person's message, an ask, an approval and a gate
 verdict always wake (a Manager hears of a verdict, and of its subtasks' and blockers' results, as a note). A rule can be set for the whole team, a task type, a department, a bot or one task, and the most
-specific wins (`hub rule list`, `hub rule set`; Settings → Rules → **What wakes a bot**). The message and the run both record the rule, and the
-Rules page and `rule_weekly` in `hub sql` show how often each woke a bot and how often that run did nothing.
+specific wins (the **What wakes** automations on the Automations page). The message and the run both record the rule, and
+`rule_weekly` in `hub sql` shows how often each woke a bot and how often that run did nothing.
 
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
@@ -614,19 +618,10 @@ deleted.
 
 A bot's **profile** (Doer, Reviewer, Lead, Manager, Responder, Monitor, Custom) adds a few bot-level rows of its own: a Reviewer wakes for
 its review and QA requests and people and notes the rest, a Lead gets everything but people, escalations and approvals in a daily
-digest, a Manager wakes for people, tasks given to it, its own clock and its exceptions list and notes the rest, a Responder and a Monitor note the rest. `hub rule list` shows them as the profile's, and a Custom bot's copies as its own
+digest, a Manager wakes for people, tasks given to it, its own clock and its exceptions list and notes the rest, a Responder and a Monitor note the rest. The bot's **What wakes** automation shows them as the profile's, and a Custom bot's copies as its own
 ([Profiles](how-it-works.md#profiles)).
 
-Once a week, **Suggest quieter rules** (Settings > System routines) turns each rule above 50% no-op over 7 days with at
-least 20 runs into one suggestion, "make this a note": a table rule's outcome becomes `note`; a built-in gets a team rule
-for its event, because built-ins are read-only. The always-wake events, awaited results and scheduled or assigned work
-(routines, assignments, due dates) are never suggested. Nothing changes by itself. Settings → Rules lists them under
-**Suggestions** with **Apply** and **Dismiss**; on an applied one, **Undo** puts the rule back. `hub rule suggestions` lists the ones
-you may act on, `hub rule apply <id>` edits the rule with your own right to edit it, and `hub rule dismiss <id>` declines
-an open suggestion (that rule is not suggested again for 28 days) or, on an applied one, puts the rule back if nobody has
-changed it since. The same three are `hub_rule_suggestions`, `hub_rule_apply` and `hub_rule_dismiss`, and
-`GET /api/v2/rules/suggestions` with `POST .../{id}/apply` and `.../{id}/dismiss`.
-`GET /api/v2/event-types` (`hub event-types`, `hub_event_types`) lists the named events a rule or routine can use.
+`GET /api/v2/event-types` (`hub event-types`, `hub_event_types`) lists the named events a rule or automation can use.
 
 ## Snoozing a task
 

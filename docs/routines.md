@@ -1,170 +1,65 @@
-# Routines
+# Routines (now Automations)
 
-This page is about bot routines. For the flat list of built-in jobs and task rules at the top of **Settings → Rules**, see [System routines](system-routines.md).
+A routine is now an automation: a trigger and steps. A bot's routine is an automation whose trigger is a
+**Schedule** (a five-field cron in a time zone), an **Event** from Tico's catalog, or an incoming **Webhook**, and whose
+step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
+runs on its own, see [System routines](system-routines.md).
 
-A routine is a row in Tico: a bot, a time (or a trigger), a title, and the text the bot is
-told. The server runs the clock. When a routine is due it opens a task for the bot with that
-text; a Mac claims the task after it wakes and passes readiness, and the bot takes it from there
-like any other task. Run now during another task queues a separate run for the routine's task; reading its
-notification during the other run does not count as doing that work. Nothing else defines a routine — not a file in the bot's repository, not a
-Git branch. Tico organizes the bots' work; what a bot does with a session, a context window or
-a compaction is the bot's runtime's business.
+An install that had routines moved them once, on the upgrade to Automations; see
+[Moving to Automations](updates.md#moving-to-automations-one-time).
 
-## Writing one
+## Making one
 
-Three doors, one table (`schedules`, `backend/routines.py`):
-
-- **The site.** Settings > Rules → *New routine*, or the Routines card on a bot's More tab.
-  In **Settings > Rules > Bot routines**, each editable row shows its **On**/**Off** switch and **Edit** without expanding.
-  Expand a row for recent runs. A routine in the Routines list on a bot's page opens the same editor: its instruction, its schedule (every day, weekdays, a day of the
-  week or of the month at a time, or a cron), *Run now*, *Pause* and *Delete*. Someone who may not edit
-  it sees the same fields read-only.
-- **The `hub` CLI, from a bot's run.** A bot sets up its own; an owner's bot may not touch
-  another's. BotOps seeds a new bot's first routines from its template (below).
+- **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
+  An automation's page shows its **Runs** and **Versions**.
+- **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
+  action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
   ```
-  hub routine list [--bot X]
-  hub routine set <key> --title "Daily audit" --cron "0 7 * * 1-5" --text-file playbooks/audit.md
-  hub routine set <key> --title "Meeting debrief" --on meeting.ready --text "..."
-  hub routine update <id> [--title ..] [--text ..] [--cron ..|--on ..] [--timezone ..] [--enable|--disable]
-  hub routine delete <id>
+  hub automation create --file - <<'EOF'
+  {"name": "Daily audit", "owner": "bot:acme-ops", "enabled": true,
+   "trigger": {"type": "schedule", "cron": "0 7 * * 1-5", "tz": "America/Los_Angeles"},
+   "steps": [{"id": "audit", "type": "bot_turn", "enabled": true, "bot": "acme-ops",
+              "prompt": "Run the daily audit. Follow playbooks/audit.md."}]}
+  EOF
   ```
 
-  `key` is a stable name (letters, digits, dots, dashes, underscores). Setting the same key
-  again updates the routine in place, so a bot that declares its routines every run makes one,
-  not one per run. The MCP tools are the same names: `hub_routine_list`, `hub_routine_set`,
-  `hub_routine_update`, `hub_routine_delete`.
-- **The API.** `POST /api/v2/bots/{bot}/routines` creates (`key`, `title`, `text`, `cron` or
-  `on`, `timezone`, `enabled`); `POST /api/v2/routines/{id}` changes any of those;
-  `POST /api/v2/routines/{id}/delete` deletes. `GET /api/v2/routines` is every routine the
-  signed-in human may see (no text), `GET /api/v2/bots/{bot}/routines` one bot's with the text,
-  `GET /api/v2/routines/{id}/occurrences` what each firing did.
+  For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
+  `{"type": "webhook", "id": "<trigger id>"}` (`hub trigger list` shows the ids). A new automation is saved off
+  unless the flow sends `"enabled": true`.
 
-Who may write a bot's routines: the environment owner, the bot's owner, the bot itself, and
-BotOps. Who may read them, with their text and occurrences: the people who may read the bot, the bot
-itself, and a bot above it in the `reports_to` chain, in its own run (a manager bot reviewing the
-bots that report to it).
+  ```
+  hub automation list [--owner O]
+  hub automation show <id>
+  hub automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
+  hub automation run <id> [--input JSON]
+  hub automation runs <id>
+  hub automation delete <id>
+  ```
 
-The editor's **Timezone** picker starts on the zone most of the team's timed routines use.
-With no timed routine to copy, it starts on **America/Los_Angeles**.
-For example, if most routines use **Europe/Berlin**, a new timed routine starts there.
-The API and CLI still default to **America/Los_Angeles** when you omit a timezone.
+  The MCP tools have the same names (`hub_automation_list`, `hub_automation_create`, `hub_automation_update`,
+  `hub_automation_run`, `hub_automation_guide`, ...). The API is under `/api/v2/automations`.
 
-The row's switch saves at once and shows **Saved**. If the change fails, the switch returns to its previous state.
-A red line under the row explains why.
+A prompt can read the trigger's values with `{{...}}`, for example `{{webhook.data}}` for a webhook call's body. Each
+one is passed as quoted data after the prompt, never as instructions.
 
-![Bot routines rows with visible On or Off switches and Edit buttons](images/settings-stage1/settings-bot-routines-on-off-edit.png)
+## Events
 
-![New routine dialog with a Timezone picker set to America/Los Angeles](images/settings-stage1/settings-new-routine-timezone.png)
+`hub event-types` (`hub_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an
+example payload; `--group` narrows it. Some that bots use: `meeting.ready` (a team meeting with a transcript is imported;
+see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `strategy.published` and `market.briefing`
+(see [Market briefing](market-briefing.md)). An event fires an automation only once something emits it.
 
-*Synthetic Acme example. Row controls do not need expanding. The new timed routine copies the zone most timed routines use.*
+## Webhooks
 
-A routine's text says which step waits when something is missing, not that the whole run stops: a
-missing setup answer, credential or access blocks only the step that needs it (publishing, sending,
-a rollout), and the run does everything else and asks for the missing piece by name. A routine that
-stops at its first line on an open setup question does nothing every time it fires.
-
-A routine runs on a time (`cron`, five fields, in `timezone`, America/Los_Angeles by default) or
-on something happening in Tico (`on`), never both. Tico emits `meeting.ready` when a team meeting with a transcript is first imported (a private meeting emits nothing; `recording.ready` is its old name and is still emitted, so older routines keep firing; see [Meetings](meetings.md)). It emits `release_published` when a release in the release repository is published (not a prerelease), one task per release, with the carried tickets listed. It emits `market.insight.urgent` when someone reports a market insight with
-`--urgent`; that opens the Librarian's urgent market routine and does not fire for an ordinary report. It emits `strategy.published`
-with subject `v{n}` when the owner publishes a [strategy](strategy.md) version. It emits `market.briefing` with subject
-`<ISO week>` when the Librarian posts a [weekly market briefing](market-briefing.md); the payload names the bets it touches,
-and a routine on it is for the CEO Bot's weighing of those bets. Every bot already gets the new summary and active
-bets in its next run's context, and no bot gets a note, so a routine on this event is for work that should follow a change at
-once, not for reading the page. Each event opens one task per routine and per subject, titled `<routine title>:
-<meeting title>`; the body is the routine's text, then the event's facts, then the meeting's
-notes and transcript. Re-emitting the same event for the same subject does nothing. The event
-list is the catalog in `backend/event_catalog.py`: `hub event-types` (`hub_event_types`, `GET /api/v2/event-types`) shows every
-name with its description, version and an example payload, and `--group` narrows it. A routine's `on` takes any catalog name
-or an old spelling of one (`release_published` is `release.published`, `recording.ready` is `meeting.ready`); both
-spellings fire the same routines once per event. `webhook.<trigger id>` is one incoming webhook's own event. `custom.<name>`
-is for sending only. A catalog event fires a routine only once something emits it, so a routine saved on a name nothing emits
-yet waits.
-
-## Triggers
-
-A trigger starts routines from outside Tico. Today a trigger is an incoming webhook: Settings → Webhooks → Incoming gives an
-address, and anything that can send an HTTP POST (a payment service, a form, a deploy, a script) calls it. A routine picks it under
-*Runs: On an event* (`--on webhook.<id>` in `hub routine set`; `hub trigger list` shows the ids). Each call opens one task per
-listening routine: the routine's text, then the trigger's name and the call's type, then the request body, fenced as data the bot
-did not write. A routine has no filter on the type, so every call opens a task; to act on one type only, use a rule on
-`webhook.received`.
-
-Making the address, signature checks and presets, types, the hourly limit, the kept calls, Run again, the address through Tico
-Gateway that holds calls while the server is off, and rules are all on [Webhooks](webhooks.md). Recipes:
-[GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
-
-Deleting a trigger removes its kept calls and leaves its routines in place, silent, until a trigger with the same id is added
-again. A routine may name only a trigger that exists.
-
-## What happens when one is due
-
-The scheduler ticks every ten seconds and reads the table. Each row runs independently: a failed
-routine, task reminder or PR notice is logged and retried without rolling back other work.
-A due routine opens one task owned by the bot, body = the routine's text. Missed occurrences
-coalesce into the latest due one. An
-unfinished task absorbs later occurrences of the same routine, each of which reminds the bot in
-that task; a task waiting on a human is left alone; a task marked Done keeps that status while
-the next occurrence opens a fresh one. Editing the text reaches the next occurrence, never a task
-already opened. Changing the cron or the timezone moves the next fire forward from now and never
-backfills. Pausing keeps the row and its history; the clock skips it.
-
-Deleting a routine keeps its history. A task it opened that no computer has claimed is closed;
-one already running finishes. Setting the same key again brings a deleted routine back with its
-settings intact.
-
-Bots that are paused or archived get no tasks. External side effects still need tool
-idempotency: a coalesced or retried occurrence can repeat an effect.
-
-## Seeing what ran
-
-The Routines page (`#/recurring`) and each bot's Routines card list every routine the signed-in
-human can see: cadence, next fire, whether it is on (each row has its On switch and Edit), whether it is paused, and — when the
-bot reads email — its mailboxes. Expand a row for the recent firings: the occurrence, the outcome
-(`created`, `coalesced`, `event`), the task's status, when its latest run started, how long
-it ran, and a link to the task. `hub sql` reads the same rows: `schedules`,
-`schedule_config` (timezone, enabled) and `schedule_occurrences`.
-
-Before taking a bot live, BotOps reads its live Routines with the requester's rights, applies the requested schedule,
-and disables unrelated template Routines. `hub_bot_go_live` accepts `routines`, an expected list of the bot's live
-Routines; the server checks it before activation and creates nothing. In the CLI, pass the same JSON in a file with
-`hub bot go-live <bot> --routines-file <file>` (`hub bot go-live --help` shows it):
-
-```json
-[{"id": "<bot>:<routine>", "title": "Weekday review", "cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "enabled": true}]
-```
-
-`id` (the Routine's id, as `hub routine list` shows it), `title` and `timezone` are required; `cron` and `on` (an
-event name) default to `""`; `enabled` defaults to `true`; no other field is accepted. Go-live refuses when a listed
-Routine differs from the live one or an enabled Routine is not listed, and a malformed list is refused with the field
-named and this shape shown. This also preserves disabled Routines during activation. When go-live waits for the
-computer to get the bot's repository (docs/permissions.md), the list is checked again when it finishes.
+An incoming webhook (Settings → Webhooks → Incoming) gives an address anything can POST to. An automation with a
+Webhook trigger runs on each call; add `filters` to the trigger (for example `webhook.type` is `invoice.paid`) to act on
+some calls only. Signatures, presets, the hourly limit, kept calls and **Run again** are on [Webhooks](webhooks.md).
+Recipes: [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
 
 ## Templates
 
-A template's `bot.yaml` may declare `routines:` (`id`, `title`, `cron` or `on`,
-`timezone`, `template:` a playbook path, and optionally `enabled: false`). That block is a seed: when BotOps runs
-`hub bot create`, the rendered playbooks become the new bot's first routines in Tico, keyed by
-their `id`. After that Tico's rows are the routines. Editing the file in the bot's repository
-changes nothing; `hub routine set` does. A seeded routine with `enabled: false` is created paused and
-visible; the bot (or a human, on the site) turns it on with `hub routine update <id> --enable`. The
-starter templates seed the first routine off. Starting Setup switches it on, and `hub bot setup-done`
-allows normal work. An owner's requested schedule change applies directly ([Starter bots](starter-bots.md)). `clients/preflight.py` still validates the block so a
-broken template is caught before a bot is made from it.
-
-## What this replaced
-
-Until runner 0.5.4 a routine was declared in the bot repository's `bot.yaml` and copied into
-Tico by runner heartbeats (or a server-side Git sync behind `TICO_ROUTINES`), with a
-version snapshot per change and a task gated on the Mac having checked out the declaring
-revision. All of that is gone: `routine_versions`, `routine_tasks`, `routine_sources`,
-`routine_deliveries`, the webhook route and the `TICO_ROUTINES*` settings. Migration 28 drops
-the tables and keeps every `schedules` row, its settings and its occurrence history. A runner
-older than 0.5.4 still reports the manifest's routines in its heartbeat; the server accepts
-and ignores them.
-
-Routine and run responses use `bot`. The older `employee` field is a compatibility alias for `bot`;
-existing clients may continue to read it.
-
-[Branches](creating-bots.md#branches) follow the original's instructions, but their routines never fire separately.
-Timed and event routines stay with the original, so a shared lesson or weekly review runs once.
+A template's `bot.yaml` may still declare `routines:` (`id`, `title`, `cron` or `on`, `timezone`, `template:` a
+playbook path, and optionally `enabled: false`). `hub bot create` seeds them once, and each becomes an automation for the
+new bot. After that the automations are what run; editing the file changes nothing. `clients/preflight.py` still checks
+the block.

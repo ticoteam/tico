@@ -9,7 +9,6 @@ const MKT_METRICS = {revenue: 'Revenue', arr: 'ARR', customers: 'Customers', sea
 const MKT_BASES = {product: 'Product', platform: 'Platform'};
 const MKT_COLOURS = 8;
 let MKT = null;          // the open view: {stop}
-let MKT_PEEK = null;     // the default view's first read, kept for the Spend view that follows it
 
 window.marketViewsStop = function marketViewsStop() {
   if (MKT) MKT.stop();
@@ -38,15 +37,6 @@ const mktObject = v => {
 const mktNice = raw => {            // a round step near raw: 1, 2 or 5 times a power of ten
   const p = 10 ** Math.floor(Math.log10(raw || 1)), f = raw / p;
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
-};
-
-// The default for a bare Market tab: Spend once anything is sized (ui/market-page.js asks).
-window.marketSpendSized = async function marketSpendSized() {
-  try {
-    const data = await get('/v2/market/spend');
-    MKT_PEEK = {at: Date.now(), data};
-    return mktSized(data);
-  } catch { return false; }
 };
 
 window.marketViewsMount = function marketViewsMount(host, view) {
@@ -148,11 +138,9 @@ function mktSpend(host, view) {
 
   async function load() {
     const mine = ++ctx.load;
-    const peek = MKT_PEEK; MKT_PEEK = null;
     let data;
     try {
-      data = peek && dimension === 'offering' && !ctx.basis && Date.now() - peek.at < 5000 ? peek.data
-        : await get('/v2/market/spend?' + new URLSearchParams({dimension, ...(ctx.basis ? {basis: ctx.basis} : {})}));
+      data = await get('/v2/market/spend?' + new URLSearchParams({dimension, ...(ctx.basis ? {basis: ctx.basis} : {})}));
     } catch (error) { return fail(error); }
     if (ctx.dead || mine !== ctx.load) return;
     ctx.data = data;

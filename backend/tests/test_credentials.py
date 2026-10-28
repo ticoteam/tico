@@ -238,3 +238,18 @@ def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(a
     assert 'Acme update key (TICO_UPDATE_KEY_ACME) for ops' in check['summary']
     assert post(api,f"credentials/{row['id']}",{**rotate,'env':'UPDATE_KEY_ACME'})['env']=='UPDATE_KEY_ACME'
     assert 'reserved_credentials' not in {x['id'] for x in get(api,'health')['checks']}
+
+
+def test_the_list_says_when_a_bot_last_used_a_credential_and_a_persons_reveal_is_not_a_use(api):
+    setup(api);cid=create(api)['id']
+    assert {k:v for k,v in get(api,'credentials')['credentials'][0].items() if k.startswith('last_used')}=={'last_used':None,'last_used_by':''}
+    post(api,f'credentials/{cid}/reveal',{})
+    assert get(api,'credentials')['credentials'][0]['last_used'] is None
+    post(api,f'credentials/{cid}/grants',{'subject':'bot:finance'})
+    machine=runner(api);assign(api,machine,'finance');ready(api,machine,['finance'])
+    post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
+    attempt=claim(api,machine)
+    assert get(api,'credential-runtime',attempt['token'])['credentials']
+    row=get(api,'credentials')['credentials'][0]
+    assert row['last_used'] and row['last_used_by']=='finance'
+    assert 'phx-synthetic' not in json.dumps(row)

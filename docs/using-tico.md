@@ -158,9 +158,9 @@ reports. The same rule decides whose profile, goals, bot settings and routines y
 your own, and anyone's below you.
 
 **How do I add a routine?**
-**Settings → Rules → New routine** (or the Routines card on the bot's page): pick the bot, a
-title, a cron (five fields, America/Los_Angeles by default) or a Tico event, and the text the bot
-is told each time. A bot can set up its own with `hub routine set`. Details: [Routines](routines.md).
+**Automations → New automation**: pick a Schedule (a cron in a time zone), an Event or a Webhook
+trigger, then add a Bot turn step with the bot and the text it is told each time. A bot can set up
+its own with `hub automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose

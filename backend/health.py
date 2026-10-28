@@ -551,8 +551,8 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
     from . import start_places
     held_now = start_places.held_totals(c)
-    full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if held_now.get(r["id"], 0) >= (r["capacity"] or 1)}
+    full = {r["id"] for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL")
+            if held_now.get(r["id"], 0) >= start_places.turn_limit(r)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
@@ -774,6 +774,8 @@ HELD = {
     "budget": ("Tico stopped it for too many runs in a short time: check its last runs, then release it or raise its "
                "budget", BOT_SETTINGS),
     "backoff": ("Pausing after a failed run: it tries again in a moment", RUNS),
+    # The owner's "Turns at once" for the bot is full across every computer: its queued work starts when one ends.
+    "bot_limit": ("At its turn limit: it starts when one of its running turns ends", BOT_SETTINGS),
 }
 
 
@@ -1016,7 +1018,7 @@ def _github_repo_create(c, github):
     return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
                   [_fix("Let BotOps create repositories", fix["permissions_url"]),
                    _fix("Create " + fix["repository"] if fix["repository"] else "Create a repository", fix["create_url"]),
-                   _fix("Open GitHub settings", "#/integrations")])
+                   _fix("Open GitHub settings", "#/integrations/github")])
 
 
 def _github_workflows(c, github):
@@ -1032,7 +1034,7 @@ def _github_workflows(c, github):
                       "accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations")])
+                       _fix("Open GitHub settings", "#/integrations/github")])
     if refused := workflows_refused(c) if connected else []:
         # The installation reports Actions: Read and write, so the setting is not the cause and is not offered.
         return _check("github_workflows", "GitHub refused workflow tokens", "warn",
@@ -1041,7 +1043,7 @@ def _github_workflows(c, github):
                       "if this stays, check the installation's repository access and the organisation's Actions "
                       "policy on GitHub. Refused: " + ", ".join(refused[:3])
                       + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations")])
+                      [_fix("Open GitHub settings", "#/integrations/github")])
     return None
 
 
@@ -1058,14 +1060,14 @@ def _github_workflow_edits(c, github):
                       "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations")])
+                       _fix("Open GitHub settings", "#/integrations/github")])
     if refused := workflows_refused(c, 'edit_workflows') if connected else []:
         return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
                       "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
                       "token with Workflows: write although the installation reports it. Tico asks again after a "
                       "minute; if this stays, check the installation's repository access on GitHub. Refused: "
                       + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations")])
+                      [_fix("Open GitHub settings", "#/integrations/github")])
     return None
 
 
@@ -1923,7 +1925,7 @@ def view(c, who, settings, auth, github, config):
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
-                                      "scoped", "company_limit", "backoff")
+                                      "scoped", "company_limit", "backoff", "bot_limit")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),

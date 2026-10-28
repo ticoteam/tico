@@ -61,7 +61,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: []});
       if (p === '/api/v2/check-pool-candidates') return json({candidates: url.searchParams.get('bots').split(',').map(slug =>
         slug === 'rev-a' ? {slug, name: 'Reviewer xAI', configured: {model: 'Claude Haiku 5.5', provider: 'Anthropic'}, runtime: null}
           : {slug, name: 'Reviewer GPT', configured: {model: 'GPT 6.1 Sol', provider: 'OpenAI'},

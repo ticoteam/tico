@@ -779,6 +779,10 @@ class Store:
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
+        # Before anything opens the database for writing: one that still holds routines and rules starts only once the
+        # install opts in to moving them (backend/redesign_migration.py `guard`).
+        from . import redesign_migration
+        redesign_migration.guard(self.settings.db_path, getattr(self.settings, "migrate_to_automations", False))
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             c.executescript(SCHEMA)
@@ -813,6 +817,8 @@ class Store:
             c.executescript(_system_routines.SCHEMA)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
+            from . import audit_log as _audit_log
+            c.executescript(_audit_log.SCHEMA)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -1334,6 +1340,8 @@ class Store:
                 # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
                 # sign-out or switch before it stops looking.
                 H.add_column(c, "runners", "readiness_at", "TEXT")
+                # The owner's "Turns at once" for a computer (NULL: automatic, its own capacity).
+                H.add_column(c, "runners", "turns_at_once", "INTEGER")
                 # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
                 H.add_column(c, "model_login_cleared", "clear_key", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
@@ -1397,6 +1405,12 @@ class Store:
                 from .turn_budgets import ensure as ensure_turn_budgets
                 ensure_run_backoff(c)
                 ensure_turn_budgets(c)
+                # The redesign's automations (backend/automations.py).
+                # Unversioned like the trash: an older release never reads the tables.
+                from . import automations as _automations
+                _automations.ensure(c)
+                from . import redesign_migration as _migration
+                _migration.ensure(c)                    # the cutover's record and the 30-minute limit columns
                 # Recruiting seats (backend/lifecycle.py). Unversioned like the trash.
                 from .lifecycle import ensure as ensure_seats
                 ensure_seats(c)
@@ -1417,6 +1431,8 @@ class Store:
                 from .market_watch import ensure as ensure_market_watch
                 ensure_market_watch(c)
                 ensure_market_briefing(c)
+                from .market import ensure_turn_sources
+                ensure_turn_sources(c)                  # which automation turn changed the graph (redesign)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
@@ -1617,6 +1633,9 @@ class Store:
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
         c.close()
+        # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
+        # in its own write, so a restart part way goes on where it stopped.
+        redesign_migration.cutover(self)
 
     @contextmanager
     def read(self):
@@ -1771,11 +1790,22 @@ class Store:
             from . import groups as Groups
             Groups.migrate(c, self.settings)
 
+    @staticmethod
+    def _principal(identity):
+        return identity.actor + (":" + identity.attempt_id if identity.role == "bot" else "")
+
+    def saved(self, c, identity, operation, key):
+        """Whether this Idempotency-Key already has a saved answer here: `mutate` replays it (or refuses other content
+        under the key) without running the write again, so a check made before `mutate` must not refuse it."""
+        return bool(key) and len(key) <= 200 and c.execute(
+            "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            (self._principal(identity), operation, key)).fetchone() is not None
+
     def mutate(self, identity, operation, key, body, fn, check=None):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
-        principal = identity.actor + (":" + identity.attempt_id if identity.role == "bot" else "")
+        principal = self._principal(identity)
         refusal = logged = None
         with self.transaction() as c:
             # Authenticate leases again under the same write lock as the mutation.

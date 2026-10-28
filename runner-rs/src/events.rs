@@ -35,6 +35,7 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
         "worktrees" | "restart" | "performance" => &["heartbeat"],
+        "capacity" => &["heartbeat"],
         "logins" => &["logins"],
         "harness_actions" => &["harness"],
         "credential_imports" => &["imports"],
@@ -291,6 +292,7 @@ mod tests {
         assert_eq!(channels("work"), &["claim"]);
         assert_eq!(channels("config"), &["sync", "config"]);
         assert_eq!(channels("credentials"), &["sync", "keys"]);
+        assert_eq!(channels("capacity"), &["heartbeat"]);
         assert_eq!(channels("something new"), ALL);
         let e = Events::new();
         e.dispatch("ready", Some("7".into()), &serde_json::json!({"seq": 7, "release": "v1"}), true);

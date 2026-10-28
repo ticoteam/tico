@@ -51,7 +51,6 @@ function taskPipelineDevType() {
 function taskPipelineTools(state) {
   const host = $('#task-type');
   if (!host) return;
-  host.hidden = state.view === 'recurring';
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);

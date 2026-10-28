@@ -1,0 +1,39 @@
+{
+  "created": [
+    {
+      "name": "Archive receipts",
+      "owner": "person:dana",
+      "enabled": true,
+      "trigger": {
+        "type": "message",
+        "inbox": "dana@acme.example"
+      },
+      "steps": [
+        {
+          "id": "receipts",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "message.subject",
+                  "op": "contains",
+                  "value": "receipt"
+                }
+              ],
+              "match": "all",
+              "then": [
+                {
+                  "do": "archive",
+                  "args": {}
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

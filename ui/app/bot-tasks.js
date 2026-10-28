@@ -22,12 +22,13 @@ function actorAvatarOnly(a) {
   const person = pid === S.me?.id ? (mePerson() || {id: pid, name: S.me?.name}) : (S.people || []).find(p => p.id === pid) || {id: pid, name: actorLabel(a)};
   return `<span class="who-av" title="${esc(pid === S.me?.id ? 'You' : actorLabel(a))}">${personAvatar(person, 22)}</span>`;
 }
-// `below` is one more line under the title, as a Blocked row's "Waits on …".
-function v2TaskRow(t, slug, showStatus = true, below = '') {
+// `below` is one more line under the title, as a Blocked row's "Waits on …". `card` is the Needs you card the row
+// opens instead of the task (decide.js), when it is answered on a card.
+function v2TaskRow(t, slug, showStatus = true, below = '', card = '') {
   // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
   const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
   const age = taskAge(t);
-  return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"><div class="trow-head">
+  return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"${card ? ` data-need-card="${esc(card)}"` : ''}><div class="trow-head">
       ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: t.blocked_since ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
       <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
@@ -351,7 +352,16 @@ function botTaskWaitsOn(t) {
 function botNeedsExtras(slug) {
   return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.to_actor === myActor());
 }
-// Keep questions, approvals and matching tasks once each; preserve half-written question replies on refresh.
+// An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
+function botNeedRow(it) {
+  const from = it.requester || '', title = approvalTitle(it) || it.first_line || it.title || '';
+  return `<div class="trow" data-need-card="${esc(decideItemKey(it))}"><div class="trow-head">
+      <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
+      <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>
+      <span class="tags">${actorChip(from)}</span>
+      <span class="muted tnum" title="${esc(fmt(it.created))}">${esc(ageShort(it.created))}</span></div></div>`;
+}
+// Keep questions, approvals and matching tasks once each; one answered on a card leaves at once.
 function botNeedsPaint(slug) {
   const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
   // Supplemental rows and their overlap count belong to the same completed filter read.
@@ -362,24 +372,15 @@ function botNeedsPaint(slug) {
     : [...extras, ...botNeeds(slug).filter(it => it.kind === 'waiting' && !extras.some(extra => extra.id === it.id))];
   if (!host || BOT?.slug !== slug) return new Set();
   botTaskCount('cnt-needs', counted ? counted.count + extras.filter(it => !(counted.matched_ids || counted.ids).includes(String(it.id))).length : Math.max(items.length, needsMeCount(slug)));
-  // A question opened here, and an answer half typed into it, survive the redraw.
-  const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask], details[data-v2-id]')].map(d =>
-    [d.dataset.ask || 'approval:' + d.dataset.v2Id, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
+  const list = $('#t-needs'), shown = items.filter(it => !decideGone(['ask', 'approval'].includes(it.kind) ? decideItemKey(it) : 'task:' + it.id));
   // Some of this bot's items may be on Needs you pages not read yet.
   const more = needsMoreButton()
     + (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
-  list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(it =>
-    it.kind === 'ask' ? looseAskRow(it) : it.kind === 'approval' ? needsV2Item(it, false) : v2TaskRow(it, slug)).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
-  for (const d of list.querySelectorAll('details[data-ask], details[data-v2-id]')) {
-    const was = kept.get(d.dataset.ask || 'approval:' + d.dataset.v2Id);
-    if (!was) continue;
-    d.open = was.open;
-    const box = d.querySelector('textarea');
-    if (box) box.value = was.text;
-  }
+  list.innerHTML = shown.length || more ? `<div class="bot-task-list">${shown.map(it =>
+    ['ask', 'approval'].includes(it.kind) ? botNeedRow(it) : v2TaskRow(it, slug, true, '', decideCardKey(needsItem(it.id)))).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   return new Set(items.map(it => String(it.id)));
 }
-// Needs You changed: keep the draft replies, then refresh filter membership and supplement deduplication.
+// Needs You changed: refresh filter membership and supplement deduplication.
 function botNeedsChanged(slug) {
   const seen = BOT_TASKS_CACHE.get(slug);
   if (seen && BOT?.loaded?.has('tasks')) {
@@ -395,8 +396,8 @@ function botTasksRender(slug, owned) {
   // Fallback while filters load (and for non-Keeper bots); saved filters are painted from server results below.
   const active = mine.filter(t => ['open', 'doing'].includes(String(t.status))).sort(newest);
   const blocked = mine.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:' + S.me?.id).sort(newest);
-  // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A routine's runs (a
-  // sweep every 30 minutes) are not work a person asked for; they live under Recurring.
+  // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A schedule's runs (a
+  // sweep every 30 minutes) are not work a person asked for; they live under Automations › Runs.
   const doneAt = t => String(t.done_at || t.closed_at || t.updated || '');
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
   const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)

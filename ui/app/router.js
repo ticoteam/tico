@@ -14,8 +14,13 @@ function route() {
     } catch { /* A malformed external handoff never changes a bot. */ }
     SETTINGS_TAB = 'bots'; location.replace(SETTINGS); return;
   }
+  // Decide is the Needs you card now: an old link goes to Needs you, and one naming an item opens that item's card.
+  if (location.hash === DECIDE || location.hash.startsWith(DECIDE + '?')) {
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
+    location.replace(NEEDS_YOU); return;
+  }
   overviewStop();
-  GOAL_MANAGER_STOP?.();
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = location.hash || UPDATES;
@@ -39,13 +44,14 @@ function route() {
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
+  if (!isAutomationsRoute(S.route)) automationsStop();
   taskChatStop(); $('#task-modal')?.close();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
   // its accumulated page, so returning re-reads the server instead of drawing a stale list.
   if (!S.route.startsWith(MAIL)) { MAIL_LOAD++; clearTimeout(MAIL_SEARCH); mailForget(); }
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
-  if (S.route !== DECIDE) decideStop();     // its waiting answer goes now
+  decideStop();     // the Needs you card closes with its page; its waiting answer goes now
   convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); TASKS_ST = null; // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
@@ -54,7 +60,8 @@ function route() {
   if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
   if (!S.route.startsWith('#/bot/')) botStopped();
   renderTree();
-  if (S.route === NOTES || S.route === RECORDINGS || S.route.startsWith(RECORDINGS + '?')) {
+  if (redesignRoute(S.route)) { /* Strategy's tabs, Automations, Connections and the old addresses that moved (ui/app/redesign.js) */ }
+  else if (S.route === NOTES || S.route === RECORDINGS || S.route.startsWith(RECORDINGS + '?')) {
     // Old links land on Meetings, keeping a deep link to one meeting.
     const id = new URLSearchParams(S.route.split('?')[1] || '').get('recording');
     location.hash = MEETINGS + (id ? '?meeting=' + encodeURIComponent(id) : ''); return;
@@ -68,7 +75,6 @@ function route() {
   else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));
   else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + S.route.slice(TASKS.length + 1).split('?')[0]); return; }   // #/tasks/<id> is the same task
   else if (S.route === CHAT) { location.hash = TASKS; return; }
-  else if (S.route === DECIDE) pageDecide();
   else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) pageNotes();
   else if (S.route.startsWith('#/bot/')) { const [slug, tab] = S.route.slice(6).split('/'); pageBot(slug, tab); }
   else if (S.route === ASSISTANT) pageAssistant();
@@ -80,15 +86,13 @@ function route() {
   else if (isTasksRoute(S.route)) {
     // #/tasks?owner=bot:eng&tag=bug: the filters ride in the query (ui/app/task-list.js)
     const base = S.route.split('?')[0];
-    pageTasks(base === BOARD ? 'board' : base === ISSUES ? 'list' : base === RECURRING ? 'recurring' : '');
+    pageTasks(base === BOARD ? 'board' : base === ISSUES ? 'list' : '');
   }
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
-  else if (S.route === GOALS || S.route.startsWith(GOALS + '/') || S.route.startsWith(GOALS + '?')) pageGoals();
   else if (S.route === SETTINGS) pageSettings();
   else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
-  else if (S.route === '#/settings/listening') { SETTINGS_TAB = 'listening'; location.replace(SETTINGS); return; }   // Settings > Listening
   // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
   else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
     const tab = S.route.split('/')[3];
@@ -100,16 +104,8 @@ function route() {
   else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > Rules; `?task=` narrows the wake rules to one task's (the task modal's Wake rules link).
-  else if (S.route === '#/settings/rules' || S.route.startsWith('#/settings/rules?')) {
-    // ?task=<id>, ?bot=<slug>, or the API's own scope_kind=task|bot&scope_id=<id>.
-    const q = new URLSearchParams(S.route.split('?')[1] || ''), kind = q.get('task') ? 'task' : q.get('bot') ? 'bot' : q.get('scope_kind');
-    const id = q.get('task') || q.get('bot') || q.get('scope_id') || '';
-    RULES_OPEN = Object.fromEntries(q);
-    RULES_FOR = ['task', 'bot'].includes(kind) && id ? `${kind}:${id}` : ''; RULES_FOR_TITLE = '';
-    SETTINGS_TAB = 'recurring'; SETTINGS_REVEAL = RULES_FOR ? '#set-rules-card' : ''; location.replace(SETTINGS); return;
-  }
-  else if (S.route === '#/settings/routines') { SETTINGS_TAB = 'recurring'; location.replace(SETTINGS); return; }   // General > Team's moved switches
+  // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
+  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { SETTINGS_TAB = 'system'; location.replace(SETTINGS); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
@@ -141,8 +137,10 @@ function route() {
   else if (S.route === '#/replay' || S.route.startsWith('#/replay?')) pageReplay();
   else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2]), from);
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2]));
+  else if (isAutomationsRoute(S.route)) pageAutomations();
   else location.hash = UPDATES;         // unknown or empty routes land on Updates, home
   window.syncLibrarianRail?.();
+  redesignAfterRoute();
   $('#main').scrollTop = 0;
 }
 window.addEventListener('hashchange', route);

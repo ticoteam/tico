@@ -45,44 +45,6 @@ def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, b
     assert act(api, attempt, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
 
 
-def test_routine_tools_delegate_canonical_ids_and_verify_schedules_before_activation(api, botops):
-    from backend.tests.test_mcp import call as mcp
-    attempt = turn(api, botops, person="ana-test", text="Set ops to a daily review")
-    err, schedule = mcp(api, "hub_routine_set", {"bot": "ops", "key": "qa-review", "title": "QA review",
-                       "cron": "0 7 * * *", "timezone": "UTC"}, attempt["token"])
-    assert not err and schedule["id"] == "ops:qa-review"
-    err, rows = mcp(api, "hub_routine_list", {"bot": "ops"}, attempt["token"])
-    assert not err and any(r["id"] == schedule["id"] for r in rows["result"])
-    err, changed = mcp(api, "hub_routine_update", {"id": schedule["id"], "cron": "0 8 * * *"}, attempt["token"])
-    assert not err and changed["cron"] == "0 8 * * *"
-    err, run = mcp(api, "hub_routine_run", {"id": schedule["id"]}, attempt["token"])
-    assert not err and run["task_id"]
-    revision = act(api, attempt, "GET", "bots/ops/access").json()["revision"]
-    assert act(api, attempt, "POST", "bots/ops/definition", {"expected_revision": revision, "status": "paused"}).status_code == 200
-    wrong = act(api, attempt, "POST", "bots/ops/go-live", {"setup": False, "routines": [{
-        "id": schedule["id"], "title": "QA review", "cron": "0 7 * * *", "timezone": "UTC"}]})
-    assert wrong.status_code == 409 and wrong.json()["error"]["code"] == "routine_mismatch"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM bots WHERE slug='ops'").fetchone()[0] == "paused"
-    assign(api, botops, "ops")
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"bots": {"ops": {"ready": True, "repository_present": True},
-         "botops": {"ready": True, "repository_present": True}}}}, botops["token"])
-    correct = act(api, attempt, "POST", "bots/ops/go-live", {"setup": False, "routines": [{
-        "id": schedule["id"], "title": "QA review", "cron": "0 8 * * *", "timezone": "UTC"}]})
-    assert correct.status_code == 200 and correct.json()["state"] == "active"
-    # Deleting is the person's own tap: a Confirm card in her chat, and the routine goes once she taps it.
-    err, card = mcp(api, "hub_routine_delete", {"id": schedule["id"]}, attempt["token"])
-    assert not err and card["needs_confirm"], card
-    listed = lambda: any(r["id"] == schedule["id"] for r in mcp(api, "hub_routine_list", {"bot": "ops"},
-                                                                 attempt["token"])[1]["result"])
-    assert listed()
-    done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]
-    assert done["status"] == "done" and not listed(), done
-    for path in ("routines/ops:qa-review/../delete", "routines/ops%3Aqa-review", "routines//ops:qa-review"):
-        from backend.botops_act import normalize
-        assert normalize(path) is None
-
-
 def open_computer(api, label="Team Mac"):
     """A computer an admin has opened to members' bots."""
     machine = runner(api, label=label)
@@ -801,27 +763,30 @@ def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_ri
 
 
 # ------------------------------------------------------------------ only BotOps' own schedule starts an own run
-def _fire(api, schedule_id):
-    """The scheduler opening one occurrence of a timed routine, as `Scheduler.tick` does."""
-    from backend import routines
+TIDY = {"name": "Tidy", "owner": "bot:botops", "trigger": {"type": "schedule", "cron": "0 6 * * *", "tz": "UTC"},
+        "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:botops", "prompt": "Open up ops' repositories."}]}
+
+
+def _fire(api, aid):
+    """One timed occurrence of an automation, as the automations tick fires it: a Bot turn opens BotOps' task."""
+    from backend import automations
+    at = H.now()
     with api.app.state.store.transaction() as c:
-        schedule = routines.row(c, schedule_id)
-        task = routines.open_task(c, None, schedule, schedule["title"], schedule["playbook"], H.now())
-        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (schedule_id, "t:" + H.new_id(), task["id"], "created"))
-    return task
+        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        automations.queue(c, row, {"schedule": {"at": at}}, "schedule:" + at)
+    api.app.state.store.automations.drain()
 
 
-def test_only_the_daily_update_and_the_owners_routines_start_an_own_run(api, botops):
-    routine = {"title": "Tidy", "text": "Open up ops' repositories.", "cron": "0 6 * * *", "timezone": "UTC"}
-    # A routine BotOps set itself in a run a bot asked for: when it fires, the run keeps no one's rights.
+def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, botops):
+    # An automation BotOps made itself in a run a bot asked for: when it fires, the run keeps no one's rights.
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Open up ops", "Give every bot ops' repository.", "bot:botops", lint=False)
     asked = claim(api, botops, "botops")
     assert act(api, asked, "PUT", "bots/ops/repositories", {"mode": "all"}).status_code == 403
-    made = act(api, asked, "POST", "bots/botops/routines", {**routine, "key": "planted"}, ref=None)   # its own route
+    made = act(api, asked, "POST", "automations", {**TIDY, "name": "Planted"}, ref=None)
     assert made.status_code == 200, made.text
     finish(api, botops, asked)
-    _fire(api, "botops:planted")
+    _fire(api, made.json()["id"])
     planted = claim(api, botops, "botops")
     assert act(api, planted, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
     finish(api, botops, planted)
@@ -833,17 +798,20 @@ def test_only_the_daily_update_and_the_owners_routines_start_an_own_run(api, bot
     assert act(api, relayed, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
     finish(api, botops, relayed)
 
-    # The owner's routine and the daily update are BotOps' own schedule.
-    assert post(api, "bots/botops/routines", {**routine, "key": "owners"}, "ana-test")["routine"]
-    _fire(api, "botops:owners")
+    # The owner's timed automation and the daily update are BotOps' own schedule.
+    owners = post(api, "automations", TIDY, "ana-test")["id"]
+    _fire(api, owners)
     scheduled = claim(api, botops, "botops")
     assert act(api, scheduled, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 200
     finish(api, botops, scheduled)
-    # Someone else rewriting that routine makes it theirs.
+    # Someone else rewriting it makes it theirs.
+    from backend import automations
     with api.app.state.store.transaction() as c:
-        from backend import routines
-        routines.update(c, "bot:botops", "botops:owners", {"text": "Open everything."})
-    _fire(api, "botops:owners")
+        row = c.execute("SELECT * FROM automations WHERE id=?", (owners,)).fetchone()
+        before = automations.flow_of(row)
+        steps = [{**before["steps"][0], "prompt": "Open everything."}]
+        automations._save(c, "bot:finance", owners, {**before, "steps": steps}, before)
+    _fire(api, owners)
     rewritten = claim(api, botops, "botops")
     assert act(api, rewritten, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
     finish(api, botops, rewritten)

@@ -440,7 +440,7 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     c.execute("SAVEPOINT check_pool_file")
     try:
         child = H.task_create(c, ticket["owner"], title, body, "bot:" + slug, parent_id=ticket["id"],
-                              review_prs=snapshots, capped=False, wake_refs={"check_pool": step["name"]})
+                              review_prs=snapshots, wake_refs={"check_pool": step["name"]})
     except H.Refused as exc:
         c.execute("ROLLBACK TO check_pool_file")
         c.execute("RELEASE check_pool_file")

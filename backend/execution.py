@@ -1425,6 +1425,17 @@ DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl
 
 def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
                   default=None):
+    """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
+    jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it."""
+    why, config = _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots,
+                                 subscription_context, default)
+    if why is None and (limit := start_places.bot_limit(config)) is not None and start_places.bot_held(c, bot) >= limit:
+        return "bot_limit", None
+    return why, config
+
+
+def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
+                   default=None):
     """Why `runner`'s claim passes over all of `bot`'s queued work before it looks at any one job: (reason, None), or
     (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
@@ -2175,13 +2186,16 @@ class Execution:
         sendable = privacy.readable_worktree_actions(c, who, worktree_actions)
         skipped = len(worktree_actions) - len(sendable)
         # A Restart a person pressed goes to the runner once; it restarts when no turn is running.
-        restart = c.execute("SELECT restart_requested,performance FROM runners WHERE id=?", (who.runner_id,)).fetchone()
+        restart = c.execute("SELECT restart_requested,performance,turns_at_once FROM runners WHERE id=?",
+                            (who.runner_id,)).fetchone()
         if restart and restart["restart_requested"]:
             c.execute("UPDATE runners SET restart_requested=NULL WHERE id=?", (who.runner_id,))
         # The assignments are read after the commit (app.py heartbeat route), off the write lock.
         return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
+                # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
+                "turns_at_once": restart["turns_at_once"] if restart else None,
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
                 **({"restart": True} if restart and restart["restart_requested"] else {})}
 
@@ -2672,7 +2686,7 @@ class Execution:
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
-                    or sum(turns_here(c, rid).values()) >= target['capacity']):
+                    or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
                 continue
             busy_bots, busy_lanes = claimed_busy(rid, CLAIMED_WAITING_FRESH)
             scope = Claim(busy_bots=list(busy_bots), busy_lanes=['|'.join(x) for x in busy_lanes]) if remote else body
@@ -2731,7 +2745,7 @@ class Execution:
         if held:
             return held
         count = sum(turns_here(c, who.runner_id).values())
-        if count >= runner["capacity"] or not self.awake(awake_since, now):
+        if count >= start_places.turn_limit(runner) or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner, people_only=people_only)
         if row is None and people_only:
@@ -2840,7 +2854,7 @@ class Execution:
         if people_only:
             selected, prepared = None, False     # chosen before the hold, perhaps not a person's
         count = sum(turns_here(c, who.runner_id).values())
-        if count >= runner["capacity"]:
+        if count >= start_places.turn_limit(runner):
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
         # Its work keeps its place in the queue and goes out once the machine is really up.
@@ -2899,7 +2913,9 @@ class Execution:
         if (task and task['owner'] == 'bot:' + row['bot']
                 and not auto_tasks.refusal(c, task, followed, woken=True, message=msg)
                 and not (msg.get("refs") or {}).get("run_now")):
-            task = auto_tasks.started(c, task, message=msg)
+            from . import automations   # the claim starts the turn: its task's change acts for the turn
+            with automations.acting_for((msg.get("refs") or {}).get("automation_chain") or ()):
+                task = auto_tasks.started(c, task, message=msg)
         roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).
@@ -3188,7 +3204,9 @@ class Execution:
         """A running attempt the server let lapse comes back when its runner reports in within
         STALL_MAX, as long as nothing else touched the job: it is still uncertain and on this
         attempt, no review decided it, and no other attempt runs in its lane. The turn on the
-        Mac never stopped, so its result is worth more than a review of a phantom interruption."""
+        Mac never stopped, so its result is worth more than a review of a phantom interruption. Neither the computer's
+        capacity nor the bot's Turns at once is checked: refusing would not stop the turn on the Mac, only discard
+        its result, so a turn claimed while this one lapsed briefly runs beside it."""
         now = H.now()
         job = c.execute("SELECT state,message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         if (not row["finished"] or row["finished"] <= H.shift(now, seconds=-STALL_MAX)
@@ -4193,6 +4211,8 @@ class Execution:
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, summary=split_runner_notices(body.text)[0][:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
+        from . import automations
+        automations.turn_done(c, row, body.outcome, body.text)   # an automation that started this turn is charged it
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
         # the subtask moved during the turn. A lane naming a task this bot does not own checkpoints nothing.

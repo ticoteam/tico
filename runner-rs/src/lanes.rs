@@ -11,7 +11,11 @@ use serde_json::Value;
 
 use crate::util::text_of;
 
-pub const CAPABILITIES: &[&str] = &["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY];
+pub const CAPABILITIES: &[&str] = &[
+    "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
+    crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY,
+    crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, "turns_at_once_v1",
+];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Debug)]
@@ -110,7 +114,11 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
                 if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
             }
         }
-        for name in ["capacity_continue_v1", "source_continue_v1", crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1", "session_roots_v1", "task_lanes_v2"] {
+        for name in ["turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+                     crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
+                     crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
+                     crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",
+                     "session_roots_v1", "task_lanes_v2"] {
             if caps.iter().any(|c| c == name) {
                 return Some(name.into());
             }
@@ -174,6 +182,9 @@ mod tests {
         forget("a1");
         forget("a2");
         assert_eq!(refused_field("body.capabilities: bad", &json!({"capabilities": ["task_lanes_v2", "task_goals_v1"]})).as_deref(), Some("task_goals_v1"));
+        // A server from before turn limits refuses the newest capability first, even without naming its position.
+        let newest = json!({"capabilities": ["task_lanes_v2", "turns_at_once_v1"]});
+        assert_eq!(refused_field("body.capabilities: bad", &newest).as_deref(), Some("turns_at_once_v1"));
         // A server from before model keys refuses only that capability; the sign-out one stays.
         let both = json!({"capabilities": ["task_lanes_v2", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY]});
         assert!(CAPABILITIES.contains(&crate::login::KEYS_CAPABILITY));

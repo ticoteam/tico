@@ -320,8 +320,11 @@ def snapshot(config):
 
 
 def materialised(c, bot):
+    """How many of a profile's rules this bot has of its own: rows still in the rules table, and the ones in its "What
+    wakes" automation."""
+    from . import redesign_migration
     return c.execute("SELECT count(*) FROM rules WHERE scope_kind='bot' AND scope_id=? AND created_by=?",
-                     (bot, MATERIALISED)).fetchone()[0]
+                     (bot, MATERIALISED)).fetchone()[0] + redesign_migration.wake_rules_by(c, "bot", bot, MATERIALISED)
 
 
 def materialise(c, bot, source):
@@ -342,11 +345,15 @@ def materialise(c, bot, source):
                   ("rule-" + H.new_id(), "bot", bot, row["event"], row["when_json"], row["then_outcome"],
                    row["params_json"], start + n, f"From the {SPEC[source]['label']} profile: {row['words']}"[:500],
                    MATERIALISED, at, at))
+    from . import redesign_migration
+    redesign_migration.adopt(c, "wake_rules", ("bot", bot))     # after the cutover: in its What wakes automation
     return len(found)
 
 
 def drop_materialised(c, bot):
+    from . import redesign_migration
     c.execute("DELETE FROM rules WHERE scope_kind='bot' AND scope_id=? AND created_by=?", (bot, MATERIALISED))
+    redesign_migration.drop_wake_rules(c, "bot", bot, MATERIALISED)
 
 
 def set_profile(admin, c, who, bot, body, undo_change_id=None):

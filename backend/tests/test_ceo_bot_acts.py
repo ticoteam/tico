@@ -5,7 +5,6 @@ proposal in their Needs you, and so does a change a bot offline can't take."""
 
 from urllib.parse import quote
 
-from backend import ceo_bot
 from backend.store import H, encode
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_ceo_bot_level import level
@@ -113,7 +112,6 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
     with api.app.state.store.transaction() as c:          # a task it asked for, so it may otherwise change it
         mine = H.task_create(c, CEO, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
     tries = [
-        ("cost", "bots/goal-manager/routines", {"title": "Check KPIs every hour", "cron": "0 * * * *"}),
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
         ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",
                               "visibility": "public", "public_title": "Our roadmap"}),
@@ -132,19 +130,14 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         r = api.post("/api/v2/" + path, json=body, headers=headers(ceo))
         assert r.status_code == 409 and "proposal" in r.text, (kind, r.text)
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM schedules WHERE bot='goal-manager' AND title='Check KPIs every hour'"
-                             ).fetchone()
         assert c.execute("SELECT state FROM bots WHERE slug='ops'").fetchone()[0] == "active"
         assert H.task(c, mine)["owner"] == "bot:ops"
         assert not c.execute("SELECT 1 FROM calendar_actions").fetchone()
         assert not c.execute("SELECT 1 FROM refusals WHERE actor=?", (CEO,)).fetchone()
     log = get(api, "ceo-bot/log")["items"]
     assert [x["kind"] for x in log][::-1] == [k for k, _, _ in tries] and all(x["state"] == "proposed" for x in log)
-    # Each is in the owner's Needs you until its 5 a day are used (its other asks count too); the rest wait in the log,
-    # saying so.
-    with api.app.state.store.read() as c:
-        assert ceo_bot.room_today(c, OWNER) == 0
-    assert proposals(api) and all(x["proposal_task"] or "5 items there today" in x["note"] for x in log)
+    # Each is in the owner's Needs you: there is no daily limit.
+    assert proposals(api) and all(x["proposal_task"] for x in log)
     # Each item is private to the owner (and the CEO Bot that asks): it names tasks by their titles, so a person who
     # reads the owner's work but is not the owner can't open it, find it in a list, or read it in the log.
     asked = proposals(api)

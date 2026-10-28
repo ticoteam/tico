@@ -4,7 +4,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const BOT_WIDGETS = [['tasks', 'Tasks'], ['updates', 'Updates'], ['files', 'Files'], ['routines', 'Routines']];
+// A saved layout may still name the old Routines widget (they are automations now); the page has none, so it is skipped.
+const BOT_WIDGETS = [['tasks', 'Tasks'], ['updates', 'Updates'], ['files', 'Files']];
 const BOT_WIDGET_DEFAULT = BOT_WIDGETS.map(([id]) => ({id, hidden: false, height: null}));
 const BOT_WIDGET_MIN = 80, BOT_WIDGET_MAX = 2000;
 // slug -> {tabs, widgets, can_edit, personal}: what the server last said, or what this browser kept from last time.

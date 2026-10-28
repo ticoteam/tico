@@ -74,7 +74,7 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long direct chat with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Rules**, **Start fresh when
+long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
 the topic changes** (off by default). It never happens in task chats or group chats, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
@@ -107,12 +107,16 @@ see [Chat goals](chat-goals.md).
 ## Many tasks at once
 
 A bot works its tasks at the same time, each in its own session and worktree. The computer decides how many turns it
-runs at once from its size (`capacity` in [runner.json](environments.md#runnerjson)). Turns on the same task, and
-in the main chat, still take turns.
+runs at once from its size (`capacity` in [runner.json](environments.md#runnerjson)). An owner or an admin can set
+**Turns at once** on the computer instead (Settings > Computers), up to 256; clearing it goes back to the size. A runner
+that predates `turns_at_once_v1` runs at most the capacity it reports, and Settings says so. Turns on the same task,
+and in the main chat, still take turns.
 
-When other bots share the computer, one bot holds at most half of its turns (at least one), so the others always have
-room for a review or a release; a bot alone on its computer uses every turn. A person's own message to the bot is not held back by this. When a turn frees, it goes to the bot
-holding the fewest turns there, then to the work that has waited longest. Work held back this way says "Waiting for a
+Nothing caps a bot below the computer's turns. When a turn frees, it goes to the bot holding the fewest turns
+there, then to the work that has waited longest, so bots that share a computer take turns between them. A bot's own
+**Turns at once** (set in its editor) caps its turns across every computer together, a person's message included: at
+its limit its queued work waits on every computer, and its other bots keep their turns. Work held back this way says
+"Waiting for a
 free turn on <computer>" in its chat and on its task. The task shows the same waiting reason as the chat (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 

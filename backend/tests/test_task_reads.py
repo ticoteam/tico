@@ -75,7 +75,7 @@ def test_an_unchanged_full_read_is_a_304_until_a_task_or_a_grant_changes(api):
 
     def read(path, tag=None):
         return api.get("/api/v2/" + path, headers={**headers("cara-test"), **({"If-None-Match": tag} if tag else {})})
-    for path in ("tasks?" + ACTIVE, "tasks/labels", "routines"):
+    for path in ("tasks?" + ACTIVE, "tasks/labels"):
         first = read(path)
         tag = first.headers["etag"]
         again = read(path, tag)

@@ -18,7 +18,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import auto_tasks, profiles, task_models, update_feeds, wake_presets
+from . import auto_tasks, profiles, start_places, task_models, update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -204,6 +204,8 @@ class SettingsAdmin:
                 # What the bot's tasks run on (backend/task_models.py): null when all of it is the same as the bot.
                 "task_model": task_models.stored(effective),
                 "keep_tasks_going": auto_tasks.of(_json(config["config_json"], {}) or {}),
+                # Most turns at once across every computer (start_places.bot_limit); null is no limit.
+                "turns_at_once": start_places.bot_limit(_json(config["config_json"], {}) or {}),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
@@ -678,6 +680,8 @@ class SettingsAdmin:
         roster = self._roster(c)
         for slug in entries:
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (P.team_of(slug, entries, roster), slug))
+        from . import groups
+        groups.leads_follow(c, "bot:" + bot)          # a new manager can take a bot out of the group it leads
         after = self.definition(c, bot)
         self.record(c, who.actor, bot, "definition", before, after)
         H.event(c, who.actor, "bot.definition_changed", bot,
@@ -706,6 +710,8 @@ class SettingsAdmin:
             return compact_at(_json(config["config_json"], {}))
         if field == auto_tasks.KEY:
             return auto_tasks.of(_json(config["config_json"], {}) or {})
+        if field == start_places.BOT_KEY:
+            return start_places.bot_limit(_json(config["config_json"], {}) or {})
         if field == "wake_preset":
             return wake_presets.preset_of(_json(config["config_json"], {}))
         if field == "profile":
@@ -1049,6 +1055,9 @@ class SettingsAdmin:
         if change["field"] == auto_tasks.KEY:
             return self.set_keep_tasks_going(c, who, bot, SimpleNamespace(
                 keep_tasks_going=before, expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == start_places.BOT_KEY:
+            return self.set_turns_at_once(c, who, bot, SimpleNamespace(
+                turns_at_once=before, expected_revision=body.expected_revision), undo_change_id=change_id)
         if change["field"] == "profile":
             if not (before or {}).get("profile"):
                 raise Problem("not_reversible", "The bot had no profile before this change", 409)
@@ -1240,6 +1249,23 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.keep_tasks_going_changed", bot,
                 {"before": before, "after": body.keep_tasks_going})
         return {"bot": bot, "keep_tasks_going": body.keep_tasks_going, "revision": config["revision"] + 1}
+
+    def set_turns_at_once(self, c, who, bot, body, undo_change_id=None):
+        """The most turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
+        self._manager(c, who, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        declared = _json(config["config_json"], {}) or {}
+        before = start_places.bot_limit(declared)
+        declared[start_places.BOT_KEY] = body.turns_at_once
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        self.record(c, who.actor, bot, start_places.BOT_KEY, before, body.turns_at_once)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.turns_at_once_changed", bot, {"before": before, "after": body.turns_at_once})
+        return {"bot": bot, "turns_at_once": body.turns_at_once, "revision": config["revision"] + 1}
 
     def set_wake_preset(self, c, who, bot, body):
         """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the

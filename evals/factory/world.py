@@ -114,10 +114,12 @@ class World:
         steps = [{**row, "id": ids[row["name"]]} for row in flows(self.board, self.roles)]
         self.dev = self.post("task-types/" + self.dev["id"], {"steps": steps})["type"]
         for lead in self.roles.get("lead", []) if self.board.lead_sweep else []:
-            self.post(f"bots/{lead}/routines", {
-                "title": "Hourly board sweep", "key": "board-sweep",
-                "cron": f"0 */{max(1, int(self.board.lead_sweep_hours))} * * *", "timezone": "UTC",
-                "text": "Look over the board for stuck tickets and get each one moving."})
+            self.post("automations", {
+                "name": "Hourly board sweep", "owner": "bot:" + lead, "enabled": True, "builtin": False,
+                "trigger": {"type": "schedule", "cron": f"0 */{max(1, int(self.board.lead_sweep_hours))} * * *",
+                            "tz": "UTC"},
+                "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + lead,
+                           "prompt": "Look over the board for stuck tickets and get each one moving."}]})
 
     def __exit__(self, *exc):
         self.client.__exit__(*exc)

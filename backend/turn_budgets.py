@@ -159,6 +159,12 @@ def _hold(c, settings, bot, window, runs, budget, now):
     H.event(c, H.KEEPER, "bot.budget_held", bot, {"window": window, "runs": runs, "budget": budget, "task": task_id})
     H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "budget", "window": window, "runs": runs, "budget": budget,
                                         "task": task_id}, H.KEEPER, revision=now)
+    # One notice each to BotOps and Health when the guard trips (CONTRACT §1 run guard); the hold itself is the same.
+    words = (f"{name} is held: {runs} runs in the last {window} against a budget of {budget}. It takes no new turns "
+             "until a person releases it.")
+    for slug in ("botops", "health-monitor"):
+        if H.bot(c, slug):
+            H.say(c, H.KEEPER, H.bot_actor(slug), words, kind="notice", refs={"held": bot})
 
 
 def _sentence(name, runs, window):

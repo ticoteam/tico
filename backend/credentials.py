@@ -531,6 +531,22 @@ class Vault:
         return {'id':cid,'value':value}
 
 
+# A credential is used when a bot's run receives it or its computer is sent it; a person revealing it is not a use.
+USES=('credential.revealed','credential.sent_to_computer')
+
+
+def last_used(c,cid):
+    """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
+    key) for Library › Tools."""
+    row=c.execute(f"SELECT ts,actor,detail_json FROM events WHERE target=? AND action IN ({','.join('?'*len(USES))}) "
+                  "AND actor NOT LIKE 'human:%' ORDER BY ts DESC LIMIT 1",(cid,*USES)).fetchone()
+    if not row:
+        return {'last_used':None,'last_used_by':''}
+    detail=json.loads(row['detail_json'] or '{}') if str(row['detail_json'] or '').startswith('{') else {}
+    actor=row['actor'] or ''
+    return {'last_used':row['ts'],'last_used_by':detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')}
+
+
 def install_credentials(app,store,delegate=None,propose=None):
     from . import runner_versions
     vault=app.state.vault=Vault(store,auth=getattr(app.state,'auth',None))
@@ -640,7 +656,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 revealable=permitted(c,who,row['id'],vault.admins)
                 if not (revealable or mine):continue
                 added|=mine
-                item=vault.brief(row)|{'can_reveal':revealable}
+                item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
