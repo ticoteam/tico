@@ -17,6 +17,7 @@ function meetStop() {
 async function pageNotes() {
   meetStop();
   const linked = new URLSearchParams(S.route.split('?')[1] || '');
+  if (linked.get('live')) return pageLiveMeetings(linked.get('live'));
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemEdit: '', itemAdd: '', itemConfirm: '', itemDup: {},
@@ -575,7 +576,7 @@ function meetPaint(state, rec) {
       ${state.editing
         ? `<input type="text" id="meet-title" aria-label="Title" value="${esc(rec.title || '')}" placeholder="Title">`
         : `<h2 id="meet-heading">${esc(noteTitle(rec))}</h2>`}
-      <div class="meta">${meta}</div>${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
+      <div class="meta">${meta}</div>${rec.client === 'tico-recorder' ? '<div class="meta">From Tico Recorder</div>' : ''}${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
     </div>${meetPill(rec)}</div>
     ${rec.error ? `<div class="err" style="margin-top:12px">${esc(rec.error)}</div>` : ''}
     ${rec.warning ? `<div class="muted" style="font-size:12.5px;margin-top:8px">${esc(rec.warning)}</div>` : ''}

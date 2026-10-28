@@ -27,6 +27,7 @@ class Connect(Contract):
     title: str = Field(default="Live meeting", min_length=1, max_length=200)
     client_id: str | None = Field(default=None, min_length=1, max_length=120,
                                   pattern=r"^[A-Za-z0-9_.:@/-]+$")
+    client: Literal["tico-recorder"] | None = None
     fallback_window_seconds: int = Field(default=30, ge=30, le=45)
     threshold: float = Field(default=0.7, ge=0.5, le=1)
     reply_cap: int = Field(default=3, ge=1, le=20)
@@ -225,7 +226,7 @@ def _view(c, auth, who, rid):
         access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
         "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
-        "visibility": row["visibility"], "access": access,
+        "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
         "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
@@ -886,10 +887,10 @@ def install_live_meetings(app, store, auth, write):
             stamp = H.now()
             window_ms = _window_ms(app, body)
             c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,"
-                      "reply_cap,threshold,created,updated,started_at,visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "reply_cap,threshold,created,updated,started_at,visibility,client) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, who.actor, body.title, "live", body.client_id, window_ms,
                        body.cooldown_seconds * 1000, body.reply_cap, body.threshold, stamp, stamp, stamp,
-                       body.visibility))
+                       body.visibility, body.client))
             c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (rid, who.actor, stamp))
             _event(c, rid, "meeting.state", {"state": "live", "connected_by": who.actor,
                                               "visibility": body.visibility, "window_ms": window_ms,
@@ -1271,7 +1272,7 @@ def install_live_meetings(app, store, auth, write):
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
                                                     for chunk in chunks], review="pending")
-            result = app.state.import_meeting(c, who, body_import, [])
+            result = app.state.import_meeting(c, who, body_import, [], live_client=row["client"])
             imported_id = result["id"]
             c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated=? WHERE id=?",
                       (imported_id, H.now(), rid))
