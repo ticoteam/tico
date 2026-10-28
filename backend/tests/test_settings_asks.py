@@ -109,7 +109,49 @@ def test_no_ask_for_a_setting_the_asker_may_change_or_one_only_a_person_changes(
     assert err and got["error"] == "person_only" and "the owner changes it in Settings" in got["detail"], got
     err, got = ask(api, botops, "cara", "release.times", "09:30", to="cara")
     assert err and got["error"] == "no_one", got                               # never the asker
+    err, got = ask(api, botops, "cara", "me.tokens", "{}")                      # each person's own: no one to ask
+    assert err and got["error"] == "person_only" and "for themselves" in got["detail"], got
+    err, got = ask(api, botops, "cara", "webhooks.outgoing.create", "{}")      # hers to make, in Settings
+    assert err and got["error"] == "person_only" and "you change it yourself" in got["detail"], got
     assert not asks(api, "ben") and not asks(api, "ana")
+
+
+def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells_the_asker(api, botops):
+    """Review 1 (delta): the hourly sweep expires an asked card left a day, as a late tap would find it, so the request
+    is declined, the asker is told and the ask no longer holds one of her five. A newer card is left alone."""
+    from backend import approval_expiry
+    before = times(api)
+    ask(api, botops, "cara", "release.times", "07:45")
+    ask(api, botops, "cara", "release.times", "08:15")
+    old, new = sorted((card for _, card in asks(api, "ben")), key=lambda card: card["body_json"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE assistant_actions SET created=? WHERE id=?", (H.shift(H.now(), hours=-25), old["id"]))
+        assert approval_expiry.sweep(c)["cards"] == [old["id"]]
+        assert approval_expiry.sweep(c)["cards"] == []                           # once
+    status = {card["id"]: (card["status"], task["status"]) for task, card in asks(api, "ben")}
+    assert status == {old["id"]: ("expired", "declined"), new["id"]: ("pending", "open")}, status
+    [said] = told(api, "cara", old["id"])
+    assert "expired" in said and "nothing changed" in said, said
+    assert not told(api, "cara", new["id"]) and times(api) == before
+    with api.app.state.store.read() as c:
+        waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND "
+                            "json_extract(ask_json, '$.asker')='human:cara'").fetchone()[0]
+    assert waiting == 1
+
+
+def test_a_bot_that_made_an_incoming_trigger_may_change_it_as_its_route_allows(api):
+    """Review 1 (delta) question: triggers.manages lets whoever made a trigger change it, a bot too; the catalogue
+    agrees, and a bot that didn't make it, or one that made an outgoing webhook, still may not."""
+    from types import SimpleNamespace
+    from backend import settings_catalog as K
+    trigger = post(api, "triggers", {"name": "Made by a bot"})["trigger"]
+    maker, other = (SimpleNamespace(role="bot", actor=a, support="", email="") for a in ("bot:maker", "bot:other"))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE triggers SET created_by='bot:maker' WHERE id=?", (trigger["id"],))
+        auth, incoming = api.app.state.auth, K.entry("webhooks.incoming")
+        assert K.may(c, auth, maker, incoming, {"id": trigger["id"]})
+        assert not K.may(c, auth, other, incoming, {"id": trigger["id"]})
+        assert not K.may(c, auth, maker, K.entry("webhooks.outgoing"), {"id": trigger["id"]})
 
 
 def test_a_bot_on_its_own_rights_cannot_ask_for_anyone(api, botops):

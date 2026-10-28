@@ -103,6 +103,23 @@ def settled(c, row, status, result=None):
                          {"settings_ask": row["id"], "task": ask["task"]}, None, None, delivered_at=H.now())
 
 
+def sweep(c, at=None):
+    """Hourly (backend/approval_expiry.py): an asked card nobody tapped or cancelled within a day expires, as a late tap
+    would find it, so its request is declined, the asker is told and their ask no longer counts against MAX_OPEN."""
+    from .assistant import CONFIRM_TTL_H
+    from .batch_work import isolated
+    at = at or H.now()
+    gone = []
+    for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask_json IS NOT NULL "
+                                 "AND created<? ORDER BY created", (H.shift(at, hours=-CONFIRM_TTL_H),))):
+        with isolated(c, "settings_asks", row["id"]):
+            c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=? AND status='pending'",
+                      (at, row["id"]))
+            settled(c, row, "expired")
+            gone.append(row["id"])
+    return gone
+
+
 def acting(chosen):
     """The chosen person as BotOps acting for them, so the plan makes their Confirm card (never a direct change)."""
     return replace(chosen, via=BOTOPS, confirmed=False)

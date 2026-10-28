@@ -753,7 +753,8 @@ class Scheduler:
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
-                                     "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+                                     "asks cleared": ended.get("asks") or [],
+                                     "asked cards expired": ended.get("cards") or []}, none="Nothing expired"))
             # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
             # bot (backend/still_needed.py).
             with SR.recording(self.store, "still_needed", failures) as run:

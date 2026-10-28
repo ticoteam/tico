@@ -284,8 +284,11 @@ def may(c, auth, who, e, target=None, settings=None):
     if e.who in ("creator", "operator"):             # an admin, or whoever made it (or runs the computer)
         if auth.bot_admin(who):
             return True
-        made = _whose(c, e, target) if who.role == "human" else None
-        return who.role == "human" and (made is None or made == who.actor)
+        if who.role == "human":
+            made = _whose(c, e, target)
+            return made is None or made == who.actor
+        # A bot that made an incoming trigger manages it too (triggers.manages); a webhook's or computer's never.
+        return who.role == "bot" and e.route.startswith("triggers/") and _whose(c, e, target) == who.actor
     if e.who == "scope":                             # a wake rule: whoever manages the scope it is set on
         if not (target or {}).get("id"):
             return who.role in ("human", "bot")
@@ -587,12 +590,19 @@ def install(app, store, auth, settings):
             raise Problem("unavailable", f"No one can be asked here: open {link}", 503)
         with store.transaction() as c:
             settings_asks.check_asker(c, who, request.headers.get("x-tico-on-behalf-of"), assistant_mod.instruction)
-            if may(c, auth, who, e, target, settings):
-                raise Problem("may", f"You may change {e.name} yourself: set it (`hub settings set`)", 409)
+            mine = may(c, auth, who, e, target, settings)
             if e.kind == "person":
-                raise Problem("person_only", (e.why or f"{e.name} is changed only by the person themselves") + ": "
-                              + WHO[e.who] + " changes it in Settings, so no card can carry it; ask one of them to "
-                              "open " + link, 422, extra={"link": link, "who_may": who_text(e)})
+                why = (e.why or f"{e.name} is changed only by the person themselves") + ": "
+                if mine:
+                    why += "you change it yourself in Settings, at " + link
+                elif e.who == "self":
+                    why += "each person changes it for themselves in Settings, so no one can be asked for it"
+                else:
+                    why += (WHO[e.who] + " changes it in Settings, so no card can carry it; ask one of them to open "
+                            + link)
+                raise Problem("person_only", why, 422, extra={"link": link, "who_may": who_text(e)})
+            if mine:
+                raise Problem("may", f"You may change {e.name} yourself: set it (`hub settings set`)", 409)
             chosen = settings_asks.who_to_ask(c, auth, settings, who, e, target, body.to or "")
             asker = settings_asks._name(c, who.actor)
             card = plan(c, auth, settings_asks.acting(chosen), e, body.value, target, settings.public_url,
