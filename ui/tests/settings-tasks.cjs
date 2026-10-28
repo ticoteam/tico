@@ -300,7 +300,7 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     await general.locator('[name="scope_id"]').selectOption('dev');
     await general.locator('[name="event"]').selectOption('task.closed');
     await tf.waitFor();
-    assert.equal(await general.count(), 0);
+    await general.waitFor({state: 'detached'}); // the old dialog goes on its close event, a tick after the new one opens
     assert.equal(await tf.locator('[name="event"]').inputValue(), 'task.closed');
     assert.equal(await tf.locator('[name="scope_kind"]').inputValue(), 'type', 'the swap keeps the scope');
     assert.equal(await tf.locator('[name="scope_id"]').inputValue(), 'dev');
