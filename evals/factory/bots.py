@@ -181,8 +181,8 @@ class Bot:
         """Read the inputs queued for the turn while it runs, as a running turn does between its steps, and ack each one.
         An input read and then left unanswered is the one the next run takes over."""
         w, attempt = self.world, self.attempt
-        for message in w.post(f"attempts/{attempt['id']}/inputs", {}, token=self.token)["messages"]:
-            w.post(f"attempts/{attempt['id']}/inputs/{message['id']}/ack", {}, token=self.token)
+        for message in w.post(f"attempts/{attempt['id']}/inputs", {}, token=w.runner["token"])["messages"]:
+            w.post(f"attempts/{attempt['id']}/inputs/{message['id']}/ack", {}, token=w.runner["token"])
 
     def renew(self):
         if self.running:
