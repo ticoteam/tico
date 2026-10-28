@@ -12441,6 +12441,66 @@
         ]
       }
     },
+    "/api/v2/needs-you/seen": {
+      "post": {
+        "summary": "The caller's Needs you shows these questions to them (asks=<message ids>, at most 200): each open one is delivered",
+        "operationId": "needsYouSeen",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AsksSeen"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/notices": {
       "get": {
         "summary": "Notices from Tico Team, newest first, each once (any signed-in person)",
@@ -18596,6 +18656,75 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/seen": {
+      "post": {
+        "summary": "The caller opened the task: its open questions to them are read",
+        "operationId": "taskSeen",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/snooze": {
       "post": {
         "summary": "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover",
@@ -22691,6 +22820,27 @@
           "decision"
         ],
         "title": "ApprovalDecision"
+      },
+      "AsksSeen": {
+        "properties": {
+          "asks": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Asks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "asks"
+        ],
+        "title": "AsksSeen",
+        "description": "Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."
       },
       "Assistant": {
         "type": "object",

@@ -394,6 +394,18 @@ function looseAsksHTML() {
   return `<section class="tl-group" data-group="asks"><header class="tl-ghead"><span class="tl-gname">Questions</span><span class="tl-gcount tnum">${asks.length}</span></header>
     <div class="tl-rows" role="list" aria-label="Questions">${asks.map(looseAskRow).join('')}</div></section>`;
 }
+// Opening a card reads its question: a loose one by itself, a task's through the task (hub-v2.js taskAsksRead).
+document.addEventListener('toggle', ev => {
+  const card = ev.target;
+  if (!card.open || !card.matches?.('details.req.v2')) return;
+  const it = (S.v2?.needs || []).find(x => String(x.id) === String(card.dataset.ask || card.dataset.v2Id));
+  if (!askToMe(it?.ask) || it.ask.read_at) return;
+  if (it.kind === 'ask') {
+    if (ASKS_SENT.read.has(it.id)) return;
+    ASKS_SENT.read.add(it.id);
+    post(`/v2/messages/${encodeURIComponent(it.id)}/ack`, {}).catch(() => ASKS_SENT.read.delete(it.id));
+  } else taskAsksRead(it.id);
+}, true);
 // Filtered for you: what the ask filter kept off your plate today (backend/ask_ingest.py), folded at the foot of Needs
 // you. In Rehearsal it lists what On would have done and changes nothing; with the filter On, Let it through puts an
 // item on your plate in one click and tells the bot that asked.
