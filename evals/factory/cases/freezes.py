@@ -122,18 +122,23 @@ def hour_spent(run, when):
     return sum(r["est_cost_usd"] or 0 for r in rows)
 
 
+def waiting_since(marks, t):
+    """The first claim round at or after `t` with a free slot and work the runner could take: where a wait for the
+    board starts. A round with every slot busy waits on capacity, not on the limit or the probe."""
+    return next((m["at"] for m in marks if m["at"] >= t and m["free"] > 0 and m["claimable"]), None)
+
+
 def resumes_within(when, minutes):
-    """Once the limit lifts at `when`, a turn starts within `minutes` of work waiting for a free slot. Work that is not
-    waiting at the lift is not the limit's wait, so the clock starts when work first waits after it. The detail says
+    """Once the limit lifts at `when`, a turn starts within `minutes` of a free slot with work for it. The detail says
     what the board had at the lift: the free slots and the hour's spend."""
     def check(run):
         t0 = START + when
-        after = [m for m in run.marks if m["at"] >= t0]
-        ready = next((m["at"] for m in after if m["claimable"]), None)
+        ready = waiting_since(run.marks, t0)
         if ready is None:
-            return True, "no work was waiting after it lifted"
-        first = next((m["at"] for m in after if m["started"] and m["at"] >= ready), None)
-        state = f"at the lift {after[0]['free']} slots free, the hour spent ${hour_spent(run, when):.2f}"
+            return True, "no free slot with work waited after it lifted"
+        first = next((m["at"] for m in run.marks if m["started"] and m["at"] >= ready), None)
+        at_lift = next(m for m in run.marks if m["at"] >= t0)
+        state = f"at the lift {at_lift['free']} slots free, the hour spent ${hour_spent(run, when):.2f}"
         if first is None:
             return False, f"no turn started in the claim rounds after work waited at {ready:%H:%M}; {state}"
         gap = (first - ready).total_seconds() / 60
@@ -153,20 +158,21 @@ def most_turns_on(runtime, since, share=0.5):
 
 
 def probe_resumes(minutes):
-    """After the probe is lost, another turn starts within `minutes` while work is waiting: a stale or missing probe
-    must not keep the login's queue waiting on it."""
+    """After the probe is lost, another turn starts within `minutes` of a free slot with work for it: a stale or missing
+    probe must not keep the login's queue waiting on it."""
     def check(run):
         lost = getattr(run, "probe_lost_at", None)
         if lost is None:
             return False, "no probe was in flight when the hold ended, so nothing was lost"
-        after = [m for m in run.marks if m["at"] > lost]
-        if not any(m["claimable"] for m in after):
-            return True, "no work was waiting once the probe was lost"
-        first = next((m["at"] for m in after if m["started"]), None)
+        ready = waiting_since(run.marks, lost)
+        if ready is None:
+            return True, "no free slot with work waited once the probe was lost"
+        first = next((m["at"] for m in run.marks if m["started"] and m["at"] >= ready), None)
         if first is None:
-            return False, f"no turn started in the {len(after)} claim rounds after the probe was lost"
-        gap = (first - lost).total_seconds() / 60
-        return gap <= minutes, f"first turn {gap:.0f} min after the probe was lost (limit {minutes} min)"
+            return False, f"no turn started in the claim rounds after work waited at {ready:%H:%M}"
+        gap = (first - ready).total_seconds() / 60
+        return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready:%H:%M} (limit {minutes} min), "
+                                f"the probe was lost at {lost:%H:%M}")
     return check
 
 
