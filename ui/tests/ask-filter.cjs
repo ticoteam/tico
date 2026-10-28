@@ -91,6 +91,8 @@ async function shot(target, name) {
     await card.locator('button[type="submit"]').click();
     for (let i = 0; i < 50 && !saved.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(saved, [{mode: 'on', budget: 15, chores_budget: 5, criteria: ['Strategy and positioning', 'Pricing'], team: false}]);
+    // The save reloads and repaints the card (the stub answers Rehearsal), which resets the replay day to today.
+    await page.waitForFunction(() => document.querySelector('#set-ask-filter input[name="mode"][value="rehearsal"]')?.checked);
 
     // Replay a day: every page read, what On would keep off the plate first, nothing else posted.
     const replays = [];
