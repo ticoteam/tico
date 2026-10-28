@@ -212,6 +212,8 @@ class Run:
         before = self.refusals(w, idle) if free and queued else []
         started, reply = 0, None
         for _ in range(max(0, free)):
+            # A runner builds its claim body before each claim, so the bots it has just started are busy for the next.
+            body = self.runner_body(team)
             _, reply = self.claim_once(w, body)
             attempt = reply.get("attempt") if isinstance(reply, dict) else None
             if not attempt:
@@ -225,7 +227,7 @@ class Run:
             mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply} [{self.claim_path}]; the claim body was {body} "
                            f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
                            f"paused {sorted(self.paused)}")
-            if self.trace_rounds < 60:
+            if self.trace_rounds < 400:
                 self.trace_rounds += 1
                 self.traces.extend(self.trace(w, body, idle))
         self.marks.append(mark)
@@ -240,7 +242,7 @@ class Run:
         ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
         return {"at": w.now(), "bot": slug, "server_ready": ready, "refusals": self.refusals(w, [slug])}
 
-    def trace(self, w, body, slugs, limit=2):
+    def trace(self, w, body, slugs, limit=8):
         """Diagnostic only, read before a short round's claims: for up to `limit` queued bots that Health calls handed
         out, the server's candidate for the whole computer and for the bot's oldest job, and each gate the claim applies to
         that job (execution.candidate), read on a read connection. No check judges these lines."""
