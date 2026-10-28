@@ -1,15 +1,15 @@
-/* Ask the Librarian on Docs and Market (docs/librarian.md): a right rail on desktop, open unless this viewer
-   hid it (remembered in this browser), and a full-screen sheet on a phone.
+/* Ask the Librarian beside Library's pages, Docs, Meetings and Tools (docs/librarian.md): a right rail on desktop, open
+   unless this viewer hid it (remembered in this browser), and a full-screen sheet on a phone. An install without the
+   Librarian (ui/app/state.js librarianBot) shows neither, nor the pages' buttons that open it.
 
-   On Docs, type a question and matching docs, internal and linked, show at once from the search that comes
+   Type a question and matching docs, internal and linked, show at once from the search that comes
    back with POST /api/v2/docs/ask; the Librarian's answer then streams in from the conversation it
    went to (its snapshot, read again as live events say it changed), with clickable citations. Only the person who asked
-   can read that conversation. On Market, the question is answered from the market graph as it is now
-   (POST /api/v2/market/ask): the answer and the organizations, people and pages it drew on, which open the
-   note and light up on the graph. Each page keeps its own thread.
+   can read that conversation.
 
-   window.openDocsAsk(question?) opens it; with a question it asks it straight away. The page's own
-   [data-librarian-open] button opens it again; window.syncLibrarianRail(settled) is called after each route.
+   window.openDocsAsk(question?) opens it; with a question it asks it straight away. A page's
+   [data-librarian-open] button opens it again; window.syncLibrarianRail() is called after each route and when the
+   team is read again (ui/app/sidebar.js renderLibrarians).
 
    The Librarian cites [Internal doc · Title](doc:<id>) and [Linked · host](https://...). `doc:<id>` is
    turned into the Docs page route here and nowhere else (docHref). Its text is bot text: it only ever
@@ -68,17 +68,20 @@ html.demo .dask{top:var(--demo-h)}
 .dask-think i:nth-child(3){animation-delay:.15s}.dask-think i:nth-child(4){animation-delay:.3s}
 @keyframes dask-dot{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .dask-err{color:var(--fail);font-size:13px}
-.dask-form{display:flex;gap:6px;align-items:flex-end;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface)}
-.dask-form textarea{flex:1 1 auto;min-width:0;min-height:36px;max-height:160px;resize:vertical;font-size:13.5px;line-height:1.4;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
-.dask-form textarea:focus{outline:2px solid var(--accent);outline-offset:0}
-.dask-form .primary{min-height:36px;padding:0 14px}
+html:not(.has-librarian) [data-librarian-open]{display:none}
+/* The composer: one line, send inside on the right, as the Strategy Bot's and BotOps' (ui/styles/redesign.css .sbot-body). */
+.dask-form{display:flex;align-items:flex-end;min-height:42px;margin:6px 12px calc(12px + env(safe-area-inset-bottom));padding:3px 3px 3px 14px;border:1px solid var(--line);border-radius:21px;background:var(--bg)}
+.dask-form:focus-within{border-color:var(--accent)}
+.dask-form textarea{flex:1 1 auto;min-width:0;height:34px;max-height:120px;resize:none;padding:6px 0;border:0;border-radius:0;background:none;font-size:13.5px;line-height:1.4;box-shadow:none}
+.dask-form textarea:focus{outline:0}
+.dask-form .p-send-icon{width:36px;height:36px}
 .dask-off{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
 .dask-cites{display:flex;flex-wrap:wrap;gap:4px 6px;margin:2px 0 0}
 .dask-cites a.dask-cite{display:inline-block;font-size:12px;line-height:1.35;padding:0 7px;border-radius:10px;border:1px solid var(--line);background:var(--bg);text-decoration:none;color:var(--accent)}
 .dask-cites a.dask-cite:hover{background:var(--surface2)}
 @media (max-width:760px){
   .dask{inset:0;width:auto;border-left:0;box-shadow:none;height:100dvh}
-  .dask-form textarea{font-size:16px;min-height:44px}.dask-form .primary{min-height:44px}
+  .dask-form textarea{font-size:16px}
   html.demo .dask{height:calc(100dvh - var(--demo-h))}
   .dask-backdrop{display:none}
 }
@@ -86,19 +89,13 @@ html.demo .dask{top:var(--demo-h)}
 @media(min-width:761px){
   :root{--librarian-w:clamp(280px,24vw,340px)}
   #main.librarian-open{--librarian-width:var(--librarian-w);margin-right:var(--librarian-width);max-width:min(1180px,calc(100% - var(--librarian-width)))}
-  #main.librarian-open.market-layout{max-width:calc(100% - var(--librarian-width))}
+  #main.librarian-open.lc-layout{max-width:calc(100% - var(--librarian-width))}
   #main.librarian-open [data-librarian-open]{display:none}
   #main.librarian-open .docs-heading{grid-template-columns:auto minmax(180px,1fr) auto}
   #main.librarian-open .docs-workspace{grid-template-columns:minmax(200px,240px) minmax(0,1fr)}
   .dask{width:var(--librarian-w);box-shadow:none;animation:none}
   body:has(#main.librarian-open) .toast{right:calc(var(--librarian-w) + 20px)}
   body:has(#main.librarian-open) #topbar{margin-right:var(--librarian-w)}
-}
-/* The market's three columns need room the rail takes: under 1600px the graph moves below the note. */
-@media(min-width:761px) and (max-width:1599px){
-  #main.librarian-open .market-shell{grid-template-columns:184px minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(200px,34vh)}
-  #main.librarian-open .market-graph{grid-column:1/-1;border-top:1px solid #2a2a2a}
-  #main.librarian-open .market-read{padding:22px 24px 16px}
 }
 @media(min-width:761px) and (max-width:1100px){
   #main.librarian-open .docs-heading{display:flex;flex-wrap:wrap}
@@ -114,22 +111,19 @@ html.demo .dask{top:var(--demo-h)}
 }`;
 
   // What each page keeps between opening and closing the panel: the conversation, so a follow-up has context,
-  // and what was asked and answered, so closing it does not lose the thread. Docs and Market each have their own.
-  const sessions = {docs: {conversationId: '', turns: []}, market: {turns: []}};
-  const where = () => /^#\/strategy\/market(?:[/?]|$)/.test(location.hash) ? 'market' : 'docs';
-  const HINTS = {docs: ['How do we handle a refund?', 'Who helps new hires?', 'Where is the pricing?'],
-    market: ['Who competes with us?', 'What changed this week?', 'Which channels matter?']};
-  const PLACEHOLDER = {docs: 'Ask about your docs…', market: 'Ask about the market…'};
+  // and what was asked and answered, so closing it does not lose the thread.
+  const sessions = {docs: {conversationId: '', turns: []}};
+  const HINTS = ['How do we handle a refund?', 'Who helps new hires?', 'Where is the pricing?'];
+  const PLACEHOLDER = 'Ask the Librarian…';
   const TURN_LIMIT = 50;
-  let ctx = where(), panel = null, opener = null, es = null, poll = null, busy = false;
+  let panel = null, opener = null, es = null, poll = null, busy = false;
   let conversations = [], nextOffset = null, historyRequest = 0, reopenRequest = 0, openingConversation = false;
-  const session = () => sessions[ctx];
+  const session = () => sessions.docs;
 
   function drawHistory() {
     const history = panel?.querySelector('.dask-history');
     if (!history) return;
-    history.hidden = ctx !== 'docs';
-    if (history.hidden) return;
+    history.hidden = false;
     const previous = conversations.filter(room => room.id !== sessions.docs.conversationId);
     history.querySelector('.dask-history-list').innerHTML = previous.map(room => {
       const date = new Date(room.last_message_at || room.created);
@@ -145,16 +139,16 @@ html.demo .dask{top:var(--demo-h)}
   }
 
   async function loadHistory(offset = 0) {
-    if (!panel || ctx !== 'docs') return;
+    if (!panel) return;
     const at = panel, request = ++historyRequest;
     try {
       const result = await get('/v2/librarian/conversations?offset=' + offset);
-      if (panel !== at || ctx !== 'docs' || request !== historyRequest) return;
+      if (panel !== at || request !== historyRequest) return;
       conversations = offset ? [...conversations, ...(result.conversations || [])] : result.conversations || [];
       nextOffset = result.next_offset ?? null;
       drawHistory();
     } catch (error) {
-      if (panel !== at || ctx !== 'docs' || request !== historyRequest) return;
+      if (panel !== at || request !== historyRequest) return;
       const list = panel.querySelector('.dask-history-list');
       list.innerHTML = `<p role="alert">${esc(error.message)}</p><button type="button" class="ghost">Retry</button>`;
       list.querySelector('button').onclick = () => loadHistory(offset);
@@ -162,9 +156,9 @@ html.demo .dask{top:var(--demo-h)}
   }
 
   async function reopenConversation(id) {
-    if (busy || openingConversation || !panel || ctx !== 'docs') return;
+    if (busy || openingConversation || !panel) return;
     const at = panel, s = sessions.docs, request = ++reopenRequest;
-    const current = () => panel === at && ctx === 'docs' && sessions.docs === s && request === reopenRequest;
+    const current = () => panel === at && sessions.docs === s && request === reopenRequest;
     openingConversation = true; draw();
     try {
       const snapshot = await get('/v2/conversations/' + encodeURIComponent(id) + '/snapshot');
@@ -180,7 +174,7 @@ html.demo .dask{top:var(--demo-h)}
         const pending = execution?.message_id === message.id && ['queued', 'leased', 'running'].includes(execution.state);
         const error = !reply && !pending
           ? (execution?.message_id === message.id ? execution.label : '') || 'No reply saved' : '';
-        return {question: message.body, ctx: 'docs', answer: reply ? reply.body || '' : null, error,
+        return {question: message.body, answer: reply ? reply.body || '' : null, error,
           conversationId: id, messageId: message.id};
       });
       openingConversation = false;
@@ -206,9 +200,11 @@ html.demo .dask{top:var(--demo-h)}
     document.head.appendChild(el);
   }
 
-  // Desktop on Docs or Market: a rail beside the page. Anywhere else, and on a phone: a sheet over it.
+  // Desktop on a Library page: a rail beside it. Anywhere else, and on a phone: a sheet over it. The Strategy tabs have
+  // the Strategy Bot's panel instead (ui/app/redesign.js), Automations BotOps'.
   const desktop = () => matchMedia('(min-width: 761px)').matches;
-  const railPage = () => /^#\/(docs|strategy\/market)(?:[/?]|$)/.test(location.hash);
+  const railPage = () => /^#\/(?:docs|meetings|library)(?:[/?]|$)/.test(location.hash);
+  const hasLibrarian = () => typeof librarianBot === 'function' && !!librarianBot();
   const asRail = () => desktop() && railPage();
   // Hidden or shown, per viewer, in this browser only; a browser that will not store it shows the rail.
   const hiddenKey = () => 'tico.librarian.collapsed.' + (S.me?.id || '');
@@ -248,14 +244,6 @@ html.demo .dask{top:var(--demo-h)}
   }
 
   function turnHtml(t, i) {
-    if (t.market) {
-      const state = t.error ? `<p class="dask-err" role="alert">${esc(t.error)}</p>`
-        : t.answer != null ? '' : '<p class="dask-think" data-thinking role="status">Reading the market<i></i><i></i><i></i></p>';
-      return `<section data-turn="${i}"><div class="dask-q">${esc(t.question)}</div>
-        ${t.answer != null ? `<h3 class="dask-label">Librarian</h3><div class="dask-a md" data-answer>${safeMd(t.answer)}</div>` : ''}
-        ${t.cites?.length ? `<p class="dask-cites">${t.cites.map(c => `<a class="dask-cite" href="${esc(c.href)}">${esc(c.label)}</a>`).join('')}</p>` : ''}
-        ${state}</section>`;
-    }
     const state = t.error ? `<p class="dask-err" role="alert">${esc(t.error)}</p>`
       : t.answer != null ? ''
       : t.noProvider ? '<p class="dask-empty" data-no-provider role="status">The Librarian needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>'
@@ -274,7 +262,7 @@ html.demo .dask{top:var(--demo-h)}
     stickScroll(body).update(() => {
       body.innerHTML = turns.length ? turns.map(turnHtml).join('')
         : `<div class="dask-empty">
-            <div class="dask-hints">${HINTS[ctx].map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div></div>`;
+            <div class="dask-hints">${HINTS.map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div></div>`;
       decorate(body);
       body.querySelectorAll('[data-hint]').forEach(b => { b.onclick = () => ask(b.dataset.hint); });
       body.querySelectorAll('[data-collection]').forEach(select => {
@@ -291,7 +279,7 @@ html.demo .dask{top:var(--demo-h)}
     const button = panel.querySelector('.dask-form button');
     if (button) button.disabled = busy || openingConversation;
     panel.querySelector('[data-new-chat]').disabled = busy || openingConversation;
-    panel.querySelector('textarea').placeholder = PLACEHOLDER[ctx];
+    panel.querySelector('textarea').placeholder = PLACEHOLDER;
     drawHistory();
   }
 
@@ -342,33 +330,16 @@ html.demo .dask{top:var(--demo-h)}
     void read();                       // what happened before the stream followed it
   }
 
-  // Market: the graph as it is now answers, and what it drew on lights up on the graph (ui/market-page.js).
-  async function askMarket(turn) {
-    try {
-      const out = await post('/v2/market/ask', {question: turn.question});
-      const ids = [...new Set((out.citations || []).filter(c => c.kind === 'entity').map(c => c.id))];
-      turn.answer = String(out.answer || '').replace(/\s*\[[a-z]+:[^\]]+\]/gi, '');
-      await window.marketCite?.(ids);
-      turn.cites = ids.map(id => ({href: '#/strategy/market?note=' + encodeURIComponent(id), label: window.marketName?.(id) || id})).filter(c => c.label);
-    } catch (e) {
-      turn.error = (e && e.message) || 'The Librarian could not answer.';
-    }
-    if (turn.ctx === ctx) busy = false;
-    draw();
-  }
-
   async function ask(question) {
     question = String(question || '').trim();
     if (!question || busy || openingConversation || !panel) return;
     busy = true;
     const s = session();
-    const turn = {question, ctx, results: null, answer: null, live: '', error: '', conversationId: s.conversationId, messageId: ''};
-    if (ctx === 'market') turn.market = true;
+    const turn = {question, results: null, answer: null, live: '', error: '', conversationId: s.conversationId, messageId: ''};
     s.turns.push(turn);
     if (s.turns.length > TURN_LIMIT) s.turns.shift();
     stickScroll(panel.querySelector('.dask-body')).toBottom();      // the question just asked is where you look
     draw();
-    if (turn.market) return askMarket(turn);
     try {
       // The first question of a page session, and the first after New chat, opens a new conversation, so what
       // the Librarian remembers is what the thread on screen shows; follow-ups continue it.
@@ -379,7 +350,7 @@ html.demo .dask{top:var(--demo-h)}
       draw();
       void loadHistory();
       stop();
-      if (panel && ctx === 'docs') follow(turn);
+      if (panel) follow(turn);
     } catch (e) {
       busy = false;
       const code = e?.body?.error?.code;
@@ -458,7 +429,6 @@ html.demo .dask{top:var(--demo-h)}
   function open(question, focus = true) {
     style();
     if (!panel) {
-      ctx = where();
       opener = document.activeElement;
       panel = document.createElement('aside');
       panel.className = 'dask';
@@ -470,22 +440,23 @@ html.demo .dask{top:var(--demo-h)}
           <button class="dask-close" type="button"></button></header>
         <details class="dask-history"><summary>Previous conversations</summary><div class="dask-history-list"></div></details>
         <div class="dask-body"></div>
-        <form class="dask-form"><textarea rows="2" maxlength="4000" aria-label="Your question" required></textarea>
-        <button class="primary" type="submit">Ask</button></form>`;
+        <form class="dask-form"><textarea rows="1" maxlength="4000" aria-label="Your question" required></textarea>
+        <button class="p-send-icon" type="submit" aria-label="Ask" title="Ask">${typeof ICON_SEND === 'string' ? ICON_SEND : 'Ask'}</button></form>`;
       document.body.append(panel);
       setMode();
       if (asRail()) rememberHidden(false);
       panel.querySelector('.dask-close').onclick = () => close(true, asRail());
       panel.querySelector('[data-new-chat]').onclick = () => {
         if (busy || openingConversation) return;
-        stop(); sessions[ctx] = ctx === 'docs' ? {conversationId: '', turns: []} : {turns: []}; draw(); void loadHistory(); panel.querySelector('textarea').focus();
+        stop(); sessions.docs = {conversationId: '', turns: []}; draw(); void loadHistory(); panel.querySelector('textarea').focus();
       };
       const box = panel.querySelector('textarea');
+      box.oninput = () => { box.style.height = ''; box.style.height = Math.min(box.scrollHeight, 120) + 'px'; };
       box.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); panel.querySelector('form').requestSubmit(); } };
       panel.querySelector('form').onsubmit = ev => {
         ev.preventDefault();
         const text = box.value;
-        if (text.trim() && !busy && !openingConversation) { box.value = ''; ask(text); }
+        if (text.trim() && !busy && !openingConversation) { box.value = ''; box.style.height = ''; ask(text); }
       };
       document.addEventListener('keydown', onKey, true);
       resume();
@@ -494,26 +465,21 @@ html.demo .dask{top:var(--demo-h)}
     if (focus) panel.querySelector('textarea').focus();
     if (question && question.trim()) ask(question);
   }
-  // Draw this page's thread; a docs turn that was still running when the panel closed (or the page changed)
-  // is picked up again.
+  // Draw the thread; a turn that was still running when the panel closed is picked up again.
   function resume() {
     const last = session().turns.at(-1);
     busy = false;
     draw();
-    if (ctx === 'docs' && last && last.answer == null && !last.error && last.messageId) { busy = true; draw(); follow(last); }
-    else if (ctx === 'market' && last && last.answer == null && !last.error) { busy = true; draw(); }
+    if (last && last.answer == null && !last.error && last.messageId) { busy = true; draw(); follow(last); }
   }
 
-  // After every route (ui/app/router.js) and when the window is resized. On Docs and Market on a desktop the
-  // rail opens unless this viewer hid it; a phone gets the page's button only. `settled`: the page has drawn
-  // (the market draws later than the route), so a page with no button (an empty market) has no rail.
-  window.syncLibrarianRail = settled => {
-    if (!railPage()) { close(false); return; }
+  // After every route (ui/app/router.js), when the team is read again and when the window is resized. On a Library page
+  // on a desktop the rail opens unless this viewer hid it; a phone gets the page's button only. No Librarian: nothing.
+  window.syncLibrarianRail = () => {
     style();
-    const button = openButton();
-    if (!button) { if (settled === true) close(false); return; }
-    button.onclick = () => open();
-    if (panel && ctx !== where()) { stop(); openingConversation = false; historyRequest++; reopenRequest++; ctx = where(); resume(); void loadHistory(); }
+    const has = hasLibrarian();
+    document.documentElement.classList.toggle('has-librarian', has);
+    if (!railPage() || !has) { close(false); return; }
     if (desktop()) {
       if (panel) setMode();
       else if (!railHidden()) open(undefined, false);
@@ -521,6 +487,8 @@ html.demo .dask{top:var(--demo-h)}
   };
   let resizeSoon = 0;                               // once a frame while the window is dragged
   window.addEventListener('resize', () => { cancelAnimationFrame(resizeSoon); resizeSoon = requestAnimationFrame(() => window.syncLibrarianRail()); });
+  // A page's button, drawn whenever that page draws.
+  document.addEventListener('click', ev => { if (ev.target.closest?.('[data-librarian-open]')) open(); });
   window.openDocsAsk = open;
   // The old entry point, until every page that called it says openDocsAsk.
   window.openDocsChat = () => open();

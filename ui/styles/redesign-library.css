@@ -1,0 +1,98 @@
+/* Library › Tools (ui/app/redesign-library.js), in Automations' language: a computer shows list | page; a phone
+   shows one screen at a time (#lc-root[data-screen]: list, detail). Only the redesign's code adds these classes. */
+#main.lc-layout{max-width:none;padding:0;overflow:hidden;height:100%}
+.lc{display:flex;flex-direction:column;height:100%;min-height:0}
+.lc-ph{display:flex;align-items:center;gap:6px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.lc-ph h1{margin:0;font-size:var(--t-lg);font-weight:650}
+.lc-ph .spacer{flex:1}
+.lc-pad{padding:14px 6px}
+.lc-body{flex:1;min-height:0;display:grid;grid-template-columns:340px minmax(0,1fr)}
+
+/* the list */
+.lc-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
+.lc-scroll{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 16px}
+.lc-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.lc-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 8px;border:1px solid transparent;border-radius:7px;color:var(--ink);text-decoration:none}
+.lc-row:hover{background:var(--surface);text-decoration:none}
+.lc-row:hover *,a.lc-who-row:hover{text-decoration:none}
+.lc-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.lc-row .nav-icon{flex:none;font-size:17px;width:18px;height:18px;color:var(--muted)}
+.lc-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc-row .pill{flex:none}
+.lc-filters{display:flex;flex-direction:column;gap:6px;padding:10px 14px 4px}
+.lc-q{width:100%}
+.lc-frow{display:flex;gap:6px;min-width:0}
+.lc-who{flex:1;min-width:0;text-overflow:ellipsis}
+.lc-issues{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.lc-issues[hidden]{display:none}
+.lc-issues[aria-pressed="true"]{color:var(--ink);border-color:color-mix(in srgb,var(--fail) 60%,var(--line));background:var(--fail-bg)}
+.lc-in{color:var(--muted);font-variant-numeric:tabular-nums}.lc-in:empty{display:none}
+.lc-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--fail)}
+.lc-n{flex:none;min-width:22px;text-align:right;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.lc-n.none{opacity:.5}
+.lc-add{margin-left:auto}.lc-add button{padding:3px 10px;font-size:var(--t-sm)}
+
+/* the page: the tool's own page (integrations.js), its heading with a back link on a phone */
+.lc-pane{min-width:0;min-height:0;overflow-y:auto;padding:16px 20px 48px}
+.lc-pane #int-detail{max-width:860px}
+.lc .meeting-head{flex-direction:row;align-items:center;justify-content:flex-start;gap:6px}
+.lc .meeting-head h1{margin:0;overflow-wrap:anywhere}
+.lc-back{display:none;align-items:center;justify-content:center;flex:none;width:40px;height:40px;margin-left:-10px;border-radius:7px;color:var(--muted);text-decoration:none}
+.lc-back:hover{background:var(--surface2);color:var(--ink)}
+.lc-back .nav-icon{font-size:22px;width:22px;height:22px}
+.lc pre{overflow-x:auto;max-width:100%}
+#tool-facts:empty{display:none}
+.lc-pane .card>.int-meta:first-child{margin-top:0}
+/* the vault's dialogs (ui/app/vault.js) */
+#credential-dialog::backdrop{background:rgba(0,0,0,.6)}
+#credential-dialog>header{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:12px;padding:12px 14px 12px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
+#credential-dialog>header h2{flex:1;min-width:0;margin:0;font-size:var(--t-md);overflow-wrap:anywhere}
+#credential-dialog>:not(header){margin:16px 18px}
+#credential-dialog form>button[type=submit]{justify-self:start}
+#credential-dialog .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
+#credential-dialog textarea{width:100%}
+.lc-pane .card>header h2 .muted{font-weight:400;margin-left:4px}
+/* who has it, each under their team */
+.lc-team{border-top:1px solid var(--line)}.lc-team:first-of-type{border-top:0}
+.lc-team>summary{display:flex;justify-content:space-between;gap:8px;padding:8px 0 4px;color:var(--muted);font-size:var(--t-sm);cursor:pointer;list-style:none}
+.lc-team>summary::-webkit-details-marker{display:none}
+.lc-who-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:3px 4px;border-radius:6px;color:var(--ink);text-decoration:none}
+a.lc-who-row:hover{background:var(--surface2)}
+.lc-who-row .nav-icon{font-size:18px;width:20px;color:var(--muted)}
+.lc-wn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc-via{font-size:var(--t-xs)}
+.lc-none{margin:4px 0}
+/* credentials and issues */
+.lc-cred{display:grid;grid-template-columns:20px minmax(0,1fr) auto;grid-template-areas:"i n p" ". u a";align-items:center;gap:2px 8px;padding:8px 0;border-top:1px solid var(--line)}
+.lc-cred:first-of-type{border-top:0}
+.lc-cred>.nav-icon{grid-area:i;font-size:18px;color:var(--muted)}
+.lc-cn{grid-area:n;min-width:0;overflow-wrap:anywhere}
+.lc-cred>.pill{grid-area:p;justify-self:end}
+.lc-used{grid-area:u;font-size:var(--t-sm)}
+.lc-acts{grid-area:a;display:flex;gap:12px;font-size:var(--t-sm)}
+.lc-acts .linkish{text-decoration:none}
+.lc-creds .int-meta{margin-top:4px}
+.lc-del{margin-top:10px}
+.lc-issue{display:flex;align-items:baseline;gap:8px;padding:4px 0;overflow-wrap:anywhere}.lc-issue .lc-dot{transform:translateY(-1px)}
+
+@media (max-width:1099px) and (min-width:761px){.lc-body{grid-template-columns:260px minmax(0,1fr)}}
+
+/* a phone: the list, or one connection's page */
+@media (max-width:760px){
+  #main.lc-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
+  .lc{height:auto}
+  .lc-ph{padding:12px;border:0}
+  .lc-body{display:block}
+  .lc-list,.lc-pane{display:none;border:0}
+  .lc[data-screen="detail"] .lc-ph{display:none}
+  .lc[data-screen="list"] .lc-list{display:flex}
+  .lc[data-screen="detail"] .lc-pane{display:block}
+  .lc-scroll{padding:0 12px 12px;overflow:visible}
+  .lc-row{min-height:44px;font-size:var(--t-md)}
+  .lc-pane{padding:8px 12px 24px;overflow:visible}
+  .lc-back{display:inline-flex}
+  .lc-filters{padding:0 12px 4px}
+  .lc-who-row{min-height:40px}
+  .lc-cred{grid-template-areas:"i n p" ". u u" ". a a"}
+  .lc-acts{gap:16px;padding-top:2px}
+}

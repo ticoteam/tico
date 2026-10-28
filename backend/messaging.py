@@ -1,6 +1,6 @@
 """Bot-first view of scheduled email and Slack work.
 
-The source of truth stays with the mail connector, Slack gateway, and routines. This read
+The source of truth stays with the mail connector, Slack gateway, and automations. This read
 model joins their records for people reviewing what a bot covers and what it saw.
 """
 
@@ -59,9 +59,12 @@ def _catalog(c, who, auth, settings):
                 tuple(mailboxes)):
             mailboxes[row["mailbox"]]["needs_review"] = row["n"]
     reads = {(row["channel"], row["reader"]): dict(row) for row in c.execute("SELECT * FROM slack_reads")}
+    # Each bot's own automations (a mail bot's checks and schedules): when one last ran and when the next is due.
     schedules = {}
-    for row in routines.listing(c, summary=True):
-        schedules.setdefault(row["bot"], []).append(row)
+    for row in c.execute("SELECT a.id, a.owner, a.enabled, a.next_due, (SELECT max(started) FROM automation_runs r "
+                         "WHERE r.automation_id=a.id) AS last_fired FROM automations a "
+                         "WHERE a.deleted_at IS NULL AND a.owner LIKE 'bot:%'"):
+        schedules.setdefault(row["owner"][4:], []).append(dict(row))
     latest_digest = {row["reader"]: row["last"] for row in c.execute(
         "SELECT reader,max(created) AS last FROM slack_digests GROUP BY reader")}
     bots = []
@@ -81,7 +84,7 @@ def _catalog(c, who, auth, settings):
         covered_slack.update(s["id"][6:] for s in sources if s["kind"] == "slack")
         jobs = schedules.get(bot, [])
         fired = [r["last_fired"] for r in jobs if r["last_fired"]]
-        due = [r["next_due"] for r in jobs if r["active"] and r["next_due"]]
+        due = [r["next_due"] for r in jobs if r["enabled"] and r["next_due"]]
         turn = c.execute("SELECT max(coalesce(finished,started)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
         last = max(fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
@@ -89,7 +92,7 @@ def _catalog(c, who, auth, settings):
                      "description": (config_row["description"] if config_row else "") or config.get("role") or "",
                      "state": row["state"], "focus": status.get("focus") or "",
                      "last_result": status.get("last_result") or "",
-                     "sources": sources, "routine_count": len(jobs),
+                     "sources": sources, "automation_count": len(jobs),
                      "last_run": last, "next_run": min(due, default=None),
                      "slack_interval_minutes": settings.slack_digest_minutes if any(s["kind"] == "slack" for s in sources) else None,
                      # Mailbox review labels belong to its primary inbox bot. Other bots
@@ -160,9 +163,9 @@ def install_messaging(app, store, auth):
             instructions = {"content": instruction["content"], "updated": instruction["updated"],
                             "published": True} if instruction and instruction["content"].strip() else {
                                 "content": found["description"], "updated": None, "published": False}
-            jobs = routines.listing(c, bot)
-            for job in jobs:
-                job["occurrences"] = routines.occurrences(c, job["id"], limit=6, who=who, auth=auth)
+            jobs = [dict(r) for r in c.execute(
+                "SELECT id, name, enabled, trigger_type, next_due FROM automations WHERE owner=? AND deleted_at IS NULL "
+                "ORDER BY name, id LIMIT 50", ("bot:" + bot,))]
             mail = []
             if mailboxes:
                 marks = ",".join("?" * len(mailboxes))
@@ -202,7 +205,7 @@ def install_messaging(app, store, auth):
                          for row in c.execute(f"SELECT * FROM slack_posts WHERE bot=? AND channel IN ({marks}) "
                                               "ORDER BY created DESC LIMIT 20", (bot, *slack_ids))]
             return {"bot": found, "source": source, "instructions": instructions,
-                    "routines": jobs, "slack_digests": digests, "slack_posts": posts,
+                    "automations": jobs, "slack_digests": digests, "slack_posts": posts,
                     "mail": mail, "slack": slack}
 
     @app.get("/api/v2/messaging/bots/{bot}/slack-thread")

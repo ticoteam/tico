@@ -7,6 +7,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import profiles as P
+from backend import redesign_migration
 from backend import rules as R
 from backend import wake_presets as W
 from backend.store import encode
@@ -64,6 +65,22 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         assert len([m for m in H.notices(c, "human:ana") if "gave each of your bots a profile" in m["body"]]) == 1
 
 
+def turn_for(api, slug):
+    """What a routine for `slug` is today: an automation whose Bot turn step is the bot's. It runs on a task made for
+    another bot; returns its run's status once no task for `slug` was opened by it."""
+    aid = post(api, "automations", {"name": "Notes", "owner": "person:ana",
+                                    "trigger": {"type": "event", "name": "task.created"},
+                                    "steps": [{"id": "notes", "type": "bot_turn", "bot": "bot:" + slug,
+                                               "prompt": "Write the notes."}]})["id"]
+    post(api, "tasks", {"owner": "cpo", "title": "Start the notes", "body": "Please."})
+    api.app.state.store.automations.drain()
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", ("bot:" + slug,)).fetchone()
+    found = get(api, f"automations/{aid}/runs")["runs"]
+    assert len(found) == 1
+    return found[0]["status"]
+
+
 def test_a_responder_takes_no_task_and_runs_no_routine(api):
     with api.app.state.store.transaction() as c:
         add_bot(c, "helper")
@@ -79,11 +96,10 @@ def test_a_responder_takes_no_task_and_runs_no_routine(api):
         from backend import routines
         with pytest.raises(H.Refused):
             routines.create(c, "human:ana", "helper", {"title": "Notes", "on": "meeting.ready"})
-        c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old','helper','meeting.ready','Notes','x')")
-        assert routines.emit(c, "meeting.ready", "m1") == []
         # People can still write to it: the chat is how a Responder is used.
         H.say(c, "human:ana", "bot:helper", "Hello")
         assert jobs(c, "helper") == 1
+    assert turn_for(api, "helper") == "failed"
 
 
 def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_people(api):
@@ -257,22 +273,15 @@ def test_setting_a_profile_needs_the_bots_manager_and_the_current_revision(api):
     assert get(api, "bots/ops")["profile"]["name"] == "lead"
 
 
-def test_the_rules_page_lists_a_bots_profile_rows_as_built_in(api):
-    set_profile(api, "ops", "reviewer")
-    listed = get(api, "rules?scope_kind=bot&scope_id=ops")["rules"]
-    mine = [r for r in listed if r.get("profile") == "reviewer"]
-    assert {r["id"] for r in mine} >= {"profile_reviewer_request", "profile_reviewer_note"}
-    assert all(r["built_in"] and not r["can_change"] for r in mine)
-    post(api, "rules/profile_reviewer_note/delete", {}, expected=403)
-
-
 def test_custom_copies_the_rows_and_leaving_it_needs_a_confirm(api):
     set_profile(api, "ops", "reviewer")
     custom = set_profile(api, "ops", "custom")
     assert custom["rules"] >= 3 and custom["profile"]["name"] == "custom"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM rules WHERE scope_kind='bot' AND scope_id='ops' AND created_by='profile'"
-                         ).fetchone()[0] == custom["rules"]
+        # The copied rows are in the bot's What wakes automation, where the wake engine reads them.
+        assert redesign_migration.wake_rules_by(c, "bot", "ops", "profile") == custom["rules"]
+        assert len([r for r in redesign_migration.wake_rows(c) if r["scope_id"] == "ops"
+                    and r["created_by"] == "profile"]) == custom["rules"]
     set_profile(api, "ops", "doer", expected=409)
     back = set_profile(api, "ops", "doer", confirm_drop_rules=True)
     assert back["rules"] == 0 and back["profile"]["name"] == "doer"
@@ -362,14 +371,17 @@ def test_a_custom_bot_that_takes_no_task_runs_no_routine_and_the_migration_copie
         put(c, "quiet", P.CUSTOM, takes="none")
         with pytest.raises(H.Refused):
             H.task_create(c, "human:ana", "Anything", "x", "bot:quiet")
-        c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old','quiet','meeting.ready','Notes','x')")
-        assert routines.emit(c, "meeting.ready", "m1") == []
-        # The Librarian becomes a Custom bot with the Monitor's clock rows, copied once however often the server starts.
+        with pytest.raises(H.Refused):
+            routines.create(c, "human:ana", "quiet", {"title": "Notes", "on": "meeting.ready"})
+        # The Librarian becomes a Custom bot with the Monitor's clock rows, copied once however often the server starts,
+        # into its What wakes automation (none stays in the table).
         add_bot(c, "librarian")
         P.migrate(c)
         P.migrate(c)
-        copied = c.execute("SELECT count(*) FROM rules WHERE scope_id='librarian' AND created_by='profile'").fetchone()[0]
+        copied = redesign_migration.wake_rules_by(c, "bot", "librarian", "profile")
         assert copied == len(R.PROFILE_RULES[P.MONITOR]) and profile_of(c, "librarian")["profile"] == P.CUSTOM
+        assert not c.execute("SELECT 1 FROM rules WHERE scope_id='librarian' AND created_by='profile'").fetchone()
+    assert turn_for(api, "quiet") == "failed"
 
 
 def last_change(api, bot="ops"):

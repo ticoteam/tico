@@ -74,3 +74,25 @@ Files under about 1,500 lines; split a file along its section comments when it g
 The [building overview](../docs/overview.md) mounts an isolated, lazy iframe under `overview/`. Its
 Three.js renderer uses native modules from `vendor/three/`; it is deliberately outside the classic
 app bundle so it loads only when the person opens Overview.
+
+## Browser tests on a real hub
+
+Most browser tests answer the API from fixtures (`support/page.cjs`, `support/routes.cjs`). A test that needs the real
+API shapes starts a hub instead: `support/real-hub.cjs` runs `support/real_hub_server.py`, which boots the scenario org
+(`evals/redesign/harness.py`) on a fresh temporary database and applies the named seeds in `evals/redesign/seeds.py`.
+
+```js
+const {startHub, pageAs} = require('./support/real-hub.cjs');
+const hub = await startHub({seeds: ['org']});
+const page = await pageAs(browser, hub, 'ana', {phone: true});   // 390×844 with touch; the default is 1440×900
+await page.context().close();
+await hub.stop();                                                 // stops the hub process this test started
+```
+
+- `hub.tokens` names each teammate: `ana` (the owner), `chris`, `engineering-lead`, `builder-claude`, `builder-openai`
+  and `release-manager`. A page signed in as one sends that teammate's token as its Bearer.
+- To start a screen from some state, add a seed. It makes the state through the API as a teammate would, never by
+  writing the database. A seed whose route is not built yet is skipped and listed in `hub.skipped`.
+- The clock is the scenario's fake clock, frozen at its start, so a seeded runner's heartbeat does not age out during a test.
+- Write the phone journey first; `real-hub-smoke.cjs` is the reference. The hub needs the backend requirements, in the
+  Python named by `TICO_PYTHON` as for the other support servers.

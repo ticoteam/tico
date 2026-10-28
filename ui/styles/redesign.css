@@ -1,0 +1,95 @@
+/* The app's shell (ui/app/redesign.js, ui/app/strategy-budget.js): what keys off html.redesign (set at boot) or a class
+   only that code adds. */
+
+/* Sidebar: what moved out of the rail. Library's pages sit under it. */
+html.redesign #nav-inboxes-section,html.redesign #nav-strategy-librarian{display:none!important}
+.rd-lib{display:flex;flex-direction:column}
+.rd-lib[hidden]{display:none}
+/* Library folds: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
+.rd-lib-toggle{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.rd-lib-toggle:hover{background:var(--surface2);color:var(--ink)}
+.rd-lib-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rd-lib-toggle .section-chev{margin:0}
+.rd-lib-toggle[aria-expanded="false"] .section-chev{transform:none}
+body.in-setup .rd-lib{display:none}
+@media (max-width:760px){.rd-lib-toggle{width:40px;height:40px}}
+.rd-lib .nav-link{padding-left:40px;color:var(--muted)}
+.rd-lib .nav-link .nav-icon{display:none}
+.rd-lib .nav-link.cur,.rd-lib .nav-link:hover{color:var(--ink)}
+@media (max-width:760px){.rd-lib .nav-link{padding-left:46px}}
+
+/* "?" help: one per panel, on hover, focus or tap. */
+.rd-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:var(--t-2xs);line-height:1;cursor:help;vertical-align:middle}
+.rd-help:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.rd-help-pop{display:none;position:absolute;z-index:30;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:min(260px,70vw);padding:6px 9px;border-radius:7px;background:var(--raised,var(--surface2));border:1px solid var(--line);color:var(--ink);font-size:var(--t-sm);font-weight:400;line-height:1.35;text-align:left;white-space:normal;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.rd-help:hover .rd-help-pop,.rd-help:focus .rd-help-pop{display:block}
+
+/* Strategy tabs: one row, scrolling sideways inside itself on a phone, never the page. */
+.rd-strat-head .strat-tabs{overflow-x:auto;scrollbar-width:none;max-width:100%}
+.rd-strat-head .strat-tabs::-webkit-scrollbar{display:none}
+.rd-strat-head .strat-tabs a{white-space:nowrap}
+.strat-sub{font-size:var(--t-sm);color:var(--muted)}
+.strat-sub:hover{color:var(--ink)}
+@media (max-width:760px){.rd-strat-head h1{flex-basis:100%}.rd-strat-head .strat-tabs{order:2;flex-basis:100%}
+  .rd-strat-head>.spacer{display:none}.rd-strat-head .strat-sub,.rd-strat-head .strat-actions{order:3}
+  .rd-strat-head .strat-sub+.strat-actions{flex:1 1 0;min-width:0}}
+
+/* The Market's Ask the Librarian button: the Strategy Bot answers on these tabs. */
+
+/* Goals as a tab: the tree takes the width the CEO Bot's rail had. */
+#main.rd-goals{display:block}
+#main.rd-goals .goals-main{max-width:none}
+
+/* An empty Strategy view: one line. */
+.rd-empty{margin:12px 0}
+
+/* The Strategy Bot: a rail on the right of every Strategy tab on a desktop; a sheet behind a button on a phone. */
+.sbot{position:fixed;top:0;right:0;bottom:0;z-index:40;width:var(--sbot-w);display:flex;flex-direction:column;background:var(--surface);border-left:1px solid var(--line)}
+html.demo .sbot{top:var(--demo-h)}
+.sbot-head{display:flex;align-items:center;gap:8px;min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--line)}
+.sbot-head .nav-icon{font-size:18px;color:var(--accent)}
+.sbot-head h2{flex:1;margin:0;font-size:var(--t-base);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sbot-close{display:none;min-width:36px;height:36px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:16px;cursor:pointer}
+.sbot-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.sbot-body .gm-chat{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px 14px;gap:10px}
+.sbot-body .gm-chat>.rail-h{display:none}
+.sbot-body .gm-thread{flex:1;min-height:0;overflow-y:auto;max-height:none}
+/* The composer: one line, send inside on the right, one border; the shared pill without the question-card box, as
+   the BotOps chat's on Automations (ui/styles/automations.css .au-bf). */
+.sbot-body .gm-form .ask{display:flex;flex-direction:column;gap:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none}
+.sbot-body .gm-form .p-pill{flex-wrap:nowrap;align-items:flex-end;min-height:42px;padding:3px 3px 3px 14px;border-radius:21px}
+.sbot-body .gm-form .ask textarea{order:0;flex:1 1 auto;min-width:0;height:34px;max-height:120px;padding:6px 0}
+.sbot-body .gm-form .ask .p-send-icon{width:36px;height:36px;border-width:2px}
+.sbot-body .gm-form :is(.p-chips,.p-why,.p-slow,.p-hint):empty{display:none}
+.sbot-fab{display:none}
+@media (min-width:761px){
+  :root{--sbot-w:clamp(280px,24vw,340px)}
+  #main.sbot-open{margin-right:var(--sbot-w);max-width:min(1180px,calc(100% - var(--sbot-w)))}
+  #main.sbot-open.market-layout{max-width:calc(100% - var(--sbot-w))}
+  body:has(#main.sbot-open) .toast{right:calc(var(--sbot-w) + 20px)}
+  body:has(#main.sbot-open) #topbar{margin-right:var(--sbot-w)}
+}
+@media (max-width:760px){
+  .sbot{top:auto;left:0;width:auto;height:min(82dvh,640px);border-left:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.35);z-index:1400;transform:translateY(105%);transition:transform var(--dur,.18s) var(--ease,ease-out);padding-bottom:env(safe-area-inset-bottom)}
+  .sbot.open{transform:none}
+  .sbot-close{display:inline-flex;align-items:center;justify-content:center}
+  .sbot-fab{display:inline-flex;align-items:center;gap:6px;position:fixed;right:12px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);z-index:30;min-height:44px;padding:0 16px;border-radius:22px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm);font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  .sbot-fab .nav-icon{font-size:18px;color:var(--accent)}
+  .sbot-body .gm-form .ask textarea{font-size:16px}
+  #main.sbot-open{padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 72px)}
+}
+@media (prefers-reduced-motion:reduce){.sbot{transition:none}}
+
+/* The editors' one-line fields (Org's sheet; Budget's rows are ui/styles/strategy-budget.css). */
+.bd-fields{display:grid;gap:8px}
+.bd-field{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
+.bd-field input:not([type=checkbox]),.bd-field select{width:min(180px,50vw);text-align:right}
+.bd-field select{text-align:left}
+.bd-money{display:inline-flex;align-items:center;gap:4px;color:var(--muted)}
+.bd-field .bd-money input{width:80px;font-variant-numeric:tabular-nums}
+.bd-money input:disabled{opacity:.45}
+.use-dialog label.bd-field,.use-dialog .bd-field{flex-direction:row;align-items:center;color:var(--ink)}
+/* Editors are sheets on a phone. */
+@media (max-width:760px){
+  dialog.rd-sheet{margin:auto 0 0;width:100vw;max-width:100vw;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}
+}

@@ -35,7 +35,7 @@ const CONDITIONS = {
   blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
 };
 const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
-const WIDGETS = ['tasks', 'updates', 'files', 'routines'].map(id => ({id, hidden: false, height: null}));
+const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
@@ -155,7 +155,7 @@ async function open(browser, viewport, colorScheme, server) {
       await pill('Doing').click();
       // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
       assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
-      assert.deepEqual(await order(), ['tasks', 'updates', 'files', 'routines']);
+      assert.deepEqual(await order(), ['tasks', 'updates', 'files']);
       await pill('Assigned to Others').click();
       assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);
       // One pencil, no gear or board icon.
@@ -184,7 +184,7 @@ async function open(browser, viewport, colorScheme, server) {
       assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1']);
       assert.equal(await widget('files').getAttribute('data-off'), null);
 
-      // Edit again: hide Files, move Routines up by keyboard and Updates down by dragging its handle, set Tasks' height
+      // Edit again: hide Files, move Updates up by keyboard and down past Files by dragging its handle, set Tasks' height
       // then Reset it, set Updates' height by dragging its edge.
       await rail.locator('#bot-sidebar-edit').click();
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), true);
@@ -194,16 +194,16 @@ async function open(browser, viewport, colorScheme, server) {
       assert.equal(await eye.getAttribute('aria-pressed'), 'true');
       assert.equal(await eye.getAttribute('aria-label'), 'Show Files');
       assert.equal(await widget('files').locator('.bot-w-bar').isVisible(), true, 'a hidden widget stays in edit mode, to show again');
-      await widget('routines').locator('[data-w-grip]').focus();
+      await widget('updates').locator('[data-w-grip]').focus();
       await page.keyboard.press('ArrowUp');
-      assert.deepEqual(await order(), ['tasks', 'updates', 'routines', 'files']);
+      assert.deepEqual(await order(), ['updates', 'tasks', 'files']);
       const grip = await widget('updates').locator('[data-w-grip]').boundingBox(), last = await widget('files').boundingBox();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
       await page.mouse.down();
       await page.mouse.move(grip.x + grip.width / 2, grip.y + 40, {steps: 4});
       await page.mouse.move(grip.x + grip.width / 2, last.y + last.height - 2, {steps: 8});
       await page.mouse.up();
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       const size = widget('tasks').locator('[data-w-size]');
       await size.focus();
       await page.keyboard.press('ArrowUp');
@@ -308,7 +308,7 @@ async function open(browser, viewport, colorScheme, server) {
         tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
                {builtin: 'needs', name: 'Needs You', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
                {builtin: 'blocked', name: 'Blocked', show_count: true, conditions: CONDITIONS.blocked}],
-        widgets: [{id: 'tasks', hidden: false, height: null}, {id: 'routines', hidden: false, height: null},
+        widgets: [{id: 'tasks', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
@@ -366,7 +366,7 @@ async function open(browser, viewport, colorScheme, server) {
       await page.waitForFunction(() => document.querySelector('#t-blocked .ttl')?.textContent === 'Wait for QA');
       // Outside edit mode: Files is not drawn, the rest in the new order, and Updates' height is its most.
       assert.equal(await widget('files').isHidden(), true);
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       assert.equal(await widget('updates').locator('.rail-sec').evaluate(el => getComputedStyle(el).maxHeight), updatesHeight + 'px');
       await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}.png`});
@@ -376,7 +376,7 @@ async function open(browser, viewport, colorScheme, server) {
       await goto('#/bot/lead');
       await rail.locator('#bot-tab-t-c0').waitFor({state: 'attached'});
       assert.equal(await rail.evaluate(el => el.hasAttribute('data-loading')), false);
-      assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
+      assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
       assert.equal(await widget('files').isHidden(), true);
       release();
       // QA: Ana may not change its sidebar, so no pencil.

@@ -665,7 +665,8 @@ class Auth:
                 shared.update(
                     roster=roster, entries=views.entries(c),
                     archived={r["slug"] for r in H.bots(c) if r.get("state") == "archived"},
-                    parents={r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)})
+                    parents={r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)},
+                    bare=True)               # a bot's bare person id in reports_to is that person (people.py)
                 pid = H.actor_id(who.actor)
                 shared["person"] = pid
                 own = (P.person(pid, roster) or {}).get("team") or ""
@@ -696,7 +697,7 @@ class Auth:
                 ctx = context()
                 pid = ctx["person"]
                 managed = (self.bot_admin(who) or row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])
-                           or P.manages(pid, "bot", slug, ctx["roster"], ctx["entries"], ctx["archived"]))
+                           or P.manages(pid, "bot", slug, ctx["roster"], ctx["entries"], ctx["archived"], ctx["bare"]))
                 if managed:
                     out[slug] = dict(self.FULL)
                     continue
@@ -796,7 +797,7 @@ class Auth:
             return False
         from . import views
         archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-        return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived)
+        return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived, True)
 
     def bot_admin(self, who):
         """Whether a person may administer bots assigned to their own operator identity. Tico support with app access

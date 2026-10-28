@@ -359,6 +359,48 @@ function machineUpdateWords(update) {
     return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
   return '';
 }
+// Turns at once on a computer: a whole number from 1 to 256, or empty for automatic. Anything else is named under the
+// row and not sent. The note is set from the answer, since a pop-up whose field is still focused is not redrawn.
+async function settingsTurnsAtOnceSave(input) {
+  // The field is disabled while its save is in flight, so a change that lands then starts no second save
+  // here. The server has not seen that value: it is sent once this save answers, from what the field holds
+  // then (below).
+  if (input.disabled) return;
+  settingsFieldClear(input);
+  const text = input.value, n = Number(text);
+  const whole = input.checkValidity() && (text === '' || (Number.isInteger(n) && n >= 1 && n <= 256));
+  if (!whole) {
+    settingsFieldError(input, 'Enter a whole number from 1 to 256, or leave it empty for automatic.');
+    return;
+  }
+  if (text === (input.dataset.current || '')) return;
+  const turns_at_once = text === '' ? null : n;
+  input.disabled = true;
+  let saved = false;
+  try {
+    const path = `/v2/computers/${encodeURIComponent(input.dataset.turnsAtOnce)}/turns-at-once`;
+    const done = await post(path, {turns_at_once});
+    saved = true;
+    input.dataset.current = text;
+    input.defaultValue = text;
+    input.disabled = false;
+    const machine = (SETTINGS_DATA.machines || []).find(row => row.id === input.dataset.turnsAtOnce);
+    const note = input.closest('label')?.querySelector('[data-turns-note]');
+    if (note && machine) {
+      const turn_limit = done?.turn_limit ?? machine.turn_limit;
+      note.textContent = machineTurnsNote({...machine, turns_at_once, turn_limit});
+    }
+    toast(turns_at_once == null ? 'Turns at once is automatic' : `Turns at once set to ${turns_at_once}`);
+  } catch (error) {
+    toast(error.message, true);
+    // A value typed during the failed save is kept and sent below; only an unchanged field goes back to what is saved.
+    if (input.value === text) input.value = input.dataset.current;
+    input.disabled = false;
+  }
+  // The value the field holds now differs from what the server holds: send it, and its own save reloads the page.
+  if (input.value !== (input.dataset.current || '')) return settingsTurnsAtOnceSave(input);
+  if (saved) await loadSettings();
+}
 // One compact row per computer: name, status, operator and Tico version in one cell, then its AI tool chips and Add.
 // A click opens the pop-up.
 function renderSettingsMachines() {
@@ -414,6 +456,8 @@ function renderSettingsMachines() {
       } catch (error) { toast(error.message, true); inbox.checked = !inbox.checked; inbox.disabled = false; }
       return;
     }
+    const turns = event.target.closest('[data-turns-at-once]');
+    if (turns) { await settingsTurnsAtOnceSave(turns); return; }
     const box = event.target.closest('[data-member-bots]');
     if (!box) return;
     box.disabled = true;

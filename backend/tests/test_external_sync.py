@@ -280,7 +280,9 @@ def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
         except H.Refused as exc:
             assert exc.rule == "external-bot"
         c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old','grok-designer','meeting.ready','Notes','x')")
-        assert routines.emit(c, "meeting.ready", "m1") == []
+        H.hook(c, "meeting.ready", "m1", lambda: {}, "human:ana")
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner LIKE '%grok-designer'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
 
 
 

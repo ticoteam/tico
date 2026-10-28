@@ -867,7 +867,8 @@ class MarketPage(Contract):
 
 
 class ApprovalCreate(Contract):
-    kind: Literal["send", "spend", "publish", "merge", "support"]
+    # task_cap and spend_limit are the redesign's proposals (backend/proposals.py), refused while it is off.
+    kind: Literal["send", "spend", "publish", "merge", "support", "task_cap", "spend_limit"]
     payload: dict
     task_id: ID | None = None
     supersedes_approval: ID | None = None
@@ -1338,7 +1339,12 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal[
+        "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
+        "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
+        "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
+        "turns_at_once_v1"]] = Field(
+        default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1386,6 +1392,12 @@ Heartbeat.model_rebuild()
 
 class RunnerMemberBots(Contract):
     accepts: bool
+
+
+class RunnerTurnsAtOnce(Contract):
+    # Required: an omitted field is a 422, not a null that would silently set automatic. Null itself clears it.
+    turns_at_once: int | None = Field(..., ge=1, le=256, strict=True,
+        description="Most turns this computer runs at once. Null is automatic: its own capacity.")
 
 
 class Assignment(Contract):
@@ -1534,6 +1546,7 @@ class GroupCreate(Contract):
     parent: ID | None = None
     add: GroupMembers = Field(default_factory=GroupMembers)
     bet_id: ID | None = None               # the strategy bet the group serves (owner only)
+    lead: str | None = Field(default=None, max_length=200)   # `bot:<slug>` or `person:<id>`, a teammate of the group
 
 
 class GroupUpdate(Contract):
@@ -1544,6 +1557,7 @@ class GroupUpdate(Contract):
     add: GroupMembers = Field(default_factory=GroupMembers)
     remove: GroupMembers = Field(default_factory=GroupMembers)
     bet_id: str | None = Field(default=None, max_length=200)      # "" unlinks it from its bet (owner only)
+    lead: str | None = Field(default=None, max_length=200)        # `bot:<slug>` or `person:<id>`; "" = no lead
 
 
 class ReportOrder(Contract):
@@ -1776,6 +1790,13 @@ class BotFallbackChoice(Contract):
 class BotFallback(Contract):
     fallback: BotFallbackChoice | None = None
     expected_revision: int = Field(ge=1)
+
+
+class BotTurnsAtOnce(Contract):
+    # Required, as for a computer: omission is refused; null is no limit.
+    turns_at_once: int | None = Field(..., ge=1, le=256, strict=True,
+        description="Most turns this bot runs at once across all computers. Null is no limit.")
+    expected_revision: int
 
 
 class BotKeepTasksGoing(Contract):
@@ -2136,7 +2157,8 @@ class LoadSnapshot(Contract):
 
 
 class StartPlace(Contract):
-    waiting: Literal["", "shared login", "pre-start requirements"] = ""
+    # The reasons runner-rs reports while a claimed turn gives its computer place back (execute.rs wait_before_start).
+    waiting: Literal["", "shared login", "pre-start requirements", "Docker turn user"] = ""
 
 
 class Started(Contract):
@@ -2231,6 +2253,7 @@ class RunUsage(RunUsagePart):
 
 
 class UsageLimit(Contract):
+    per_30m_usd: float | None = None
     hourly_usd: float | None = None
     daily_usd: float | None = None
     weekly_usd: float | None = None
@@ -2337,28 +2360,10 @@ class BotPlace(Contract):
     computer: str = Field(default="", max_length=200)
 
 
-# The `routines` of a go-live (`hub bot go-live --routines-file`): the bot's live Routines as they must be before it is
-# turned on. Each names an existing Routine by its id; nothing is created. Shown in help and in a refusal of a bad file.
-ROUTINES_SHAPE = ('a JSON array of objects, one per live Routine: [{"id": "<bot>:<routine>", "title": "Weekday review", '
-                  '"cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "enabled": true}]. id, title and timezone '
-                  'are required; cron (default "") and on (an event name, default "") say when it runs; enabled defaults '
-                  'to true; no other fields')
-
-
-class RoutineExpectation(Contract):
-    id: ID
-    title: str
-    cron: str = ""
-    timezone: str
-    enabled: bool = True
-    on: str = ""
-
-
 class BotGoLive(Contract):
     """Place it if it has no computer, activate it, and start its setup with the person."""
     computer: str = Field(default="", max_length=200)
     setup: bool = True
-    routines: list[RoutineExpectation] | None = None
 
 
 class TaskSnooze(Contract):

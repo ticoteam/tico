@@ -4,7 +4,8 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import auto_tasks, agents, execution, lifecycle, pipeline_stats, profiles, rooms, update_feeds, views, task_models, wake_presets
+from backend import (auto_tasks, agents, execution, lifecycle, pipeline_stats, profiles, rooms, start_places,
+                     update_feeds, views, task_models, wake_presets)
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -60,6 +61,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "compact_at": compact_at_of(declared),
                     "task_model": task_models.of(declared),
                     "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
+                    "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
                     "wake": wake_presets.effective(declared),

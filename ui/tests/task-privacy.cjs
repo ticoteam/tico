@@ -76,10 +76,6 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/me') return json(me);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: [
-        {id: 'weekly-review', title: 'Review customer signals', employee: 'cmo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'release-review', title: 'Review release readiness', employee: 'cpo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'build-review', title: 'Review build health', employee: 'cto', cron: '0 9 * * 1', active: true, enabled: true, next: now}]});
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]]});
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});

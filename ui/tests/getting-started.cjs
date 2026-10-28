@@ -129,13 +129,13 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.waitForFunction(() => location.hash === '#/tasks');
     await page.close();
 
-    // ---- Market: an empty market is the page's own empty state: the Librarian asks four questions, one at a
+    // ---- Market (its Players view): an empty market is the page's own empty state: the Librarian asks four questions, one at a
     // time, kept as answered so the owner can skip and pick up again; the last asks for research, and a notice
     // shows until the market has content
     page = await context.newPage();
     await page.clock.install();
     page.on('pageerror', e => errors.push('market: ' + e.message));
-    await page.goto('http://tico-ui.test/#/market');
+    await page.goto('http://tico-ui.test/#/strategy/market/players');
     await ready(page);
     const box = page.locator('#market-shell [data-market-setup]');
     const asked = () => box.locator('h1').textContent();
@@ -237,7 +237,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       page = await context.newPage();
       await page.addInitScript(([ago]) => localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - ago * 60000, task: 't-market', base: '0|'})), [minutes]);
       page.on('pageerror', e => errors.push('market-old: ' + e.message));
-      await page.goto('http://tico-ui.test/#/market');
+      await page.goto('http://tico-ui.test/#/strategy/market/players');
       await page.locator('#market-shell ' + shows).waitFor();
       await page.evaluate(() => localStorage.removeItem('tico.market.researching'));
       await page.close();
@@ -249,7 +249,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     page = await context.newPage();
     page.on('pageerror', e => errors.push('market-open: ' + e.message));
     await page.addInitScript(() => { if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - 31 * 60000, task: 't-market', base: null})); } });
-    await page.goto('http://tico-ui.test/#/market');
+    await page.goto('http://tico-ui.test/#/strategy/market/players');
     await page.locator('#market-shell [data-market-setup]').waitFor();
     await page.reload();
     await page.locator('#market-shell [data-market-setup]').waitFor();
@@ -259,7 +259,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     page = await context.newPage();
     page.on('pageerror', e => errors.push('market-open: ' + e.message));
     await page.clock.install();
-    await page.goto('http://tico-ui.test/#/market');
+    await page.goto('http://tico-ui.test/#/strategy/market/players');
     await page.locator('#market-shell [data-market-researching]').waitFor();
     await page.clock.fastForward(2 * 60000);
     await page.locator('#market-shell [data-market-setup]').waitFor();
@@ -270,7 +270,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     // Back saves without waiting, but the writes go out in order: a slow Back save never lands after the Next
     // that followed it, so a reload resumes at the newer answer and place.
     setup = {...setup, answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, skipped: false, task: null};
-    page = await open('#/market');
+    page = await open('#/strategy/market/players');
     const shows = text => page.waitForFunction(text => document.querySelector('#market-shell h1')?.textContent === text, text);
     const form = page.locator('#market-shell [data-market-setup]');
     await shows('Who buys it?');
@@ -293,7 +293,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
 
     // Someone who is not the owner cannot ask: the empty market just says so.
     role = 'human';
-    page = await open('#/market');
+    page = await open('#/strategy/market/players');
     await page.locator('#market-shell .market-none').waitFor();
     assert.equal(await page.locator('#market-shell').textContent(), 'Nothing here yet.');
     assert.equal(await page.locator('[data-market-setup], [data-market-resume], #market-canvas').count(), 0);

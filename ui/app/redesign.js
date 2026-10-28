@@ -1,0 +1,160 @@
+/* ui/app/redesign.js — The app's shell (redesign PLAN §1, wave 1): the sidebar order, the Strategy tabs
+   (Market / Strategy / Org / Goals / Budget), the Strategy Bot's panel beside them, the moved pages and the old
+   addresses that lead to them.
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+'use strict';
+
+const RD_GOALS = '#/strategy/goals', RD_ORG = '#/strategy/org', RD_BUDGET = '#/strategy/budget';
+const RD_LISTENING = '#/strategy/market/listening', RD_AUTOMATIONS = '#/automations';
+const rdUnder = (r, base) => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
+// Where Goals lives: a Strategy tab.
+const goalsBase = () => RD_GOALS;
+
+// One "?" per panel: the explanation a row would otherwise carry, on hover, focus or tap.
+const helpBubble = text => `<span class="rd-help" tabindex="0" role="button" aria-label="${esc(text)}">?<span class="rd-help-pop" role="tooltip">${esc(text)}</span></span>`;
+
+// ----------------------------------------------------------------- the sidebar
+// The rail is rearranged in place, once, not drawn again: the links keep their own badges and handlers (sidebar.js,
+// notices.js).
+let RD_NAV_DONE = false;
+const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag'};
+function redesignNav() {
+  const nav = $('#side .side-scroll');
+  if (!nav || RD_NAV_DONE) return;
+  RD_NAV_DONE = true;
+  const strategyLink = nav.querySelector('a[data-nav="strategy"]'), before = [...nav.children];
+  const pick = sel => nav.querySelector(sel);
+  const row = sel => pick(sel)?.closest('.nav-row') || pick(sel);
+  const link = (key, href, icon, label) => {
+    const a = Object.assign(document.createElement('a'), {className: 'nav-link', href, innerHTML: `<span class="nav-icon" aria-hidden="true">${icon}</span>${label}`});
+    a.dataset.nav = key;
+    return a;
+  };
+  const automations = link('automations', RD_AUTOMATIONS, RD_NAV_ICONS.automations, 'Automations');
+  const library = link('library', DOCS, RD_NAV_ICONS.library, 'Library'); library.classList.add('rd-lib-head');
+  // Library's pages fold under it: a chevron beside it, remembered in this browser (rdLibSync).
+  const libRow = document.createElement('div'); libRow.className = 'nav-row rd-lib-row';
+  const libToggle = Object.assign(document.createElement('button'), {type: 'button', className: 'rd-lib-toggle',
+    innerHTML: '<span class="section-chev" aria-hidden="true">›</span>'});
+  libToggle.setAttribute('aria-label', 'Library pages');
+  libToggle.setAttribute('aria-controls', 'rd-lib');
+  libToggle.onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
+  libRow.append(library, libToggle);
+  const subs = document.createElement('div'); subs.className = 'rd-lib'; subs.id = 'rd-lib';
+  const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
+  subs.append(...[pick('a[data-nav="docs"]'), pick('a[data-nav="meetings"]'), tools].filter(Boolean));
+  if (strategyLink) { strategyLink.setAttribute('href', MARKET_ROUTE); strategyLink.querySelector('.nav-icon').textContent = RD_NAV_ICONS.strategy; }
+  const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), row('a[data-nav="strategy"]'),
+    pick('a[data-nav="updates"]'), pick('a[data-nav="tasks"]'), pick('#nav-assistant'), automations, libRow, subs,
+    pick('#nav-botops'), pick('#nav-pins')].filter(Boolean);
+  const rest = before.filter(el => !order.includes(el) && !subs.contains(el));
+  nav.append(...order, ...rest);
+  rdLibSync();
+}
+// Library open or folded: what this browser chose, opened while a Library page is showing (a fold there holds until
+// the next visit). A browser that will not store it keeps Library open.
+const RD_LIB_KEY = 'tico.nav.library';
+const RD_LIB = {inside: false, was: false};
+const rdInLibrary = r => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r || '').split('?')[0], base));
+function rdLibRemember(open) { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
+const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
+function rdLibSync() {
+  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle');
+  if (!subs || !toggle) return;
+  const here = rdInLibrary(S.route);
+  if (here && !RD_LIB.was) RD_LIB.inside = true;
+  if (!here) RD_LIB.inside = false;
+  RD_LIB.was = here;
+  const open = rdLibOpen();
+  subs.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+// The current page's highlight for what the redesign adds or moves (sidebar.js asks, after its own checks).
+function redesignNavCurrent(nav) {
+  const r = S.route || '';
+  if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
+  if (nav === 'tools') return rdUnder(r, RD_TOOLS);
+  if (nav === 'strategy') return rdUnder(r, '#/strategy');
+  return false;
+}
+
+// Called by applyConfig (state.js) whenever config is read: boot, and the poll every two minutes.
+window.redesignApply = function redesignApply() {
+  document.documentElement.classList.add('redesign');
+  redesignNav();
+};
+
+// ----------------------------------------------------------------- routes
+// Runs before the router's own list (router.js); true when it handled the address.
+function redesignRoute(r) {
+  // Old addresses of what moved.
+  if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
+  if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
+  if (r === '#/library') { location.replace(DOCS); return true; }
+  if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0])) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
+  if (rdUnder(r, RD_AUTOMATIONS)) {
+    // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
+    if (typeof window.pageAutomations === 'function') window.pageAutomations();
+    else $('#main').innerHTML = '<div id="automations-root" class="rd-automations"></div>';
+    return true;
+  }
+  if (rdToolsRoute(r)) return true;
+  if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
+  if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
+  if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
+  if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
+  // Market opens on the latest briefing.
+  if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
+  return false;
+}
+// After every route: leave Automations' state when off its page, and put the Strategy Bot beside the Strategy tabs.
+function redesignAfterRoute() {
+  if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
+  if (!rdUnder(S.route || '', RD_TOOLS)) rdToolsStop();
+  rdLibSync();
+  syncStrategyBot();
+}
+
+// The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view.
+function redesignStrategyHead(tab) {
+  const on = tab === 'lenses' ? 'strategy' : tab;
+  const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
+    ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
+  const sub = on === 'strategy'
+    ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
+  return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
+      <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>
+        `<a href="${href}" data-strat-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
+      <span class="spacer"></span>${sub}<div class="strat-actions" id="strat-actions"></div></div>`;
+}
+
+// Org (ui/app/redesign-org.js), Market's Briefing and Listening (ui/app/redesign-market.js) are their own files.
+
+// ----------------------------------------------------------------- the Strategy Bot's panel
+// Beside every Strategy tab: a right rail on a desktop, a sheet behind a button on a phone. It stays mounted while
+// the tabs change, so a conversation and a half-typed message survive a switch; leaving Strategy stops it.
+let SBOT = null;            // {el, fab, rail}
+function syncStrategyBot() {
+  const want = rdUnder((S.route || '').split('?')[0], '#/strategy');
+  if (!want) {
+    if (SBOT) { SBOT.rail.stop?.(); SBOT.el.remove(); SBOT.fab.remove(); SBOT = null; }
+    return;
+  }
+  $('#main').classList.add('sbot-open');
+  if (SBOT?.el.isConnected) return;
+  const name = ceoBotName();
+  const el = document.createElement('aside');
+  el.id = 'sbot'; el.className = 'sbot'; el.setAttribute('aria-label', name);
+  el.innerHTML = `<header class="sbot-head"><span class="nav-icon" aria-hidden="true">auto_awesome</span><h2>${esc(name)}</h2>
+      <button class="sbot-close" type="button" aria-label="Close">✕</button></header><div class="sbot-body"></div>`;
+  const fab = document.createElement('button');
+  fab.type = 'button'; fab.id = 'sbot-fab'; fab.className = 'sbot-fab'; fab.setAttribute('aria-controls', 'sbot');
+  fab.innerHTML = `<span class="nav-icon" aria-hidden="true">auto_awesome</span><span>${esc(name)}</span>`;
+  document.body.append(el, fab);
+  const rail = {host: el.querySelector('.sbot-body')};
+  SBOT = {el, fab, rail};
+  fab.onclick = () => { el.classList.add('open'); el.querySelector('.p-text')?.focus(); };
+  el.querySelector('.sbot-close').onclick = () => el.classList.remove('open');
+  void goalManagerMount(rail);
+}

@@ -1,0 +1,272 @@
+/* ui/styles/automations.css — Automations (redesign, ui/app/automations*.js): the list, the flow, the editor, runs and
+   the BotOps chat. A computer shows list | flow | editor-or-bot; a phone shows one screen at a time
+   (#au-root[data-screen]: list, detail, bot) and the editor as a sheet.
+   The cascade runs in the order index.html links these files; keep rules in order. */
+#main.au-layout{max-width:none;padding:0;overflow:hidden;height:100%}
+.au{display:flex;flex-direction:column;height:100%;min-height:0}
+.au-ph{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
+.au-ph h1{margin:0;font-size:var(--t-lg);font-weight:650}
+.au-sp{flex:1}
+.au-sp-phone{display:none}
+.au-pad{padding:14px}
+.au-vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.au-body{flex:1;min-height:0;display:grid;grid-template-columns:304px minmax(0,1fr) var(--rail-right,340px)}
+.au [hidden]{display:none!important}
+
+/* the list */
+.au-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
+.au-s{padding:12px}
+.au-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 16px}
+.au-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.au-row{display:flex;align-items:center;gap:8px;padding-right:8px;border:1px solid transparent;border-radius:7px;min-height:32px}
+.au-row:hover{background:var(--surface)}
+.au-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.au-row a{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:6px 8px;color:var(--ink);text-decoration:none}
+.au-row .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-row.off .au-nm{color:var(--muted)}
+.au-sw{flex:none}
+
+/* the header */
+.au-c{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0}
+/* a narrow pane puts the spend limit and Flow/Runs on a second row, as a phone does, so the name stays whole */
+@media (min-width:761px){.au-c{container-type:inline-size}}
+@container (max-width:640px){.au-c .au-hd{flex-wrap:wrap}.au-c .au-hd2{order:10;flex-basis:100%}.au-hd2 .au-sp-phone{display:block;flex:1}}
+.au-hd{display:flex;align-items:center;flex-wrap:nowrap;gap:8px 10px;padding:10px 20px;min-height:53px;border-bottom:1px solid var(--line)}
+.au-hd:empty{border:0;padding:0;min-height:0}
+.au-name{margin:0;font-size:var(--t-lg);font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-own{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.au-hd>*:not(.au-name,.au-own){flex-shrink:0}
+.au-hd>.au-name{min-width:6em}
+.au-hd2{display:flex;align-items:center;gap:8px}
+.au-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm);line-height:18px;white-space:nowrap}
+button.au-chip{cursor:pointer}
+button.au-chip:hover{background:var(--surface2)}
+.au-chip .nav-icon{font-size:15px;width:15px;height:15px;color:var(--muted)}
+.au-ver{color:var(--muted)}
+.au-help{position:relative;flex:none;width:18px;height:18px;padding:0;border:1px solid var(--line);border-radius:50%;background:none;color:var(--muted);font-size:var(--t-xs);line-height:16px;cursor:pointer}
+.au-help:hover::after,.au-help.on::after{content:attr(data-help);position:absolute;top:calc(100% + 6px);right:-8px;width:200px;padding:6px 9px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);line-height:1.4;text-align:left;white-space:normal;z-index:20;pointer-events:none}
+.au-seg{display:inline-flex;background:var(--surface2);border-radius:8px;padding:2px}
+.au-seg a{padding:3px 12px;border-radius:6px;color:var(--muted);font-weight:600;font-size:var(--t-sm);text-decoration:none}
+.au-seg a[aria-selected="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.au-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border:0;border-radius:7px;background:none;color:var(--muted);cursor:pointer;text-decoration:none}
+.au-icon:hover{background:var(--surface2);color:var(--ink)}
+.au-icon .nav-icon{font-size:20px;width:20px;height:20px}
+.au-back,.au-botbtn{display:none}
+
+/* the flow */
+.au-pane{flex:1;min-height:0;overflow:auto;padding:16px 20px 48px}
+.au-track{max-width:620px}
+.au-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer}
+.au-card:hover{border-color:var(--g4)}
+.au-card.sel{border-color:var(--accent)}
+.au-card.off>*{opacity:.5}
+.au-card.off .au-sw{opacity:1}
+.au-trig{background:var(--surface2)}
+.au-cr{display:flex;align-items:center;gap:8px;min-height:22px}
+.au-cr>.nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-ct{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-tag{flex:none;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:600 var(--t-2xs)/16px var(--mono);letter-spacing:.04em;text-transform:uppercase}
+.au-tag.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.au-chips{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
+.au-c1{padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--bg);font-size:var(--t-sm);line-height:18px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.au-rule{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:var(--t-base)}
+.au-rule>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-rule .nav-icon{font-size:15px;width:15px;height:15px;color:var(--muted)}
+.au-pr{margin-top:6px;color:var(--muted);font-size:var(--t-base);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.au-ln{position:relative;display:flex;justify-content:center;align-items:center;height:24px}
+.au-ln::before{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:1px solid var(--line)}
+/* the "+" between steps: small, its hit area 36px wide; the gap it sits in lights it up, as does focus */
+.au-add{position:relative;width:20px;height:20px;padding:0;border:1px solid var(--g4);border-radius:50%;background:var(--bg);color:var(--muted);font-size:14px;line-height:17px;cursor:pointer;transition:transform var(--dur-fast,.12s) var(--ease,ease-out)}
+.au-add::after{content:"";position:absolute;inset:-8px}
+.au-ln:hover .au-add,.au-add:hover,.au-add:focus-visible{color:var(--accent);border-color:var(--accent);transform:scale(1.2)}
+.au-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* the end of a list: a line down to an Add step button */
+.au-ln-end{height:auto;padding-top:16px}
+.au-ln-end::before{bottom:auto;height:16px}
+.au-add-end{display:inline-flex;align-items:center;gap:6px;width:auto;height:32px;padding:0 12px 0 10px;border:1px dashed var(--g4);border-radius:8px;font:inherit;font-size:var(--t-sm);font-weight:600;line-height:1;white-space:nowrap}
+.au-add-end span{font-size:16px;font-weight:400}
+.au-add-end::after{content:none}
+.au-ln:hover .au-add-end,.au-add-end:hover,.au-add-end:focus-visible{border-style:solid;transform:none;background:var(--surface)}
+@media (hover:none){.au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}.au-ln:not(.au-ln-end){height:32px}}
+.au-paths{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(120px,1fr);gap:8px;margin-top:10px;overflow-x:auto;padding-bottom:4px}
+.au-pth{min-width:0;padding:8px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--surface) 55%,var(--bg))}
+.au-pth.fb{border-style:dashed}
+.au-pth>.au-chips{margin-top:6px}
+/* a narrow path column wraps its condition rather than cutting it */
+.au-pth .au-c1{white-space:normal;overflow-wrap:anywhere;border-radius:10px}
+.au-pname{padding:1px 8px;border:0;border-radius:6px;background:var(--ok-bg);color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
+.au-pth.fb .au-pname{background:var(--surface2);color:var(--muted)}
+.au-cond{color:var(--accent)}
+/* a step inside a path: the tag and a small switch on top, the name below on up to two lines */
+.au-pth .au-card{padding:7px 9px}
+.au-pth .au-cr{flex-wrap:wrap;row-gap:4px}
+.au-pth .au-cr>.au-sw{margin-left:auto}
+.au-pth .au-ct{order:3;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3}
+.au-pth .au-pr{font-size:var(--t-sm)}
+.au-pth input.au-sw{width:26px;height:16px;border-radius:8px}
+.au-pth input.au-sw::before{width:12px;height:12px}
+.au-pth input.au-sw:checked::before{transform:translateX(10px)}
+.au-dots{display:none}
+
+/* menus: "+" step types and ⋯ */
+.au-menu{position:absolute;z-index:30;min-width:180px;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.au-menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
+.au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+
+/* the side: an editor, else the BotOps chat */
+.au-side{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line)}
+.au-scrim{display:none}
+.au-grab{display:none}
+.au-ed{display:flex;flex-direction:column;min-height:0;height:100%}
+.au-edh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
+.au-edh h3{margin:0;font-size:var(--t-md)}
+.au-x{flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.au-x:hover{background:var(--surface2);color:var(--ink)}
+.au-edb{flex:1;min-height:0;overflow-y:auto;display:grid;align-content:start;gap:14px;padding:14px 16px}
+.au-edf{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
+.au-del{color:var(--fail)}
+.au-f{display:grid;gap:6px;min-width:0}
+.au-lb{color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.au-f textarea{min-height:150px}
+.au-rb{display:grid;gap:6px;padding:8px;border:1px solid var(--line);border-radius:8px}
+.au-rb.focus{border-color:var(--accent)}
+.au-rb.fb{border-style:dashed}
+.au-rbh{display:flex;align-items:center;gap:8px}
+.au-rbh select{width:auto}
+.au-ir{display:flex;align-items:center;gap:6px;min-width:0}
+.au-ir>:is(input,select){flex:1;min-width:0}
+.au-cond-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.7fr) minmax(0,1fr) 62px auto;gap:6px;align-items:center}
+/* the minimum confidence reads as a percent once filled in */
+.au-pct{position:relative;display:block;min-width:0}
+.au-pct input{width:100%;padding-right:20px}
+.au-pct::after{content:'%';position:absolute;right:8px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:var(--t-sm);pointer-events:none}
+.au-then{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.au-then .nav-icon{font-size:15px;width:15px;height:15px;color:var(--muted)}
+.au-then select{width:auto}
+.au-plus{justify-self:start;font-size:var(--t-sm);text-decoration:none}
+.au-chk{display:flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
+.au-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.au-eb{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:center;font-size:var(--t-sm)}
+.au-bar{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+.au-bar i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.au-vers{display:grid}
+.au-vr{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:var(--t-base)}
+.au-vr .muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-vr>:not(.muted){flex:none}
+
+/* the BotOps chat: a panel as the Strategy Bot's rail is, on the surface colour */
+.au-botp{display:flex;flex-direction:column;min-height:0;height:100%;background:var(--surface)}
+.au-bh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
+.au-bh h2{margin:0;font-size:var(--t-md);font-weight:600}
+.au-bav{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:var(--ok-bg);color:var(--accent);font-size:16px}
+.au-bm{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;padding:12px}
+.au-msgs{margin-top:auto;overflow-wrap:anywhere}
+/* the app's chat look, as Goals: the name once, inside the bubble */
+.au-msgs .conv-run.chat{border:0;padding:6px 0}
+.au-msgs .conv-run-head{display:none}
+.au-msgs .bubble{margin:0}
+.au-msgs .bubble.you{border:0}
+.au-msgs .bubble.bot.reply{background:transparent;border-radius:0}
+.au-berr{margin:0 12px}
+.au-bf{display:flex;align-items:center;gap:12px;padding:6px 12px 12px}
+.au-bf>.ask{flex:1 1 auto;min-width:0}
+.au-bf .au-blank{flex:none;color:var(--muted);text-decoration:none;font-size:var(--t-sm)}
+.au-bf .au-blank:hover{color:var(--ink)}
+.au-bf .au-blank[hidden]{display:none}
+/* the composer: one line, send inside it on the right (the shared pill without the question-card box) */
+.au-bf .ask{display:flex;flex-direction:column;gap:0;margin:0;padding:0;border:0;background:transparent}
+.au-bf .p-pill{flex-wrap:nowrap;align-items:flex-end;min-height:42px;padding:3px 3px 3px 14px;border-radius:21px}
+.au-bf .ask textarea{order:0;flex:1 1 auto;min-width:0;height:34px;max-height:120px;padding:6px 0}
+.au-bf .ask .p-send-icon{width:36px;height:36px;border-width:2px}
+.au-bf :is(.p-chips,.p-why,.p-slow,.p-hint):empty{display:none}
+.au-prop{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.au-prop-t{display:flex;align-items:center;gap:8px}
+.au-prop-x{margin:4px 0 8px;font-size:var(--t-base)}
+.au-prop-b{display:flex;align-items:center;gap:10px}
+.au-prop-b .linkish{color:var(--muted);text-decoration:none}
+.au-diff{margin:0 0 8px;padding:8px;border-radius:6px;background:var(--surface2);font:var(--t-sm)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.au-diff .add{color:var(--ok)}
+.au-diff .del{color:var(--fail)}
+
+/* runs */
+.au-runs{width:100%;border-collapse:collapse;font-size:var(--t-base)}
+.au-runs th{padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-label);font-weight:500;letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left}
+.au-runs td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.au-rr{cursor:pointer}
+.au-rr:hover{background:var(--surface)}
+.au-rt{white-space:nowrap;color:var(--muted)}
+.au-rt .nav-icon{font-size:16px;width:16px;height:16px;vertical-align:-3px;margin-right:2px}
+.au-ro{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.au-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--idle)}
+.au-dot.ok{background:var(--ok)}
+.au-dot.fail{background:var(--fail)}
+.au-dot.wait{background:var(--wait)}
+.au-rx td{padding:2px 8px 10px 30px;background:var(--surface)}
+.au-sl{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:var(--t-sm)}
+.au-sl .au-tag{min-width:58px;text-align:center}
+.au-sl>span:nth-child(2){flex:1;min-width:0}
+.au-more{display:flex;justify-content:center;padding:12px}
+
+@media (max-width:1099px) and (min-width:761px){.au-body{grid-template-columns:232px minmax(0,1fr) 300px}}
+
+/* a phone: one screen at a time, the editor a sheet from the bottom, the paths a swipe with dots */
+@media (max-width:760px){
+  #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
+  .au{height:auto;min-height:0}
+  .au-ph{padding:12px;border:0}
+  .au-body{display:block}
+  .au-list,.au-c,.au-side{display:none;border:0}
+  .au:not([data-screen="list"]) .au-ph{display:none}
+  .au[data-screen="list"] .au-list{display:flex}
+  .au[data-screen="detail"] .au-c{display:flex}
+  .au-s{padding:0 12px 8px}
+  .au-scroll{padding:0 12px 12px;overflow:visible}
+  .au-row{min-height:44px}
+  .au-row a{font-size:var(--t-md)}
+  .au-hd{padding:8px 12px;border:0;flex-wrap:wrap}
+  .au-back,.au-botbtn{display:inline-flex}
+  .au[data-screen="bot"] .au-botbtn,.au.ed-open .au-botbtn{display:none}
+  .au-back{margin-left:-6px}
+  .au-own,.au-hd>.au-sp{display:none}
+  .au-name{flex:1 1 0}
+  .au-hd2{order:10;flex-basis:100%}
+  .au-sp-phone{display:block;flex:1}
+  .au-icon{width:40px;height:40px}
+  .au-pane{padding:4px 12px 24px;overflow:visible}
+  /* room under the last row for the BotOps button */
+  .au-scroll,.au-pane{padding-bottom:76px}
+  .au-paths{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none}
+  .au-paths::-webkit-scrollbar{display:none}
+  .au-pth{flex:0 0 84%;scroll-snap-align:start}
+  .au-dots{display:flex;justify-content:center;gap:2px;margin-top:6px}
+  .au-dots button{position:relative;width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
+  .au-dots button::before{content:"";position:absolute;top:8px;left:7px;width:7px;height:7px;border-radius:4px;background:var(--g4)}
+  .au-dots button[aria-selected="true"]::before{left:3px;width:16px;background:var(--accent)}
+  .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
+  .au-ln:not(.au-ln-end){height:32px}
+  .au-add-end{height:40px;padding:0 16px 0 14px}
+  .au-menu{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
+  .au-menu button{min-height:44px}
+  /* the bot: its own screen above the tab bar */
+  .au[data-screen="bot"] .au-side{display:flex;height:calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom))}
+  .au-bh{border:0;padding:8px 12px}
+  .au-bf .ask textarea{font-size:16px}
+  .au-bf .p-pill{border-radius:21px;padding:3px 3px 3px 14px}
+  /* an editor: a sheet over the flow */
+  .au.ed-open .au-side{display:flex;position:fixed;z-index:41;left:0;right:0;bottom:0;height:auto;max-height:88dvh;border-radius:14px 14px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.4)}
+  .au.ed-open .au-ed{height:auto;max-height:88dvh}
+  .au-scrim{display:block;position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45)}
+  .au-grab{display:block;width:36px;height:4px;margin:8px auto 0;border-radius:2px;background:var(--g4)}
+  .au-edh{border:0;min-height:0;padding:8px 16px}
+  .au-edf{border:0;padding:8px 16px calc(12px + env(safe-area-inset-bottom))}
+  .au-save{flex:1;padding:10px 14px}
+  .au-cond-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 64px auto}
+  .au-cond-row>:first-child{grid-column:1/-1}
+  .au-runs thead{display:none}
+  .au-runs td{padding:10px 6px}
+  .au-rx td{padding:2px 6px 10px 22px}
+}
+.au-mono textarea{font-family:var(--mono,ui-monospace,monospace);font-size:12.5px}

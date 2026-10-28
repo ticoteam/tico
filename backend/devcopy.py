@@ -1,6 +1,7 @@
 """A dev server's database: a pruned copy of a real install that cannot act on the world.
 
     python -m backend.devcopy --from <database | s3://bucket/backups/<name>.sqlite> --to <path> [--days 30]
+        [--keep-automations]
 
 The source is only read. Every table is classified: EMPTY (it queues work, schedules it, lets a machine or a person
 in, or reaches an outside service: emptied), HISTORY (cut to the last `--days`) or KEEP. A table in none of them, one
@@ -12,6 +13,11 @@ replaced by values no token hashes to: bots, external agents, runners (also revo
 The key files that sit beside a database (backup.KEY_FILES) are never copied, so a credential row missed here still
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
+
+`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, task rules, incoming triggers,
+outgoing webhooks and automations; wake rules are always kept) so the one-time move to automations can be rehearsed on it.
+Their queues, deliveries and runs are still emptied, and their secrets replaced: no trigger URL, webhook signature or
+header of the live install works on the copy. Rehearsal mode still holds every timer.
 """
 import argparse
 import json
@@ -66,10 +72,20 @@ EMPTY = (
     "feed_walks", "feed_cursors", "feed_deliveries",
     # Which history rows are settled for SQL reads: the copy's own sweep settles its pruned history again.
     "read_index", "read_deps", "read_dirty",
+    # The redesign's automations act on a timer or a trigger (--keep-automations keeps the definitions); their runs,
+    # mail actions, effect keys, spend holds, held turn answers, daily counts and inbox send switches never; nor a
+    # migration snapshot (restoring it would act).
+    "automations", "automation_versions", "automation_runs", "automation_mail_actions", "automation_daily",
+    "automation_inboxes", "automation_effects", "automation_holds", "automation_turn_answers", "redesign_migrations",
+    # Task cap counts are today's sends; the caps themselves are kept.
+    "task_cap_sends", "task_cap_log",
 )
+# Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
+AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
+               "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since"}
+           "bot_status_history": "since", "audit_log": "at"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
@@ -89,17 +105,17 @@ KEEP = frozenset((
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
-    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "media_assets", "media_control", "meeting_brain", "meeting_comments",
+    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools",
+    "usage_limits", "usage_pools", "task_caps",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -120,18 +136,20 @@ def data_tables(c):
             and not any(t == v or t.startswith(v + "_") for v in virtual)}
 
 
-def unclassified(c):
-    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY)
+def unclassified(c, keep_automations=False):
+    kept = AUTOMATIONS if keep_automations else ()
+    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept)
 
 
 def quote(name):
     return '"' + name.replace('"', '""') + '"'
 
 
-def emptied(c):
-    """The tables this module empties that exist in `c`: EMPTY and every unclassified one (Litestream's included)."""
-    present = tables(c)
-    return [t for t in EMPTY if t in present] + unclassified(c)
+def emptied(c, keep_automations=False):
+    """The tables this module empties that exist in `c`: EMPTY and every unclassified one (Litestream's included);
+    with `keep_automations`, not the definitions in AUTOMATIONS."""
+    present, kept = tables(c), AUTOMATIONS if keep_automations else ()
+    return [t for t in EMPTY if t in present and t not in kept] + unclassified(c, keep_automations)
 
 
 def children(c, parent):
@@ -217,7 +235,21 @@ def fetch_bundle(url, directory, profile=None, region=None):
     return local
 
 
-def prune(c, days):
+def revoke_automation_secrets(c):
+    """Kept definitions open nothing: a trigger's URL secret hashes to no value, a signing secret and an outgoing
+    webhook's secret and headers are blank (the live install's would let the copy sign as it)."""
+    present = tables(c)
+    if "triggers" in present:
+        c.execute("UPDATE triggers SET secret_hash='devcopy-revoked:'||id")
+        if "signing_secret" in {r[1] for r in c.execute("PRAGMA table_info(triggers)")}:
+            c.execute("UPDATE triggers SET signing_secret=NULL")
+    if "webhooks" in present:
+        columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
+        c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
+                  + (", headers_json='[]'" if "headers_json" in columns else ""))
+
+
+def prune(c, days, keep_automations=False):
     """Empty what can act, revoke every token, cut history to `days`. Returns {table: rows removed}."""
     removed = {}
     present = tables(c)
@@ -226,9 +258,11 @@ def prune(c, days):
         count = c.execute(f"DELETE FROM {quote(table)}" + (" WHERE " + where if where else ""), args).rowcount
         removed[table] = removed.get(table, 0) + count
 
-    gone = emptied(c)
+    gone = emptied(c, keep_automations)
     for table in gone:
         delete(table)
+    if keep_automations:
+        revoke_automation_secrets(c)
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
     # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
     if "task_trash" in present:
@@ -249,7 +283,7 @@ def prune(c, days):
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
-        cleared = set(emptied(c)) | OWNED
+        cleared = set(emptied(c, keep_automations)) | OWNED
         for table, column in HISTORY.items():
             if table not in present:
                 continue
@@ -289,7 +323,7 @@ def prune(c, days):
     return {t: n for t, n in removed.items() if n}
 
 
-def build(source, dest, days=30, force=False):
+def build(source, dest, days=30, force=False, keep_automations=False):
     """Copy `source` (read-only) to `dest`, pruned. Returns ({table: rows removed}, [unclassified tables emptied])."""
     source, dest = Path(source).resolve(), Path(dest).resolve()
     if not source.is_file():
@@ -307,8 +341,8 @@ def build(source, dest, days=30, force=False):
             c.execute("BEGIN IMMEDIATE")
             for name, _ in triggers:
                 c.execute(f"DROP TRIGGER {quote(name)}")
-            loose = unclassified(c)
-            removed = prune(c, days)
+            loose = unclassified(c, keep_automations)
+            removed = prune(c, days, keep_automations)
             for _, sql in triggers:
                 c.execute(sql)
             c.execute("COMMIT")
@@ -323,13 +357,20 @@ def build(source, dest, days=30, force=False):
     with closing(sqlite3.connect(dest.as_uri() + "?mode=ro", uri=True)) as c:
         if c.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise SystemExit(f"devcopy: {dest} failed its integrity check")
-        left = [t for t in emptied(c) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
+        left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
                          "OR finished IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
+        present = tables(c)
+        if keep_automations and (
+                ("triggers" in present and c.execute("SELECT 1 FROM triggers WHERE secret_hash NOT LIKE "
+                                                     "'devcopy-revoked:%' LIMIT 1").fetchone())
+                or ("webhooks" in present and c.execute("SELECT 1 FROM webhooks WHERE secret<>'' OR secret_prev<>'' "
+                                                        "LIMIT 1").fetchone())):
+            raise SystemExit("devcopy: a kept trigger or webhook still has its secret")
     return removed, loose
 
 
@@ -381,6 +422,8 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8879, help="the loopback port written to server.env")
     parser.add_argument("--owner-email", default="", help="who signs in as owner (default: the copy's own owner)")
     parser.add_argument("--force", action="store_true", help="replace an existing copy that is not in use")
+    parser.add_argument("--keep-automations", action="store_true",
+                        help="keep routines, task rules, triggers, webhooks and automations (queues and secrets still go)")
     parser.add_argument("--profile", help="AWS profile for an s3:// bundle")
     parser.add_argument("--region", default="us-west-2", help="AWS region for an s3:// bundle")
     args = parser.parse_args(argv)
@@ -392,7 +435,7 @@ def main(argv=None):
         os.chmod(scratch, 0o700)
         source = (fetch_bundle(args.source, scratch, args.profile, args.region)
                   if args.source.startswith("s3://") else Path(args.source).expanduser())
-        removed, loose = build(source, dest, days=args.days, force=args.force)
+        removed, loose = build(source, dest, days=args.days, force=args.force, keep_automations=args.keep_automations)
     email = args.owner_email or owner_email(dest)
     env, token, url = write_environment(dest, args.port, email)
     if not email:

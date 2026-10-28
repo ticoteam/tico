@@ -48,13 +48,18 @@ const assistantName = () => {
 };
 const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The assistant, BotOps, the Librarian, the CEO Bot and the Task Manager are built in to every team: pause and rename
-// them, never archive or delete. The Task Manager's entry point is Settings > Rules, not the org chart.
+// them, never archive or delete. The Task Manager's entry point is Settings > System, not the org chart.
 const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager';
-// The CEO Bot (backend/ceo_bot.py, slug goal-manager) is on every install, at the top of the org chart, by the name the
-// owner gave it, else "CEO Bot". Its old name never shows: a roster read before the upgrade renamed it says "CEO Bot".
+// The Librarian (a helper, as BotOps is): its chat beside Library's pages and its settings from Docs; an install without one shows
+// neither.
+const librarianBot = () => (S.emps || []).find(e => e.name === 'librarian' && e.status !== 'archived' && e.status !== 'retired') || null;
+// The Strategy Bot (backend/ceo_bot.py, slug goal-manager) is on every install, at the top of the org chart, by the name
+// the owner gave it, else "Strategy Bot": its older default names ("CEO Bot", "Goal Manager") read so too.
+const ceoDefaultName = () => 'Strategy Bot';
+const ceoDefaultish = name => !name || name === 'Goal Manager' || name === 'CEO Bot';
 const ceoBotName = () => {
   const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
-  return name && name !== 'Goal Manager' ? name : 'CEO Bot';
+  return ceoDefaultish(name) ? ceoDefaultName() : name;
 };
 // "Hide from my chart" on the CEO Bot: one person's view (preference chart.hide_ceo_bot, backend/ceo_bot.py `hidden_for`).
 // The server leaves the chart unmoved for them and marks the CEO Bot's row `chart_hidden`; Goals, its chat and Settings >
@@ -158,6 +163,7 @@ function applyConfig(config) {
   renderVersionMessage();
   renderFeedbackAsk();
   document.documentElement.classList.toggle('no-support', S.config.support_on === false);
+  window.redesignApply?.();
   return S.config;
 }
 // Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill

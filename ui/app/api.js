@@ -3,7 +3,8 @@
 'use strict';
 
 const bytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(0)} KB` : n < 1073741824 ? `${(n/1048576).toFixed(1)} MB` : `${(n/1073741824).toFixed(1)} GB`;
-const apiErrorRaw = (j, r) => j.error?.detail || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
+// A task cap's 409 (redesign CONTRACT §1) says why in `message`; `error` is only its code.
+const apiErrorRaw = (j, r) => (j.error === 'task_cap' && j.message) || j.error?.detail || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
 const apiError = (j, r) => {
   const raw = apiErrorRaw(j, r);
   return String(raw).replace(/\. Rewrite the title\/body to fix these writing errors and retry\. Do not ask the human to waive formatting rules\./g, '. Please edit the title or details and try again.')

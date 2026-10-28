@@ -150,11 +150,15 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
                    "merge": ("repo", "pr"),
+                   # A bot's own task cap (backend/task_caps.py): the pair; per_day null asks to remove the cap.
+                   "task_cap": ("sender", "receiver"),
+                   # The redesign's other proposal (backend/proposals.py checks its whole shape): a spend limit.
+                   "spend_limit": (),
                    # A report to the Tico team (backend/support.py `file_approved`): the message, its hash, and whether
                    # the version and install ID go with it. Nothing else may: no email, no diagnostics bundle.
                    "support": ("message", "content_sha256")}
@@ -818,6 +822,37 @@ CREATE TABLE IF NOT EXISTS market_sources (
   created TEXT NOT NULL);
 """
 
+# Task caps (backend/task_caps.py, redesign/CONTRACT.md §1): the cap per sender and manager, every send (kept per task,
+# so a hand-over counts too), and the caps a bot proposes for a person to approve.
+TASK_CAPS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_caps(sender TEXT, receiver TEXT, per_day INTEGER, updated TEXT, updated_by TEXT,
+  PRIMARY KEY(sender, receiver));
+CREATE TABLE IF NOT EXISTS task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS task_cap_sends_pair ON task_cap_sends(sender, receiver, sent_at);
+"""
+
+# Every task cap send is kept (backend/task_caps.py): one row per task, sender, receiver and time, so a hand-over adds a
+# send and never replaces the one before it. `task_cap_sends` (one row per task) is copied in and no longer written.
+TASK_CAP_LOG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_cap_log(task_id TEXT NOT NULL, sender TEXT NOT NULL, receiver TEXT NOT NULL,
+  sent_at TEXT NOT NULL, PRIMARY KEY(task_id, sender, receiver, sent_at));
+CREATE INDEX IF NOT EXISTS task_cap_log_pair ON task_cap_log(sender, receiver, sent_at);
+INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at)
+  SELECT task_id, sender, receiver, sent_at FROM task_cap_sends
+  WHERE task_id IS NOT NULL AND sender IS NOT NULL AND receiver IS NOT NULL AND sent_at IS NOT NULL;
+"""
+
+# A pull request's last activity (CONTRACT section 6, PR find): the time of its newest GitHub pull_request, review or
+# review comment event. NULL on rows from before it, which read as their creation (automation_actions FIND).
+TASK_LINK_ACTIVITY_SCHEMA = """
+ALTER TABLE task_links ADD COLUMN activity_at TEXT;
+"""
+
+# Task trigger tables (rule_task_runs, rule_task_state) were added to RULE_EVENTS_SCHEMA after it shipped, so an
+# install that ran it earlier never got them and every task trigger failed quietly. Every statement is IF NOT EXISTS.
+RULE_TASK_TABLES_SCHEMA = "-- rule_task_runs, rule_task_state for installs that ran RULE_EVENTS_SCHEMA first\n" + RULE_EVENTS_SCHEMA
+
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -834,7 +869,9 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TRIGGERS_INCOMING_SCHEMA, HOOK_RELAY_SCHEMA,
               WEBHOOKS_SCHEMA, SLEEP_IDLE_SCHEMA,
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
-              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA]
+              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA,
+              TASK_CAPS_SCHEMA, TASK_CAP_LOG_SCHEMA, TASK_LINK_ACTIVITY_SCHEMA,
+              RULE_TASK_TABLES_SCHEMA]
 
 
 class Refused(Exception):
@@ -1400,15 +1437,20 @@ def _building(conn, task_id):
 
 
 def hook(conn, type, subject, data, actor, revision=None):
-    """Tell the outgoing webhooks (backend/webhooks.py) that `type` happened to `subject`, in the caller's write. `data`
-    is a function that makes the event's thin payload, called only when some endpoint is listening. Never raises: a
-    webhook problem must not undo or refuse the change that caused it."""
+    """Tell the outgoing webhooks (backend/webhooks.py) and the automations (backend/automations.py) that `type` happened
+    to `subject`, in the caller's write. `data` is a function that makes the event's thin payload, called only when
+    someone is listening. Never raises: a webhook problem must not undo or refuse the change that caused it."""
     try:
         from . import webhooks
         if webhooks.listening(conn):
             webhooks.publish(conn, type, subject, data(), actor, revision=revision)
     except Exception:
         logging.getLogger(__name__).warning("webhook event %s was not queued", type, exc_info=True)
+    try:
+        from . import automations
+        automations.on_event(conn, type, subject, data, actor)
+    except Exception:
+        logging.getLogger(__name__).warning("automations did not hear %s", type, exc_info=True)
 
 
 def _task_facts(conn, task_id, actor, **more):
@@ -5535,7 +5577,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None,
+                change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
@@ -5550,7 +5592,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `lane` picks the pipeline (company or product; default by the owner's team); the task
     joins the bottom of the owner's queue and of its step unless `top`.
     `number` keeps an imported task's number: a mover's (`mover`, as in `task_update`), and free.
-    `capped=False` files an urgent CEO Bot ask past its daily cap (goal_asks.urgent).
     `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
     (backend/blocker_asks.py) wakes when that ask is done.
     """
@@ -5566,9 +5607,6 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     _takes_tasks(conn, actor, target, title, parent_id)
     _learning(conn, actor, target)
-    from . import ceo_bot
-    if capped:
-        ceo_bot.check_cap(conn, actor, target)      # at most 5 a day in one person's Needs you (backend/ceo_bot.py)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
     if parent and review_gate.is_review(conn, parent, title):
@@ -5640,11 +5678,23 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         labels.append("qa")
     if labels and is_bot(actor) and not mover:
         _create_labels(conn, actor, labels)     # people, movers and the keeper as before
-    dup = _same_title(conn, "SELECT id,title FROM tasks WHERE requester=? AND owner=? "
-                            f"AND coalesce({TR.parent_sql()},'')=? "
-                            f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))}) ORDER BY created,id",
-                      (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (deduplicate or actor != KEEPER):
+    # An automation's turn is the same work as another only when its wake names the same run, step and record: two
+    # finds' items (or two runs) may share a title, and the title is never what makes a turn a duplicate.
+    turn = _turn_identity(wake_refs)
+    scope = ("SELECT id,title FROM tasks WHERE requester=? AND owner=? "
+             f"AND coalesce({TR.parent_sql()},'')=? "
+             f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))})")
+    if turn:
+        same_turn = " AND ".join(f"json_extract(m.refs_json,'$.{k}')=?" for k in AUTOMATION_TURN)
+        twins = _rows(conn.execute(
+            scope + f" AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=tasks.conversation_id AND {same_turn})"
+                    " ORDER BY created,id",
+            (requester, target, parent_id or "", *ACTIVE_STATUSES, *(turn[k] for k in AUTOMATION_TURN))))
+        dup = twins[0] if twins else None
+    else:
+        dup = _same_title(conn, scope + " ORDER BY created,id",
+                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
+    if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
         refuse(conn, actor, "duplicate", detail)
@@ -5794,6 +5844,18 @@ def _same_title(conn, sql, args, title):
     """The first row `sql` reads (id, title) whose title is `title` by title_key, or None."""
     key = title_key(title)
     return next((r for r in _rows(conn.execute(sql, args)) if title_key(r["title"]) == key), None)
+
+
+AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
+
+
+def _turn_identity(wake_refs):
+    """The run, step and record an automation turn's wake names (backend/automation_actions.py `start_turn`), or None
+    for any other task. Another action of the same automation (a create_task) names its run but not its step."""
+    refs = wake_refs or {}
+    if any(refs.get(k) in (None, "") for k in AUTOMATION_TURN):
+        return None
+    return {k: str(refs[k]) for k in AUTOMATION_TURN}
 
 
 def _retitle(conn, actor, row, title, owner, type_id):
@@ -8097,7 +8159,7 @@ def _approval_facts(row):
             "decision_owner": row.get("decision_owner")}
 
 
-def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
+def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, to=None):
     """Rule 6. One exact payload, one open request per payload, a human decides, spent once.
 
     A request replaces the asker's older undecided one it names (`supersedes`), and any it has open on the same task
@@ -8140,7 +8202,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
     if kind == "support" and is_human(actor):
         # A person's own report (their token, or the Assistant for them) is theirs to approve and is filed as them.
         owner = actor
-    owner = owner or human_actor(default_human(conn))
+    owner = to or owner or human_actor(default_human(conn))     # `to`: a redesign proposal's decider
     ts = now()
     ask = ("Send this to Tico support? " + _clip(payload["message"], 200) if kind == "support"
            else f"Approve this {kind}: " + _clip(text, 200))
@@ -8270,10 +8332,6 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         live = "idle"
     elif state in ("paused", "quarantined"):
         conn.execute("UPDATE bots SET state=? WHERE slug=?", (state, slug))
-        if state == "paused":
-            # Queued routine runs would only pile up while paused; a person's direct work stays.
-            from . import routines
-            routines.hold_for_paused_bot(conn, slug)
     row = {"bot": slug,
            "state": live if live is not None else (old or {}).get("state") or "idle",
            "focus": focus if focus is not None else (old or {}).get("focus") or "",

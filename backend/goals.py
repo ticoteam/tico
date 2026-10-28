@@ -157,7 +157,7 @@ def for_actor(conn, actor, roster=None, entries=None, archived=()):
                 seen.add(parent["id"])
                 above.append(parent)
     below = []
-    for report in reports_of(actor, roster, entries, archived):
+    for report in reports_of(actor, roster, entries, archived, True):
         below.extend(goals(conn, owner=report, live_only=True))
     company = goals(conn, owner=COMPANY, live_only=True) if not mine and not above else []
     return {"owner": actor, "goals": mine, "chain": above, "reports": below, "company": company}
@@ -174,14 +174,15 @@ def _actor(key):
     return H.bot_actor(rest) if head == "b" else H.human_actor(rest) if head == "p" else None
 
 
-def above(actor, roster, entries, archived=()):
+def above(actor, roster, entries, archived=(), bare_people=False):
     """Actors above this one on the org chart, nearest first: the same walk as
-    `people.manages`, over people and bots alike. Department groups are stepped through."""
+    `people.manages`, over people and bots alike. Department groups are stepped through. `bare_people`: the redesign's
+    switch (backend/people.py `org_parent`)."""
     kind = H.actor_kind(actor)
     if kind not in ("bot", "human"):
         return []
     out, seen = [], set()
-    parent = P.org_parent("bot" if kind == "bot" else "person", H.actor_id(actor), roster, entries, archived)
+    parent = P.org_parent("bot" if kind == "bot" else "person", H.actor_id(actor), roster, entries, archived, bare_people)
     while parent and parent not in seen:
         seen.add(parent)
         head, _, rest = parent.partition(":")
@@ -191,11 +192,11 @@ def above(actor, roster, entries, archived=()):
             parent = ("p:" + boss) if boss else ""
             continue
         out.append(_actor(parent))
-        parent = P.org_parent("person" if head == "p" else "bot", rest, roster, entries, archived)
+        parent = P.org_parent("person" if head == "p" else "bot", rest, roster, entries, archived, bare_people)
     return out
 
 
-def reports_of(actor, roster, entries, archived=()):
+def reports_of(actor, roster, entries, archived=(), bare_people=False):
     """Direct reports on the org chart: people whose boss this is, bots whose `reports_to` this
     is, and, for a person, the bots that hang under them or their department."""
     kind = H.actor_kind(actor)
@@ -209,12 +210,12 @@ def reports_of(actor, roster, entries, archived=()):
                 keys.add("g:" + gid)
     out = []
     for p in P.visible_people(roster):
-        if P.org_parent("person", p["id"], roster, entries, archived) in keys:
+        if P.org_parent("person", p["id"], roster, entries, archived, bare_people) in keys:
             out.append(H.human_actor(p["id"]))
     for slug in entries or {}:
         if slug in archived:
             continue
-        if P.org_parent("bot", slug, roster, entries, archived) in keys:
+        if P.org_parent("bot", slug, roster, entries, archived, bare_people) in keys:
             out.append(H.bot_actor(slug))
     return out
 

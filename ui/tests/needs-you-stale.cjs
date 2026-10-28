@@ -1,6 +1,7 @@
-// The Stale tickets card in Needs you (backend/stale_review.py): one card, a row per task with its reason and
-// suggestion; a row with nothing to accept has only Skip. Accept sends the task version its row showed, and Accept all
-// sends the rows on screen with theirs, so a suggestion that arrived after the card was drawn is never applied unseen.
+// The Stale tickets card in Needs you (backend/stale_review.py): one line in the list; a tap opens its card, a row per
+// task with its reason and suggestion; a row with nothing to accept has only Skip. Accept sends the task version its
+// row showed, and Accept all sends the rows on screen with theirs, so a suggestion that arrived after the card was
+// drawn is never applied unseen.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -10,9 +11,10 @@ const card = {kind: 'stale', id: 'stale:human:ana', title: 'Stale tickets: 3 sug
   created: new Date().toISOString(), need: 'decide',
   rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
     row('s-3', 't-3', 'Old chore three', 'done', 9)]};
-// The card already on screen follows the server (QA on v0.3.60: answered rows stayed, busy, until a reload). The
-// server here keeps the suggestions: Skip and Accept take a row out, Accept all takes the rows it names at the version
-// they showed and refuses one whose task moved on, and the list it hands back is what the card must draw.
+const KEY = 'stale:stale:human:ana';
+// The open card follows the server (QA on v0.3.60: answered rows stayed, busy, until a reload). The server here keeps
+// the suggestions: Skip and Accept take a row out, Accept all takes the rows it names at the version they showed and
+// refuses one whose task moved on, and the list it hands back is what the card must draw.
 async function answered(browser, viewport) {
   const {page, errors} = await open(browser, {hash: '#/tasks', viewport});
   const server = {rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
@@ -38,18 +40,19 @@ async function answered(browser, viewport) {
   const poll = () => page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });   // what the live poll does
   await poll();
   await page.locator('#task-view [data-view="foryou"]').click();
-  const shown = page.locator('[data-group="stale"] details[data-stale-card]');
+  await page.locator(`[data-need-card="${KEY}"]`).click();
+  const shown = page.locator('#need-card [data-stale-card]');
   await shown.first().waitFor();
   await shown.evaluate(el => { el.__drawn = true; });
-  const look = () => page.evaluate(() => {
-    const el = document.querySelector('[data-group="stale"] details[data-stale-card]');
-    return el && {same: !!el.__drawn, open: el.open, title: el.querySelector('.req-text').textContent.trim(),
-      count: document.querySelector('[data-group="stale"] .tl-gcount').textContent.trim(),
+  const look = () => page.evaluate(key => {
+    const el = document.querySelector('#need-card [data-stale-card]');
+    const all = [...document.querySelectorAll('#need-card [data-stale-all]')];
+    return el && {same: !!el.__drawn, title: document.querySelector('#need-card .dc-q').textContent.trim(),
+      count: document.querySelector(`[data-need-card="${key}"] .tl-folded`)?.textContent.trim() ?? null,
       rows: [...el.querySelectorAll('[data-stale-row]')].map(li => `${li.dataset.staleRow}@${li.dataset.staleVersion}`),
-      busy: [...el.querySelectorAll('button')].filter(b => b.disabled || b.textContent === '…').length,
-      all: el.querySelectorAll('[data-stale-all]').length,
-      focus: document.activeElement?.closest?.('[data-stale-row]')?.dataset.staleRow || (el.contains(document.activeElement) ? 'card' : '')};
-  });
+      busy: [...el.querySelectorAll('button'), ...all].filter(b => b.disabled || b.textContent === '…').length,
+      all: all.length, focus: document.activeElement?.closest?.('[data-stale-row]')?.dataset.staleRow || ''};
+  }, KEY);
   const settle = async (want, what) => {
     let now;
     for (let i = 0; i < 250; i++) { now = await look(); if (want(now)) return now; await page.waitForTimeout(20); }
@@ -58,26 +61,18 @@ async function answered(browser, viewport) {
   const button = (id, decision) => shown.locator(`[data-stale-row="${id}"] [data-stale-decision="${decision}"]`);
 
   await button('s-2', 'skip').click();
-  let now = await settle(v => v.rows.length === 2, 'Skip takes the row out of the card on screen');
+  let now = await settle(v => v.rows.length === 2 && v.count === '2' && v.busy === 0 && v.focus === 's-3', 'Skip takes the row out of the card on screen');
   assert.deepEqual(sent.shift(), ['s-2', {decision: 'skip'}]);
-  assert.deepEqual(now, {same: true, open: true, title: 'Tico: Stale tickets: 2 suggestions', count: '2', rows: ['s-1@4', 's-3@9'],
-    busy: 0, all: 1, focus: 's-3'}, 'the same card, still open, title and count follow, nothing left busy, focus on the next row');
+  assert.deepEqual(now, {same: true, title: 'Stale tickets: 2 suggestions', count: '2', rows: ['s-1@4', 's-3@9'],
+    busy: 0, all: 1, focus: 's-3'}, 'the same card, title and count follow, nothing left busy, focus on the next row');
 
-  // A suggestion arrives while the person has the card shut: it joins the card, which stays shut.
-  await shown.locator('summary').click();
-  assert.equal((await look()).open, false);
-  server.rows.push(row('s-4', 't-4', 'Old chore four', 'done', 1));
-  await poll();
-  now = await look();
-  assert.deepEqual([now.same, now.open, now.title, now.count, now.rows], [true, false, 'Tico: Stale tickets: 3 suggestions', '3', ['s-1@4', 's-3@9', 's-4@1']],
-    'a live suggestion is drawn in the open card, and a card the person shut stays shut');
-  await shown.locator('summary').click();
-  // And one that arrives while a row's button has the focus leaves the focus where it was.
+  // A suggestion arrives while the card is open: it joins the card, and the focus stays on the row it was on.
   await button('s-3', 'skip').focus();
   server.rows.push(row('s-5', 't-5', 'Old chore five', null, 3));
   await poll();
   now = await look();
-  assert.deepEqual([now.rows, now.focus], [['s-1@4', 's-3@9', 's-4@1', 's-5@3'], 's-3'], 'focus stays on the row it was on');
+  assert.deepEqual([now.same, now.title, now.rows, now.focus], [true, 'Stale tickets: 3 suggestions', ['s-1@4', 's-3@9', 's-5@3'], 's-3'],
+    'a live suggestion is drawn in the open card; focus stays');
 
   // One row goes and another comes in the same redraw, so the count stays: the row with the focus is the same
   // element, and the same button still has the focus.
@@ -87,46 +82,45 @@ async function answered(browser, viewport) {
   server.rows.push(row('s-7', 't-7', 'Old chore seven', 'done', 1));
   await poll();
   now = await look();
-  assert.deepEqual([now.same, now.title, now.count, now.rows], [true, 'Tico: Stale tickets: 4 suggestions', '4', ['s-3@9', 's-4@1', 's-5@3', 's-7@1']]);
+  assert.deepEqual([now.same, now.title, now.count, now.rows], [true, 'Stale tickets: 3 suggestions', '3', ['s-3@9', 's-5@3', 's-7@1']]);
   assert.deepEqual(await page.evaluate(() => {
-    const li = document.querySelector('[data-stale-card] [data-stale-row="s-3"]'), f = document.activeElement;
+    const li = document.querySelector('#need-card [data-stale-row="s-3"]'), f = document.activeElement;
     return {row: !!li.__kept, button: !!f.__kept, focused: [f.closest('[data-stale-row]')?.dataset.staleRow, f.dataset.staleDecision]};
   }), {row: true, button: true, focused: ['s-3', 'accept']}, 'an equal-count update keeps the focused row and button');
 
   await button('s-7', 'accept').click();
-  now = await settle(v => !v.rows.includes('s-7@1'), 'Accept takes only its own row out');
+  now = await settle(v => !v.rows.includes('s-7@1') && v.count === '2' && v.busy === 0, 'Accept takes only its own row out');
   assert.deepEqual(sent.shift(), ['s-7', {decision: 'accept', version: 1}]);
-  assert.deepEqual([now.same, now.title, now.count, now.rows, now.busy], [true, 'Tico: Stale tickets: 3 suggestions', '3', ['s-3@9', 's-4@1', 's-5@3'], 0]);
+  assert.deepEqual([now.same, now.title, now.count, now.rows, now.busy], [true, 'Stale tickets: 2 suggestions', '2', ['s-3@9', 's-5@3'], 0]);
 
-  // Accept all: s-4's task moved on before the click (refused, the row stays at its new version), and s-6 arrived
+  // Accept all: s-3's task moved on before the tap (refused, the row stays at its new version), and s-6 arrived
   // after the card was drawn (not applied, drawn after the answer).
-  server.rows.find(r => r.id === 's-4').version = 2;
+  server.rows.find(r => r.id === 's-3').version = 10;
   server.rows.push(row('s-6', 't-6', 'Old chore six', 'done', 1));
-  await shown.locator('[data-stale-all]').click();
-  now = await settle(v => !v.rows.includes('s-3@9'), 'Accept all takes the accepted rows out');
-  assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-3', version: 9}, {id: 's-4', version: 1}]}]);
-  assert.deepEqual([now.same, now.title, now.count, now.rows, now.busy, now.all],
-    [true, 'Tico: Stale tickets: 3 suggestions', '3', ['s-4@2', 's-5@3', 's-6@1'], 0, 1],
+  await page.locator('#need-card [data-stale-all]').click();
+  now = await settle(v => v.rows.includes('s-6@1') && v.busy === 0, 'Accept all draws the list the server hands back');
+  assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-3', version: 9}]}]);
+  assert.deepEqual([now.same, now.title, now.rows, now.busy, now.all],
+    [true, 'Stale tickets: 3 suggestions', ['s-3@10', 's-5@3', 's-6@1'], 0, 1],
     'refused row at its new version, the late row drawn, Accept all ready again');
 
-  // Accept all refused for every row: the list comes back the same, so the card is not redrawn, and Accept all is
-  // ready again as itself, not left busy.
+  // Accept all refused for every row: the list comes back the same, and Accept all is ready again as itself.
   server.refuseAll = true;
-  await shown.locator('[data-stale-all]').click();
+  await page.locator('#need-card [data-stale-all]').click();
   for (let i = 0; i < 250 && !sent.length; i++) await page.waitForTimeout(20);
-  assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-4', version: 2}, {id: 's-6', version: 1}]}]);
+  assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-3', version: 10}, {id: 's-6', version: 1}]}]);
   now = await settle(v => v.busy === 0, 'Accept all refused for every row is ready again');
-  assert.deepEqual([now.same, now.title, now.rows, now.all], [true, 'Tico: Stale tickets: 3 suggestions', ['s-4@2', 's-5@3', 's-6@1'], 1]);
-  assert.equal((await shown.locator('[data-stale-all]').textContent()).trim(), 'Accept all');
-  assert.equal(await shown.locator('[data-stale-all]').isEnabled(), true);
+  assert.deepEqual([now.same, now.rows, now.all], [true, ['s-3@10', 's-5@3', 's-6@1'], 1]);
+  assert.equal((await page.locator('#need-card [data-stale-all]').textContent()).trim(), 'Accept all');
   server.refuseAll = false;
 
-  for (const id of ['s-4', 's-5', 's-6']) {
+  for (const id of ['s-3', 's-5', 's-6']) {
     await button(id, 'skip').click();
     await settle(v => !v || !v.rows.some(r => r.startsWith(id + '@')), `Skip ${id}`);
   }
-  assert.equal(await shown.count(), 0, 'the last answer takes the card away');
-  assert.equal(await page.locator('[data-group="stale"]').count(), 0);
+  // The last answer takes the card away: nothing else waits, so the card says so, and the line leaves the list.
+  await page.locator('#need-card .dc-done').waitFor();
+  assert.equal(await page.locator(`[data-need-card="${KEY}"]`).count(), 0);
   assert.deepEqual(errors, []);
   await page.close();
 }
@@ -144,10 +138,15 @@ async function answered(browser, viewport) {
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
     await page.locator('#task-view [data-view="foryou"]').click();
-    const shown = page.locator('[data-group="stale"] details[data-stale-card]');
-    await shown.first().waitFor();
-    assert.equal(await shown.count(), 1, 'one card for every suggestion');
-    assert.equal((await shown.locator('.req-text').textContent()).trim(), 'Tico: Stale tickets: 3 suggestions');
+    // One line, Tico's, with its count; nothing unfolds in the list.
+    const line = page.locator(`#task-body [data-need-card="${KEY}"]`);
+    assert.equal(await line.count(), 1, 'one line for every suggestion');
+    assert.equal((await line.locator('.tl-title').textContent()).trim(), 'Tico: Stale tickets: 3 suggestions');
+    assert.deepEqual(await line.locator('.tl-chips > *').allTextContents(), ['Stale check', '3']);
+    assert.equal(await page.locator('#task-body details').count(), 0);
+    await line.click();
+    const shown = page.locator('#need-card [data-stale-card]');
+    await shown.waitFor();
     const rows = shown.locator('[data-stale-row]');
     assert.equal(await rows.count(), 3);
     assert.equal(await rows.nth(1).locator('[data-stale-decision="accept"]').count(), 0, 'nothing to accept: Skip only');
@@ -157,12 +156,12 @@ async function answered(browser, viewport) {
     for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(sent.shift(), ['s-1', {decision: 'accept', version: 4}], 'Accept names the version the row showed');
 
-    // A suggestion reaches the page's list but is not drawn before the click: Accept all sends what is on screen.
-    // Keep the push and click in one page turn so a live refresh cannot redraw it between those two actions.
+    // A suggestion reaches the page's list but is not drawn before the tap: Accept all sends what is on screen.
+    // Keep the push and tap in one page turn so a live refresh cannot redraw it between those two actions.
     await page.evaluate(() => {
       const it = S.v2.needs.find(x => x.kind === 'stale');
       it.rows.push({id: 's-4', task: 't-4', title: 'Unseen', status: 'open', reason: 'x', suggest: 'Mark done', action: 'done', version: 1});
-      document.querySelector('[data-stale-all]').click();
+      document.querySelector('#need-card [data-stale-all]').click();
     });
     for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-1', version: 4}, {id: 's-3', version: 9}]}],
@@ -170,7 +169,7 @@ async function answered(browser, viewport) {
     assert.deepEqual(errors, []);
     await page.close();
     for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) await answered(browser, viewport);
-    console.log('Needs you stale card: one card, Skip-only rows, Accept and Accept all send what the card showed;'
-      + ' an answered row leaves the card drawn, a live suggestion joins it, open or shut and focus kept (desktop + phone)');
+    console.log('Needs you stale card: one line, its card has Skip-only rows, Accept and Accept all send what the card showed;'
+      + ' an answered row leaves the card drawn, a live suggestion joins it, focus kept (desktop + phone)');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

@@ -106,7 +106,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. **Deprecated: `tokens_in`, `tokens_out` and `cost`.** They are no longer written and the old rows keep their data. `tokens_in` and `tokens_out` were the runner's session counter (a resumed thread's running total, so each turn re-counted the whole session), which is why they run about 35x the real per-run figures; `cost` was never filled. Do not sum them. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
 | `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`turns.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
-| `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
+| `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
 | `events` | `ts, actor, action, target, detail_json` | the audit log; `action` such as `task.create`, `sql.query` |
 | `slack_posts` | `message_id, bot, state, attempts, next_attempt, slack_ts, created, updated` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs_json, '$.task')` for one task. Other callers receive no rows. |
 | `refusals` | `ts, actor, rule, detail_json, severity` | the rule a bot broke |
@@ -237,8 +237,8 @@ SELECT bot, sum(runs) AS runs, sum(input_tokens) AS input_tokens,
 FROM run_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY bot ORDER BY input_tokens DESC
 ```
 
-Which wake rule woke the runs, and how many of them did nothing (`rule_weekly`; the rules and their ids are on the
-Rules page and in `hub rule list`). A run from before rules reads `unknown`:
+Which wake rule woke the runs, and how many of them did nothing (`rule_weekly`; the rules are in the **What wakes**
+automations on the Automations page). A run from before rules reads `unknown`:
 
 ```sql
 SELECT rule, sum(runs) AS runs, sum(did_nothing) AS did_nothing,
@@ -276,7 +276,7 @@ SELECT created, from_actor, to_actor, substr(body, 1, 90) AS ask
 FROM messages WHERE kind='ask' AND created >= strftime('%Y-%m-%d', 'now') ORDER BY created DESC
 ```
 
-Routine outcomes, most recent first:
+Routine outcomes from before Automations, most recent first:
 
 ```sql
 SELECT s.bot, s.title, o.occurrence, o.outcome, t.status

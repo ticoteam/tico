@@ -1,8 +1,7 @@
 // The Updates chat (ui/app/updates-chat.js; spec: CEO Bot v3, section 10.8, tests 25 to 27): the person's own chat bot
 // in a right rail beside the feed, the same conversation as their menu tab; a question goes with `place: "updates"`;
 // a link in a reply scrolls to and highlights that update, switching the day or Daily/Weekly as needed, while the chat
-// stays; the header button hides it and that is remembered; its edge resizes it. On a phone the bot is in the menu and
-// the button opens the chat full screen; a link closes it first. Every request is intercepted (fixtures only).
+// stays; the header button hides it and that is remembered; its edge resizes it. On a phone the button opens the chat full screen; a link closes it first. Every request is intercepted (fixtures only).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -162,7 +161,8 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       assert.deepEqual(errors, []);
       await context.close();
     }
-    // Test 27, a phone: the owner's CEO Bot is in the menu; the Updates button opens it full screen; a link closes it.
+    // Test 27, a phone: the owner's Strategy Bot is not in the menu (it sits beside Strategy); the Updates button opens it
+    // full screen; a link closes it.
     {
       const ana = {id: 'ana', name: 'Ana', email: 'ana@example.test', role: 'owner', cloud: true};
       const chat = chatOf({bot: 'goal-manager', ceo: true, name: 'Chief', room_id: 'room-ana', messages: []});
@@ -171,8 +171,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();
       assert.ok(await page.locator('#upd-chat').isHidden(), 'no rail on a phone');
       await page.locator('#mobile-more').click();
-      await page.locator('#nav-assistant').waitFor({state: 'visible'});
-      assert.equal(await page.locator('#nav-assistant [data-nav-name]').innerText(), 'Chief', 'the CEO Bot in the menu, by its name');
+      assert.ok(await page.locator('#nav-assistant').isHidden(), 'the Strategy Bot is not in the menu');
       await page.keyboard.press('Escape');
       await page.evaluate(() => document.body.classList.remove('drawer'));
       await page.locator('#upd-chat-btn').click();

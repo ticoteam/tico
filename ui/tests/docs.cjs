@@ -84,7 +84,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(ui, p) : '';
       if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
       if (p === '/api/me') return json(me);
-      if (p === '/api/employees') return json([]);
+      if (p === '/api/employees') return json([{name: 'librarian', display_name: 'Librarian', status: 'active'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -139,15 +139,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         return route.fulfill({contentType: 'text/event-stream', body: 'event: snapshot\ndata: ' + JSON.stringify(snapshot) + '\n\n'});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      // A one-row market, so the Market page draws and Ask the Librarian answers from its graph.
-      if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', status: 'active'}]});
-      if (p === '/api/v2/market/entities/company/rival') return json({entity: {id: 'company/rival', type: 'company', name: 'Rival', summary: 'Sells to studios.'}, edges: [], evidence: []});
-      if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', degree: 0}], edges: []});
       if (p === '/api/company-docs') return json({documents: []});
-      if (p === '/api/v2/market/ask') {
-        requests.push({api: 'market/ask', body: req.postDataJSON()});
-        return json({answer: 'Rival competes on price [entity:company/rival].', citations: [{kind: 'entity', id: 'company/rival'}], excerpts: []});
-      }
       if (p === '/api/v2/setup/getting-started' && method === 'GET') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true,
         cards_dismissed: started.cards, can_build: true, owner: me.role === 'owner', empty: {docs: true, market: false, tasks: false, updates: false, goals: false, meetings: false, ...started.empty}});
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: true, cards: [], skipped: []});
@@ -259,6 +251,9 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
+    // The Librarian's settings sit in the page header, not as a gear beside Docs in the sidebar.
+    assert.equal(await page.locator('.docs-actions #docs-librarian-settings').getAttribute('href'), '#/bot/librarian/more');
+    assert.equal(await page.locator('#side .nav-row:has(a[data-nav="docs"]) .nav-librarian').count(), 0);
 
     // Desktop rail stays open while reading, streams answers and preserves collapse per viewer.
     assert.equal(await page.locator('[data-docs-ask]').getAttribute('role'), 'complementary');
@@ -348,33 +343,9 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(asked.section, '');
     assert.equal(await research.locator('a', {hasText: 'View task'}).getAttribute('href'), '#/task/task-research');
     await research.locator('button', {hasText: 'Close'}).click();
-
-    // Market: the same rail, its own thread, answered from the market graph; what it drew on opens the note.
-    const docsAsks = requests.filter(r => r.api === 'docs/ask').length;
-    await page.evaluate(() => { location.hash = '#/market'; });
-    await page.locator('#market-shell [data-librarian-open]').waitFor({state: 'attached'});
-    await page.locator('[data-docs-ask]').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about the market…');
-    assert.equal(await page.locator('.dask-history').isVisible(), false, 'Docs history stays out of Market');
-    assert.equal(await page.locator('[data-docs-ask] [data-turn]').count(), 0, 'Market has its own thread');
-    await page.locator('.dask-form textarea').fill('Who competes with us?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-cites .dask-cite', {hasText: 'Rival'}).waitFor();
-    assert.equal(requests.findLast(r => r.api === 'market/ask').body.question, 'Who competes with us?');
-    assert.equal(requests.filter(r => r.api === 'docs/ask').length, docsAsks);
-    assert.equal(await page.locator('[data-docs-ask] [data-answer]').innerText(), 'Rival competes on price.');
-    await page.locator('.dask-cites .dask-cite').click();
-    await page.waitForFunction(() => location.hash === '#/strategy/market?note=company%2Frival');
-    await page.locator('#market-read [data-market-research="company/rival"]').click();
-    await page.locator('form[data-research-form] textarea').fill('Find their pricing');
-    await page.locator('form[data-research-form] [type=submit]').click();
-    await page.locator('form[data-research-form] a', {hasText: 'View task'}).waitFor();
-    assert.equal(requests.findLast(r => r.api === 'librarian/research').body.target, 'company/rival');
-    await page.locator('form[data-research-form] button', {hasText: 'Close'}).click();
-    assert.equal(await page.locator('[data-docs-ask]').count(), 1, 'a citation opens the note beside the rail');
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about your docs…');
+    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask the Librarian…');
 
     // A narrow desktop still reserves space for the rail and lets a doc open.
     await page.setViewportSize({width: 1024, height: 860});

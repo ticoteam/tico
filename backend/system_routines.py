@@ -118,7 +118,6 @@ ACTIONS = {
     "start_task": ("start the highest-ranked eligible assigned task in its own session", ("task", "start", "assigned", "On Deck", "prerequisite")),
     "recover_assignment": ("wake an unattempted assignment once after one hour; show it in Health and its manager's Needs you two hours later",
                            ("task", "assigned", "not started", "wake", "health", "manager")),
-    "start_routines": ("start each bot routine that is due", ("routine", "start")),
     "free_dead_starts": ("free turns proven dead: process gone and lease lost, or stopped before they started",
                          ("turn", "start", "dead", "stuck", "free", "busy")),
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
@@ -148,8 +147,6 @@ ACTIONS = {
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
-    "suggest_notes": ("suggest making a rule a note when it mostly wakes a bot for nothing",
-                      ("rules", "wake", "note", "suggest", "no-op")),
     "triage_quiet": ("have Decide read its last messages: set the wait it names, close it if finished, or let one wake through",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
@@ -196,8 +193,6 @@ JOBS = [
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
-    Job("routine_timer", "Bot routine timer", "Starts each bot routine below when it is due.",
-        HOUSEKEEPING, "Every 10 seconds", 10, then=("start_routines",)),
     Job("stall_checks", "Stall checks",
         "Wakes the bot on a task nothing is moving, and drops queued work its bot can no longer read.",
         HOUSEKEEPING, "Every minute", 60, then=("wake_stalled", "drop_unreadable")),
@@ -246,10 +241,6 @@ JOBS = [
         HOUSEKEEPING, "Every 30 seconds", 30, records=False, then=("sync_meetings",)),
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
         HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
-    Job("propose_demotions", "Suggest quieter rules",
-        "Once a week, finds each wake rule that woke a bot and found nothing to do on over half of at least 20 runs, and "
-        "suggests making it a note in Settings > Rules. Nothing changes until a person applies it.",
-        CHECKS, "Weekly", 7 * 86400, control=True, then=("suggest_notes",)),
     Job("stall_triage", "Quiet task triage",
         "Before a stall check stays silent on a quiet task nothing has changed on, Decide reads its last messages: "
         "if it waits on someone it sets that wait, if it is finished it closes it, if it is stuck one wake goes through.",
@@ -294,14 +285,13 @@ CONTROLS = {
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
-    "propose_demotions": Control(presets=(WEEKLY,), preset=WEEKLY),
     "engineering_exceptions": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     "topic_fresh": Control(rule="topic_fresh"),
     "stall_triage": Control(rule="stall_triage"),
 }
 
 
-QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report", "propose_demotions",
+QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions")   # run by backend/scheduler.py QUICK
 
 

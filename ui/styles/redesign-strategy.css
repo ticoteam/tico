@@ -1,0 +1,119 @@
+/* Strategy content with the redesign on (ui/app/redesign-org.js, ui/app/redesign-market.js): the org chart, Market's
+   Briefing and Listening. Every rule keys off a class only that code adds, so with the setting off none of it applies. */
+
+/* ---------------------------------------------------------------- Org: the chart */
+#main.rd-org-layout{display:flex;flex-direction:column}
+.rdo-wrap{position:relative;flex:none}
+.rdo-pane{position:relative;isolation:isolate;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 128px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.rdo-cv{width:max-content;margin:0 auto;padding:18px 14px 28px;--rdo-line:var(--g5)}
+.rdo-zoom{position:absolute;z-index:2;top:8px;right:8px;display:flex;gap:4px}
+.rdo-pane.dragging{cursor:grabbing;user-select:none}
+.rdo-zoom button{width:32px;height:32px;padding:0;border-radius:8px;background:var(--surface2);font-size:var(--t-lg);line-height:1}
+
+.rdo-card{display:flex;flex-direction:column;justify-content:space-between;gap:4px;width:118px;min-height:54px;padding:6px 8px 5px;border:1px solid var(--raised);border-radius:9px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.rdo-card:hover{border-color:var(--muted)}
+.rdo-card:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.rdo-card b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--t-base);line-height:1.2;font-weight:600}
+.rdo-card.lead{border-color:var(--muted)}
+.rdo-card.top{width:150px;min-height:48px;background:color-mix(in srgb,var(--accent) 14%,var(--surface));border-color:var(--accent)}
+.rdo-card.top b{-webkit-line-clamp:1;font-size:var(--t-base)}
+.rdo-r{display:flex;align-items:center;gap:5px;min-width:0}
+.rdo-rl{font-size:var(--t-xs);line-height:1.2;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+/* The owner on top, a bus under them, a drop to each column. */
+.rdo-top{display:flex;justify-content:center}
+.rdo-top.has-row{position:relative;padding-bottom:14px}
+.rdo-top.has-row::after{content:"";position:absolute;left:50%;bottom:0;height:14px;border-left:1.5px solid var(--rdo-line)}
+.rdo-row{display:flex;align-items:flex-start;list-style:none;margin:0;padding:0}
+.rdo-row>li{position:relative;padding:14px 4px 0}
+.rdo-row>li::before{content:"";position:absolute;top:0;left:50%;height:14px;border-left:1.5px solid var(--rdo-line)}
+.rdo-row>li::after{content:"";position:absolute;top:0;left:0;right:0;border-top:1.5px solid var(--rdo-line)}
+.rdo-row>li:first-child::after{left:50%}
+.rdo-row>li:last-child::after{right:50%}
+.rdo-row>li:only-child::after{display:none}
+
+/* Reports under a card, on a rail; an elbow into each. */
+.rdo-stack{list-style:none;margin:0;padding:6px 0 0 16px}
+.rdo-stack>li{position:relative;--mid:27px}
+.rdo-stack>li.is-g{--mid:4px;margin-top:10px}
+.rdo-stack>li+li{margin-top:6px}
+.rdo-stack>li.is-g+li,.rdo-stack>li+li.is-g{margin-top:14px}
+.rdo-stack>li::before{content:"";position:absolute;left:-9px;top:-6px;width:9px;height:calc(var(--mid) + 6px);border-left:1.5px solid var(--rdo-line);border-bottom:1.5px solid var(--rdo-line);border-bottom-left-radius:4px}
+.rdo-stack>li:not(:last-child)::after{content:"";position:absolute;left:-9px;top:0;bottom:-14px;border-left:1.5px solid var(--rdo-line)}
+
+/* A group: a dashed outline, its name on a tab that folds it. */
+.rdo-g{position:relative;min-width:134px;padding:18px 8px 8px;border:1px dashed var(--line);border-radius:12px;background:color-mix(in srgb,var(--accent) 3%,transparent)}
+.rdo-g.folded{padding:14px 8px 2px}
+.rdo-g.folded>.rdo-gb{display:none}
+.rdo-tab{position:absolute;z-index:1;top:-11px;left:50%;transform:translateX(-50%);display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--muted);font:600 var(--t-2xs)/1 var(--sans);letter-spacing:var(--track-caps,.06em);text-transform:uppercase;white-space:nowrap;cursor:pointer}
+.rdo-tab:hover,.rdo-tab:focus-visible{color:var(--ink);border-color:var(--muted)}
+.rdo-tab .rdo-n{padding:1px 5px;border-radius:7px;background:var(--surface2);color:var(--ink);letter-spacing:0}
+.rdo-gb{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.rdo-gi.is-g{margin-top:10px}
+.rdo-gi.is-g+.rdo-gi:not(.is-g){margin-top:6px}
+
+.rdo-sheet .bd-field>span:last-child{color:var(--muted);text-align:right}
+.rdo-open{font-size:var(--t-sm)}
+
+@media (max-width:760px){
+  .rdo-pane{max-height:none}
+  .rdo-zoom button{width:36px;height:36px}
+}
+
+/* ---------------------------------------------------------------- Market › Briefing: a front page */
+/* On a phone the Strategy tabs come first, the view switch under them. */
+@media (max-width:760px){#main:is(.rd-brief-layout,.rd-listen-layout) .strat-actions{order:3}}
+/* The view switch scrolls inside its own strip, as on Players (market-spend.css). */
+#main:is(.rd-brief-layout,.rd-listen-layout) .strat-actions{min-width:0;max-width:100%}
+.rdb-host{max-width:760px}
+.rdb{display:flex;flex-direction:column;gap:6px;padding:14px 18px 12px;border:1px solid var(--raised);border-radius:10px;background:var(--surface);box-shadow:0 8px 22px rgba(0,0,0,.22);font-family:Georgia,"Times New Roman",serif}
+.rdb-mast{text-align:center;font-size:var(--t-xl);font-weight:700;line-height:1.1;padding-bottom:5px;border-bottom:3px double var(--ink)}
+.rdb-date{display:flex;justify-content:space-between;gap:8px;padding:1px 0 6px;border-bottom:1px solid var(--line);font:500 var(--t-xs)/1.2 var(--sans);color:var(--muted)}
+.rdb-hl{margin:2px 0 0;font-size:var(--t-xl);font-weight:700;line-height:1.2;color:var(--ink)}
+.rdb-deck{margin:0;font-size:var(--t-md);font-style:italic;line-height:1.4;color:var(--muted)}
+.rdb-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;padding-top:7px;border-top:1px solid var(--line);font:var(--t-base)/1.4 var(--sans)}
+.rdb-cols h3{margin:0 0 3px;font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps,.06em);text-transform:uppercase;color:var(--muted)}
+.rdb-cols p{margin:0 0 5px}
+.rdb-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:6px;border-top:1px solid var(--line);font:var(--t-sm)/1.3 var(--sans);color:var(--muted)}
+.rdb-foot a{color:var(--muted)}
+.rdb-foot a:hover{color:var(--ink)}
+@media (max-width:760px){.rdb{padding:12px 14px 10px}.rdb-hl{font-size:var(--t-lg)}}
+
+/* ---------------------------------------------------------------- Market › Listening */
+.rdm{display:flex;flex-direction:column;gap:6px;max-width:1000px}
+.rdm-hd{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:24px}
+.rdm-cap{font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps,.06em);text-transform:uppercase;color:var(--muted)}
+.rdm-leg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;font-size:var(--t-xs);color:var(--muted)}
+.rdm-leg>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.rdm-leg i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.rdm-lnk{padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);cursor:pointer;white-space:nowrap}
+.rdm-bars{display:flex;align-items:flex-end;height:130px;margin-top:22px;border-bottom:1px solid var(--line)}
+.rdm-col{position:relative;flex:1;height:100%;display:flex;justify-content:center}
+.rdm-stk{width:min(22px,60%);height:100%;display:flex;flex-direction:column-reverse}
+.rdm-stk span{display:block;width:100%;flex:none;border-top:1px solid var(--surface)}
+.rdm-spk{position:absolute;left:50%;transform:translateX(-50%);min-width:24px;height:20px;padding:0 6px;border-radius:10px;border:1px solid var(--ink);background:var(--bg);color:var(--ink);font:600 var(--t-xs)/1 var(--sans);font-variant-numeric:tabular-nums;cursor:pointer;z-index:1}
+.rdm-spk:hover,.rdm-spk:focus-visible{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.rdm-ax{display:flex;justify-content:space-between;height:18px;padding-top:3px;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.rdm-list{display:flex;flex-direction:column;margin-top:4px}
+.rdm-row{display:grid;grid-template-columns:16px minmax(0,1fr) auto 30px;gap:10px;align-items:center;min-height:30px;padding:0 6px;border-top:1px solid var(--line);font-size:var(--t-base);color:var(--ink);text-decoration:none;white-space:nowrap}
+a.rdm-row:hover{background:var(--surface2)}
+.rdm-row .nav-icon{font-size:16px}
+.rdm-t{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.rdm-d,.rdm-w{color:var(--muted);font-size:var(--t-sm);text-align:right;font-variant-numeric:tabular-nums}
+.rdm-d{max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.rdm-row.hl{background:var(--surface2);box-shadow:inset 2px 0 0 var(--accent)}
+.rdm-none{margin:10px 0 4px}
+.rdm-set{margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+@media (max-width:760px){
+  .rdm-row{grid-template-columns:16px minmax(0,1fr) 30px;min-height:40px}
+  .rdm-d{display:none}
+  .rdm-leg{margin-left:0;order:3;flex-basis:100%}
+  .rdm-lnk{margin-left:auto}
+}
+
+/* ---------------------------------------------------------------- Strategy and Goals */
+/* The Strategy Bot's rail sits beside every tab, so the Strategy tab drops its contents column and reads as one column,
+   as in the mock; the version line sits tight under the tabs. */
+html.redesign #main.strategy-layout .strat-grid{grid-template-columns:minmax(0,860px)}
+html.redesign #main.strategy-layout .strat-toc{display:none}
+html.redesign #main.strategy-layout .strat-meta{margin-bottom:4px}

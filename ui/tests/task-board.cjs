@@ -76,10 +76,6 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/me') return json(me);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: [
-        {id: 'weekly-review', title: 'Review customer signals', employee: 'cmo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'release-review', title: 'Review release readiness', employee: 'cpo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'build-review', title: 'Review build health', employee: 'cto', cron: '0 9 * * 1', active: true, enabled: true, next: now}]});
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/tasks/flow') {
         flowAsked.push(Object.fromEntries(url.searchParams));
@@ -207,7 +203,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.setViewportSize({width: 1200, height: 900});
     // Labelled tabs (no icon-only buttons), the selected one marked for screen readers.
     assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
-      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false'], ['Closed', 'false']]);
+      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Done', 'false'], ['Closed', 'false']]);
     assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
     await page.locator('#task-q').focus();
     await page.keyboard.press('Tab');
@@ -395,7 +391,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     }
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-board-mobile.png')});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no sideways scroll on a phone');
-    for (const [route, view] of [['#/board', 'board'], ['#/issues', 'list'], ['#/recurring', 'recurring']]) {
+    for (const [route, view] of [['#/board', 'board'], ['#/issues', 'list']]) {
       await page.goto('http://tico-ui.test/' + route);
       const activeCount = tasks.filter(task => task.lane === 'company' && !['done', 'closed'].includes(task.status)).length;
       await page.waitForFunction(({view, activeCount}) => TASKS_ST?.view === view && TASKS_ST.tasks.length === activeCount,

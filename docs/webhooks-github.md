@@ -36,7 +36,7 @@ In GitHub: your organization → Settings → Webhooks → Add webhook.
 - **Which events**: *Let me select individual events*, then tick **Issues** only.
 - Leave **Active** on, and save.
 
-GitHub sends a `ping` straight away. Tico accepts it and finds no rule for it, so nothing starts. You will see it in
+GitHub sends a `ping` straight away. Tico accepts it and finds no automation for it, so nothing starts. You will see it in
 **Recent calls** under the webhook, which also tells you the address and signature work. A red mark in GitHub's *Recent
 Deliveries* means Tico refused it; the answer GitHub shows says why (401 is a wrong secret, 404 a wrong address).
 
@@ -51,21 +51,24 @@ hub trigger update github --type-from /action
 
 Because this webhook only gets Issues events, the type is now one of `opened`, `closed`, `reopened`, `edited`, `labeled` and so on.
 
-## 5. Add the rule
+## 5. Add the automation
 
-In Settings → Rules, add a team rule on the event *Webhook received*, or:
+On the Automations page, add an automation with the Webhook trigger *GitHub issues*, or:
 
 ```
-hub rule set --scope-kind team --event webhook.received \
-  --when '{"trigger":"github","type":"opened"}' \
-  --then action \
-  --params '{"action":"wake_bot","bot":"ops","text":"New issue in {{data.repository.full_name}}: {{data.issue.title}}\n{{data.issue.html_url}}"}'
+hub automation create --file - <<'EOF'
+{"name": "New GitHub issue", "owner": "bot:ops", "enabled": true,
+ "trigger": {"type": "webhook", "id": "github",
+             "filters": [{"field": "webhook.type", "op": "is", "value": "opened"}]},
+ "steps": [{"id": "wake", "type": "action", "enabled": true, "do": "wake_bot",
+            "args": {"bot": "ops", "text": "New issue in {{webhook.data.repository.full_name}}: {{webhook.data.issue.title}}\n{{webhook.data.issue.html_url}}"}}]}
+EOF
 ```
 
 Only issues that are opened wake `ops`. Every other call is logged and does nothing.
 
-If you would rather keep GitHub's own event name, leave step 4 out, use `"type":"issues"` in the rule, and put
-`{{data.action}}` in the text so the bot sees which action it was.
+If you would rather keep GitHub's own event name, leave step 4 out, use `issues` in the filter, and put
+`{{webhook.data.action}}` in the text so the bot sees which action it was.
 
 ## 6. Try it
 
@@ -73,15 +76,15 @@ Open an issue in a repository of the organization. In a few seconds `ops` is wok
 and, fenced as data, the start of the call. If it does not wake:
 
 - Open **Recent calls**. No row means GitHub never reached Tico. A refused row means the signature or address is wrong.
-- A row marked accepted with no result means no rule matched. Open it with **View payload** and compare `type` and `trigger` to the
-  rule.
-- Fix the rule, then use **Run again** on that row. Do not use GitHub's *Redeliver*: it reuses the delivery id, which Tico treats
+- A row marked accepted with no result means nothing matched. Open it with **View payload** and compare `type` to the
+  automation's filter (`hub automation runs <id>` shows its runs).
+- Fix the automation, then use **Run again** on that row. Do not use GitHub's *Redeliver*: it reuses the delivery id, which Tico treats
   as a duplicate for 30 days.
 
 ## Variations
 
 - Wake the bot only for one repository's issues: add the repository to the bot's text and read it in the notice, or make the
   webhook on the repository instead of the organization.
-- Start a task instead of a wake: set a routine `--on webhook.github`. See [Routines](routines.md). A routine opens a task for
-  every call, so keep the GitHub event list short.
+- Start a task instead of a wake: use a Bot turn step instead of the action. See [Routines](routines.md). Without a filter it
+  opens a task for every call, so keep the GitHub event list short.
 - Read a long body: the bot runs `hub trigger delivery github <delivery> --part 2`.

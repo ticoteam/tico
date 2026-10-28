@@ -16,7 +16,7 @@ Every number is drawn from the scenario's seeded random generator, so a run repe
 import os
 from collections import Counter
 from .board import MERGE
-from .world import Refusal
+from .world import PRIMARY, Refusal
 
 TOKENS = {  # (cached input, uncached input, output) per kind of turn: a real team's averages over a week
     "work": (3_700_000, 90_000, 17_000),     # a Builder's run
@@ -58,6 +58,7 @@ class Bot:
         self.turns = []             # one dict per finished turn
         self.lost = []              # turns its computer lost going off, filed when it comes back
         self.unfinished = set()     # messages whose turn ended without an answer: running one again is a retry
+        self.runtime, self.held = PRIMARY, False   # where its turn runs: held, the turn runs on a fallback
 
     @property
     def token(self):
@@ -78,14 +79,22 @@ class Bot:
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
+        # Where the turn runs: its own login, or the fallback a hold sends it to (the runner's choice, made on the claim).
+        self.runtime, self.held = w.turn_runtime(attempt.get("job_id"))
         message = attempt.get("message") or {}
         refs = message.get("refs") or {}
         task = attempt.get("task")
         self.record = {"at": w.now(), "bot": self.slug, "news": refs.get("handoff") or refs.get("news") or refs.get("rule")
                        or message.get("kind"), "task": task and task["id"], "kind": "noise",
                        "stale": self.stale(task, message), "action": None,
-                       "text": str(message.get("body") or "").replace("\n", " ")}
+                       "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime,
+                       "attempt": attempt["id"],
+                       # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
+                       # returns it, since no input row is written for it.
+                       "prompt": message.get("id")}
         w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
+        if self.slug in w.steer_bots:
+            self.steer()
         self.ends = w.now() + __import__("datetime").timedelta(minutes=self.minutes(task))
 
     def minutes(self, task):
@@ -119,6 +128,17 @@ class Bot:
             self.unfinished.add(message.get("id"))
             record["kind"] = "limited"
             self.finish(attempt, "failed", limited=True, resets=self.limited_until, tokens=None)
+            return self.log(record)
+        hit = w.limit_next.pop(self.runtime, None)
+        if hit:
+            # The runtime hit its usage limit: its error line says so, and the login hold reads the reset from that line.
+            self.unfinished.add(message.get("id"))
+            record["kind"] = "limited"
+            w.limit_events(attempt, hit)
+            self.finish(attempt, "failed", limited=True, seq=1)
+            window = w.limit_window(self.slug)
+            if window:
+                w.limit_windows.append(window)
             return self.log(record)
         if self.chance("silent"):
             self.unfinished.add(message.get("id"))
@@ -161,11 +181,28 @@ class Bot:
         while self.lost:
             attempt = self.lost.pop()
             self.world.call("post", f"attempts/{attempt['id']}/complete",
-                            {"outcome": "interrupted", "text": "Runner restarted during execution", "last_seq": 0},
+                            {"outcome": "interrupted", "text": "Runner restarted during execution",
+                             "last_seq": attempt.get("last_seq", 0)},
                             token=self.world.runner["token"], ok=False)
 
+    def steer(self):
+        """Read the inputs queued for the turn as it starts (the runner's first poll, which the sim makes once per turn),
+        and ack each one as delivered to the runtime. The read does not answer them: a turn that ends on its limit leaves
+        its inputs unanswered, and a later run takes them over."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request("post", f"attempts/{attempt['id']}/inputs", {}, token=w.runner["token"])
+        if status >= 500:
+            return      # recorded by the world; the turn runs without them, and the run's checks report the error
+        if status >= 400:
+            raise Refusal(status, str(reply))
+        mids = [message["id"] for message in reply["messages"]]
+        w.input_reads.append((w.now(), self.slug, attempt["id"], mids))
+        for mid in mids:
+            w.call("post", f"attempts/{attempt['id']}/inputs/{mid}/ack", {}, token=w.runner["token"])
+
     def renew(self):
-        if self.running:
+        # A computer that is off sends nothing: its turn's lease lapses on the server, as a real lost computer's does.
+        if self.running and self.available:
             self.world.call("post", f"attempts/{self.attempt['id']}/renew", {}, token=self.world.runner["token"],
                             ok=False)
 
@@ -177,15 +214,20 @@ class Bot:
                   + ("" if record["task"] and not record["stale"] else f" [{record['text'][:90]}]"))
         return record
 
-    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None):
+    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0):
         w = self.world
-        body = {"outcome": outcome, "text": "done", "last_seq": 0, "limited": limited}
+        body = {"outcome": outcome, "text": "done", "last_seq": seq, "limited": limited}
         if resets:
             body["limit_resets_at"] = resets.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if self.held:
+            # A turn run on a fallback names it: without that the server reads the turn as one on the held login and
+            # clears the hold.
+            body["primary_held"], body["fallback"] = True, self.runtime
         if tokens:
             cached, fresh, out = tokens
             body["usage"] = {"input_tokens": fresh, "cached_tokens": cached, "output_tokens": out,
-                             "model": self.model, "runtime": "claude", "billing": "api"}
+                             "model": self.model, "runtime": self.runtime,
+                             "billing": "api"}
         w.post(f"attempts/{attempt['id']}/complete", body, token=w.runner["token"])
 
     def stale(self, task, message):

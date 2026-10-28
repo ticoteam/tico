@@ -13,12 +13,12 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Give work or review a result | Tasks → New task, List, Board or Done |
 | Talk to a bot about one task | Bot chat → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
-| Add or edit a Routine | Settings → Rules → New routine, or the bot's Routines card |
-| See what Tico runs on its own | Settings → Rules → What Tico runs on its own ([System routines](system-routines.md)) |
+| Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
+| See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
 | Receive a webhook, or send events out | Settings → Webhooks → Incoming or Outgoing ([Webhooks](webhooks.md)) |
 | Keep webhooks while the server is off | Settings → Webhooks → Through Tico Gateway |
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
-| See or change what wakes a bot | Settings → Rules → What wakes a bot, or a task's **Wake rules** line |
+| See or change what wakes a bot | Automations → What wakes bots, or What wakes <bot> |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |

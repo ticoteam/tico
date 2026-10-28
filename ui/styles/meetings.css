@@ -422,7 +422,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-join{margin:12px 0}.live-finalized{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:var(--t-base)}
 .live-status{min-height:1.5em;margin-top:8px;color:var(--muted);font-size:var(--t-sm)}
 @media(max-width:760px){
-  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button{padding:7px 9px;font-size:var(--t-sm)}
+  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:7px 9px;font-size:var(--t-sm)}
   .live-layout{grid-template-columns:1fr}.live-list{max-height:220px}
   .live-connect{align-items:stretch;flex-direction:column}.live-connect input{max-width:none}
   .live-card{padding:12px}.live-card-head{flex-direction:column}.live-controls{justify-content:flex-start}

@@ -201,7 +201,7 @@ async function access(browser) {
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
-  assert.equal(await page.locator('#bot-files, #bot-recurring, #bot-history, #bot-routines, #sess-card, #bot-updates-card').count(), 0);
+  assert.equal(await page.locator('#bot-files, #bot-history, #sess-card, #bot-updates-card').count(), 0);
   assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);
   await page.locator('#chat-composer .p-text').waitFor();
   await page.evaluate(() => { location.hash = '#/bot/intake/more'; });
@@ -229,6 +229,8 @@ async function roles(browser) {
     description: 'Add Sean (sean@example.test) to the roster, and let them sign in', summary: 'Add Sean (sean@example.test) to the roster',
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
+  // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
+  let turnsAtOnce = null, holdTurns = false, heldTurns = null;
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1,
     can_manage: true, ...extra});
@@ -255,7 +257,8 @@ async function roles(browser) {
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen: new Date().toISOString(),
-      platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts},
+      platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts, turns_at_once: turnsAtOnce,
+      turn_limit: 2, capacity: 2},
       {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen: new Date().toISOString(), platform: 'darwin', bots: [],
        readiness: {appdriver: {trusted: true, apps: {grok: {installed: true, signed_in: true, background_ok: true, ready: true, state: 'ready'}}}}}],
       agents: [], services: []});
@@ -265,6 +268,13 @@ async function roles(browser) {
     if (p === '/api/v2/bots/jira-manager/co-owners' && method === 'POST') { posts.push(['co-owners', request.postDataJSON()]); return json({}); }
     if (p === '/api/v2/computers/r1/member-bots' && method === 'POST') {
       posts.push(['member-bots', request.postDataJSON()]); accepts = request.postDataJSON().accepts; return json({});
+    }
+    if (p === '/api/v2/computers/r1/turns-at-once' && method === 'POST') {
+      posts.push(['turns-at-once', request.postDataJSON()]);
+      // A held save is answered by the test, so a change can land in the field while it is in flight.
+      if (holdTurns) { heldTurns = route; return; }
+      turnsAtOnce = request.postDataJSON().turns_at_once;
+      return json({turns_at_once: turnsAtOnce, turn_limit: 2});
     }
     if (p === '/api/v2/assistant/actions/act1' && method === 'GET') return json({action});
     if (p === '/api/v2/assistant/actions/act1/confirm' && method === 'POST') {
@@ -339,6 +349,51 @@ async function roles(browser) {
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);
   assert.deepEqual(posts.shift(), ['member-bots', {accepts: true}]);
+
+  // ---- Turns at once on that computer: empty is automatic, the runner's own count; a raised setting says the limit
+  // the runner keeps; a value that is not a whole number from 1 to 256 is named under the row and not sent.
+  const turns = page.locator('[data-turns-at-once=r1]'), turnsNote = page.locator('[data-turns-note]');
+  const pop = page.locator('#set-machines dialog.computer-detail [data-field-err]');
+  await turns.waitFor();
+  assert.equal((await turnsNote.innerText()).trim(), 'Automatic (2)');
+  await turns.fill('4');
+  await turns.dispatchEvent('change');
+  await page.waitForFunction(
+    () => document.querySelector('[data-turns-note]')?.textContent.includes('This computer runs at most 2'));
+  assert.deepEqual(posts.shift(), ['turns-at-once', {turns_at_once: 4}]);
+  await turns.fill('2');
+  await turns.dispatchEvent('change');
+  await page.waitForFunction(() => document.querySelector('[data-turns-note]')?.textContent.trim() === '');
+  assert.deepEqual(posts.shift(), ['turns-at-once', {turns_at_once: 2}],
+    'a setting equal to the limit is not named as a limit');
+  await turns.fill('');
+  await turns.dispatchEvent('change');
+  await page.waitForFunction(() => document.querySelector('[data-turns-note]')?.textContent.trim() === 'Automatic (2)');
+  assert.deepEqual(posts.shift(), ['turns-at-once', {turns_at_once: null}], 'empty posts null');
+  for (const value of ['300', '2.5']) {
+    await turns.fill(value);
+    await turns.dispatchEvent('change');
+    await pop.first().waitFor();
+    await page.waitForTimeout(100);
+    assert.deepEqual(posts, [], `${value} is not posted`);
+  }
+  await turns.fill('');
+  await turns.dispatchEvent('change');
+  assert.equal(await pop.count(), 0, 'the line clears once the value is valid');
+
+  // A change that lands while a save is in flight is not dropped: the field's value once that save
+  // answers is sent next.
+  holdTurns = true;
+  await turns.fill('3');
+  await turns.dispatchEvent('change');
+  await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.disabled === true);
+  await turns.evaluate(el => { el.value = '5'; el.dispatchEvent(new Event('change', {bubbles: true})); });
+  holdTurns = false;
+  heldTurns.fulfill({contentType: 'application/json', body: JSON.stringify({turns_at_once: 3, turn_limit: 2})});
+  for (let i = 0; i < 100 && posts.length < 2; i++) await page.waitForTimeout(50);
+  assert.deepEqual(posts.splice(0), [['turns-at-once', {turns_at_once: 3}], ['turns-at-once', {turns_at_once: 5}]],
+    'the change made during the save is sent after it, and not with it');
+  await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.value === '5');
 
   // ---- BotOps' chat: a Confirm card, and nothing happens until the person clicks it
   await page.goto('https://tico-ui.test/#/bot/botops');

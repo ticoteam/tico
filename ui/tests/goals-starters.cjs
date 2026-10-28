@@ -1,7 +1,7 @@
-// The CEO Bot's chat in the Goals rail (ui/app/goals.js goalManagerMount), chat first: the owner reads that it drafts a
-// goal and saves it on their yes, the box asks them to set or fix a goal, and an empty chat offers three starters. A
-// tap sends the starter's words as the owner's message, and once the chat has a message the starters are gone. Anyone
-// else still reads that only the owner talks to the CEO Bot and is pointed to their Assistant. Fixtures only.
+// The Strategy Bot's chat in the Strategy rail (ui/app/redesign.js syncStrategyBot, ui/app/goals.js goalManagerMount):
+// the box says Ask Strategy Bot, and an empty chat offers three starters. A tap sends the starter's words
+// as the owner's message, and once the chat has a message the starters are gone. Anyone else reads that only the owner
+// talks to the Strategy Bot and is pointed to their Assistant. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -33,7 +33,6 @@ async function open(browser, {role = 'owner', chat = []} = {}) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: [], owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: []});
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/conversations') return json({conversations: messages.length ? [{id: 'gm-chat', kind: 'chat', room_key: 'ceo'}] : []});
     if (p === '/api/v2/chat/goal-manager' && post) {
       const body = req.postDataJSON();
@@ -45,22 +44,19 @@ async function open(browser, {role = 'owner', chat = []} = {}) {
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/#/goals');
-  await page.locator('#goal-manager-panel .gm-what').waitFor();
+  await page.locator('#sbot [data-gm-chat]').waitFor();
   return {page, errors, posted};
 }
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // Test 1: the owner with an empty chat reads the chat-first line, the new placeholder and the three starters.
+    // Test 1: the owner with an empty chat reads the placeholder and the three starters.
     {
       const {page, errors, posted} = await open(browser);
-      const rail = page.locator('#goal-manager-panel');
+      const rail = page.locator('#sbot');
       await rail.locator('[data-gm-starter]').first().waitFor();
-      assert.equal(await rail.locator('.gm-what').innerText(),
-        'Keeps KPIs current and each goal green, yellow or red. Tell it what you want to achieve. It drafts the goal and saves it when you say yes.');
-      assert.doesNotMatch(await rail.innerText(), /Humans set the goals/);
-      assert.equal(await rail.locator('.gm-form textarea').getAttribute('placeholder'), 'Set or fix a goal…');
+      assert.equal(await rail.locator('.gm-form textarea').getAttribute('placeholder'), 'Ask Strategy Bot');
       assert.deepEqual(await rail.locator('[data-gm-starter]').allInnerTexts(), STARTERS);
       // Test 2: a tap sends its words, as typed by the owner, to the CEO Bot's chat.
       await rail.locator('[data-gm-starter]', {hasText: 'Go through suggestions'}).click();
@@ -80,14 +76,13 @@ async function open(browser, {role = 'owner', chat = []} = {}) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Test 4: anyone else (an admin here) is still sent to their Assistant: no starters, no chat-first line.
+    // Test 4: anyone else (an admin here) is still sent to their Assistant: no starters, no composer.
     {
       const {page, errors, posted} = await open(browser, {role: 'admin'});
-      const rail = page.locator('#goal-manager-panel');
+      const rail = page.locator('#sbot');
       await rail.locator('[data-gm-assistant]').waitFor();
-      assert.equal((await rail.locator('[data-gm-assistant]').textContent()).replace(/\s+/g, ' ').trim(), "Only the company's owner talks to CEO Bot. Ask your Assistant instead.");
+      assert.equal((await rail.locator('[data-gm-assistant]').textContent()).replace(/\s+/g, ' ').trim(), "Only the company's owner talks to Strategy Bot. Ask your Assistant instead.");
       assert.equal(await rail.locator('[data-gm-assistant] a').getAttribute('href'), '#/assistant');
-      assert.match(await rail.locator('.gm-what').innerText(), /Humans set the goals\.$/);
       assert.equal(await rail.locator('[data-gm-starter]').count(), 0);
       assert.equal(await rail.locator('.gm-form').count(), 0);
       assert.deepEqual(posted, []);

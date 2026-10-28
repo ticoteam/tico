@@ -69,7 +69,7 @@ Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules
 on a two-user Docker runner. The owner can deliberately
 turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
-switches it on. Change its timezone in **Settings → Rules** for your team.
+switches it on. Change its time zone on its automation in **Automations**.
 
 And the record:
 

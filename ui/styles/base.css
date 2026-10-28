@@ -78,7 +78,7 @@ table,time,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[type=
 .mono{font-family:var(--mono);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold
-   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 3s). */
+   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 10s). */
 html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person-mail-link,.av-glyph,.int-key){visibility:hidden}
 /* Motion (tokens.css: --dur-fast, --dur, --ease). Surfaces that appear on top fade in; rows answer a
    hover with a quick tint. Only opacity and transform move, never layout. */

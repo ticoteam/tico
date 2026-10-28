@@ -31,6 +31,10 @@
       "description": "The bots a person can see, and their live status."
     },
     {
+      "name": "Computers",
+      "description": "The computers that run bots: what each one runs at once."
+    },
+    {
       "name": "Conversations",
       "description": "Chats with bots: send, list, and stream replies."
     },
@@ -95,6 +99,10 @@
       "description": "The catalog of named events (docs/routines.md)."
     },
     {
+      "name": "Automations",
+      "description": "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP."
+    },
+    {
       "name": "Roadmaps",
       "description": "Company roadmap settings, internal requesters, and anonymous publication (docs/roadmaps.md)."
     },
@@ -128,6 +136,68 @@
     }
   ],
   "paths": {
+    "/api/v2/approvals": {
+      "post": {
+        "summary": "Ask a person to approve an action. Kinds task_cap and spend_limit are proposals the top of the org decides; the hub applies one on approve, audited with via approval:<id>, and tells BotOps",
+        "operationId": "requestApproval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequested"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/approvals/{aid}": {
       "get": {
         "summary": "One approval request",
@@ -931,6 +1001,987 @@
         ]
       }
     },
+    "/api/v2/audit": {
+      "get": {
+        "summary": "Who changed caps, spend, groups and automations, newest first (owner: all; others: their own)",
+        "operationId": "listAudit",
+        "parameters": [
+          {
+            "name": "object",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Object"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team"
+        ]
+      }
+    },
+    "/api/v2/automations": {
+      "get": {
+        "summary": "The automations you may see, newest first, each with can_edit; paged by cursor",
+        "operationId": "listAutomations",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Owner"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      },
+      "post": {
+        "summary": "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending)",
+        "operationId": "createAutomation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Automation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/automations/guide": {
+      "get": {
+        "summary": "How BotOps builds and edits automations, with the flow format generated from the hub's code",
+        "operationId": "getAutomationGuide",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationGuide"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/question-sets": {
+      "get": {
+        "summary": "The saved question sets a Decide step may name (`set`), each with its questions",
+        "operationId": "listQuestionSets",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionSets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}": {
+      "get": {
+        "summary": "One automation with set questions filled in, today's counts and, for a schedule, next_run",
+        "operationId": "getAutomation",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Automation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      },
+      "patch": {
+        "summary": "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets `pending`, a proposal a person restores",
+        "operationId": "updateAutomation",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Automation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      },
+      "delete": {
+        "summary": "Delete it; its runs stay. A built-in one is refused",
+        "operationId": "deleteAutomation",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Empty"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDeleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/delete": {
+      "post": {
+        "summary": "The same delete, for clients that only POST",
+        "operationId": "deleteAutomationPost",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Empty"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDeleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/run": {
+      "post": {
+        "summary": "Run it now with `input` standing in for the trigger's output; answers the run",
+        "operationId": "runAutomation",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunNow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationRunNow"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/runs": {
+      "get": {
+        "summary": "Its runs, newest first (limit, before \u2192 next), step detail for 30 days, and daily run and drop counts",
+        "operationId": "listAutomationRuns",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationRuns"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/versions": {
+      "get": {
+        "summary": "Its versions, newest first; status=pending for proposals",
+        "operationId": "listAutomationVersions",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationVersions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/versions/{n}": {
+      "delete": {
+        "summary": "Discard a pending version (409 for any other)",
+        "operationId": "discardAutomationVersion",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "N"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Empty"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Automation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{aid}/versions/{n}/restore": {
+      "post": {
+        "summary": "Make a version current: a pending one keeps its number, an older one is saved as a new version; a draft's first pending version turns it on",
+        "operationId": "restoreAutomationVersion",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "N"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Empty"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Automation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
     "/api/v2/bots": {
       "get": {
         "summary": "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
@@ -1656,7 +2707,7 @@
     },
     "/api/v2/bots/{bot}/onboarded": {
       "post": {
-        "summary": "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; 403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to `onboarded`) and its routines start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
+        "summary": "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; 403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to `onboarded`) and its automations start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
         "operationId": "markBotOnboarded",
         "parameters": [
           {
@@ -1848,7 +2899,7 @@
     },
     "/api/v2/bots/{bot}/release": {
       "post": {
-        "summary": "Release a bot Tico stopped for failed runs or too many runs; its queued work starts again",
+        "summary": "Release a bot Tico stopped for failed runs or too many runs, or for queued runs it could not start; its queued work starts again",
         "operationId": "releaseBot",
         "parameters": [
           {
@@ -2026,68 +3077,6 @@
         },
         "tags": [
           "Repositories"
-        ]
-      }
-    },
-    "/api/v2/bots/{bot}/routines": {
-      "get": {
-        "summary": "A bot's routines, its recurring work (Read on the bot; add include_deleted=true for removed ones)",
-        "operationId": "listBotRoutines",
-        "parameters": [
-          {
-            "name": "bot",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Bot"
-            }
-          },
-          {
-            "name": "include_deleted",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Include Deleted"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoutineList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Bots"
         ]
       }
     },
@@ -2465,6 +3454,75 @@
                 "schema": {
                   "$ref": "#/components/schemas/BotToolUpdated"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
+    "/api/v2/bots/{bot}/turns-at-once": {
+      "post": {
+        "summary": "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise",
+        "operationId": "setBotTurnsAtOnce",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotTurnsAtOnce"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -3493,6 +4551,75 @@
         },
         "tags": [
           "Goals"
+        ]
+      }
+    },
+    "/api/v2/computers/{rid}/turns-at-once": {
+      "post": {
+        "summary": "Set the most turns a computer runs at once: null is automatic (its own capacity)",
+        "operationId": "setComputerTurnsAtOnce",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerTurnsAtOnce"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Computers"
         ]
       }
     },
@@ -9330,6 +10457,127 @@
         ]
       }
     },
+    "/api/v2/inboxes/{inbox}": {
+      "get": {
+        "summary": "An inbox's send switch (on by default): email address, slack:dm or slack:#<channel>",
+        "operationId": "getInboxSend",
+        "parameters": [
+          {
+            "name": "inbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Inbox"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSwitch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      },
+      "patch": {
+        "summary": "Turn the send switch on or off (the inbox's person, or the owner); off, send_reply saves a draft",
+        "operationId": "setInboxSend",
+        "parameters": [
+          {
+            "name": "inbox",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Inbox"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxSend"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSwitch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
     "/api/v2/kpis": {
       "get": {
         "summary": "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs",
@@ -12765,6 +14013,59 @@
         ]
       }
     },
+    "/api/v2/people/{person}/assistant": {
+      "get": {
+        "summary": "The bot behind a person's Assistant, or null until it is first used",
+        "operationId": "getPersonAssistant",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "person",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Person"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonAssistant"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
     "/api/v2/profiles": {
       "get": {
         "summary": "Every bot profile with its one-line description, its values and the wake rows it adds, for a picker",
@@ -15958,6 +17259,164 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/task-caps": {
+      "get": {
+        "summary": "Task caps with today's count and the tasks closed before the receiver acted, per pair; for the owner and admins, the changes bots asked for, waiting as approvals",
+        "operationId": "getTaskCaps",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskCaps"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "put": {
+        "summary": "Cap the tasks one teammate sends another a day (0 blocks, null removes). The receiver must be a manager above the sender. A bot's own change comes back as a pending approval a person decides",
+        "operationId": "setTaskCap",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCap"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskCapWrite"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      },
+      "delete": {
+        "summary": "Remove the cap between two teammates (?sender=&receiver=); a bot's removal is an approval too",
+        "operationId": "removeTaskCap",
+        "parameters": [
+          {
+            "name": "sender",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sender"
+            }
+          },
+          {
+            "name": "receiver",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Receiver"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskCapWrite"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
         ]
       }
     },
@@ -20323,7 +21782,7 @@
     },
     "/api/v2/usage/limits": {
       "get": {
-        "summary": "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits",
+        "summary": "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a lead who is not an administrator gets the groups it leads and those below)",
         "operationId": "getUsageLimits",
         "responses": {
           "200": {
@@ -20413,7 +21872,7 @@
     },
     "/api/v2/usage/limits/{bot}": {
       "put": {
-        "summary": "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns over or the limit is raised",
+        "summary": "A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, the person who runs the bot within the team default, and a group lead for the bots in the group and those below. A bot over a limit takes no new job until the period turns over or the limit is raised",
         "operationId": "setBotUsageLimit",
         "parameters": [
           {
@@ -20475,7 +21934,7 @@
     },
     "/api/v2/usage/pools/company": {
       "put": {
-        "summary": "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot takes a new job (owner and bot administrators)",
+        "summary": "A limit on every bot's estimated spend together, per hour, day, week and month; null removes a field, one left out stays. Over it, no bot takes a new job (owner and bot administrators)",
         "operationId": "setTeamUsageLimit",
         "requestBody": {
           "content": {
@@ -20526,7 +21985,7 @@
     },
     "/api/v2/usage/pools/groups/{group}": {
       "put": {
-        "summary": "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none of them takes a new job (owner and bot administrators)",
+        "summary": "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none of them takes a new job (owner and bot administrators; also the lead of the group or one above it, within the parent group's limit)",
         "operationId": "setGroupUsageLimit",
         "parameters": [
           {
@@ -22668,6 +24127,61 @@
         ],
         "title": "Answer"
       },
+      "ApprovalCreate": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "send",
+              "spend",
+              "publish",
+              "merge",
+              "support",
+              "task_cap",
+              "spend_limit"
+            ],
+            "title": "Kind"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "supersedes_approval": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Approval"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "payload"
+        ],
+        "title": "ApprovalCreate"
+      },
       "ApprovalDecision": {
         "properties": {
           "decision": {
@@ -22691,6 +24205,28 @@
           "decision"
         ],
         "title": "ApprovalDecision"
+      },
+      "ApprovalRequested": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "approval": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "additionalProperties": true
       },
       "Assistant": {
         "type": "object",
@@ -22993,6 +24529,544 @@
         ],
         "additionalProperties": true
       },
+      "AuditPage": {
+        "type": "object",
+        "required": [
+          "rows",
+          "next"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Automation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "object"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "can_edit": {
+            "type": "boolean"
+          },
+          "can_pause": {
+            "type": "boolean"
+          },
+          "spend_cap": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "batch": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "last_run": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "today": {
+                "type": "object",
+                "properties": {
+                  "runs": {
+                    "type": "integer"
+                  },
+                  "dropped": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "dropped",
+                  "runs"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "today"
+            ],
+            "additionalProperties": true
+          },
+          "next_run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "can_edit",
+          "id"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationDeleted": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted",
+          "id"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationGuide": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "owner": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Owner"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "builtin": {
+            "type": "boolean",
+            "title": "Builtin",
+            "default": false
+          },
+          "spend_cap": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend Cap"
+          },
+          "batch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch"
+          },
+          "trigger": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trigger"
+          },
+          "steps": {
+            "items": {},
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "trigger"
+        ],
+        "title": "AutomationIn"
+      },
+      "AutomationList": {
+        "type": "object",
+        "properties": {
+          "automations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Automation"
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "automations",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "spend_cap": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend Cap"
+          },
+          "batch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AutomationPatch"
+      },
+      "AutomationRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "automation_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "trigger_ref": {
+            "type": "string"
+          },
+          "started": {
+            "type": "string"
+          },
+          "finished": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "waiting",
+              "ok",
+              "failed",
+              "empty",
+              "skipped"
+            ]
+          },
+          "cost": {
+            "type": "number"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "Each step's status, outputs and cost; null after 30 days"
+          }
+        },
+        "required": [
+          "automation_id",
+          "id",
+          "status",
+          "steps",
+          "version"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationRunNow": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/AutomationRun"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationRuns": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationRun"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "daily": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "string"
+                },
+                "runs": {
+                  "type": "integer"
+                },
+                "dropped": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "day",
+                "dropped",
+                "runs"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "daily",
+          "next",
+          "runs"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationVersions": {
+        "type": "object",
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "integer"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "pending"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "flow": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "actor",
+                "at",
+                "flow",
+                "n",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next",
+          "versions"
+        ],
+        "additionalProperties": true
+      },
       "Bot": {
         "type": "object",
         "properties": {
@@ -23042,6 +25116,12 @@
             ]
           },
           "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "turns_at_once": {
             "type": [
               "integer",
               "null"
@@ -23315,6 +25395,12 @@
             "type": "string"
           },
           "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "turns_at_once": {
             "type": [
               "integer",
               "null"
@@ -24164,6 +26250,35 @@
         ],
         "additionalProperties": true
       },
+      "BotTurnsAtOnce": {
+        "properties": {
+          "turns_at_once": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 256.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns At Once",
+            "description": "Most turns this bot runs at once across all computers. Null is no limit."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "turns_at_once",
+          "expected_revision"
+        ],
+        "title": "BotTurnsAtOnce"
+      },
       "BotUsageLimit": {
         "type": "object",
         "properties": {
@@ -24642,9 +26757,6 @@
               "additionalProperties": true
             }
           },
-          "daily_cap": {
-            "type": "integer"
-          },
           "asked_today": {
             "type": "object",
             "additionalProperties": {
@@ -24657,7 +26769,6 @@
           }
         },
         "required": [
-          "daily_cap",
           "level",
           "levels",
           "name",
@@ -28262,6 +30373,18 @@
               }
             ],
             "title": "Bet Id"
+          },
+          "lead": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead"
           }
         },
         "additionalProperties": false,
@@ -28350,6 +30473,18 @@
               }
             ],
             "title": "Bet Id"
+          },
+          "lead": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead"
           }
         },
         "additionalProperties": false,
@@ -28480,7 +30615,7 @@
             "items": {
               "type": "object"
             },
-            "description": "Bots with queued work that is not starting, or left in setup for over a day (the caller may read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, lane_held, uncertain, scoped, cooling_off, run_hold, budget, backoff, readiness_unknown, sign_in_rejected, not_isolated, isolation_unknown, profile, config, check_model, unreadable), why, drain_progress (counts of running and handed-back turns on update holds), since (setup only: when the bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"
+            "description": "Bots with queued work that is not starting, or left in setup for over a day (the caller may read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, slow, limit, updating, restarting, setup, or a reason the claim holds the work: draining, maintaining, lane_held, uncertain, scoped, bot_limit, cooling_off, run_hold, budget, backoff, readiness_unknown, sign_in_rejected, not_isolated, isolation_unknown, profile, config, check_model, unreadable), why, drain_progress (counts of running and handed-back turns on update holds), since (setup only: when the bot was added), and fix (label plus href/tab, login, move or finish; null unless the caller administers bots, or for setup may manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"
           },
           "on_fallback": {
             "type": "array",
@@ -28882,6 +31017,36 @@
           "changed",
           "created",
           "task"
+        ],
+        "additionalProperties": true
+      },
+      "InboxSend": {
+        "properties": {
+          "send": {
+            "type": "boolean",
+            "title": "Send"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "send"
+        ],
+        "title": "InboxSend"
+      },
+      "InboxSwitch": {
+        "type": "object",
+        "properties": {
+          "inbox": {
+            "type": "string"
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "inbox",
+          "send"
         ],
         "additionalProperties": true
       },
@@ -31301,6 +33466,21 @@
         ],
         "additionalProperties": true
       },
+      "PersonAssistant": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bot"
+        ],
+        "additionalProperties": true
+      },
       "PersonUpdate": {
         "properties": {
           "title": {
@@ -32039,6 +34219,39 @@
         ],
         "title": "QuestionOption"
       },
+      "QuestionSets": {
+        "type": "object",
+        "properties": {
+          "sets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "questions": {
+                  "type": "object",
+                  "description": "Keyed by question id, in judge.py's format"
+                }
+              },
+              "required": [
+                "id",
+                "questions",
+                "summary"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "sets"
+        ],
+        "additionalProperties": true
+      },
       "RanOn": {
         "type": "object",
         "properties": {
@@ -32206,7 +34419,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ReleaseBot",
-        "description": "Release a bot from every hold Tico put on it (failed runs, run budget)."
+        "description": "Release a bot from every hold Tico put on it (failed runs, run budget, queued runs it could not start)."
       },
       "RepoAccessUpdate": {
         "properties": {
@@ -33011,104 +35224,41 @@
         "type": "object",
         "title": "RoadmapSettings"
       },
-      "Routine": {
-        "type": "object",
+      "RunNow": {
         "properties": {
-          "id": {
-            "type": "string"
-          },
-          "bot": {
-            "type": "string"
-          },
-          "key": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "title": {
-            "type": "string"
-          },
-          "cron": {
-            "type": "string"
-          },
-          "on": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "timezone": {
-            "type": "string"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "text": {
-            "type": "string"
-          },
-          "last_fired": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "next_due": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "deleted_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "updated_at": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "active": {
-            "type": "boolean"
-          },
-          "held_by_bot": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Set while an enabled routine waits on its bot rather than its own switch: the bot's state (paused, planned, quarantined, archived) or needs_setup. The routine stays enabled and fires again once the bot is active and set up."
+          "input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input"
           }
         },
-        "required": [
-          "active",
-          "bot",
-          "cron",
-          "enabled",
-          "id",
-          "kind",
-          "on",
-          "timezone",
-          "title"
-        ],
-        "additionalProperties": true
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RunNow"
       },
-      "RoutineList": {
-        "type": "object",
+      "RunnerTurnsAtOnce": {
         "properties": {
-          "routines": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Routine"
-            }
+          "turns_at_once": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 256.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns At Once",
+            "description": "Most turns this computer runs at once. Null is automatic: its own capacity."
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
-          "routines"
+          "turns_at_once"
         ],
-        "additionalProperties": true
+        "title": "RunnerTurnsAtOnce"
       },
       "Seat": {
         "type": "object",
@@ -35563,6 +37713,157 @@
           "skipped",
           "tasks",
           "unchanged"
+        ],
+        "additionalProperties": true
+      },
+      "TaskCap": {
+        "properties": {
+          "sender": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Sender"
+          },
+          "receiver": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Receiver"
+          },
+          "per_day": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Day"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sender",
+          "receiver"
+        ],
+        "title": "TaskCap",
+        "description": "A cap on the tasks `sender` sends `receiver` a day. null (or left out) removes it; 0 blocks the pair."
+      },
+      "TaskCapProposal": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "receiver": {
+            "type": "string"
+          },
+          "per_day": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "proposed_by": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "id",
+          "per_day",
+          "proposed_by",
+          "receiver",
+          "sender",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "TaskCapRow": {
+        "type": "object",
+        "properties": {
+          "sender": {
+            "type": "string"
+          },
+          "receiver": {
+            "type": "string"
+          },
+          "per_day": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "closed": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "closed",
+          "count",
+          "per_day",
+          "receiver",
+          "sender",
+          "updated",
+          "updated_by"
+        ],
+        "additionalProperties": true
+      },
+      "TaskCapWrite": {
+        "type": "object",
+        "properties": {
+          "cap": {
+            "type": "object"
+          },
+          "approval": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval",
+          "cap",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "TaskCaps": {
+        "type": "object",
+        "properties": {
+          "caps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskCapRow"
+            }
+          },
+          "proposals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskCapProposal"
+            }
+          }
+        },
+        "required": [
+          "caps",
+          "proposals"
         ],
         "additionalProperties": true
       },
@@ -38064,6 +40365,17 @@
       },
       "UsageDefault": {
         "properties": {
+          "per_30m_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 30M Usd"
+          },
           "hourly_usd": {
             "anyOf": [
               {
@@ -38124,6 +40436,12 @@
           "default": {
             "type": "object",
             "properties": {
+              "per_30m_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "hourly_usd": {
                 "type": [
                   "number",
@@ -38157,6 +40475,7 @@
               "daily_usd",
               "hourly_usd",
               "monthly_usd",
+              "per_30m_usd",
               "weekly_usd"
             ],
             "additionalProperties": true
@@ -38218,6 +40537,17 @@
       },
       "UsageLimit": {
         "properties": {
+          "per_30m_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 30M Usd"
+          },
           "hourly_usd": {
             "anyOf": [
               {
@@ -38270,6 +40600,12 @@
       "UsageLimitView": {
         "type": "object",
         "properties": {
+          "per_30m_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "hourly_usd": {
             "type": [
               "number",
@@ -38328,6 +40664,7 @@
           },
           "blocked": {
             "enum": [
+              "per_30m",
               "hourly",
               "daily",
               "weekly",
@@ -38343,6 +40680,12 @@
             ],
             "description": "Whose limit holds the bot: scope (bot, company or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and administrators only)",
             "additionalProperties": true
+          },
+          "own_per_30m_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "own_hourly_usd": {
             "type": [
@@ -38385,7 +40728,9 @@
           "own_daily_usd",
           "own_hourly_usd",
           "own_monthly_usd",
+          "own_per_30m_usd",
           "own_weekly_usd",
+          "per_30m_usd",
           "percent",
           "source",
           "week_spent",
@@ -38399,6 +40744,12 @@
           "default": {
             "type": "object",
             "properties": {
+              "per_30m_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "hourly_usd": {
                 "type": [
                   "number",
@@ -38432,6 +40783,7 @@
               "daily_usd",
               "hourly_usd",
               "monthly_usd",
+              "per_30m_usd",
               "weekly_usd"
             ],
             "additionalProperties": true
@@ -38444,7 +40796,7 @@
               "object",
               "null"
             ],
-            "description": "Owner and administrators: company (UsagePoolView) and groups, {id: UsagePoolView with name and parent}",
+            "description": "Owner and administrators: company (UsagePoolView) and groups, {id: UsagePoolView with name and parent}. A lead who is not an administrator: company null and only the groups it leads and those below, each with may_edit true",
             "additionalProperties": true
           },
           "bots": {
@@ -38482,6 +40834,12 @@
       "UsagePoolView": {
         "type": "object",
         "properties": {
+          "per_30m_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "hourly_usd": {
             "type": [
               "number",
@@ -38501,6 +40859,12 @@
             ]
           },
           "monthly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "30m_spent": {
             "type": [
               "number",
               "null"
@@ -38535,6 +40899,7 @@
           },
           "blocked": {
             "enum": [
+              "per_30m",
               "hourly",
               "daily",
               "weekly",
@@ -38544,6 +40909,7 @@
           }
         },
         "required": [
+          "30m_spent",
           "blocked",
           "daily_usd",
           "day_spent",
@@ -38551,6 +40917,7 @@
           "hourly_usd",
           "month_spent",
           "monthly_usd",
+          "per_30m_usd",
           "percent",
           "week_spent",
           "weekly_usd"

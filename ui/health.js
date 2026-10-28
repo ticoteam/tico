@@ -128,8 +128,12 @@ function hlSeen(f) {
 // rule that lets it file Tico bug reports without a Needs you card.
 function hlMonitorHtml(m) {
   if (!m) return '';
-  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page.
-  const stopped = f => { const m = /^(?:run_hold|turn_budget):(.+)$/.exec(f.key || ''); return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : ''; };
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page. So does
+  // one for queued runs it could not start (claim_failed:<bot>), which the bot's page does not show.
+  const stopped = f => {
+    const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+    return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
     <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">

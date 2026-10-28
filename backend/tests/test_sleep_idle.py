@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from backend import botops_act, scheduler, sleep_idle
+from backend import botops_act, routines, scheduler, sleep_idle
 from backend import hubdb as H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -82,10 +82,12 @@ def tick(api):
 
 
 def add_routine(api, due, key="r1"):
+    """A routine of ops's (its schedule automation, on), next due at `due`."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,next_due) VALUES(?,?,?,?,?,?)",
-                  (key, "ops", "0 9 * * *", "Morning check", "Look around", scheduler.stamp(
-                      sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc))))
+        aid = routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 9 * * *", "timezone": "UTC",
+                                                    "text": "Look around"}, key=key)["automation"]
+        c.execute("UPDATE automations SET next_due=? WHERE id=?",
+                  (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
 def quiet(api, hours=1):

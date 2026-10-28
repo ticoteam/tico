@@ -349,6 +349,35 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 
 ## Coming from an older version
 
+### Moving to Automations (one time)
+
+This release runs routines and wake rules as Automations. The first start moves them, once: each routine, wake rule,
+inbox, hourly spend limit and low turn budget becomes its Automations equivalent, one write per object, and a restart
+part way goes on where it stopped. What cannot move stays as it was and is listed once in a task for the owner;
+otherwise the owner gets one notice. The old tables keep their rows.
+
+An install whose database still holds any of these starts only when it opts in. Without the setting the server logs
+`This release moves rules and routines to Automations once. Set TICO_MIGRATE_TO_AUTOMATIONS=1 to go ahead` and exits
+before it writes anything, so the updater rolls back to the release before (above). A new install, or one with nothing
+to move, starts without it; so does one that has already moved, with or without it.
+
+1. Before updating, see what will move, with the new release's image (the old one has no report). It reads a copy and
+   never writes to the database, so it can run beside the running server:
+
+   ```
+   TICO_TAG=vX.Y.Z docker compose pull server
+   TICO_TAG=vX.Y.Z docker compose run --rm --no-deps --entrypoint python server \
+     -m backend.redesign_migration report --db /data/hub.sqlite
+   ```
+
+   (A checkout: the same command from the new release's code, `--db` set to `TICO_DB` from its `server.env`.) It says
+   whether the start needs the setting, and lists every routine, rule and system job, what each becomes, and anything
+   that stays, with the reason.
+2. Add `TICO_MIGRATE_TO_AUTOMATIONS=1` to `.env` (a checkout: its `server.env`), then update.
+3. After the start, check the log for `redesign cutover ...: N moved to automations`, run the report again (every
+   object shows `moved`, `runs as before`, `kept` or `unchanged`; none `pending`), and open Automations. The setting can
+   stay; it does nothing once the move is done.
+
 ### You're on 0.2: update to get one-tap support
 
 Tico 0.3 can reach the Tico team from anywhere in the app, with what went wrong attached, and shows replies, fixed-in notices

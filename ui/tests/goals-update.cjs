@@ -87,7 +87,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     const panel = page.locator('#goal-panel');
     const openPanel = async owner => {
       if (await panel.evaluate(d => d.open).catch(() => false)) await panel.locator('[data-gp-close]').click();
-      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`).click();
+      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-goal').first().waitFor();
     };
     const goal = id => panel.locator(`[data-gp-goal="${id}"]`);

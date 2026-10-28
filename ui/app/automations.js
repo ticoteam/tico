@@ -1,0 +1,319 @@
+/* ui/app/automations.js — Automations (redesign): routing, the page's state, the list and the header
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
+   The flow and its "+" menu are automations-flow.js, the step editors automations-editors.js, the run log
+   automations-runs.js and the BotOps chat automations-bot.js. Payloads: redesign CONTRACT §2 (/api/v2/automations).
+   #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
+'use strict';
+
+const AUTOMATIONS = '#/automations';
+function isAutomationsRoute(r) { return r === AUTOMATIONS || r.startsWith(AUTOMATIONS + '/') || r.startsWith(AUTOMATIONS + '?'); }
+const AU_BOT = 'botops';                             // builds and edits automations with the viewer's rights (CONTRACT §2)
+const auPhone = () => matchMedia('(max-width:760px)').matches;
+const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
+const auApi = id => '/v2/automations/' + encodeURIComponent(id);
+// One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
+let AU = null;
+function automationsStop() { if (!AU) return; AU.botStop?.(); AU = null; }
+
+// #/automations[/<id>[/runs|/bot]]; #/automations/bot is the bot with no automation open (New).
+function auRouteParts(r) {
+  const [id = '', view = ''] = r.slice(AUTOMATIONS.length + 1).split('?')[0].split('/').map(decodeURIComponent);
+  if (id === 'bot') return {id: '', view: 'bot'};
+  return {id, view: ['runs', 'bot'].includes(view) ? view : 'flow'};
+}
+const auHref = (id, view) => AUTOMATIONS + (id ? '/' + encodeURIComponent(id) : view === 'bot' ? '/bot' : '') + (id && view && view !== 'flow' ? '/' + view : '');
+
+// The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
+const auPersonId = a => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';
+function auActorName(a) {
+  const pid = auPersonId(a);
+  if (pid) return pid === S.me?.id ? (S.me?.name || personDisplay(pid)) : personDisplay(pid);
+  if (String(a || '').startsWith('group:')) return auGroupName(a);
+  if (String(a || '').startsWith('assistant:')) {
+    const who = String(a).slice(10);
+    return (who === S.me?.id ? firstName(S.me?.name) || 'My' : firstName(personDisplay(who))) + '’s Assistant';
+  }
+  return actorLabel(String(a || '').startsWith('bot:') ? a : 'bot:' + a);
+}
+const auIsMine = a => !!S.me?.id && auPersonId(a) === S.me.id;
+const auGroupName = g => (AU?.groups || []).find(x => x.id === g || 'group:' + x.id === g)?.name || titleCase(String(g || '').replace(/^group:/, ''));
+
+const AU_TRIGGER_ICONS = {message: 'mail', task_received: 'task_alt', schedule: 'schedule', webhook: 'api', listening: 'travel_explore', event: 'campaign'};
+const AU_TRIGGER_WORDS = {message: 'Message received', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
+  listening: 'Listening match', event: 'Event'};
+const auCap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
+// A schedule in words; every hour (or few) on some weekdays reads "every hour, weekdays", not its cron.
+function auCronWords(cron) {
+  const f = String(cron || '').trim().split(/\s+/), [mi, hr, dom, mon, dow] = f;
+  if (f.length === 5 && dom === '*' && mon === '*' && /^[\d,-]+$/.test(dow) && /^(\*|\*\/\d+)$/.test(hr) && /^(\d+|\*\/\d+)$/.test(mi)) {
+    const each = cronWords(`${mi} ${hr} * * *`), days = cronWords(`0 0 * * ${dow}`).replace(/ at 00:00$/, '');
+    if (each !== `${mi} ${hr} * * *` && !days.includes('*')) return `${each}, ${days}`;
+  }
+  return cronWords(cron || '');
+}
+// Where an automation's work comes from, in a few words: the list's "· source" and the trigger card's chip.
+function auSource(t = {}) {
+  if (t.type === 'message') return t.inbox || '';
+  if (t.type === 'task_received') return t.to ? 'Tasks to ' + auActorName(t.to) : 'Tasks';
+  if (t.type === 'schedule') return auCap(auCronWords(t.cron));
+  if (t.type === 'webhook') return t.name || t.id || '';
+  if (t.type === 'listening') return t.destination ? 'Listening · ' + t.destination : 'Listening';
+  if (t.type === 'event') return t.name || '';
+  return '';
+}
+const auSpendWords = a => a.spend_cap?.per_30m != null ? `$${Number(a.spend_cap.per_30m).toFixed(2)} / 30 min` : 'Bot’s limit';
+
+async function pageAutomations() {
+  const {id, view} = auRouteParts(S.route);
+  $('#main').classList.add('au-layout');
+  if (!AU || !document.body.contains(AU.root)) {
+    automationsStop();
+    AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', q: '', ed: null, runs: null, menu: null, root: null, bot: null};
+    auShell();
+    const q = new URLSearchParams(S.route.split('?')[1] || '').get('q');
+    if (q) { AU.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }
+  }
+  const state = AU;
+  state.view = view;
+  state.root.dataset.screen = view === 'bot' ? 'bot' : id ? 'detail' : 'list';
+  if (state.list === null) await auLoadList(state);
+  if (AU !== state) return;
+  // A computer opens on the first automation; a phone opens on the list.
+  const first = auShown()[0];
+  if (!id && view !== 'bot' && !auPhone() && first) { location.replace(auHref(first.id)); return; }
+  if (id !== state.id) {
+    state.id = id; state.ed = null; state.runs = null; state.cur = null; state.lastRun = undefined;
+    if (id) {
+      auDrawHead(); auDrawPane();
+      // A slow answer for an automation left behind must not land on the one now open.
+      let cur;
+      try { cur = auNormal(await get(auApi(id))); }
+      catch (e) { if (AU === state && state.id === id) { state.cur = null; state.root.querySelector('.au-pane').innerHTML = [403, 404].includes(e.status)
+        ? '<p class="muted au-pad">Not shared with you</p>' : `<p class="err">${esc(e.message)}</p>`; } return; }
+      if (AU !== state || state.id !== id) return;
+      state.cur = cur;
+    }
+  }
+  auDrawList(); auDrawHead(); auDrawPane(); auDrawSide();
+  if (state.view === 'runs' && state.cur && !state.runs) void auRunsLoad(state);
+  auBotSync();
+}
+// GET answers the automation itself; a wrapped {automation} is read the same.
+const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
+
+function auShell() {
+  $('#main').innerHTML = `<div class="au" id="au-root">
+    <header class="au-ph"><h1>Automations</h1><span class="au-sp"></span><button class="primary au-new" type="button">+ New</button></header>
+    <div class="au-body">
+      <aside class="au-list" aria-label="Automations">
+        <div class="au-s"><input class="au-q" type="search" placeholder="Search automations" aria-label="Search automations"></div>
+        <div class="au-scroll"></div>
+      </aside>
+      <section class="au-c" aria-live="polite"><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
+      <aside class="au-side"><div class="au-ed" hidden></div><div class="au-botp"></div></aside>
+      <div class="au-scrim" hidden></div>
+    </div>
+    <a class="sbot-fab au-botbtn" href="${auHref('', 'bot')}"><span class="nav-icon" aria-hidden="true">smart_toy</span><span>BotOps</span></a>
+  </div>`;
+  const root = AU.root = $('#au-root');
+  root.querySelector('.au-q').addEventListener('input', e => { AU.q = e.target.value.trim().toLowerCase(); auDrawList(); });
+  root.querySelector('.au-new').onclick = () => { location.hash = auHref('', 'bot'); };
+  root.querySelector('.au-scrim').onclick = () => auEdClose();
+  root.addEventListener('change', auOnSwitch);
+  root.addEventListener('click', auOnClick);
+  root.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { if (AU.menu) auMenuClose(); else if (AU.ed) auEdClose(); return; }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
+  });
+  auEdWire(root.querySelector('.au-ed'));
+  auBotMount(root.querySelector('.au-botp'));
+}
+
+async function auLoadList(state) {
+  const [list, groups] = await Promise.all([
+    get('/v2/automations').catch(e => ({error: e})),
+    get('/v2/groups').catch(() => ({groups: []})),
+  ]);
+  if (AU !== state) return;
+  state.groups = Array.isArray(groups) ? groups : groups.groups || [];
+  if (list.error) { state.list = []; state.listError = list.error.message; return; }
+  state.list = list.automations || [];
+}
+
+// Mine, then each group the viewer may see, then the company's (no group: built-ins and the rest).
+function auGrouped(list) {
+  const mine = [], groups = new Map(), company = [];
+  for (const a of list) {
+    if (auIsMine(a.owner)) mine.push(a);
+    else if (a.group) { if (!groups.has(a.group)) groups.set(a.group, []); groups.get(a.group).push(a); }
+    else company.push(a);
+  }
+  return [['Mine', mine], ...[...groups].map(([g, xs]) => [auGroupName(g), xs]), ['Company', company]].filter(([, xs]) => xs.length);
+}
+const auRowName = a => { const src = auSource(a.trigger); return {name: a.name || 'Untitled', src: src && !String(a.name || '').includes(src) ? src : ''}; };
+// The on/off switch: `can_pause` (a read-only built-in shows it to the top of the org only); older hubs send can_edit.
+const auMayPause = a => a.can_pause ?? !!a.can_edit;
+function auSwitch(on, label, attrs = '') {
+  return `<input type="checkbox" role="switch" class="people-switch au-sw" aria-label="${esc(label)}"${on ? ' checked' : ''} ${attrs}>`;
+}
+// The list as the search box narrows it: name, source, owner and trigger words.
+const auShown = () => (AU.list || []).filter(a => !AU.q || [a.name, auSource(a.trigger), auActorName(a.owner), AU_TRIGGER_WORDS[a.trigger?.type]]
+  .join(' ').toLowerCase().includes(AU.q));
+function auDrawList() {
+  const box = AU.root.querySelector('.au-scroll');
+  if (AU.listError) { box.innerHTML = `<p class="err au-pad">${esc(AU.listError)}</p>`; return; }
+  const q = AU.q, rows = auShown();
+  box.innerHTML = auGrouped(rows).map(([label, xs]) => `<div class="au-gh"><span>${esc(label)}</span><span>${xs.length}</span></div>` + xs.map(a => {
+    const {name, src} = auRowName(a);
+    return `<div class="au-row${a.id === AU.id ? ' sel' : ''}${a.enabled === false ? ' off' : ''}" data-row="${esc(a.id)}">
+      <a href="${auHref(a.id)}" title="${esc(name + (src ? ' · ' + src : ''))}"${a.id === AU.id ? ' aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[a.trigger?.type] || 'schedule'}</span>
+      <span class="au-nm">${esc(name)}${src ? ` <span class="muted">· ${esc(src)}</span>` : ''}</span></a>
+      ${a.pending ? '<span class="pill">Pending</span>' : ''}${auMayPause(a) ? auSwitch(a.enabled !== false, name + ' on', `data-on="${esc(a.id)}"`) : a.enabled === false ? '<span class="pill">Off</span>' : ''}</div>`;
+  }).join('')).join('') || `<p class="muted au-pad">${q ? 'No matches' : 'No automations'}</p>`;
+}
+
+function auDrawHead() {
+  const hd = AU.root.querySelector('.au-hd'), a = AU.cur;
+  if (!AU.id) { hd.innerHTML = ''; return; }
+  const row = a && (AU.list || []).find(x => x.id === a.id);
+  const name = a?.name || row?.name || '';
+  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v || (v === 'flow' && AU.view === 'bot')}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
+  hd.innerHTML = `<a class="au-icon au-back" href="${AUTOMATIONS}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>
+    <h2 class="au-name">${esc(name)}</h2>
+    ${a ? `<span class="au-own" title="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}<span class="au-own-n">${esc(auActorName(a.owner))}</span></span>
+    <span class="au-sp"></span>
+    <div class="au-hd2">
+      ${auMayPause(a) ? auSwitch(a.enabled !== false, name + ' on', 'data-on-cur') : a.enabled === false ? '<span class="pill">Off</span>' : ''}
+      ${a.can_edit ? `<button class="au-chip" type="button" data-spend><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</button>`
+        : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
+      <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>
+      <span class="au-sp au-sp-phone"></span>
+      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+    </div>
+    <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}</button>
+    <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}`;
+}
+
+function auDrawPane() {
+  const pane = AU.root.querySelector('.au-pane');
+  if (!AU.id) { pane.innerHTML = ''; return; }
+  if (!AU.cur) { pane.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
+  const top = pane.scrollTop;
+  if (AU.view === 'runs') auRunsDraw(pane); else pane.innerHTML = auFlowHTML(AU.cur);
+  pane.scrollTop = top;
+  if (AU.view !== 'runs') auPathsWire(pane);
+}
+
+// The right side: an open editor, else BotOps. A phone shows the editor as a sheet over the flow.
+// A redraw while a field is being typed in (a late load of question sets or the last run) keeps that field focused.
+function auDrawSide() {
+  const ed = AU.root.querySelector('.au-ed'), html = AU.ed ? auEdHTML() : '';
+  const typing = ed.contains(document.activeElement) ? document.activeElement : null, b = typing?.dataset?.b;
+  const sel = b && typeof typing.selectionStart === 'number' ? [typing.selectionStart, typing.selectionEnd] : null;
+  ed.hidden = !html;
+  ed.innerHTML = html;
+  const again = b && html ? ed.querySelector(`[data-b="${CSS.escape(b)}"]`) : null;
+  if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
+  AU.root.classList.toggle('ed-open', !!html);
+  AU.root.querySelector('.au-scrim').hidden = !html;
+  AU.root.querySelector('.au-botp').hidden = !!html;
+}
+
+// Writes. The answer is the automation as saved (a flow change carries its new version).
+async function auWrite(body, done) {
+  const a = AU.cur, state = AU;
+  try {
+    const out = auNormal(await patch(auApi(a.id), body));
+    if (AU !== state) return null;
+    auAdopt(out);
+    if (done) toast(done(out));
+    return out;
+  } catch (e) { toast(e.message, true); if (AU === state) { auDrawList(); auDrawHead(); auDrawPane(); } return null; }
+}
+function auAdopt(a) {
+  if (!AU) return;
+  if (AU.cur?.id === a.id) AU.cur = a;
+  const i = (AU.list || []).findIndex(x => x.id === a.id);
+  if (i >= 0) AU.list[i] = {...AU.list[i], ...a};
+  auDrawList(); auDrawHead(); auDrawPane(); auDrawSide(); auPropsDraw();
+}
+
+async function auOnSwitch(e) {
+  const t = e.target;
+  if (!t.matches?.('.au-sw')) return;
+  const listId = t.dataset.on, stepId = t.dataset.step;
+  if (stepId) { await auStepToggle(stepId, t.checked); return; }
+  const id = listId || AU.cur?.id, row = (AU.list || []).find(x => x.id === id) || AU.cur;
+  if (!row) return;
+  // A built-in is paused only by the top of the org (the server decides), and never without saying what stops.
+  if (!t.checked && row.builtin && !confirm(`${row.name} is built in. Turning it off stops it for everyone.`)) { t.checked = true; return; }
+  const state = AU;
+  try {
+    const out = auNormal(await patch(auApi(id), {enabled: t.checked}));
+    if (AU !== state) return;
+    const i = state.list.findIndex(x => x.id === id);
+    if (i >= 0) state.list[i] = {...state.list[i], enabled: out.enabled ?? t.checked};
+    if (state.cur?.id === id) state.cur = {...state.cur, ...out, enabled: out.enabled ?? t.checked};
+    auDrawList(); auDrawHead();
+  } catch (err) { toast(err.message, true); t.checked = !t.checked; }
+}
+
+function auOnClick(e) {
+  const t = e.target;
+  if (!t.closest) return;
+  if (AU.menu && !t.closest('.au-menu') && !t.closest('[data-add],[data-more]')) auMenuClose();
+  let m;
+  if ((m = t.closest('.au-menu [data-ty]'))) { auInsert(m.dataset.ty); return; }
+  if ((m = t.closest('.au-menu [data-mi]'))) { auMoreAct(m.dataset.mi); return; }
+  if ((m = t.closest('[data-add]'))) { auMenuOpen(m, 'add'); return; }
+  if ((m = t.closest('[data-more]'))) { auMenuOpen(m, 'more'); return; }
+  if ((m = t.closest('[data-help]'))) { m.classList.toggle('on'); m.dataset.tip = m.dataset.help; return; }
+  if ((m = t.closest('[data-spend]'))) { auEdOpen({kind: 'spend'}); return; }
+  if ((m = t.closest('[data-versions]'))) { auEdOpen({kind: 'versions'}); return; }
+  if ((m = t.closest('[data-dot]'))) { auPathsGo(m); return; }
+  if ((m = t.closest('[data-run]'))) { auRunToggle(m.dataset.run); return; }
+  if ((m = t.closest('[data-runs-more]'))) { void auRunsLoad(AU, true); return; }
+  if (t.closest('.au-sw')) return;
+  if ((m = t.closest('[data-open]'))) { auEdOpenStep(m.dataset.open, m.dataset.path); return; }
+}
+
+// The ⋯ menu: versions, delete (refused for a built-in, so it is shown off with why).
+function auMoreHTML() {
+  const a = AU.cur;
+  return `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}
+    <button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>
+    ${a.can_edit ? `<button type="button" role="menuitem" data-mi="delete"${a.builtin ? ' disabled title="Built-in automations can’t be deleted"' : ''}>
+      <span class="nav-icon" aria-hidden="true">delete</span>${a.builtin ? 'Built-in' : 'Delete'}</button>` : ''}`;
+}
+async function auMoreAct(what) {
+  auMenuClose();
+  const a = AU.cur, state = AU;
+  if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
+  if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger)}); return; }
+  if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
+  try {
+    await writeRequest('DELETE', auApi(a.id));
+    if (AU !== state) return;
+    state.list = state.list.filter(x => x.id !== a.id);
+    toast('Deleted');
+    state.id = ''; state.cur = null;
+    location.hash = AUTOMATIONS;
+    auDrawList();
+  } catch (e) { toast(e.message, true); }
+}
+
+function auMenuOpen(btn, kind) {
+  const menu = AU.root.querySelector('.au-menu'), c = AU.root.querySelector('.au-c');
+  AU.menu = {kind, at: btn.dataset.add || ''};
+  menu.innerHTML = kind === 'add' ? auAddMenuHTML(AU.menu.at) : auMoreHTML();
+  menu.hidden = false;
+  menu.classList.toggle('au-menu-more', kind === 'more');
+  if (auPhone()) { menu.style.top = menu.style.left = ''; menu.querySelector('button:not([disabled])')?.focus(); return; }
+  const br = btn.getBoundingClientRect(), cr = c.getBoundingClientRect();
+  let top = br.bottom - cr.top + 4, left = kind === 'more' ? br.right - cr.left - menu.offsetWidth : br.left - cr.left - 8;
+  if (top + menu.offsetHeight > c.clientHeight - 8) top = Math.max(8, br.top - cr.top - menu.offsetHeight - 4);
+  menu.style.top = top + 'px';
+  menu.style.left = Math.max(8, Math.min(left, c.clientWidth - menu.offsetWidth - 8)) + 'px';
+  menu.querySelector('button:not([disabled])')?.focus();
+}
+function auMenuClose() { AU.menu = null; const m = AU.root.querySelector('.au-menu'); m.hidden = true; m.innerHTML = ''; }

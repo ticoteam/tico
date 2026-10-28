@@ -19,9 +19,9 @@ def store(tmp_path):
     s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     s.initialize(seed_market=False)
     with s.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('human:ana','Ana'),('human:ben','Ben')")
+        c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('ana','Ana'),('ben','Ben')")
         c.execute("INSERT OR IGNORE INTO bots(slug,state) VALUES('ops','active')")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','human:ana','h','t')")
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
     return s
 
 

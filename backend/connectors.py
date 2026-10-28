@@ -552,7 +552,11 @@ def install_connectors(app, store, execution, mutate):
                 raise Problem("not_found", "Mail target is not on the "
                               + store.settings.app_name + " roster", 404)
             now = H.now()
+            from . import automations
             for message in body.messages:
+                # A message seen for the first time is what a mail automation hears (backend/automations.py).
+                fresh = not c.execute("SELECT 1 FROM mail_messages WHERE mailbox=? AND msg_id=?",
+                                                    (body.mailbox, message.msg_id)).fetchone()
                 c.execute(
                     "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
                     "to_json,cc_json,subject,snippet,labels_json,body,body_truncated,attachments_json,"
@@ -575,6 +579,8 @@ def install_connectors(app, store, execution, mutate):
                      encode(message.rule_hits), now))
                 _mail_fts(c, body.mailbox, message.msg_id, message.subject, message.body,
                           message.from_addr, " ".join(message.to))
+                if fresh:
+                    automations.on_mail(c, body.mailbox, message)
             for msg_id in body.deleted:
                 existing = c.execute("SELECT epoch FROM mail_messages WHERE mailbox=? AND msg_id=?",
                                      (body.mailbox, msg_id)).fetchone()

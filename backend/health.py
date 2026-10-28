@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
                pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+from .batch_work import report, storage_error
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -511,6 +512,20 @@ def _fenced_queue_reason(row, refused, first, person):
     return refused, first, person
 
 
+def _claimable(c, settings, runner_id, slug, limits, **kw):
+    """execution.bot_claimable, or None when a check of the claim raised. The claim passes such a bot over or holds the
+    job, and Health names it (claim_holds.check_failures, the held job's item), so the bot is not explained here and
+    the page still renders. A storage error still fails the read."""
+    from .execution import bot_claimable
+    try:
+        return bot_claimable(c, settings, runner_id, slug, limits, **kw)
+    except Exception as exc:
+        if storage_error(exc):
+            raise
+        report("health claim check", slug, exc, logger="tico.health")
+        return None
+
+
 def _waiting(c, online_ids, settings=None, limits=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
@@ -551,8 +566,8 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
     from . import start_places
     held_now = start_places.held_totals(c)
-    full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if held_now.get(r["id"], 0) >= (r["capacity"] or 1)}
+    full = {r["id"] for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL")
+            if held_now.get(r["id"], 0) >= start_places.turn_limit(r)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
@@ -616,13 +631,16 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 (oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff)):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
-            refused, first, person = (('company_limit', None, False) if company_stopped else
-                                      bot_claimable(c, settings, where[0], slug, limits))
+            claimable = (('company_limit', None, False) if company_stopped else
+                         _claimable(c, settings, where[0], slug, limits))
+            if claimable is None:
+                continue        # the claim's check for this bot raised: Health names that check instead
+            refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = bot_claimable(c, settings, where[0], slug, limits, oldest=True)
-                if diagnostic[0] and diagnostic[0] != "lane_held":
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True)
+                if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
             refused, first, person = _fenced_queue_reason(row, refused, first, person)
@@ -774,6 +792,8 @@ HELD = {
     "budget": ("Tico stopped it for too many runs in a short time: check its last runs, then release it or raise its "
                "budget", BOT_SETTINGS),
     "backoff": ("Pausing after a failed run: it tries again in a moment", RUNS),
+    # The owner's "Turns at once" for the bot is full across every computer: its queued work starts when one ends.
+    "bot_limit": ("At its turn limit: it starts when one of its running turns ends", BOT_SETTINGS),
 }
 
 
@@ -1016,7 +1036,7 @@ def _github_repo_create(c, github):
     return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
                   [_fix("Let BotOps create repositories", fix["permissions_url"]),
                    _fix("Create " + fix["repository"] if fix["repository"] else "Create a repository", fix["create_url"]),
-                   _fix("Open GitHub settings", "#/integrations")])
+                   _fix("Open GitHub settings", "#/integrations/github")])
 
 
 def _github_workflows(c, github):
@@ -1032,7 +1052,7 @@ def _github_workflows(c, github):
                       "accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations")])
+                       _fix("Open GitHub settings", "#/integrations/github")])
     if refused := workflows_refused(c) if connected else []:
         # The installation reports Actions: Read and write, so the setting is not the cause and is not offered.
         return _check("github_workflows", "GitHub refused workflow tokens", "warn",
@@ -1041,7 +1061,7 @@ def _github_workflows(c, github):
                       "if this stays, check the installation's repository access and the organisation's Actions "
                       "policy on GitHub. Refused: " + ", ".join(refused[:3])
                       + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations")])
+                      [_fix("Open GitHub settings", "#/integrations/github")])
     return None
 
 
@@ -1058,14 +1078,14 @@ def _github_workflow_edits(c, github):
                       "permissions, then accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
                       + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
                       [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                       _fix("Open GitHub settings", "#/integrations")])
+                       _fix("Open GitHub settings", "#/integrations/github")])
     if refused := workflows_refused(c, 'edit_workflows') if connected else []:
         return _check("github_workflow_edits", "GitHub refused workflow-editing tokens", "warn",
                       "These bots may edit workflow files but get only the ordinary write token: GitHub refused a "
                       "token with Workflows: write although the installation reports it. Tico asks again after a "
                       "minute; if this stays, check the installation's repository access on GitHub. Refused: "
                       + ", ".join(refused[:3]) + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
-                      [_fix("Open GitHub settings", "#/integrations")])
+                      [_fix("Open GitHub settings", "#/integrations/github")])
     return None
 
 
@@ -1923,7 +1943,7 @@ def view(c, who, settings, auth, github, config):
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
-                                      "scoped", "company_limit", "backoff")
+                                      "scoped", "company_limit", "backoff", "bot_limit")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),

@@ -28,10 +28,11 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import start_places
 from . import ask_ingest, ceo_bot, invites, owner_link
 from . import login_holds
 from . import step_age
-from . import bot_stops, turn_budgets
+from . import bot_stops, turn_budgets, proposals, task_caps
 from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -44,7 +45,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity, validate_identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name, route as error_route
-from .execution import (Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
+from .execution import (ClaimFaults, Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
                         lift_after_model_change, model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
@@ -407,8 +408,6 @@ def create_app(settings=None):
             return error["msg"]
         detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + reason(error)
                            for error in exc.errors())
-        if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
-            detail += ". routines must be " + M.ROUTINES_SHAPE
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
@@ -416,6 +415,9 @@ def create_app(settings=None):
 
     @app.exception_handler(Problem)
     async def problem_handler(request, exc):
+        if getattr(exc, "payload", None) is not None:
+            # A refusal whose body is its own flat payload (task_caps.Capped: CONTRACT §1), not the usual error envelope.
+            return JSONResponse(exc.payload, status_code=exc.status)
         if exc.status >= 500:
             telemetry.capture("request", exc, exc.status, route=error_route(request))
             request.state.telemetry_captured = True
@@ -682,6 +684,9 @@ def create_app(settings=None):
                     # A direct setting from the catalogue the person asked for runs on their words the same way.
                     setting = (not approves and request.state.identity.via == "assistant"
                                and assistant_mod.instructed_setting(request.method, request.url.path, raw))
+                    # An org change they asked for (the Strategy Bot's suggestion they said to make) runs the same way.
+                    org = (not approves and request.state.identity.via == "assistant"
+                           and assistant_mod.instructed_org(request.method, request.url.path, raw))
                     # The owner's yes to a goal read-back in their CEO Bot chat (backend/goal_read_back.py): the goal,
                     # measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.ceo_turn(request.state.identity)
@@ -690,12 +695,12 @@ def create_app(settings=None):
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
                                                         "read-back, citing it (`--on-behalf-of turn`)")
                     if not goal_yes and not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and (setting or assistant_instructed(request.method, request.url.path, raw,
+                            and (setting or org or assistant_instructed(request.method, request.url.path, raw,
                                                                  decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
                                       "own. A task change, comment or link, declining an approval, answering a bot's "
-                                      "question or a direct setting (`hub settings set`) that the person clearly asked "
-                                      "for in this chat runs when you cite their "
+                                      "question, a direct setting (`hub settings set`) or an org change (groups, leads, "
+                                      "reports to) that the person clearly asked for in this chat runs when you cite their "
                                       "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
                                       "(or POST /api/v2/assistant/actions), several actions on one card (path "
                                       "/api/v2/assistant/batch); approving is a card unless the person lets you "
@@ -865,7 +870,6 @@ def create_app(settings=None):
             if cause_reset is not None:
                 wake_rules.CAUSE.reset(cause_reset)
 
-    from . import routines
 
     def may_edit_routines(c, who, bot):
         """The bot itself, or a person who manages it (its owners, its operator, an Admin, whoever it reports up
@@ -978,109 +982,6 @@ def create_app(settings=None):
         if who.role != "owner" and who.actor != "bot:botops":
             raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
         return app.state.timing.summary()
-
-    @app.get('/api/v2/bots/{bot}/routines')
-    def bot_routines(bot: str, request: Request, include_deleted: bool = False):
-        who = request.state.identity
-        with store.read() as c:
-            if not (who.actor == "bot:" + bot or who.role in ('human', 'owner') or auth.bot_above(c, who, bot)):
-                raise Problem('forbidden', 'Only people, the bot itself and the bots above it read its routines', 403)
-            auth.require_read(c, who, bot)
-            return {'routines': routines.listing(c, bot, include_deleted)}
-
-    @app.post('/api/v2/bots/{bot}/routines')
-    def routine_create(request: Request, bot: str, body: M.RoutineCreate):
-        who = request.state.identity
-        def work(c):
-            may_edit_routines(c, who, bot)
-            try:
-                return {'routine': routines.create(c, who.actor, bot, body.model_dump(), key=body.key)}
-            except ValueError as exc:
-                raise Problem('routine', str(exc), 422)
-        return mutate(request, body, work)
-
-    def routine_owner(c, who, sid):
-        found = c.execute('SELECT bot FROM schedules WHERE id=?', (sid,)).fetchone()
-        if not found:
-            raise Problem('not_found', 'Routine not found', 404)
-        may_edit_routines(c, who, found['bot'])
-        return found['bot']
-
-    @app.post('/api/v2/routines/{schedule_id}')
-    def routine_update(request: Request, schedule_id: str, body: M.RoutineUpdate):
-        who = request.state.identity
-        def work(c):
-            routine_owner(c, who, schedule_id)
-            try:
-                return {'routine': routines.update(c, who.actor, schedule_id, body.model_dump())}
-            except ValueError as exc:
-                raise Problem('routine', str(exc), 422)
-        return mutate(request, body, work)
-
-    @app.post('/api/v2/routines/{schedule_id}/delete')
-    def routine_delete(request: Request, schedule_id: str, body: M.Empty):
-        who = request.state.identity
-        def work(c):
-            routine_owner(c, who, schedule_id)
-            return {'routine': routines.remove(c, who.actor, schedule_id)}
-        return mutate(request, body, work)
-
-    @app.post('/api/v2/routines/{schedule_id}/run')
-    def routine_run_now(request: Request, schedule_id: str, body: M.Empty):
-        """Open one manual occurrence of a recurring routine for its bot."""
-        who = request.state.identity
-        def work(c):
-            bot = routine_owner(c, who, schedule_id)
-            schedule = routines.row(c, schedule_id)
-            if schedule["deleted_at"] or schedule["event_name"]:
-                raise Problem("routine", "Only an existing timed routine can run now", 422)
-            if schedule["enabled"] != 1 or (H.bot(c, bot) or {}).get("state") != "active":
-                raise Problem("routine", "Resume the routine and bot before running it", 409)
-            setup = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            if setup and is_parked(setup["onboarding_state"]):
-                raise Problem("onboarding", f"{H.bot(c, bot)['display_name'] or bot} is still onboarding, so it can't run "
-                              "its routines yet. Someone above it on the org chart marks onboarding complete when it is "
-                              "ready", 409)
-            current = routines.latest_task(c, schedule_id)
-            if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
-                raise Problem("routine", "This routine already has unfinished work", 409)
-            task = routines.open_task(c, auth, schedule, schedule["title"], schedule["playbook"], H.now(),
-                                      trigger="person_message" if H.is_human(who.actor) else "other")
-            occurrence = "manual:" + H.new_id()
-            c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)",
-                      (schedule_id, occurrence, task["id"], "created"))
-            H.event(c, who.actor, "routine.run_now", schedule_id, {"task": task["id"]})
-            return {"task_id": task["id"], "occurrence": occurrence}
-        return mutate(request, body, work)
-
-    @app.get('/api/v2/routines')
-    def all_routines(request: Request, response: Response, include_deleted: bool = False):
-        from . import task_reads as reads
-        who = request.state.identity
-        if who.role not in ('human', 'owner'):
-            raise Problem('forbidden', 'This endpoint is available only to people', 403)
-        with store.read() as c:
-            readable = auth.bot_accesses(c, who)
-            rows = [row for row in routines.listing(c, include_deleted=include_deleted, summary=True)
-                    if readable.get(row['bot'], auth.FULL)['read']]
-            # The rows are one small query; the answer's names and bytes are what a match saves.
-            tag = reads.etag('routines', rows, reads.names(c))
-            if reads.fresh(request, tag):
-                return reads.not_modified(tag)
-            response.headers['ETag'] = tag
-            return {'routines': rows}
-
-    @app.get('/api/v2/routines/{schedule_id}/occurrences')
-    def routine_occurrences(schedule_id: str, request: Request, limit: int = 50):
-        who = request.state.identity
-        with store.read() as c:
-            row = c.execute('SELECT bot FROM schedules WHERE id=?', (schedule_id,)).fetchone()
-            if who.role not in ('human', 'owner') and not (row and auth.bot_above(c, who, row['bot'])):
-                raise Problem('forbidden', 'This endpoint is available only to people and the bots above the routine\'s bot', 403)
-            if not row:
-                raise Problem('not_found', 'Routine not found', 404)
-            auth.require_read(c, who, row['bot'], 'Routine not found')
-            return {'occurrences': routines.occurrences(c, schedule_id, limit, who=who, auth=auth)}
 
     def mutate(request, body, fn, check=None):
         def current_access(c):
@@ -1371,6 +1272,10 @@ def create_app(settings=None):
                 # A reply to a bot's update (backend/updates.py): the update must exist.
                 if not isinstance(values, str) or not updates.one(c, values):
                     raise Problem("reference", "Unknown update", 422)
+            elif kind == "automation":
+                # A chat about one automation (BotOps edits the one a person has open): the caller must be able to see it.
+                if not automations.may_reference(c, who, values):
+                    raise Problem("reference", "Unknown automation", 422)
             elif kind not in ("depth", "turn_id"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
@@ -1899,6 +1804,9 @@ def create_app(settings=None):
             row, admins, changed = Access.edit_person(c, who.actor, roster, pid, body, lists, auth.owner_email)
             if changed.get("sign_in") is False:
                 c.execute("DELETE FROM oidc_sessions WHERE human=?", (pid,))    # open browsers are signed out now
+            if changed.get("team"):
+                from . import groups
+                groups.leads_follow(c, "person:" + pid)        # a lead who left its group leads it no more
             if admins != lists["admins"]:
                 Access.save_access(c, who.actor, {"expected_revision": lists["revision"]}, H.now(),
                                    bot_admins=admins, settings=settings)
@@ -2257,6 +2165,7 @@ def create_app(settings=None):
                         # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                         "task_model": task_models.stored(declared),
                         "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
+                        "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                                   task_models.of(declared)),
@@ -2378,7 +2287,8 @@ def create_app(settings=None):
             from . import ceo_bot
             hide_ceo = ceo_bot.hidden_for(c, who)
             chart = ceo_bot.chart_entries(c, settings, roster, configs, archived, hidden=hide_ceo)
-            view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "")
+            # A bot's bare person id in reports_to is that person (backend/people.py).
+            view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "", bare_people=True)
             view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived,
                                                       hidden=hide_ceo)
             for row in view["bots"]:
@@ -2420,7 +2330,7 @@ def create_app(settings=None):
             seats, every = [], lifecycle.all_seats(c)
             parents = {}
             for seat in c.execute("SELECT * FROM seats WHERE closed_at IS NULL ORDER BY created,id").fetchall():
-                parent, seen = lifecycle.org_parent(seat, roster, chart, archived, every), set()
+                parent, seen = lifecycle.org_parent(seat, roster, chart, archived, every, True), set()
                 while parent.startswith("b:") and parent[2:] in by_id and parent not in seen and not drawn(parent[2:]):
                     seen.add(parent)
                     parent = by_id[parent[2:]]["org_parent"]
@@ -3561,6 +3471,7 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
+        task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
@@ -3666,6 +3577,7 @@ def create_app(settings=None):
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        task_caps.record(c, row["id"], who.actor, owner)     # a send, counted against the sender's cap for this owner
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
         for source_row in kept:
@@ -3776,9 +3688,22 @@ def create_app(settings=None):
             prs = review_gate.links(c, row)
         return review_gate.snapshot(app.state.github_app, prs) if prs else {}
 
+    def cap_before_preflight(request, who, owner_ref):
+        """The task cap (CONTRACT §1) before any LLM preflight: a refused send spends no judgment and writes nothing.
+        A retry whose Idempotency-Key already has a saved answer is not checked: `mutate` replays that answer."""
+        if not owner_ref:
+            return
+        from .shared_bots import route
+        with store.read() as c:
+            if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+                return
+            original = auth.target(c, who, owner_ref, need="write")
+            task_caps.check(c, who.actor, auth.target(c, who, route(c, who.actor, original), need="write"))
+
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
+        cap_before_preflight(request, request.state.identity, body.owner)
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
         ingest = ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
@@ -3858,8 +3783,14 @@ def create_app(settings=None):
                 gates.append(gate)
             if "size" in body.model_fields_set and body.size is None:
                 fields["clear_size"] = True
+            if fields.get("owner") and body.owner:
+                new_owner = auth.target(c, who, body.owner, need="write")
+                if new_owner != row["owner"]:
+                    task_caps.check(c, who.actor, new_owner)
             after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
                                   receipt_owner=Access.load_owner(c, settings)["email"])
+            if fields.get("owner") and body.owner and new_owner != row["owner"]:
+                task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
@@ -3874,6 +3805,15 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
+        if body.owner:
+            with store.read() as c:
+                try:
+                    current = auth.task(c, caller, auth.resolve_task(c, caller, tid))
+                except Problem:
+                    current = None
+                if current and auth.target(c, caller, body.owner, need="write") != current["owner"] and not \
+                        store.saved(c, caller, request.url.path, request.headers.get("idempotency-key")):
+                    task_caps.check(c, caller.actor, auth.target(c, caller, body.owner, need="write"))
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         ingest = []
         if (body.owner or body.waiting_on) and ask_ingest.gated(caller, settings.assistant_bot):
@@ -4546,8 +4486,14 @@ def create_app(settings=None):
             lifecycle.refuse_send(c, who, None, what="anything")
             if body.task_id:
                 auth.task(c, who, body.task_id)
-            return H.approval_request(c, who.actor, body.kind, body.payload, body.task_id,
-                                      supersedes=body.supersedes_approval)
+            to = None
+            if body.kind in proposals.KINDS:     # a redesign proposal: checked now, decided by the top of the org
+                proposals.check(c, body.kind, body.payload)
+                to = proposals.decider(c)
+            row = H.approval_request(c, who.actor, body.kind, body.payload, body.task_id,
+                                     supersedes=body.supersedes_approval, to=to)
+            # A proposal answers as a bot's cap PUT does too: the approval's id and that it waits on a person.
+            return {**row, "approval": row["id"], "status": "pending"} if body.kind in proposals.KINDS else row
         return mutate(request, body, work)
 
     @app.get("/api/v2/approvals/{aid}")
@@ -4576,7 +4522,10 @@ def create_app(settings=None):
                 from .support import require_person
                 require_person(who)
             privacy.require_payload(c, who, row)
-            return H.approval_decide(c, who.actor, aid, body.decision, body.note)
+            decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
+            if row["kind"] in proposals.KINDS and body.decision == "approved":
+                proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
+            return decided
         return mutate(request, body, work)
 
     @app.post("/api/v2/approvals/{aid}/undo")
@@ -5239,6 +5188,9 @@ def create_app(settings=None):
                 path, "Your role can't change this: ask " + who_may, settings.public_url))
         if refusal:
             raise refusal
+        if aid := botops_act.automation_deleted(method, path):
+            from . import automations
+            automations.deletable(c, acting, aid)          # refused at once (404, 403, a built-in 409)
         with store.transaction() as w:
             card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body),
                                 what=what, shown=shown)
@@ -5959,6 +5911,7 @@ def create_app(settings=None):
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
+                         "turns_at_once": r["turns_at_once"], "turn_limit": start_places.turn_limit(r),
                          **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
                          **load_status(c, r["id"]), **turns})
         return rows
@@ -5982,27 +5935,10 @@ def create_app(settings=None):
 
     GO_LIVE_PENDING = pending_go_lives.PREFIX
 
-    def check_routines(c, who, bot, expected):
-        """The live Routines match the schedule the caller asked to go live with (`--routines-file`)."""
-        settings_admin._manager(c, who, bot)
-        live = {r["id"]: r for r in routines.listing(c, bot)}
-        requested = {r.id for r in expected}
-        for want in expected:
-            row = live.get(want.id)
-            if not row or any((row.get(key) if key == "enabled" else row.get(key) or "") != value for key, value in (
-                    ("title", want.title), ("cron", want.cron), ("timezone", want.timezone),
-                    ("enabled", int(want.enabled)), ("event_name", want.on))):
-                raise Problem("routine_mismatch", f"The live Routine {want.id} does not match the requested schedule; "
-                              "verify it before activating", 409)
-        if any(r["enabled"] and rid not in requested for rid, r in live.items()):
-            raise Problem("routine_mismatch", "An unrelated Routine is enabled; disable it before activating", 409)
-
-    def finish_go_live(c, who, bot, setup, expected):
+    def finish_go_live(c, who, bot, setup):
         """What going live does once the bot's computer has its repository: active, its setup started with the
-        person, and its first routine on (or the requested schedule checked). Shared by the request itself and by
-        the readiness report that completes a go-live that was waiting for the repository."""
-        if expected is not None:
-            check_routines(c, who, bot, expected)
+        person, and its first routine on. Shared by the request itself and by the readiness report that completes a
+        go-live that was waiting for the repository."""
         row = H.bot(c, bot)
         if row["state"] == "quarantined":
             raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
@@ -6016,7 +5952,7 @@ def create_app(settings=None):
             send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
             started = True
         # Going live turns its first routine on too: nobody approves it separately.
-        armed = onboarding.arm_first_routine(c, who, bot) if expected is None else None
+        armed = onboarding.arm_first_routine(c, who, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
         return {"activated": activated, "setup_started": started, "routine_armed": armed}
 
@@ -6031,7 +5967,6 @@ def create_app(settings=None):
                       "bot": bot, "runner_id": runner["runner_id"] if runner else "", "computer": computer,
                       "actor": who.actor, "role": who.role, "email": who.email, "via": who.via,
                       "setup": body.setup,
-                      "routines": None if body.routines is None else [r.model_dump() for r in body.routines],
                       "requested_at": H.now()})))
         H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
         message = (f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
@@ -6076,10 +6011,8 @@ def create_app(settings=None):
                 if role == "owner" and H.actor_id(pending.get("actor") or "") != auth.owner_id(c):
                     role = "human"
                 who = Identity(pending.get("actor") or "", role, pending.get("email") or "", via=pending.get("via") or "")
-                expected = (None if pending.get("routines") is None
-                            else [M.RoutineExpectation(**r) for r in pending["routines"]])
                 validate_identity(c, who)
-                done = finish_go_live(c, who, bot, bool(pending.get("setup", True)), expected)
+                done = finish_go_live(c, who, bot, bool(pending.get("setup", True)))
                 H.event(c, who.actor, "bot.go_live_finished", bot, {"computer": pending.get("computer") or "", **done})
                 c.execute("RELEASE go_live_finish")
             except Exception as exc:
@@ -6138,8 +6071,6 @@ def create_app(settings=None):
         history = history_on_github(bot)
 
         def work(c):
-            if body.routines is not None:
-                check_routines(c, who, bot, body.routines)
             # An external agent (a Hermes profile) has a credential, not a computer.
             placed = ({"computer": None, "placed": False} if agents.external_harness(c, bot)
                       else place_now(c, who, bot, body.computer, history))
@@ -6174,7 +6105,7 @@ def create_app(settings=None):
                     else:
                         raise Problem("repository_missing", "It has no repository yet. Ask BotOps to build it "
                                       f"(`hub bot repo-create {bot}`), then run `hub bot go-live {bot}` again", 409)
-            done = finish_go_live(c, who, bot, body.setup, body.routines)
+            done = finish_go_live(c, who, bot, body.setup)
             return {"bot": bot, "state": H.bot(c, bot)["state"], "computer": placed["computer"], "placed": placed["placed"],
                     **done,
                     **({"building": True, "note": "The computer is building its repository; queued work starts when it is ready"}
@@ -6183,6 +6114,25 @@ def create_app(settings=None):
         if isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             return JSONResponse(result, status_code=202)
         return result
+
+    @app.post("/api/v2/runners/{rid}/turns-at-once")
+    def runner_turns_at_once(request: Request, rid: str, body: M.RunnerTurnsAtOnce):
+        """How many turns a computer runs at once; null is automatic, its own capacity. A computer that cannot take a
+        raised number (no turns_at_once_v1) runs at most the capacity it reports. Owners and admins."""
+        who = request.state.identity
+        def work(c):
+            admin_only(who, "sets how many turns a computer runs at once")
+            row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "Computer not found", 404)
+            c.execute("UPDATE runners SET turns_at_once=? WHERE id=?", (body.turns_at_once, rid))
+            # The computer's next heartbeat reads the new limit (runner-rs events.rs: a "capacity" change).
+            c.execute("INSERT INTO changes(topic,kind,subject_id,at) VALUES('runner','capacity',?,?)", (rid, H.now()))
+            H.event(c, who.actor, "runner.turns_at_once", rid,
+                    {"before": row["turns_at_once"], "after": body.turns_at_once})
+            return {"turns_at_once": body.turns_at_once,
+                    "turn_limit": start_places.turn_limit({**dict(row), "turns_at_once": body.turns_at_once})}
+        return mutate(request, body, work)
 
     @app.post("/api/v2/runners/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
@@ -6505,6 +6455,12 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: settings_admin.set_keep_tasks_going(
             c, request.state.identity, bot, body))
 
+    @app.post("/api/v2/bots/{bot}/turns-at-once")
+    def bot_turns_at_once(request: Request, bot: str, body: M.BotTurnsAtOnce):
+        """How many turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
+        return mutate(request, body, lambda c: settings_admin.set_turns_at_once(
+            c, request.state.identity, bot, body))
+
     @app.post("/api/v2/bots/{bot}/task-model")
     def bot_task_model(request: Request, bot: str, body: M.BotTaskModel):
         """The harness, model and effort the bot's tasks run on, or null for the same as the bot
@@ -6632,9 +6588,9 @@ def create_app(settings=None):
     def claim(request: Request, body: M.Claim):
         # A read first: an idle runner asks every fraction of a second and must not take the write lock.
         with store.read() as c:
-            selected = []
+            selected, failed = [], ClaimFaults()
             idle = execution.idle_claim(c, request.state.identity, body,
-                                        request.headers.get("idempotency-key"), selected)
+                                        request.headers.get("idempotency-key"), selected, failed)
             if idle is not None:
                 return idle
             # Only a registered computer's claim cleans up: anyone else is refused before any write.
@@ -6648,16 +6604,19 @@ def create_app(settings=None):
             store.write(request.state.identity, execution.maintain)
             selected.clear()
         with store.read() as c:
-            if not selected:
+            # A job whose checks raised on this snapshot is held by the write below, which takes the next candidate.
+            if not selected and not failed:
                 selected.append(execution.candidate(c, request.state.identity, body,
-                                                    execution.runner(c, request.state.identity)))
+                                                    execution.runner(c, request.state.identity), failed=failed))
             # End any transaction opened during selection before taking the writer lock. The selected
             # job is checked against current policy in that transaction.
             if c.in_transaction:
                 c.rollback()
             def work(write):
+                if not selected:
+                    return execution.claim(write, request.state.identity, body, maintained=True, failed=failed)
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0], prepared=True, maintained=True)
+                                       selected=selected[0], prepared=True, maintained=True, failed=failed)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")
@@ -6677,7 +6636,12 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/started")
     def started(request: Request, aid: str, body: M.Started):
-        return mutate(request, body, lambda c: execution.started(c, request.state.identity, aid, body))
+        from . import automations   # the turn's start acts for the turn (automations.for_attempt)
+
+        def begin(c):
+            with automations.for_attempt(c, aid):
+                return execution.started(c, request.state.identity, aid, body)
+        return mutate(request, body, begin)
 
     @app.post("/api/v2/attempts/{aid}/thread")
     def attempt_thread(request: Request, aid: str, body: M.AttemptThread):
@@ -6739,7 +6703,12 @@ def create_app(settings=None):
     @app.post("/api/v2/attempts/{aid}/complete")
     def complete(request: Request, aid: str, body: M.Completion):
         body = scrub_attempt(aid, body)
-        return mutate(request, body, lambda c: execution.complete(c, request.state.identity, aid, body))
+        from . import automations   # the turn's end acts for the turn (automations.for_attempt)
+
+        def finish(c):
+            with automations.for_attempt(c, aid):
+                return execution.complete(c, request.state.identity, aid, body)
+        return mutate(request, body, finish)
 
     @app.get("/api/v2/bots/{bot}/execution-review")
     def execution_review(request: Request, bot: str):
@@ -6849,10 +6818,14 @@ def create_app(settings=None):
     system_routines.install(app, store, auth, mutate)
     from . import task_rules
     task_rules.install(app, store, auth, mutate)
-    from . import rule_suggestions, rules as wake_rules_api
-    rule_suggestions.install(app, store, auth, mutate)      # before the rules' `/{rule_id}`
-    wake_rules_api.install(app, store, auth, mutate)
+    from . import rules as wake_rules_api
+    wake_rules_api.install(app, store, auth)                # the event catalog; wake rules are automations now
     turn_budgets.install(app, store, auth, mutate, settings_admin)
+    from . import automations
+    automations.install(app, store, auth, mutate)
+    from . import audit_log
+    audit_log.install(app, store, auth)
+    task_caps.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)

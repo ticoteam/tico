@@ -55,7 +55,6 @@ async function pageAssistant() {
     <section class="rail-sec bot-active" id="asst-active" aria-labelledby="asst-active-h" hidden><h2 class="rail-h" id="asst-active-h">Active</h2><div class="tpane"></div></section>
     <section class="rail-sec bot-latest" id="asst-latest" aria-label="Updates" hidden></section>
     <section class="rail-sec bot-files" id="asst-files" aria-label="Files" hidden></section>
-    <section class="rail-sec bot-recurring" id="asst-recurring" aria-label="Routines" hidden></section>
   </aside></div>`;
   void assistantRail(slug, load);
   let d;
@@ -135,7 +134,7 @@ function assistantEarlier(earlier, load) {
   list.onclick = ev => { if (ev.target.closest('[data-earlier-more]')) void more(); };
 }
 
-// The rail: the assistant's active tasks, its latest update, its files and its routines, each only when it has
+// The rail: the assistant's active tasks, its latest update and its files, each only when it has
 // some, as on a bot page (ui/app/bot-page.js); the whole rail only when one of them shows and the window is wide.
 function assistantRailFit() {
   const rail = $('#pane-tasks');
@@ -147,15 +146,9 @@ function assistantRailFit() {
 }
 let ASSISTANT_RAIL_WATCH = false;
 async function assistantRail(slug, load) {
-  const rail = $('#pane-tasks'), e = S.emps.find(x => x.name === slug);
+  const rail = $('#pane-tasks');
   if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.js loads after this file
   new MutationObserver(assistantRailFit).observe(rail, {subtree: true, attributes: true, attributeFilter: ['hidden']});
-  if (e) {
-    const rec = $('#asst-recurring');
-    rec.innerHTML = botRecurringHTML(e, slug);
-    bindRecurringRail(rec);
-    rec.hidden = !rec.innerHTML;
-  }
   window.botFiles?.mount($('#asst-files'), {slug, get, esc, openFile: openFileLink});
   const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);

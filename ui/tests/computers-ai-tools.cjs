@@ -494,7 +494,9 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.deepEqual(await dialog.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
       ['own:claude', 'own:codex', 'own:musecode']);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], '
+      + '[data-computer-remove], [data-inbox-only], [data-member-bots], [data-turns-at-once], [data-computer-screen], '
+      + '[data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);

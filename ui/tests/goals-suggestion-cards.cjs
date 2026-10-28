@@ -117,7 +117,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.equal(await longCell.evaluate(el => el.scrollHeight > el.clientHeight + 1), false, 'Show all opens it');
     assert.match(await card('p-tgt').innerText(), /New target for Activation on Double organic signups\s+Now\s+→ 65% by Dec 31\s+Proposed\s+→ 60% by Dec 31, 2027/);
     // A Flag says in one line what the CEO Bot noticed.
-    assert.match(await card('p-flag').innerText(), /CEO Bot noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
+    assert.match(await card('p-flag').innerText(), /Strategy Bot noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
     if (screenshotDir) await page.locator('#goal-needs').screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-suggestion-cards.png')});
 
     // Fields filled in: "Add measure" adds it with that target.
@@ -141,7 +141,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.deepEqual(await decided('p-def'), {decision: 'reject'});
 
     // A goal's panel draws the same card; a proposed target shows, its fields folded under "Change the target".
-    await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]').first().click();
+    await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
     const inPanel = page.locator('#goal-panel[open] [data-proposal="p-panel"]');
     await inPanel.waitFor();
     assert.match(await inPanel.innerText(), /Add the measure Signups to Double organic signups\s+New accounts\s+Target range 40\+/);

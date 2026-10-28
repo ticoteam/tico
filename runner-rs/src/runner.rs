@@ -3,7 +3,7 @@
 //! task per turn (runner-rs/src/execute.rs).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,9 @@ pub struct Runner {
     pub stop: AtomicBool,
     pub(crate) drain: crate::drain::Drain,
     pub capacity: usize,
+    /// How many turns may hold a place: the owner's "Turns at once" from the last heartbeat reply, or the machine's
+    /// capacity while none is set (config::turn_limit). Only new starts read it; running turns keep their places.
+    pub turn_limit: AtomicUsize,
     pub tokens: Arc<TokenCache>,
     pub socket: Option<CredentialSocket>,
     /// Attempts with a live worker here; recovery leaves them alone.
@@ -135,6 +138,7 @@ impl Runner {
             stop: AtomicBool::new(false),
             drain: crate::drain::Drain::new(Duration::from_secs(drain_limit)),
             capacity,
+            turn_limit: AtomicUsize::new(capacity),
             tokens: Arc::new(TokenCache::new()),
             socket: None,
             active: Mutex::new(HashSet::new()),
@@ -543,6 +547,11 @@ impl Runner {
                 break Err(e);
             }
         };
+        if let Ok(reply) = &beat {
+            // Absent or null is automatic: the machine's own capacity is the limit.
+            let owner = reply["turns_at_once"].as_u64().map(|n| n as usize);
+            self.turn_limit.store(crate::config::turn_limit(owner, self.capacity), Ordering::SeqCst);
+        }
         (beat, tries)
     }
 
@@ -901,7 +910,7 @@ impl Runner {
         // The server reserves starts atomically; waiting workers do not consume computer capacity.
         while {
             let mut places = self.places.lock().unwrap();
-            if places.len() < self.capacity && clock.claim_due(&self.events) {
+            if places.len() < self.turn_limit.load(Ordering::SeqCst) && clock.claim_due(&self.events) {
                 places.insert("<claim>".into());
                 true
             } else {
@@ -1118,6 +1127,30 @@ mod tests {
         assert!(requests[1].contains("\"start_places\":true"));
         assert!(requests[2].contains("start_places") && !requests[3].contains("start_places"));
         assert!(!runner.start_places.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_heartbeat_reply_sets_the_turn_limit_and_an_absent_one_returns_it_to_the_machines_capacity() {
+        let (url, _seen) = crate::client::tests::serve(vec![
+            (200, r#"{"ok":true,"turns_at_once":1}"#),
+            (200, r#"{"ok":true}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-turn-limit-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "capacity":3,
+                                     "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config.clone(), client, State::open(&dir.join("state")).unwrap());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 3);
+        let mut body = json!({"version": "test"});
+        assert!(runner.post_heartbeat(&mut body).await.0.is_ok());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 1);
+        assert!(runner.post_heartbeat(&mut body).await.0.is_ok());
+        assert_eq!(runner.turn_limit.load(Ordering::SeqCst), 3);
+        assert_eq!(runner.capacity, 3, "the machine's own capacity is what the heartbeat body reports");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

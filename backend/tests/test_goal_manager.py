@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from backend import routines as R
 from backend.app import create_app
 from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, draft,  # noqa: F401
                                            environment, machine, signed_in)
@@ -21,10 +22,10 @@ def with_goal_manager(api):
 
 
 def routines(api):
+    """The CEO Bot's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left out."""
     with api.app.state.store.read() as c:
-        return {r["id"]: dict(r) for r in c.execute(
-            "SELECT s.id, coalesce(sc.enabled,1) AS enabled FROM schedules s "
-            "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot='goal-manager' AND s.deleted_at IS NULL")}
+        rows = {r["id"]: R.row(c, r["id"]) for r in c.execute("SELECT id FROM schedules WHERE bot='goal-manager'")}
+    return {sid: row for sid, row in rows.items() if row and row["automation"] and not row["deleted_at"]}
 
 
 def states(api):
@@ -79,4 +80,3 @@ def test_nobody_archives_it_and_only_the_owner_edits_it(environment):
     admin = api.post("/api/v2/bots/goal-manager/definition", json=edit, headers=as_person(api, "riley"))   # an Admin
     assert admin.status_code == 403
     assert api.post("/api/v2/bots/goal-manager/definition", json=edit, headers=signed_in()).status_code == 200
-

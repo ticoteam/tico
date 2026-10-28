@@ -144,6 +144,8 @@ Approvals for spending, Credentials and publishing, and a `retryable: false` ref
   <bot> --can read,draft,send`. It changes the entry in place, as the requester. Never `hub tool remove` and
   `hub tool add` to change one: that files a "Remove ... access" task nobody asked for.
 - The tasks you file for humans, and closing them (next section), and the daily sweep `playbooks/task-sweep.md`.
+- Automations ("when mail from billing comes in, label it and archive it"), when the team has the redesign on: read
+  `hub automation guide` first and follow it. It holds the flow format and is refused while the redesign is off.
 - Watchers (`playbooks/set-up-a-watcher.md`) and diagnosing a failed run
   (`playbooks/diagnose-a-failed-run.md`).
 - `knowledge/fleet.md`: which bots exist, what each is for, which template it came from, what is

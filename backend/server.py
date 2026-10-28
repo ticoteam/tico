@@ -94,7 +94,21 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--log-level", default="info")
     args = parser.parse_args()
+    refuse_unmoved()
     run(host=args.host, port=args.port, log_level=args.log_level)
+
+
+def refuse_unmoved():
+    """Exit 1, the database unopened for writing, when it still holds routines and rules this install has not opted in
+    to moving (backend/redesign_migration.py `guard`): the updater's health check then rolls the release back."""
+    from . import redesign_migration
+    path = os.environ.get("TICO_DB")
+    if not path:
+        return
+    try:
+        redesign_migration.guard(path)
+    except redesign_migration.NotOptedIn:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

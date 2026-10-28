@@ -115,6 +115,10 @@ def judge(conn, item):
         ctx = R._Context(conn, item["actor"], row.get("owner") or "", {}, None, row)
         rows = conn.execute("SELECT r.* FROM rules r LEFT JOIN rule_task_state s ON s.rule_id=r.id "
                             "WHERE r.enabled=1 AND r.event=? AND s.paused_at IS NULL", (item["event"],)).fetchall()
+        from . import redesign_migration
+        paused = {r["rule_id"] for r in conn.execute("SELECT rule_id FROM rule_task_state WHERE paused_at IS NOT NULL")}
+        rows += [r for r in redesign_migration.wake_rows(conn, item["event"])
+                 if r["event"] == item["event"] and r["id"] not in paused]
         rows = sorted(rows, key=lambda r: (R.PRECEDENCE.index(r["scope_kind"]), r["position"], r["created"], r["id"]))
         for rule in rows:
             if not ctx.in_scope(rule) or not ctx.matches(H._json(rule["when_json"], {})):

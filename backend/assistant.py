@@ -210,6 +210,29 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
                       if e else "That setting needs the person's own yes", 403)
 
 
+# An org change the person asked for in their chat (the redesign's Strategy Bot suggests them in words; the person says
+# which to make): a group made, renamed, nested, filled, led or deleted, and who a teammate reports to. It runs on their
+# cited words with exactly their rights, which the route checks as for their own click: the owner changes anything, a
+# lead moves teammates inside what it leads, anyone else is refused there. A bot asking, or the Strategy Bot on its own,
+# never borrows a person's rights: its own are refused (backend/groups.py `_may_change`).
+_ORG = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/groups"), ("PATCH", r"/api/v2/groups/[^/]+"), ("DELETE", r"/api/v2/groups/[^/]+"))]
+_REPORTS = (re.compile(r"/api/v2/(?:people|humans)/[^/]+"), re.compile(r"/api/v2/bots/[^/]+/definition"))
+
+
+def instructed_org(method, path, body=None):
+    """Whether this write is an org change that may run on the person's cited words: a group write, or a change of who a
+    person or a bot reports to and nothing else."""
+    path = normalize_path(path)
+    if not path:
+        return False
+    if any(m == method and p.fullmatch(path) for m, p in _ORG):
+        return True
+    fields = _fields(body)
+    return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields
+            and not set(fields) - {"reports_to", "expected_revision"})
+
+
 def instructed_route(method, path, body=None, decides=False):
     """Whether this write may run on the person's cited words. `decides`: their Assistant may decide approvals."""
     path = normalize_path(path)
@@ -442,7 +465,7 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
 _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/access/(limits|allow)"), ("PUT", r"/api/v2/usage/limits(/[^/]+)?"),
     ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
-    ("POST", r"/api/v2/routines/[^/]+/delete"),
+    ("DELETE", r"/api/v2/automations/[^/]+"), ("POST", r"/api/v2/automations/[^/]+/delete"),
     ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
     ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"), ("POST", r"/api/v2/system/update"),
     ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"), ("POST", r"/api/v2/support/tickets"),
@@ -452,7 +475,8 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
 )]
-_SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
+# An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
+_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:\-/]+)")
 
 
 def normalize_path(path):

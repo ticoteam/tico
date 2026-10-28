@@ -134,9 +134,9 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
         job = job_of(c, secret["id"])
     picks = []
 
-    def candidate(self, c, who, body, runner, *, job_id=None):
+    def candidate(self, c, who, body, runner, *, job_id=None, skip=(), **_):
         picks.append(job_id)
-        return job
+        return None if job["id"] in skip else job
 
     monkeypatch.setattr(execution.Execution, "candidate", candidate)
     monkeypatch.setattr(execution.Execution, "idle_claim", lambda self, *a, **k: None)
@@ -147,7 +147,7 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
         assert suppressed(c, job["id"]) == [{"reason": "unreadable"}]
 
 
-def test_a_stale_prepared_pick_waits_without_scanning_for_automatic_work(api, monkeypatch):
+def test_a_stale_prepared_pick_leaves_the_backfill_to_the_next_poll(api, monkeypatch):
     from backend import auto_tasks
 
     machine = task_bot(api, lanes=True)
@@ -158,9 +158,9 @@ def test_a_stale_prepared_pick_waits_without_scanning_for_automatic_work(api, mo
     picks = []
     backfills = []
 
-    def candidate(self, c, who, body, runner, *, job_id=None):
+    def candidate(self, c, who, body, runner, *, job_id=None, skip=(), **_):
         picks.append(job_id)
-        return job if job_id is None else None
+        return job if job_id is None and job["id"] not in skip else None
 
     def backfill(*args, **kwargs):
         backfills.append(True)
@@ -169,7 +169,8 @@ def test_a_stale_prepared_pick_waits_without_scanning_for_automatic_work(api, mo
     monkeypatch.setattr(execution.Execution, "idle_claim", lambda self, *a, **k: None)
     monkeypatch.setattr(auto_tasks, "missing", backfill)
     assert claim(api, machine, "ops") is None
-    assert picks == [None, job["id"]]
+    # The stale pick is passed over and the next pick finds nothing else, so the claim answers none.
+    assert picks == [None, job["id"], None]
     assert backfills == [], "a stale prepared pick leaves automatic backfill to the next poll"
     with store.read() as c:
         assert job_of(c, task["id"])["state"] == "queued"

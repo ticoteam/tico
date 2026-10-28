@@ -118,7 +118,8 @@ Only the Owner changes them, directly in Settings or by asking BotOps to act wit
 and remove groups and put humans and bots in them; members read them. A group is an access audience, so moving a human or a bot into a
 group, or a group under another, can change who reads a bot. BotOps does this as the person who asked it (`POST`, `PATCH` and `DELETE`
 on `/api/v2/groups` through `hub api`, or `hub group update`), with that person's own rights: an owner or an admin, at once; a member is
-refused. Built-in bots stay outside groups.
+refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
+same rights. Built-in bots stay outside groups.
 
 **The built-in bots** (the Assistant, BotOps, the Librarian and the CEO Bot) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
@@ -234,6 +235,8 @@ created by a member has Instructions the Team has not reviewed, so it does not g
   bot on any computer. Placing a member's bot never hands it to the computer's owner: it stays theirs.
 - Setup that places bots for you (a computer enrolling, the wizard) leaves a member's bot alone unless the computer is its owner's
   or takes members' bots.
+- **Turns at once** on a computer is set by owners and admins only. A member who manages a bot sets that bot's **Turns
+  at once** in its editor, like its other settings.
 
 A computer still hosts its owner's bots and the team owner's; taking members' bots adds members' bots, it does not move anyone else's.
 
@@ -468,17 +471,19 @@ The commands (with MCP tools of the same names):
 | `hub bot update <slug> ...` | name, description, reports-to, status, repository |
 | `hub bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_onboarding` (its manager may call it for it) |
 | `hub human add <email> [--name] [--title] [--reports-to]`, `hub human list` | the roster |
-| `hub group list`, `hub group update [<group>] [--name] [--parent] [--add-human] [--add-bot] [--remove-human] [--remove-bot]` | the groups; create (no group given), rename, move or fill one, owners and admins only |
+| `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human] [--remove-bot]`, `hub group delete <group>` | the groups; create (no group given), rename, move, lead, fill or delete one, owners and admins only (a lead within its groups) |
+| `hub org reports-to <bot:slug\|human:id> <manager>` | change who a teammate reports to, with the asker's rights |
 
 | `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
-| `hub bot go-live <bot> [--computer C] [--routines-file F]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. `--help` shows the `--routines-file` shape (docs/routines.md) |
+| `hub bot go-live <bot> [--computer C]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. |
 | `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
 | `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
 | `hub bot budget <bot> [--hour N\|default] [--day N\|default]`, `hub bot budget <bot> release`, `hub bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `hub team budget [--hour N] [--day N]` sets the team default (owner and admins) |
 | `hub bot scope <bot> <task>`, `hub bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
-| `hub routine on\|off <key> --bot <bot>` | a routine on or off |
+| `hub automation update <id> --enable\|--disable` | an automation (a routine) on or off |
 | `hub computer list [--computer C [--section S --offset N]]`, `hub health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
 | `hub computer performance <computer> [--hours 24]` | the computer's CPU and memory over the window, its overloads and what ran in them, and its busiest processes |
+| `hub computer turns-at-once <computer> <N\|automatic>` | turns at once, 1 to 256 or `automatic`; owners and admins |
 | `hub credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
 | `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
 | `hub credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |

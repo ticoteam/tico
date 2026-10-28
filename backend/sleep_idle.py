@@ -89,18 +89,17 @@ def table(c, name):
 
 
 def routine_times(c, at):
-    """When the server next has something to do on a clock, soonest first: each live bot routine (an overdue one is due
-    now), the controlled system jobs that run at a fixed time, the daily release hours, and the later tries of waiting
-    sends. Jobs that repeat on an interval are housekeeping that catches up after a wake, so they are left out: a
-    15-minute job would otherwise keep the server up for good."""
-    from .scheduler import SCHEDULES_SQL, schedule_due
+    """When the server next has something to do on a clock, soonest first: each switched-on schedule automation (an
+    overdue one is due now), the controlled system jobs that run at a fixed time, the daily release hours, and the later
+    tries of waiting sends. Jobs that repeat on an interval are housekeeping that catches up after a wake, so they are
+    left out: a 15-minute job would otherwise keep the server up for good."""
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
-    for row in c.execute(SCHEDULES_SQL).fetchall():
-        try:
-            out.append(schedule_due(row, when).timestamp())
-        except Exception:
-            continue                        # a routine with a bad cron is the scheduler's to report
+    if table(c, "automations"):
+        for row in c.execute("SELECT next_due FROM automations WHERE enabled=1 AND deleted_at IS NULL "
+                             "AND next_due IS NOT NULL").fetchall():
+            if (due := epoch(row[0])) is not None:
+                out.append(due)
     out.extend(t for t in fixed_times(c, when) if t > at)      # one already past is being run by the scheduler now
     out.extend(later_sends(c, at))
     return sorted(out)

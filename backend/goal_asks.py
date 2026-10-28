@@ -12,8 +12,7 @@ while the cause stands is left alone, and asked again only once the cause has cl
 
 Two more wait on a person: the company's vision, while it is empty
 (one ask to the environment owner, first in their list), and the Why lines the CEO Bot proposed (one bundled ask per
-person who decides them, never one per goal). There it also puts at most 5 asks a day in one person's list
-(`ceo_bot.room_today`), most important first (`ORDER`); the rest wait for the next day's room. At level 2 and 3 a
+person who decides them, never one per goal). Asks are filed most important first (`ORDER`). At level 2 and 3 a
 recovery the CEO Bot proposes for a goal (backend/ceo_suggest.py) is its own item, with its options, and takes the place
 of asking that goal's owner why a KPI is off track.
 
@@ -41,7 +40,7 @@ WHY_REF = "goals"                                     # one bundled Why ask per 
 
 def _org(conn):
     archived = {row["slug"] for row in H.bots(conn) if row.get("state") == "archived"}
-    return views.roster(conn), views.entries(conn), archived
+    return views.roster(conn), views.entries(conn), archived, True
 
 
 def _person(conn, actor, owner_id, org):
@@ -416,7 +415,7 @@ def sync(conn, owner_id, at=None, reads=None):
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
-                                 lint=False, lane="company", top=item["kind"] == "vision", capped=not rush,
+                                 lint=False, lane="company", top=item["kind"] == "vision",
                                  private=True if item.get("private") else None)
             conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))

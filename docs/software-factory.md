@@ -101,8 +101,8 @@ ticket stays at its step with a Waiting tag.
   files its check to a free pool bot, preferring another model company than the Builder, or leaves it "Waiting for a
   reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
-  wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
-  Rules page (`hub rule list --scope-kind type --scope-id <type>`).
+  wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the type's
+  **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
   work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,

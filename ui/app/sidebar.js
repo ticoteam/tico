@@ -180,14 +180,15 @@ function renderLibrarians() {
     const el = document.getElementById(id);
     if (!el) continue;
     el.href = href;
-    el.hidden = !(S.emps || []).some(e => e.name === slug);
+    // The owner's Strategy Bot is talked to beside the Strategy tabs, not from the rail.
+    el.hidden = !(S.emps || []).some(e => e.name === slug) || (id === 'nav-assistant' && slug === 'goal-manager');
   }
   const label = document.querySelector('#nav-assistant [data-nav-name]');
   if (label && label.textContent !== myChatName()) label.textContent = myChatName();
-  for (const [id, slug] of [['nav-docs-librarian', 'librarian'], ['nav-strategy-librarian', 'librarian']]) {
+  for (const [id, slug] of [['nav-strategy-librarian', 'librarian']]) {
     const el = document.getElementById(id);
     if (!el) continue;
-    const bot = (S.emps || []).find(e => e.name === slug && e.status !== 'archived' && e.status !== 'retired');
+    const bot = librarianBot();
     el.hidden = !bot;
     if (!bot) continue;
     const name = bot.display_name || slug;
@@ -198,6 +199,7 @@ function renderLibrarians() {
     el.classList.toggle('cur', on);
     if (on) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
   }
+  window.syncLibrarianRail?.();   // the Librarian's chat beside Library's pages follows the team as read now
 }
 function mailPersonVisible(person) {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
@@ -577,40 +579,28 @@ $('#org-history').onclick = () => {
   }
   renderTree();
 };
-// Message bots sit in their own group after the team chart; built-ins have separate entry points. `reports_to` is untouched,
-// and a bot that reports to one hangs where it would have.
-const MESSAGE_BOTS_GROUP = '__message_bots';
-// The CEO Bot is built in but on the chart, at its top.
+// Helpers (built-ins and message bots) are off the Team list; they have their own entry points. `reports_to` is untouched,
+// and a bot that reports to one hangs where it would have. The Strategy Bot is built in but on the chart, at its top.
 const isHelperBot = e => (isBuiltInBot(e.name) && e.name !== 'goal-manager') || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
 function orgTreeWithHelpers(byParent) {
-  const out = {}, helpers = [], bot = {}, parentOf = {};
+  const out = {}, bot = {}, parentOf = {};
   for (const [parent, kids] of Object.entries(byParent)) for (const n of kids) if (n.kind === 'bot') { bot['b:' + n.name] = n; parentOf['b:' + n.name] = parent; }
   const lift = parent => {
     for (let hops = 0; bot[parent] && isHelperBot(bot[parent]) && hops < 5; hops++) parent = parentOf[parent] || '';
     return parent;
   };
-  for (const [parent, kids] of Object.entries(byParent)) for (const n of kids) {
-    if (n.kind === 'bot' && isHelperBot(n)) helpers.push(n);
-    else (out[lift(parent)] ||= []).push(n);
-  }
-  for (const [id, name, members, order] of [
-    [MESSAGE_BOTS_GROUP, 'Message bots', helpers.filter(e => !isBuiltInBot(e.name)), 1],
-  ]) {
-    if (!members.length) continue;
-    (out[''] ||= []).push({kind: 'group', id, name, order, helpers: true});
-    out['g:' + id] = members;
-  }
+  for (const [parent, kids] of Object.entries(byParent)) for (const n of kids)
+    if (!(n.kind === 'bot' && isHelperBot(n))) (out[lift(parent)] ||= []).push(n);
   return out;
 }
 // One parent's rows in the team chart's order. The screen after Create (ui/first-run.js) lists its groups the same way.
 function orgSorted(parent, kids) {
   const placed = byReportOrder(parent);
   return (kids || []).slice().sort((a, b) => {
-    if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
     // A group's own humans and bots come first, then the groups nested in it.
     if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
     if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
@@ -686,13 +676,13 @@ function renderTree() {
   // flat: the history list, one row per bot and person, no children and nothing to drag
   const row = (node, depth, flat = false, at = {parent: '', order: []}) => {
     if (node.kind === 'group') {
-      const key = 'g:' + node.id, manage = !node.helpers && orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
+      const key = 'g:' + node.id, manage = orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
-      return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}${node.helpers ? ' data-helper' : ''}>
+      return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}>
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
-        ${renaming ? orgGroupFieldHTML(node.name) : `<span class="dept-label" data-toggle="${esc(key)}" role="button" tabindex="0">${esc(node.name)}</span>${node.id === MESSAGE_BOTS_GROUP ? betaPill('message_bots') : ''}`}
+        ${renaming ? orgGroupFieldHTML(node.name) : `<span class="dept-label" data-toggle="${esc(key)}" role="button" tabindex="0">${esc(node.name)}</span>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
         ${manage && ORG_BET === node.id && orgMayBet() ? orgBetPopHTML({id: node.id, bet_id: orgGroupBet(node.id)}) : ''}
@@ -731,7 +721,7 @@ function renderTree() {
         ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
+        ${botPausedBadge(e.name)}${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -834,8 +824,8 @@ function renderTree() {
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
       (a.dataset.nav === 'assistant' && (S.route === $('#nav-assistant')?.getAttribute('href') || S.route === LEARNED)) ||
       (a.dataset.nav === 'botops' && /^#\/bot\/botops(?:\/|$)/.test(S.route)) ||
-      (a.dataset.nav === 'goals' && (S.route === GOALS || S.route.startsWith(GOALS + '/') || S.route.startsWith(GOALS + '?'))) ||
-      (a.dataset.nav === 'more' && !mobilePrimary);
+      (a.dataset.nav === 'more' && !mobilePrimary) ||
+      redesignNavCurrent(a.dataset.nav);
     a.classList.toggle('cur', isCurrent);
     if (isCurrent) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });

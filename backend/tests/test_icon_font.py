@@ -15,3 +15,8 @@ def test_every_icon_in_use_is_in_the_font_manifest():
     assert not used - listed, "icons used but not in the font; run scripts/build-icon-font.py: %s" % sorted(used - listed)
     assert not listed - used, "icons.txt lists icons nothing uses; run scripts/build-icon-font.py: %s" % sorted(listed - used)
 
+
+
+def test_every_url_of_the_font_carries_its_hash():
+    # A cache that kept the old subset under the same URL would show an icon added since as its name.
+    assert not build.stale_font_urls(), "run scripts/build-icon-font.py --stamp"

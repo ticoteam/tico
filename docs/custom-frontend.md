@@ -325,7 +325,7 @@ GET /api/v2/tasks?lane=company&changed_after=<cursor>
   more changes than a page, or one change to more than 100 tasks): read in full. Treat the cursor as opaque.
 - A task's open `ask` can lag: a change to who may read its conversation alone does not move the cursor or the ETag,
   so it shows on the task's next change or full read.
-- A full read of `/api/v2/tasks` or `/api/v2/tasks/labels` (and `/api/v2/routines`) has an `ETag`. Send it back as
+- A full read of `/api/v2/tasks` or `/api/v2/tasks/labels` has an `ETag`. Send it back as
   `If-None-Match` and an unchanged answer is `304` with no body. For `/api/v2/tasks` "unchanged" means the rows it
   would return: a change to a task outside them still answers `304`.
 
