@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from . import bots as B
 from .board import dev_board
-from .world import Refusal, World
+from .world import PRIMARY, Refusal, World
 
 PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}   # $ per million: uncached input, cached input, output
 
@@ -145,6 +145,7 @@ class Run:
         free = w.capacity - sum(1 for b in team.all if b.running)
         idle = {b.slug for b in team.all} - set(body["busy_bots"]) - self.paused
         queued, held = w.queued_bots(idle)
+        why = self.refusals(w, idle) if free and queued else ""
         started = 0
         for _ in range(max(0, free)):
             _, reply = self.claim_once(w, body)
@@ -153,7 +154,39 @@ class Run:
                 break
             team.bot(attempt["bot"]).start(attempt)
             started += 1
-        self.marks.append({"at": w.now(), "free": free, "queued": queued, "held": held, "started": started})
+        mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started}
+        if free and queued and started < min(free, queued):
+            mark["why"] = why
+        self.marks.append(mark)
+
+    def refusals(self, w, slugs):
+        """Diagnostic only, read before a round's claims: for each bot among `slugs` with a queued job, the login holds the
+        server keeps on the bot's login and its fallbacks (a hold, or a probe out on it, with the probe's state), and the
+        bot's backoff. A short round reports these in its mark; no check judges them."""
+        from backend import login_holds, run_backoff
+        rid = w.runner["runner_id"]
+        clock = lambda stamp: (stamp or "")[11:16]
+        out = []
+        with w.store.read() as c:
+            for slug in sorted(slugs):
+                job = c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0 AND bot=? ORDER BY rowid LIMIT 1",
+                                (slug,)).fetchone()
+                if not job:
+                    continue
+                parts = [why] if (why := run_backoff.refusal(c, slug)) else []
+                for name in (PRIMARY, *w.runtime_fallbacks()):
+                    if name != PRIMARY and name not in w.signed_in:
+                        continue
+                    verdict = login_holds.holding(c, rid, "", name, job["id"])
+                    hold = login_holds.get(c, rid, "", name)
+                    if verdict or hold:
+                        probe = (hold or {}).get("probe_job")
+                        state = c.execute("SELECT state FROM jobs WHERE id=?", (probe,)).fetchone() if probe else None
+                        parts.append(f"{name} {verdict or 'no hold'} until {clock((hold or {}).get('until'))}"
+                                     + (f", probe {probe[:6]} {state['state']} from {clock(hold.get('probe_at'))}"
+                                        if probe and state else ""))
+                out.append(f"{slug}: {'; '.join(parts) or 'no refusal'}")
+        return " | ".join(out)
 
     def runner_body(self, team):
         """What a runner claims with: no bot named, and the bots it is running (or whose computer is off) as busy. The

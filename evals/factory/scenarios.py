@@ -140,7 +140,8 @@ def board_keeps_moving(since, waits=()):
             judged += 1
             need = min(m["free"], m["queued"])
             if m["started"] < need:
-                short.append(f"{m['at']:%H:%M} started {m['started']} of {need}")
+                short.append(f"{m['at']:%H:%M} started {m['started']} of {need}"
+                             + (f" ({m['why']})" if m.get("why") else ""))
         if not judged:
             return False, "no claim round had a free slot and queued work outside the waits: nothing shows the board moved"
         if short:

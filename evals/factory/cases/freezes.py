@@ -232,9 +232,10 @@ def turns_from(when):
 
 
 def inputs_moved(bot, texts):
-    """The moved-input mechanism, in order: the turn that met the limit read the run's messages to the bot, it ended
-    without answering them (its record has no action), and a later turn took them over (their attempt_inputs rows name
-    that turn, not the limited one)."""
+    """The moved-input mechanism, in order: the turn that met the limit had both messages, its own prompt (the claimed
+    message) and the inputs its first poll read, it ended without answering them (its record has no action), and a later
+    turn took them over. A later turn takes an input over with its attempt_inputs row; a prompt has no such row, so the
+    later turn is the attempt that ran the message's job."""
     def check(run):
         w = run.w
         mids = [r["id"] for text in texts for r in w.sql(
@@ -245,19 +246,26 @@ def inputs_moved(bot, texts):
         if not limited:
             return False, "no turn met the limit"
         turn = limited[0]
-        read = {m for _, _, aid, ids in w.input_reads if aid == turn["attempt"] for m in ids}
-        if not set(mids) <= read:
-            return False, f"the limited turn read {len(set(mids) & read)} of {len(mids)} messages"
+        read = {turn["prompt"]} | {m for _, _, aid, ids in w.input_reads if aid == turn["attempt"] for m in ids}
+        missed = [m for m in mids if m not in read]
+        if missed:
+            return False, f"the limited turn read {len(mids) - len(missed)} of {len(mids)} messages"
         if turn["action"]:
             return False, f"the limited turn answered: {turn['action'][:80]}"
         owners = {r["message_id"]: r["attempt_id"] for r in w.sql(
             f"SELECT message_id, attempt_id FROM attempt_inputs WHERE message_id IN ({','.join('?' * len(mids))})",
             tuple(mids))}
-        moved = [m for m in mids if owners.get(m) not in (None, turn["attempt"])]
-        if len(moved) != len(mids):
-            return False, f"{len(mids) - len(moved)} of {len(mids)} messages still belong to the limited turn"
-        return True, (f"the limited turn {turn['attempt'][:8]} read both, left them unanswered, and a later turn "
-                      f"{owners[mids[0]][:8]} took them over")
+
+        def taken_over(mid):
+            if owners.get(mid) not in (None, turn["attempt"]):
+                return True
+            return bool(w.sql("SELECT 1 FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=? AND a.id<>?",
+                              (mid, turn["attempt"])))
+        still = [m for m in mids if not taken_over(m)]
+        if still:
+            return False, f"{len(still)} of {len(mids)} messages still belong to the limited turn"
+        return True, (f"the limited turn {turn['attempt'][:8]} had both, left them unanswered, and a later turn took "
+                      "them over")
     return check
 
 

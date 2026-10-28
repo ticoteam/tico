@@ -88,7 +88,10 @@ class Bot:
                        or message.get("kind"), "task": task and task["id"], "kind": "noise",
                        "stale": self.stale(task, message), "action": None,
                        "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime,
-                       "attempt": attempt["id"]}
+                       "attempt": attempt["id"],
+                       # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
+                       # returns it, since no input row is written for it.
+                       "prompt": message.get("id")}
         w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
         if self.slug in w.steer_bots:
             self.steer()
