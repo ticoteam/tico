@@ -2819,14 +2819,15 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
 
 
 def _close_open_asks(conn, actor, target, kind, msg):
-    """A person's reply answers the named ask, or that bot's asks to them on the named task, pick questions too:
-    the reply is the answer, and the bot wakes on it as on any message.
+    """A person's reply answers plain asks in scope; structured asks require a recorded choice.
+    The bot wakes on a note as on any message, while the decision stays open.
 
     A shared conversation alone does not identify which task a person is answering.
     A direct reply takes precedence over task context so it cannot close sibling asks.
     """
     refs = _json(msg.get("refs_json"), {}) or msg.get("refs") or {}
-    if kind not in ("say", "answer") or not is_human(actor) or not is_bot(target) or refs.get("clarify"):
+    if (kind not in ("say", "answer") or not is_human(actor) or not is_bot(target)
+            or refs.get("clarify") or refs.get("decision_open")):
         return      # asking for a clearer question (backend/clarify_asks.py) is not an answer
     if msg.get("in_reply_to"):
         scope, scope_id = "m.id", msg["in_reply_to"]
@@ -2840,8 +2841,9 @@ def _close_open_asks(conn, actor, target, kind, msg):
         "WHERE m.to_actor=? AND m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL "
         "AND m.answered_by IS NULL AND m.id NOT IN (SELECT in_reply_to FROM messages "
         "WHERE kind='answer' AND in_reply_to IS NOT NULL) "
-        f"AND {scope}=?",
-        (actor, target, scope_id)))]
+        f"AND {scope}=? "
+        "AND (json_type(m.refs_json,'$.questions') IS NULL OR ?)",
+        (actor, target, scope_id, bool(refs.get("answer")))))]
     if not open_asks:
         return
     conn.executemany("UPDATE messages SET answered_by=? WHERE id=?",
@@ -3166,6 +3168,13 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
+    if (asked.get("refs") or {}).get("questions") and not refs.get("answer"):
+        refs.update({"decision_open": True})
+        about = message_task_id(asked, conversation(conn, asked["conversation_id"]))
+        if about:
+            refs["task"] = about
+        return _write_message(conn, actor, comment_target or asked["from_actor"], body,
+                              conversation(conn, asked["conversation_id"]), "say", refs, message_id, None)
     conv = conversation(conn, asked["conversation_id"])
     msg = _write_message(conn, actor, comment_target or asked["from_actor"], body, conv, "answer", refs, message_id, None)
     about = message_task_id(asked, conv)

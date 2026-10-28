@@ -457,9 +457,13 @@ document.addEventListener('submit', async ev => {
   if (!text) { box.focus(); return; }
   [...form.elements].forEach(el => el.disabled = true); msg.textContent = 'Sending…';
   try {
-    await post(`/v2/messages/${encodeURIComponent(form.dataset.askAnswer)}/answer`, {text});
-    toast('Answered');
-    form.closest('details')?.remove();
+    const result = await post(`/v2/messages/${encodeURIComponent(form.dataset.askAnswer)}/answer`, {text});
+    toast(result.decision_open ? result.feedback : 'Answered');
+    if (result.decision_open) {
+      box.value = '';
+      msg.textContent = result.feedback;
+      [...form.elements].forEach(el => el.disabled = false);
+    } else form.closest('details')?.remove();
     await v2Refresh();
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   } catch (e) {

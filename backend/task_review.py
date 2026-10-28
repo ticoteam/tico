@@ -189,6 +189,25 @@ def edit_version(c, auth, who, task_id, fid, number, body):
     return version_review(c, fid, number, actor=privacy.actor(who))
 
 
+def answer_text(c, auth, who, asked, text, *, unknown=False):
+    """Only a unique exact label for one question can stand in for a card pick."""
+    from . import models as M
+    if asked["to_actor"] != who.actor or asked["from_actor"] == who.actor:
+        raise Problem("forbidden", "Only the question's recipient may answer it", 403)
+    privacy.require_message(c, who, asked)
+    task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
+    questions = asked["refs"]["questions"]
+    matches = [o["label"] for q in questions for o in q["options"] if o["label"] == text]
+    if task_id and not unknown and len(questions) == 1 and len(matches) == 1:
+        target = asked["refs"].get("target") or {"comment": asked["id"]}
+        return answer_task(c, auth, who, task_id, M.TaskAnswer(
+            target=target, answers={questions[0]["id"]: matches}), wake=True)
+    # The original words stay on the task; an unmatched note cannot settle its question.
+    note = H.answer(c, who.actor, asked["id"], text, unknown=unknown)
+    return {**note, "decision_open": True,
+            "feedback": "Note saved. Decision still open; choose one of the options."}
+
+
 def answer_task(c, auth, who, task_id, body, wake):
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
@@ -262,6 +281,11 @@ def answer_task(c, auth, who, task_id, body, wake):
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
+    # Repeated deliveries with a new transport key still record only one identical choice.
+    for previous in H.review_answers(c, asked["id"], actor=privacy.actor(who)):
+        if all(previous.get(k) == value.get(k) for k in ("target", "answers", "other", "dismiss", "by")):
+            return {"answer": previous, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
+                    "woke": False}
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
