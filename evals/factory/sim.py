@@ -55,6 +55,7 @@ class Run:
         self.back_check = None     # set by the scenario when a computer comes back: its readiness is read on that tick
         self.back_lines = []       # what the server held for the returning computer's bot on its first round back
         self.traces = []           # claim traces of short rounds: the server's candidate gates for one queued bot
+        self.trace_rounds = 0      # short rounds traced so far (the first few are read)
 
     def team(self, w):
         styles = self.scenario.styles
@@ -161,7 +162,7 @@ class Run:
             # that heartbeat once the scenario changes who is available).
             self.back_lines.append(self.back_read(w, self.back_check["slug"]))
             self.back_check = None
-        queued, held = w.queued_bots(idle)
+        queued, held, queued_slugs = w.queued_bots(idle)
         before = self.refusals(w, idle) if free and queued else []
         started, reply = 0, None
         for _ in range(max(0, free)):
@@ -171,13 +172,15 @@ class Run:
                 break
             team.bot(attempt["bot"]).start(attempt)
             started += 1
-        mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started}
+        mark = {"at": w.now(), "free": free, "queued": queued, "slugs": queued_slugs, "held": held,
+                "started": started}
         if free and queued and started < min(free, queued):
             # Diagnostic: the server's view of each queued bot before the claims, and the last claim's answer.
             mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the claim body was {body} "
                            f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
                            f"paused {sorted(self.paused)}")
-            if len(self.traces) < 8:
+            if self.trace_rounds < 12:
+                self.trace_rounds += 1
                 self.traces.extend(self.trace(w, body, idle))
         self.marks.append(mark)
 
@@ -215,13 +218,27 @@ class Run:
                 ready = X.readiness_document(runner["readiness_json"])
                 ctx, default, roots, live_tasks = subscriptions.context(c), usage_limits.company(c), X.roots_on(runner), X.live_tasks(c)
                 any_job = ex.candidate(c, who, ns, runner)
-                out.append(f"{stamp} candidate for the computer: {any_job['id'][:6] if any_job else None}")
-                for slug in sorted(slugs):
-                    if len(out) > limit:
+                out.append(f"{stamp} candidate for the computer: {any_job['id'][:6] if any_job else None}"
+                           + (f" for bot {any_job['bot']}" if any_job else ""))
+                # The computer's gates the claim applies before any job: the waking period from its last contact,
+                # its turns held against its capacity.
+                now = X.H.now()
+                computer = c.execute("SELECT last_seen,awake_since,capacity FROM runners WHERE id=?", (rid,)).fetchone()
+                waking = ex.waking(runner, now)
+                out.append(f"{stamp} computer: last_seen {computer['last_seen']}, awake_since {computer['awake_since']}, "
+                           f"waking {waking}, awake {ex.awake(waking, now)}, turns held "
+                           f"{sum(X.turns_here(c, rid).values())} of capacity {computer['capacity']}")
+                # The candidate's bot first: it is the one the claim would start.
+                order = [any_job["bot"]] if any_job and any_job["bot"] in slugs else []
+                order += [slug for slug in sorted(slugs) if slug not in order]
+                traced = 0
+                for slug in order:
+                    if traced >= limit:
                         break
                     reasons = list(X.queued_reasons(c, w.store.settings, rid, slug, oldest=True))
                     if not reasons or reasons[0][1] is not None:
                         continue
+                    traced += 1
                     job = reasons[0][0]
                     assigned = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
                                          "WHERE a.runner_id=? AND a.bot=? AND b.state='active'",

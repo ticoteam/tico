@@ -26,7 +26,7 @@ def limit_cooldowns(run):
     holds it (execution.limit_until): the login hold's reset when the hold names one, else LIMIT_COOLDOWN (1800 s), or
     LIMIT_COOLDOWN_LONG (7200 s) once LIMIT_STRIKES (3) limits came in a row. Read from World.limit_window after each
     limited turn, so the constant is the server's own."""
-    return [(_utc(win["since"]), _utc(win["until"]), f"{win['bot']} cooling off ({win['source']})")
+    return [(_utc(win["since"]), _utc(win["until"]), win["bot"], f"{win['bot']} cooling off ({win['source']})")
             for win in run.w.limit_windows if win["since"] and win["until"]]
 
 
@@ -38,7 +38,7 @@ def probe_runs(run):
     for job in sorted(run.probe_seen):
         for row in run.w.sql("SELECT created, finished, lease_until FROM attempts WHERE job_id=?", (job,)):
             end = _utc(row["finished"]) if row["finished"] else min(_utc(row["lease_until"]), now)
-            out.append((_utc(row["created"]), end, f"probe {job[:6]} holds its login's queue"))
+            out.append((_utc(row["created"]), end, None, f"probe {job[:6]} holds its login's queue"))
     return out
 
 

@@ -123,27 +123,35 @@ def no_server_error(run):
 
 def board_keeps_moving(since, waits=(), evidence=()):
     """From `since` on, each claim round with a free slot and queued work starts as many turns as the smaller of the
-    two. Queued work is the bots with a job not held, read from the queue before the claims, and a turn started takes
-    its bot out of the count. A round inside `waits` is not judged: the scenario knows the work waits there, on a limit
-    in force or on a login's probe. `evidence` are functions of the run returning (from, to, why) windows of absolute
-    times from the server's own records (a bot's cooling off, a probe holding its login); they are read when the check
-    runs. A judged round that starts fewer turns is a stall, whatever its cause. A run with no judged round fails, since
-    nothing then shows the board moved."""
+    free slots and the queued bots the round could start. A queued bot is waived in a round inside a window declared for
+    it: `waits` are (from, to) windows of the scenario's clock that hold every bot (a cap in force); `evidence` are
+    functions of the run returning (from, to, bot, why) windows of absolute times from the server's own records: a bot's
+    cooling off (its own bot), or a probe holding its login (bot None: every bot on that login). A round with no queued
+    bot outside its windows is not judged. A judged round that starts fewer turns is a stall, whatever its cause. A run
+    with no judged round fails, since nothing then shows the board moved."""
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
         start = START + since
-        windows = [(START + lo, START + hi) for lo, hi in waits]
-        windows += [(lo, hi) for read in evidence for lo, hi, _ in read(run)]
+        everyone = [(START + lo, START + hi) for lo, hi in waits]
+        per_bot = {}
+        for read in evidence:
+            for lo, hi, bot, _ in read(run):
+                if bot is None:
+                    everyone.append((lo, hi))
+                else:
+                    per_bot.setdefault(bot, []).append((lo, hi))
         judged, short, waived = 0, [], 0
         for m in run.marks:
             if m["at"] < start or not m["free"] or not m["queued"]:
                 continue
-            if any(lo <= m["at"] < hi for lo, hi in windows):
+            outside = [bot for bot in m["slugs"]
+                       if not any(lo <= m["at"] < hi for lo, hi in everyone + per_bot.get(bot, []))]
+            if not outside:
                 waived += 1
                 continue
             judged += 1
-            need = min(m["free"], m["queued"])
+            need = min(m["free"], len(outside))
             if m["started"] < need:
                 short.append(f"{m['at']:%H:%M} started {m['started']} of {need}"
                              + (f" ({m['why']})" if m.get("why") else ""))

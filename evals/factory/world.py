@@ -589,11 +589,11 @@ class World:
         shows as held jobs, not as a stall."""
         slugs = sorted(slugs)
         if not slugs:
-            return 0, 0
+            return 0, 0, []
         marks = ",".join("?" * len(slugs))
         with self.store.read() as c:
             bots = c.execute(f"SELECT DISTINCT bot FROM jobs WHERE state='queued' AND held=0 AND bot IN ({marks})",
                              slugs).fetchall()
             held = c.execute(f"SELECT count(*) FROM jobs WHERE state='queued' AND held=1 AND bot IN ({marks})",
                              slugs).fetchone()[0]
-        return len(bots), held
+        return len(bots), held, sorted(row[0] for row in bots)
