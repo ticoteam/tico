@@ -145,8 +145,8 @@ class Run:
         free = w.capacity - sum(1 for b in team.all if b.running)
         idle = {b.slug for b in team.all} - set(body["busy_bots"]) - self.paused
         queued, held = w.queued_bots(idle)
-        why = self.refusals(w, idle) if free and queued else ""
-        started = 0
+        before = self.refusals(w, idle) if free and queued else []
+        started, reply = 0, None
         for _ in range(max(0, free)):
             _, reply = self.claim_once(w, body)
             attempt = reply.get("attempt") if isinstance(reply, dict) else None
@@ -156,37 +156,48 @@ class Run:
             started += 1
         mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started}
         if free and queued and started < min(free, queued):
-            mark["why"] = why
+            # Diagnostic: the server's view of each queued bot before the claims, and the last claim's answer.
+            mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the sim sent "
+                           f"{len(body['busy_bots'])} busy bots")
         self.marks.append(mark)
 
     def refusals(self, w, slugs):
-        """Diagnostic only, read before a round's claims: for each bot among `slugs` with a queued job, the login holds the
-        server keeps on the bot's login and its fallbacks (a hold, or a probe out on it, with the probe's state), and the
-        bot's backoff. A short round reports these in its mark; no check judges them."""
-        from backend import login_holds, run_backoff
+        """Diagnostic only, read before a round's claims: for each bot among `slugs` with queued work, the claim's own
+        refusal for its oldest queued job (queued_reasons, the rule the claim applies), and each login it could run on,
+        free or held. A hold names its end, and a probe out on it names the probe's job and attempt with the attempt's
+        lease. A short round reports these in its mark; no check judges them."""
+        from backend import login_holds
+        from backend.execution import queued_reasons
         rid = w.runner["runner_id"]
-        clock = lambda stamp: (stamp or "")[11:16]
+        stamp = lambda value: (value or "")[5:16].replace("T", " ")
         out = []
         with w.store.read() as c:
             for slug in sorted(slugs):
-                job = c.execute("SELECT id FROM jobs WHERE state='queued' AND held=0 AND bot=? ORDER BY rowid LIMIT 1",
-                                (slug,)).fetchone()
-                if not job:
-                    continue
-                parts = [why] if (why := run_backoff.refusal(c, slug)) else []
-                for name in (PRIMARY, *w.runtime_fallbacks()):
-                    if name != PRIMARY and name not in w.signed_in:
+                try:
+                    reasons = list(queued_reasons(c, w.store.settings, rid, slug, oldest=True))
+                    if not reasons:
                         continue
-                    verdict = login_holds.holding(c, rid, "", name, job["id"])
-                    hold = login_holds.get(c, rid, "", name)
-                    if verdict or hold:
-                        probe = (hold or {}).get("probe_job")
-                        state = c.execute("SELECT state FROM jobs WHERE id=?", (probe,)).fetchone() if probe else None
-                        parts.append(f"{name} {verdict or 'no hold'} until {clock((hold or {}).get('until'))}"
-                                     + (f", probe {probe[:6]} {state['state']} from {clock(hold.get('probe_at'))}"
-                                        if probe and state else ""))
-                out.append(f"{slug}: {'; '.join(parts) or 'no refusal'}")
-        return " | ".join(out)
+                    job, why = reasons[0]
+                    parts = [f"claim {why or 'hands out'} {job['id'][:6]}"]
+                    for name in (PRIMARY, *w.runtime_fallbacks()):
+                        if name != PRIMARY and name not in w.signed_in:
+                            continue
+                        hold = login_holds.get(c, rid, "", name)
+                        text = f"{name} {login_holds.holding(c, rid, '', name, job['id']) or 'free'}"
+                        if hold:
+                            text += f" (hold ends {stamp(hold.get('until'))})"
+                            probe = hold.get("probe_job")
+                            row = c.execute("SELECT j.state AS job, a.state AS attempt, a.lease_until FROM jobs j "
+                                            "LEFT JOIN attempts a ON a.job_id=j.id WHERE j.id=? "
+                                            "ORDER BY a.rowid DESC LIMIT 1", (probe,)).fetchone() if probe else None
+                            if row:
+                                text += (f", probe {probe[:6]} job {row['job']} attempt {row['attempt']} "
+                                         f"lease {stamp(row['lease_until'])}")
+                        parts.append(text)
+                    out.append(f"{slug}: " + "; ".join(parts))
+                except Exception as error:      # a diagnostic never stops the run
+                    out.append(f"{slug}: diagnostic error {error!r}")
+        return out
 
     def runner_body(self, team):
         """What a runner claims with: no bot named, and the bots it is running (or whose computer is off) as busy. The
