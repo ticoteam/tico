@@ -245,6 +245,24 @@ class Run:
                                  f"{X.SOURCE_CONTINUE in X._capability_set(runner['capabilities_json'])}")
                     mine = ex.candidate(c, who, ns, runner, job_id=job["id"])
                     gates.append(f"candidate for this job {mine['id'][:6] if mine else None}")
+                    # The write path's own checks (turn_budgets.enforce records a first hit and passes the job over; the
+                    # claim's read path sees only a hold already recorded), read here without recording anything.
+                    try:
+                        from backend import turn_budgets, run_backoff, task_privacy
+                        from backend.store import H as store_h
+                        tb = turn_budgets.get(c, slug)
+                        seen = turn_budgets.counts(c, slug, tb.get("released_at") or "", store_h.now())
+                        cap = turn_budgets.limits(c, turn_budgets._declared(cfg["config_json"] if cfg else None))
+                        over = [label for window, key, _, label in turn_budgets.WINDOWS
+                                if cap[key] and seen[window] >= cap[key]]
+                        gates.append(f"budget held {bool(tb.get('held_at'))}, over cap {over or 'no'}")
+                        rb = run_backoff.get(c, slug)
+                        gates.append(f"run backoff held {bool(rb.get('held_at'))}, probe due "
+                                     f"{run_backoff.probe_due(c, slug, rb) if rb.get('held_at') else '-'}")
+                        msg = store_h.message(c, job["message_id"])
+                        gates.append(f"message readable {task_privacy.message_readable(c, 'bot:' + slug, msg)}")
+                    except Exception as error:      # a diagnostic never stops the run
+                        gates.append(f"budget gate error {error!r}")
                     out.append(f"{stamp} {slug} oldest {job['id'][:6]}: " + "; ".join(gates))
             except Exception as error:      # a diagnostic never stops the run
                 out.append(f"{stamp} trace error {error!r}")
