@@ -30,7 +30,7 @@ already has one. Before suggesting on a goal, read its rejected suggestions and 
 after the goal's words change; when a new suggestion touches it, say in its reason how it differs. A reason can rule
 a suggestion out on any goal ("no billing yet, don't track revenue"), so read them all once at the start of the pass
 (`hub proposal list --status rejected`). A rejected suggestion is never made again in the same words. A "no" the owner
-gave in chat is stored the same way (`playbooks/owner-chat.md`). Proposals are for the goal's owner to confirm; you do
+gave in chat is a rejected suggestion too, once they turn it down (`playbooks/owner-chat.md`). Proposals are for the goal's owner to confirm; you do
 not edit a goal, and `playbooks/README.md` has the payload shapes.
 
 **Why lines** (above Passive, or at Passive when the owner asks for them): read the vision with `hub strategy show`

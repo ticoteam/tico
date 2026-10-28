@@ -396,7 +396,7 @@ function bindProposals(root, after) {
     catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; return; }
     // Rejected already; the card stays as one line asking why, until something draws the list again.
     if (b.hasAttribute('data-prop-reason') && out?.proposal?.may_reason) {
-      li.classList.add('kpi-prop-was'); li.innerHTML = propLeftHtml(); bindPropLeft(li, after);
+      li.innerHTML = propLeftHtml(); bindPropLeft(li, after);
       return;
     }
     await after();

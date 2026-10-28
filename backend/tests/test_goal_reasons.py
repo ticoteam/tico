@@ -117,3 +117,9 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     post(api, f"goal-proposals/{named['id']}/decide", {"decision": "reject", "note": "Inbox again"})
     assert rejected(api, "cara-test")[named["id"]]["decision_note"] == ""
     assert "Inbox again" not in str(get(api, f"goals/{hers['id']}", "cara-test"))
+    # A note typed with a yes is kept from her the same way.
+    yes = propose(api, "goal_kpi", {"kpi": {"name": "Replies read"}, "owner": "inbox"}, hers["id"])
+    post(api, f"goal-proposals/{yes['id']}/decide", {"decision": "confirm", "note": "Inbox wants it"})
+    for path in ("goal-proposals?status=confirmed", "goal-proposals?status=all", f"goals/{hers['id']}"):
+        assert "Inbox wants it" not in str(get(api, path, "cara-test")), path
+    assert "Inbox wants it" in str(get(api, "goal-proposals?status=confirmed"))

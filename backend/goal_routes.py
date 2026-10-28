@@ -212,9 +212,10 @@ def install(app, store, auth, mutate, settings):
         return bool(used and used["owner"] in hidden) or bool(named) and (named in hidden or "bot:" + named in hidden)
 
     def reason_view(c, who, p, hidden):
-        """A suggestion as this reader may read its reason: none from a bot they may not read, and `may_reason`, whether
+        """A suggestion as this reader may read its reason: none from a bot they may not read (a note typed with a yes
+        neither), and `may_reason`, whether
         they may still add one (the person who turned it down, on their own click, while it has none)."""
-        kept = p["status"] == "rejected" and reason_hidden(c, p, hidden)
+        kept = p["status"] != "pending" and reason_hidden(c, p, hidden)
         may = (p["status"] == "rejected" and not p.get("decision_note") and p.get("decided_by") == who.actor
                and who.role in ("owner", "human") and not who.via and not kept)
         return {**p, **({"decision_note": ""} if kept else {}), "may_reason": may}
@@ -285,9 +286,9 @@ def install(app, store, auth, mutate, settings):
             names = hidden_names(c, hidden)
             out["events"] = [e for e in out["events"] if not any(names_any(e.get(k), names) for k in ("old", "new", "note"))]
             scrub_status(out, names)
-            # The reject's history line carries the reason it was given: kept from a reader who may not read its bot.
-            kept = {p["decision_note"].strip() for p in G.proposals(c, "rejected", goal_id=row["id"])
-                    if p["decision_note"] and reason_hidden(c, p, hidden)}
+            # A decision's history line carries the note it was given: kept from a reader who may not read its bot.
+            kept = {p["decision_note"].strip() for p in G.proposals(c, None, goal_id=row["id"])
+                    if p["status"] != "pending" and p["decision_note"] and reason_hidden(c, p, hidden)}
             out["events"] = [{**e, "note": ""} if e.get("field") == "proposal" and (e.get("note") or "").strip() in kept
                              else e for e in out["events"]]
         return out
