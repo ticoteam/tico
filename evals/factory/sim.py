@@ -48,8 +48,8 @@ class Run:
         self.merged_at = {}        # ticket id -> when it first reached a merged step
         self.peak_doing = Counter()
         self.claims = Counter()    # claim replies by HTTP status: an exception the app raised counts as a 500
-        self.claim_errors = []     # (when, status, body or traceback) for each claim the server failed
-        self.marks = []            # per runner claim round: free slots, whether the server had work, turns started
+        self.paused = set()        # bots the scenario paused: the work they hold waits on their owner, not the board
+        self.marks = []            # per runner claim round: free slots, queued bots, held jobs and turns started
 
     def team(self, w):
         styles = self.scenario.styles
@@ -130,19 +130,21 @@ class Run:
             bot.start(attempt)
 
     def sweep(self, w):
-        """The history sweep the server runs beside itself (read_deps.loop), here once per tick: a claim that moves an
-        input an earlier run read meets the index the sweep keeps, as it does on a live server."""
+        """The history sweep (read_deps.sweep), run once per tick. The server's loop runs it every 10 seconds; here a
+        tick is the step the claim rounds run on, so each round meets the index the sweep kept on that tick."""
         from backend import read_deps
         with w.store.read() as c:
             read_deps.sweep(c, gate=w.store.writer)
 
     def runner_round(self, w, team):
         """One claim round as a real runner runs it: while it has a free slot it asks for work, naming the bots it is
-        already running. The work the board could hand out is counted from the queue and its holds before the claims
-        (`queued`), not from the claim's own pick, so a claim that passes over work it could take shows in `marks`."""
+        already running. The work the board could hand out is counted from the queue before the claims (`queued`), not
+        from the claim's own pick, so a claim that passes over work it could take shows in `marks`. The bots the
+        scenario paused are left out of that count: their work waits on their owner."""
         body = self.runner_body(team)
         free = w.capacity - sum(1 for b in team.all if b.running)
-        queued = w.unheld_queued({b.slug for b in team.all} - set(body["busy_bots"]))
+        idle = {b.slug for b in team.all} - set(body["busy_bots"]) - self.paused
+        queued, held = w.queued_bots(idle)
         started = 0
         for _ in range(max(0, free)):
             _, reply = self.claim_once(w, body)
@@ -151,7 +153,7 @@ class Run:
                 break
             team.bot(attempt["bot"]).start(attempt)
             started += 1
-        self.marks.append({"at": w.now(), "free": free, "queued": queued, "started": started})
+        self.marks.append({"at": w.now(), "free": free, "queued": queued, "held": held, "started": started})
 
     def runner_body(self, team):
         """What a runner claims with: no bot named, and the bots it is running (or whose computer is off) as busy. The
@@ -161,12 +163,11 @@ class Run:
                 "start_places": True}
 
     def claim_once(self, w, body):
-        """One claim, its status counted. A 5xx is recorded with its body (or the traceback, when the app raised) and
-        the run goes on; any other refusal is the sim's own fault and stops the run."""
+        """One claim, its status counted. A 5xx is recorded by the world (with its body, or the traceback when the app
+        raised) and the claim answers nothing; any other refusal is the sim's own fault and stops the run."""
         status, reply = w.request("post", "jobs/claim", body, token=w.runner["token"])
         self.claims[status] += 1
         if status >= 500:
-            self.claim_errors.append((w.now(), status, str(reply)[:4000]))
             return status, None
         if status >= 400:
             raise Refusal(status, str(reply))

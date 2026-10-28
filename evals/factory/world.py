@@ -56,8 +56,10 @@ class World:
         self.signed_in = tuple(signed_in)   # runtimes the computer reports signed in; when set, readiness is structured
         self.capacity = capacity            # the computer's slots, as its heartbeat says
         self.enabled = []                   # the company's providers in order: their runtimes are the fallbacks
-        self.steer_bots = set()             # bots that read the inputs queued for their turn while it runs
+        self.steer_bots = set()             # bots that read the inputs queued for their turn as it starts
         self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
+        self.server_errors = []             # (when, route, status, body) for each call the server answered with a 5xx
+        self.input_reads = []               # (when, bot, attempt, message ids): the inputs a turn read as it started
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -184,32 +186,38 @@ class World:
 
     # ------------------------------------------------------------------ API
     def call(self, method, path, body=None, token="ana-test", ok=True):
-        headers = {"Authorization": "Bearer " + token}
-        if method != "get":      # the server wants a key on every write, PUT included
-            headers["Idempotency-Key"] = str(uuid.uuid4())
-        response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
-                                                **({"json": body} if body is not None else {}))
-        if response.status_code >= 400:
-            if ok:
-                raise Refusal(response.status_code, response.text)
+        """One API call: a refusal raises (or answers None when `ok` is off), and a server error is recorded and answers
+        None. Every route the sim calls goes through here, so a 5xx on any of them is found the same way."""
+        status, reply = self.request(method, path, body, token)
+        if status >= 500:
             return None
-        return response.json()
+        if status >= 400:
+            if ok:
+                raise Refusal(status, str(reply))
+            return None
+        return reply
 
     def request(self, method, path, body=None, token="ana-test"):
-        """One API call that answers with its status and body rather than raising: a claim the server fails is a finding
-        (a 500, with the traceback when the app raised), not the end of the run."""
+        """One API call that answers with its status and body rather than raising. A server error (a 500, or the app
+        raising) is a finding: it is recorded with its route and body, and the run goes on."""
         headers = {"Authorization": "Bearer " + token}
         if method != "get":      # the server wants a key on every write, PUT included
             headers["Idempotency-Key"] = str(uuid.uuid4())
+        route = f"{method.upper()} /api/v2/{path}"
         try:
             response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
                                                     **({"json": body} if body is not None else {}))
         except Exception:   # TestClient re-raises what the app raised; a live server would answer 500
-            return 500, "raised:\n" + traceback.format_exc()[-3000:]
-        try:
-            return response.status_code, response.json()
-        except ValueError:
-            return response.status_code, response.text
+            status, reply = 500, "raised:\n" + traceback.format_exc()[-3000:]
+        else:
+            status = response.status_code
+            try:
+                reply = response.json()
+            except ValueError:
+                reply = response.text
+        if status >= 500:
+            self.server_errors.append((self.now(), route, status, str(reply)[:4000]))
+        return status, reply
 
     def post(self, path, body, token="ana-test"):
         return self.call("post", path, body, token)
@@ -223,7 +231,7 @@ class World:
     def update(self, task_id, token="ana-test", **fields):
         """Change a task; a refused change raises Refusal with the server's reason."""
         result = self.post("tasks/" + task_id, {"version": self.task(task_id)["version"], **fields}, token=token)
-        return result.get("task", result)
+        return result if result is None else result.get("task", result)
 
     def step_of(self, task):
         steps = {s["id"]: s["name"] for s in self.dev["steps"]}
@@ -293,6 +301,10 @@ class World:
         response = self.client.post("/api/v2/github/webhook", content=body, headers={
             "X-GitHub-Event": event, "X-Hub-Signature-256": sign,
             "Content-Type": "application/json"})
+        if response.status_code >= 500:   # a server error is a finding the run's checks report, as for any other call
+            self.server_errors.append((self.now(), "POST /api/v2/github/webhook", response.status_code,
+                                       response.text[:4000]))
+            return
         assert response.status_code == 200, response.text
 
     def pr_url(self, number):
@@ -536,26 +548,18 @@ class World:
                         + ("AND bot=? " if slug else "") + "GROUP BY bot", (slug,) if slug else ())
         return {r["bot"]: (r["n"], r["held"] or 0) for r in rows}
 
-    def unheld_queued(self, slugs):
-        """Queued jobs of these bots that a free slot could take, counted from the queue and the holds the claim reads
-        rather than from the claim's pick. A job waits while its bot is paused or over a limit, while its login is
-        held and no fallback signed in is free for it, or while the server holds it until a limit resets."""
-        from backend import login_holds, usage_limits
-        rid = self.runner["runner_id"]
-        fallbacks = [name for name in self.runtime_fallbacks() if name in self.signed_in]
-        count, over = 0, {}
+    def queued_bots(self, slugs):
+        """The bots among `slugs` with a queued job that is not held, and how many queued jobs are held. The queue alone
+        is read, never the server's limit and hold checks: a check holds this count against what its scenario knows, so
+        a hold the server sets cannot hide the work it blocks. A held job is counted apart, so a hold that never lifts
+        shows as held jobs, not as a stall."""
+        slugs = sorted(slugs)
+        if not slugs:
+            return 0, 0
+        marks = ",".join("?" * len(slugs))
         with self.store.read() as c:
-            paused = {r["bot"] for r in c.execute("SELECT bot FROM bot_control WHERE draining=1")}
-            for job in c.execute("SELECT id, bot FROM jobs WHERE state='queued' AND held=0").fetchall():
-                bot = job["bot"]
-                if bot not in slugs or bot in paused:
-                    continue
-                if bot not in over:
-                    over[bot] = bool(usage_limits.blocked(c, bot))
-                if over[bot]:
-                    continue
-                if login_holds.holding(c, rid, "", PRIMARY, job["id"]) and not any(
-                        login_holds.holding(c, rid, "", name) is None for name in fallbacks):
-                    continue
-                count += 1
-        return count
+            bots = c.execute(f"SELECT DISTINCT bot FROM jobs WHERE state='queued' AND held=0 AND bot IN ({marks})",
+                             slugs).fetchall()
+            held = c.execute(f"SELECT count(*) FROM jobs WHERE state='queued' AND held=1 AND bot IN ({marks})",
+                             slugs).fetchone()[0]
+        return len(bots), held

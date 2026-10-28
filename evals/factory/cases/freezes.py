@@ -1,15 +1,27 @@
-"""Board freezes like the one on a live install on v0.4.16: a usage limit that holds every claim, and a board that has to keep
-moving once the limit lifts or a fallback is ready. The runs claim the way a real runner does (no bot named, its busy
-lists), so each claim the server answers is one a computer sends. Limits, holds, pauses and groups are set through the
-product's own routes and sign-in state. The one thing the sim does itself is lose a probe turn (its computer goes off, or
-its job is cancelled before it finishes), and that is marked where it happens."""
-from evals.factory.scenarios import BASE, Scenario, at, board_keeps_moving, both, no_claim_5xx, tickets
+"""Board freezes: a usage limit that holds every claim, and a board that has to keep moving once the limit lifts or a
+fallback is ready. The runs claim the way a real runner does (no bot named, its busy lists), so each claim the server
+answers is one a computer sends. Limits, holds and pauses are set through the product's routes and the computer's
+sign-in state. A group is a roster entry the sim writes itself (World.add_group), and the limit a turn meets is the error
+line its runtime gives (`hit`). The sim also loses a probe turn (its computer goes off, or its job is cancelled before it
+finishes), and marks that where it happens."""
+import datetime as dt
+
+from evals.factory.scenarios import BASE, Scenario, at, board_keeps_moving, both, tickets
 from evals.factory.world import START
 
 WEEKLY = "You've hit your weekly limit · resets Oct 27, 9am (UTC)"      # a reset days away: the login is held for it
 SESSION = "You've hit your session limit · resets 10:30am (UTC)"        # a reset within the hour
 TWO_DAYS = "You've hit your session limit · resets Oct 22, 9am (UTC)"   # a second login, held two days
 PACKET_BOT = "fleet-01"                                                 # the bot the moved-input run messages
+PACKET_TEXTS = ("Check the packet figures.", "Confirm the totals before you answer.")
+LOWERED = [(at(1, 30), at(1, 42))]                                      # a cap is lowered from 10:30 to 10:42
+
+
+def login_wait(limit, reset=at(1, 30)):
+    """A login's queue waits from its limit to its reset, and then while its probe runs: a probe that has not started
+    holds the queue for the server's stale bound at most."""
+    from backend.login_holds import PROBE_STALE
+    return [(limit, reset + dt.timedelta(seconds=PROBE_STALE))]
 
 
 def hit(runtime, text):
@@ -27,10 +39,11 @@ def cap(scope, hourly):
 
 
 def pause(slugs):
-    """The owner pauses these bots: they claim nothing until resumed."""
+    """The owner pauses these bots: they claim nothing until resumed, so the run leaves their work out of the count."""
     def act(run, w, team):
         for slug in slugs:
             w.pause(slug)
+            run.paused.add(slug)
     return act
 
 
@@ -107,21 +120,33 @@ def say(*texts):
     return act
 
 
+def routine(slug, count):
+    """`count` routine tasks the bot owns, filed now: work that waits in its queue while its login is held, so the board
+    has queued work to resume with once the login is back."""
+    def act(run, w, team):
+        for n in range(count):
+            w.post("tasks", {"owner": slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
+    return act
+
+
 def steer(slug):
-    """The bot reads what is queued for its turn while the turn runs, and acks it."""
+    """The bot reads what is queued for its turn as the turn starts, and acks each input it read."""
     def act(run, w, team):
         w.steer_bots.add(slug)
     return act
 
 
-
 # ---------------------------------------------------------------------------------------------- checks
 def spend_under(cap_usd, since, until):
     """No turn starts in [since, until) in a clock hour whose spend, from the runs that finished before it started, has
-    already reached the cap: usage_limits counts it that way."""
+    reached the cap: usage_limits counts it that way. The cap must first be reached by `until`, the window's end: a cap
+    nothing reached holds no turn, and the check would pass on nothing."""
     lo, hi = ((START + t).strftime("%Y-%m-%dT%H:%M:%S") for t in (since, until))
 
     def check(run):
+        reached = hour_spent(run, until)
+        if reached < cap_usd:
+            return False, f"the hour spent ${reached:.2f} by {START + until:%H:%M}, short of the ${cap_usd:g} cap"
         runs = [dict(r) for r in run.w.sql("SELECT started, finished, est_cost_usd FROM turns ORDER BY started")]
         late = []
         for r in runs:
@@ -147,28 +172,32 @@ def hour_spent(run, when):
     return sum(r["est_cost_usd"] or 0 for r in rows)
 
 
-def waiting_since(marks, t):
-    """The first claim round at or after `t` with a free slot and queued work a bot could take: where a wait for the
-    board starts. A round with every slot busy waits on capacity, not on the limit or the probe."""
-    return next((m["at"] for m in marks if m["at"] >= t and m["free"] > 0 and m["queued"]), None)
+def resumed(run, when, minutes):
+    """From the claim round at `when` (an offset on the scenario's clock) on: the first round with a free slot and queued
+    work, and whether a turn starts within `minutes` of it. No such round fails, as nothing then shows the board resumed."""
+    t0 = START + when
+    after = [m for m in run.marks if m["at"] >= t0]
+    if not after:
+        return False, f"no claim round after {t0:%H:%M}"
+    lift = after[0]
+    state = f"at {lift['at']:%H:%M} {lift['free']} slots free, {lift['queued']} bots queued, {lift['held']} jobs held"
+    ready = next((m for m in after if m["free"] and m["queued"]), None)
+    if ready is None:
+        return False, f"no free slot with queued work after {t0:%H:%M} ({state})"
+    first = next((m for m in after if m["at"] >= ready["at"] and m["started"]), None)
+    if first is None:
+        return False, f"no turn started in the claim rounds after work waited at {ready['at']:%H:%M} ({state})"
+    gap = (first["at"] - ready["at"]).total_seconds() / 60
+    return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready['at']:%H:%M} "
+                            f"(limit {minutes} min); {state}")
 
 
 def resumes_within(when, minutes):
-    """Once the limit lifts at `when`, a turn starts within `minutes` of a free slot with work for it. The detail says
-    what the board had at the lift: the free slots and the hour's spend."""
+    """Once the limit lifts at `when`, a turn starts within `minutes` of the first claim round after it with a free slot
+    and queued work. The detail reports the hour's spend at the lift."""
     def check(run):
-        t0 = START + when
-        ready = waiting_since(run.marks, t0)
-        if ready is None:
-            return True, "no free slot with work waited after it lifted"
-        first = next((m["at"] for m in run.marks if m["started"] and m["at"] >= ready), None)
-        at_lift = next(m for m in run.marks if m["at"] >= t0)
-        state = f"at the lift {at_lift['free']} slots free, the hour spent ${hour_spent(run, when):.2f}"
-        if first is None:
-            return False, f"no turn started in the claim rounds after work waited at {ready:%H:%M}; {state}"
-        gap = (first - ready).total_seconds() / 60
-        return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready:%H:%M} (limit {minutes} min), "
-                                f"at {first:%H:%M}; {state}")
+        ok, detail = resumed(run, when, minutes)
+        return ok, f"{detail}; the hour spent ${hour_spent(run, when):.2f}"
     return check
 
 
@@ -183,21 +212,14 @@ def most_turns_on(runtime, since, share=0.5):
 
 
 def probe_resumes(minutes):
-    """After the probe is lost, another turn starts within `minutes` of a free slot with work for it: a stale or missing
-    probe must not keep the login's queue waiting on it."""
+    """After the probe is lost, a turn starts within `minutes` of the first claim round after it with a free slot and
+    queued work: a stale or missing probe must not keep its login's queue waiting on it."""
     def check(run):
         lost = getattr(run, "probe_lost_at", None)
         if lost is None:
             return False, "no probe was in flight when the hold ended, so nothing was lost"
-        ready = waiting_since(run.marks, lost)
-        if ready is None:
-            return True, "no free slot with work waited once the probe was lost"
-        first = next((m["at"] for m in run.marks if m["started"] and m["at"] >= ready), None)
-        if first is None:
-            return False, f"no turn started in the claim rounds after work waited at {ready:%H:%M}"
-        gap = (first - ready).total_seconds() / 60
-        return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready:%H:%M} (limit {minutes} min), "
-                                f"the probe was lost at {lost:%H:%M}")
+        ok, detail = resumed(run, lost - START, minutes)
+        return ok, f"{detail}; the probe was lost at {lost:%H:%M}"
     return check
 
 
@@ -209,9 +231,40 @@ def turns_from(when):
     return check
 
 
-def freeze_checks(since, *extra):
-    return [*BASE, ("no claim got a server error", None, no_claim_5xx),
-            ("the board keeps moving from the event on", None, board_keeps_moving(since)), *extra]
+def inputs_moved(bot, texts):
+    """The moved-input mechanism, in order: the turn that met the limit read the run's messages to the bot, it ended
+    without answering them (its record has no action), and a later turn took them over (their attempt_inputs rows name
+    that turn, not the limited one)."""
+    def check(run):
+        w = run.w
+        mids = [r["id"] for text in texts for r in w.sql(
+            "SELECT id FROM messages WHERE body=? AND json_extract(refs_json,'$.task')=?", (text, run.packet))]
+        if len(mids) != len(texts):
+            return False, f"{len(mids)} of {len(texts)} messages were found on the task"
+        limited = [r for r in run.t.bot(bot).turns if r["kind"] == "limited"]
+        if not limited:
+            return False, "no turn met the limit"
+        turn = limited[0]
+        read = {m for _, _, aid, ids in w.input_reads if aid == turn["attempt"] for m in ids}
+        if not set(mids) <= read:
+            return False, f"the limited turn read {len(set(mids) & read)} of {len(mids)} messages"
+        if turn["action"]:
+            return False, f"the limited turn answered: {turn['action'][:80]}"
+        owners = {r["message_id"]: r["attempt_id"] for r in w.sql(
+            f"SELECT message_id, attempt_id FROM attempt_inputs WHERE message_id IN ({','.join('?' * len(mids))})",
+            tuple(mids))}
+        moved = [m for m in mids if owners.get(m) not in (None, turn["attempt"])]
+        if len(moved) != len(mids):
+            return False, f"{len(mids) - len(moved)} of {len(mids)} messages still belong to the limited turn"
+        return True, (f"the limited turn {turn['attempt'][:8]} read both, left them unanswered, and a later turn "
+                      f"{owners[mids[0]][:8]} took them over")
+    return check
+
+
+def freeze_checks(since, *extra, waits=()):
+    """The checks every freeze runs, the board's from `since` on. `waits` are windows (offsets on the scenario's clock)
+    in which the scenario knows its work waits on a limit or a probe, so no turn is expected in them."""
+    return [*BASE, ("the board keeps moving from the event on", None, board_keeps_moving(since, waits)), *extra]
 
 
 SCENARIOS = [
@@ -224,7 +277,8 @@ SCENARIOS = [
                                   ("no turn starts past the cap while it is lowered", None,
                                    spend_under(3, at(1, 30), at(1, 42))),
                                   ("the board resumes within 15 minutes of the raise", None,
-                                   resumes_within(at(1, 42), 15)))),
+                                   resumes_within(at(1, 42), 15)),
+                                  waits=LOWERED)),
     Scenario("freeze_group_cap",
              "The engineering group's hourly limit is lowered to $3 at 10:30 and raised to $40 at 10:42, with a backlog "
              "on every fleet bot: its bots resume.",
@@ -235,7 +289,8 @@ SCENARIOS = [
                                   ("no turn starts past the cap while it is lowered", None,
                                    spend_under(3, at(1, 30), at(1, 42))),
                                   ("the board resumes within 15 minutes of the raise", None,
-                                   resumes_within(at(1, 42), 15)))),
+                                   resumes_within(at(1, 42), 15)),
+                                  waits=LOWERED)),
     Scenario("freeze_weekly_hold",
              "The team's own login is held for a weekly limit with its reset days away; most bots run on the codex "
              "fallback that is ready, behind a backlog of hundreds of queued jobs.",
@@ -257,28 +312,35 @@ SCENARIOS = [
                                   ("most turns after codex is held run on claude", None,
                                    most_turns_on("claude", at(1, 0))),
                                   ("no turn starts past the cap while it is lowered", None,
-                                   spend_under(3, at(1, 30), at(1, 42))))),
+                                   spend_under(3, at(1, 30), at(1, 42))),
+                                  waits=LOWERED)),
     Scenario("freeze_probe_stale",
              "The login's hold ends at 10:30 and its probe turn is lost mid-run: the probe's time goes stale and the queue "
              "must go on without it.",
              setup=setup_with(8), claim="runner", signed_in=("fake",),
              during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("stale")),
-             checks=freeze_checks(at(1, 30), ("the queue goes on once the lost probe is stale", None, probe_resumes(30)))),
+             checks=freeze_checks(at(1, 30), ("the queue goes on once the lost probe is stale", None, probe_resumes(30)),
+                                  waits=login_wait(at(0, 30)))),
     Scenario("freeze_probe_missing",
              "The login's hold ends at 10:30 and its probe job is gone before it finishes: the queue must take a new probe.",
              setup=setup_with(8), claim="runner", signed_in=("fake",),
              during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("missing")),
              checks=freeze_checks(at(1, 30), ("the queue takes a new probe once the probe is gone", None,
-                                              probe_resumes(15)))),
+                                              probe_resumes(15)),
+                                  waits=login_wait(at(0, 30)))),
     Scenario("freeze_moved_input",
              "A person's two messages reach a bot on its task while its turn runs: the turn reads them, then its login's "
              "limit stops it before it answers. A third message queues after the stop, and the claims that take the login "
              "back move the two unanswered ones to the run that takes the work.",
              setup=packet_task(PACKET_BOT), claim="runner", signed_in=("fake",), fleet=1,
              during=at_times([(at(0, 20), steer(PACKET_BOT)),
-                              (at(0, 20), say("Check the packet figures.", "Confirm the totals before you answer.")),
+                              (at(0, 20), say(*PACKET_TEXTS)),
                               (at(0, 20), hit("fake", SESSION)),
-                              (at(0, 45), say("Is the packet final?"))]),
-             checks=freeze_checks(at(0, 20), ("turns run again once the login is back", None,
-                                              turns_from(at(1, 30))))),
+                              (at(0, 45), say("Is the packet final?")),
+                              (at(0, 50), routine(PACKET_BOT, 8))]),
+             checks=freeze_checks(at(0, 20),
+                                  ("the limited turn read both inputs, left them unanswered, and a later turn took them over",
+                                   None, inputs_moved(PACKET_BOT, PACKET_TEXTS)),
+                                  ("turns run again once the login is back", None, turns_from(at(1, 30))),
+                                  waits=login_wait(at(0, 20)))),
 ]

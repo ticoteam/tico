@@ -87,7 +87,8 @@ class Bot:
         self.record = {"at": w.now(), "bot": self.slug, "news": refs.get("handoff") or refs.get("news") or refs.get("rule")
                        or message.get("kind"), "task": task and task["id"], "kind": "noise",
                        "stale": self.stale(task, message), "action": None,
-                       "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime}
+                       "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime,
+                       "attempt": attempt["id"]}
         w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
         if self.slug in w.steer_bots:
             self.steer()
@@ -178,11 +179,19 @@ class Bot:
                             token=self.world.runner["token"], ok=False)
 
     def steer(self):
-        """Read the inputs queued for the turn while it runs, as a running turn does between its steps, and ack each one.
-        An input read and then left unanswered is the one the next run takes over."""
+        """Read the inputs queued for the turn as it starts (the runner's first poll, which the sim makes once per turn),
+        and ack each one as delivered to the runtime. The read does not answer them: a turn that ends on its limit leaves
+        its inputs unanswered, and a later run takes them over."""
         w, attempt = self.world, self.attempt
-        for message in w.post(f"attempts/{attempt['id']}/inputs", {}, token=w.runner["token"])["messages"]:
-            w.post(f"attempts/{attempt['id']}/inputs/{message['id']}/ack", {}, token=w.runner["token"])
+        status, reply = w.request("post", f"attempts/{attempt['id']}/inputs", {}, token=w.runner["token"])
+        if status >= 500:
+            return      # recorded by the world; the turn runs without them, and the run's checks report the error
+        if status >= 400:
+            raise Refusal(status, str(reply))
+        mids = [message["id"] for message in reply["messages"]]
+        w.input_reads.append((w.now(), self.slug, attempt["id"], mids))
+        for mid in mids:
+            w.call("post", f"attempts/{attempt['id']}/inputs/{mid}/ack", {}, token=w.runner["token"])
 
     def renew(self):
         if self.running:
@@ -209,7 +218,7 @@ class Bot:
         if tokens:
             cached, fresh, out = tokens
             body["usage"] = {"input_tokens": fresh, "cached_tokens": cached, "output_tokens": out,
-                             "model": self.model, "runtime": self.runtime if self.held else "claude",
+                             "model": self.model, "runtime": self.runtime,
                              "billing": "api"}
         w.post(f"attempts/{attempt['id']}/complete", body, token=w.runner["token"])
 

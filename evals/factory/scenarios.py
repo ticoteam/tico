@@ -108,38 +108,45 @@ def no_uncertain_runs(run):
     return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
 
 
-def no_claim_5xx(run):
-    """No claim got a server error. The live freeze showed as a claim that answered 500 hundreds of times an hour, so the
-    status counts and the first error are reported."""
+def no_server_error(run):
+    """No call the sim makes gets a server error: a route that raises or answers 500 fails the run's checks, with the
+    first error and its traceback when the app raised. Each claim's status is counted in the detail."""
+    errors = run.w.server_errors
     counts = ", ".join(f"{status} x{n}" for status, n in sorted(run.claims.items())) or "no claims"
-    if not run.claim_errors:
-        return True, f"claims: {counts}"
-    when, status, body = run.claim_errors[0]
+    if not errors:
+        return True, f"no call got a server error; claims: {counts}"
+    when, route, status, body = errors[0]
     text = body if len(body) <= 500 else body[:200] + " ... " + body[-300:]
-    return False, f"claims: {counts}; first {status} at {when:%H:%M}: {text}"
+    return False, (f"{len(errors)} calls got a server error; first {status} on {route} at {when:%H:%M}: {text}; "
+                   f"claims: {counts}")
 
 
-def board_keeps_moving(since):
-    """From `since` on, in every hour, a turn starts whenever a job is queued that a bot could take (not held, paused,
-    over a limit, or behind a held login) and a slot is free. A board that stalls with work it could take is frozen,
-    whatever the cause."""
+def board_keeps_moving(since, waits=()):
+    """From `since` on, each claim round with a free slot and queued work starts as many turns as the smaller of the
+    two. Queued work is the bots with a job not held, read from the queue before the claims, and a turn started takes
+    its bot out of the count. A round inside `waits` is not judged: the scenario knows the work waits there, on a limit
+    in force or on a login's probe, which holds the rest of its login's queue until it starts or its stale bound passes.
+    A judged round that starts fewer turns is a stall, whatever its cause. A run with no judged round fails, since
+    nothing then shows the board moved."""
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
-        stalled, hours, t = [], 0, START + since
-        while t < run.end:
-            window = [m for m in run.marks if t <= m["at"] < t + at(1)]
-            if any(m["queued"] and m["free"] for m in window):
-                hours += 1
-                if not sum(m["started"] for m in window):
-                    stalled.append(t.strftime("%H:%M"))
-            t += at(1)
-        if stalled:
-            return False, (f"no turn started in {len(stalled)} of {hours} hours with work and a free slot: "
-                           + ", ".join(stalled[:6]))
-        if not hours:
-            return True, "no hour had work and a free slot"
-        return True, f"turns started in each of {hours} hours with work and a free slot"
+        start = START + since
+        windows = [(START + lo, START + hi) for lo, hi in waits]
+        judged, short = 0, []
+        for m in run.marks:
+            if m["at"] < start or not m["free"] or not m["queued"] or any(lo <= m["at"] < hi for lo, hi in windows):
+                continue
+            judged += 1
+            need = min(m["free"], m["queued"])
+            if m["started"] < need:
+                short.append(f"{m['at']:%H:%M} started {m['started']} of {need}")
+        if not judged:
+            return False, "no claim round had a free slot and queued work outside the waits: nothing shows the board moved"
+        if short:
+            return False, (f"{len(short)} of {judged} claim rounds started fewer turns than the smaller of free slots "
+                           "and queued bots: " + ", ".join(short[:6]))
+        return True, f"all {judged} claim rounds with a free slot and queued work started the smaller of the two"
     return check
 
 
@@ -236,7 +243,8 @@ def company_cap(hourly):
 
 BASE = [("tickets not merged by the end", REPORT, all_through),
         (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
-        ("merged tickets never Blocked", HOLD, never_blocked_after_merge)]
+        ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
+        ("no call got a server error", None, no_server_error)]
 
 
 # ---------------------------------------------------------------------------------------------- events
