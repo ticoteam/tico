@@ -290,3 +290,31 @@ def test_the_assistants_settings_plan_is_the_card_without_a_yes(api, repos):
                    json={"value": {"repository": "Acme/product", "on": True}, "bot": "ops"})
     assert got.status_code == 200 and got.json().get("needs_confirm") is True and "run" not in got.json(), got.text
     assert ticks(api) == []
+
+
+def test_the_assistants_yes_follows_the_owners_rule_assistant_acts_without_asking(api, repos):
+    # Engineering, Oct 28: like approving on the person's words, the Assistant's yes path runs only while "Assistant acts
+    # without asking" is on; with it off the change is the person's Confirm card, even with a yes cited.
+    r, first = assistant_turn(api, "ana-test", "Turn on Run workflows for ops on product")
+    call = lambda attempt, path, body: api.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
+    back = call(first, ROUTE + "/read-back", {"repository": "product", "on": True}).json()
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t"}, r["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, r["token"])
+    say(api, "Yes")
+    yes = last_from(api, "human:ana")["id"]
+    then = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    cited = {"repository": "product", "on": True, "read_back": back["message_id"], "yes": yes}
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
+    got = call(then, ROUTE, cited).json()
+    assert got.get("needs_confirm") is True and "Assistant acts without asking" in got["no_yes"], got
+    planned = api.post("/api/v2/settings/catalog/bot.run_workflows/plan", headers=headers(then["token"]),
+                       json={"value": {"repository": "Acme/product", "on": True, "read_back": back["message_id"],
+                                       "yes": yes}, "bot": "ops"}).json()
+    assert planned.get("needs_confirm") is True and "run" not in planned, planned
+    again = call(then, ROUTE + "/read-back", {"repository": "product", "on": True}).json()
+    assert again["card_instead"] is True and "message_id" not in again, again
+    assert ticks(api) == [] and history(api) == []
+    # With the rule back on, the same yes carries it.
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
+    done = call(then, ROUTE, cited)
+    assert done.status_code == 200 and done.json()["changed"] is True, done.text

@@ -32,6 +32,17 @@ def carrier_of(who):
     return who.via if who.via in CARRIERS and not who.confirmed and who.role in ("owner", "human") else ""
 
 
+def rule_off(c, who):
+    """Why the person's yes can't carry this change, when it can't: the Assistant's yes path follows the owner's rule
+    "Assistant acts without asking" (Settings > Humans > Team rules), like approving on the person's words; with it off, the change is
+    their Confirm card. BotOps' yes path has no such rule."""
+    from . import team_rules
+    if carrier_of(who) == "assistant" and not team_rules.load(c)["assistant_direct"]:
+        return ("The team's owner turned off “Assistant acts without asking” (Settings > Humans > Team rules), so a yes "
+                "in conversation doesn't carry this change: it is the person's Confirm card")
+    return None
+
+
 def bot_name(c, bot):
     return (H.bot(c, bot) or {}).get("display_name") or bot
 
@@ -115,6 +126,12 @@ def read_back(c, auth, who, bot, org, repository, on):
         # Nothing to ask: the reply says so, and no question waits in the conversation for a yes that does nothing.
         return {"already": True, "reply": f"Run workflows is already {'on' if on else 'off'} for "
                 f"{bot_name(c, bot)} on {repo['full_name']}; nothing to change."}
+    off = rule_off(c, who)
+    if off:
+        # Nothing to ask either: a yes to it would change nothing. The carrier makes the change without a yes instead,
+        # which is the person's Confirm card.
+        return {"already": False, "asked": False, "card_instead": True,
+                "reply": off + "; make the change without a yes to put it on their card."}
     room, asked = turn_conversation(c, who.attempt_id)
     if not room:
         raise Problem("forbidden", "This turn has no conversation to ask the person in", 403)
@@ -123,7 +140,7 @@ def read_back(c, auth, who, bot, org, repository, on):
                            asked, None, delivered_at=H.now())
     H.event(c, who.actor, READ_BACK, msg["id"], {"bot": bot, "repository": repo["full_name"], "on": bool(on),
                                                   "carrier": carrier})
-    return {"message_id": msg["id"], "text": text, "already": False}
+    return {"message_id": msg["id"], "text": text, "already": False, "asked": True}
 
 
 def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
@@ -205,8 +222,10 @@ def change(c, auth, who, bot, org, repository, on, read_back_id=None, yes_id=Non
                          "nothing changed."}
     yes = None
     if carrier:
-        why = None
-        if read_back_id or yes_id:
+        why = rule_off(c, who)
+        if why:
+            pass
+        elif read_back_id or yes_id:
             try:
                 yes = the_yes(c, who, read_back_id, yes_id, bot, repo["full_name"], on)
             except Problem as refused:

@@ -92,7 +92,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
     # Run workflows for one repository: the route itself writes the read-back, checks the person's yes to it, and
-    # makes their Confirm card when there is none (backend/run_workflows_yes.py).
+    # makes their Confirm card when there is none, or when the owner's rule "Assistant acts without asking" is off
+    # (backend/run_workflows_yes.py `rule_off`).
     if re.fullmatch(r"/api/v2/bots/[^/]+/repositories/run-workflows(/read-back)?", path):
         return True
     try:

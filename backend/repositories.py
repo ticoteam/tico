@@ -975,7 +975,8 @@ def install(app, store, service):
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked. Letting a bot run workflows or edit workflow files, or turning Create
             # product repositories back on, is the person's own click too: BotOps puts it on a Confirm card, which runs
-            # as their own session.
+            # as their own session. The one other opening is Run workflows for one named repository on the person's yes
+            # in conversation, through its own route (`run-workflows`, backend/run_workflows_yes.py), never this one.
             # The change is tried as that click would make it first, so what their click could not do (no write
             # access, an admin turning product repositories on) is refused now rather than put on a card.
             before = access(c, bot, org)

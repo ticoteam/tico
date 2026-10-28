@@ -334,7 +334,8 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     # the card here, and with no way to make one it gets nothing it could run.
     # A yes entry runs on the person's yes the request cites (the route checks it); without one it is their card.
     if kind == "yes":
-        if isinstance(body, dict) and body.get("read_back") and body.get("yes"):
+        from .run_workflows_yes import rule_off
+        if isinstance(body, dict) and body.get("read_back") and body.get("yes") and not rule_off(c, who):
             kind = "direct" if acting_for else kind
         else:
             body = {k: v for k, v in body.items() if k not in ("read_back", "yes")}

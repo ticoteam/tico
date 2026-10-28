@@ -213,7 +213,8 @@ ENTRIES = TEAM_RULES + [
       words="run workflows actions ci runs yes turn on off repository",
       why="Read the change back with POST bots/{bot}/repositories/run-workflows/read-back {repository, on}; the "
           "person's plain yes to it is the yes the change cites ({repository, on, read_back, yes}). Only that "
-          "repository's tick changes; the next run there is the check"),
+          "repository's tick changes; the next run there is the check. The Assistant's yes counts only while "
+          "\"Assistant acts without asking\" is on; otherwise, and with no yes, it is the person's Confirm card"),
     # CEO bot
     S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
       card=_card("ceo")),
