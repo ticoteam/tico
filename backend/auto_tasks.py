@@ -225,7 +225,7 @@ def refusal(c, row, config, woken=False, result=False, *, message=None):
 def missing(c, settings, runner, body, failed=None, waiting=None):
     """The highest ranked eligible task without an unfinished run. Reads only, including on idle claims. A bot whose
     claim check raised is passed over as the claim passes it over: `failed` (the claim's ClaimFaults) records it, and
-    each bot whose check reads cleanly, and `waiting` says its check is still backing off. A task whose own checks raise
+    each bot whose checks all pass, and `waiting` says its check is still backing off. A task whose own checks raise
     is passed over and logged; the bot's other tasks are still looked at."""
     from . import execution as E
     from .batch_work import report, shared_check, shared_scope, storage_error
@@ -266,10 +266,11 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             else:
                 report("auto task check", slug, exc)
             continue
+        if why:
+            # A refusal is not a clean check: draining or a busy bot is refused before its checks run.
+            continue
         if failed is not None:
             failed.clean.add(slug)
-        if why:
-            continue
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
                                      "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
             try:

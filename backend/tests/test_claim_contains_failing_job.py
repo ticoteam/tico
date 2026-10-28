@@ -774,14 +774,18 @@ def test_a_task_whose_backfill_check_raises_does_not_stop_another_bots_task(api,
     still starts."""
     machine = runner(api, "ana")
     tasks = open_task_only(api, machine, ("ops", "cpo"))
-    real = auto_tasks.refusal
+    real, raised = auto_tasks.refusal, []
 
     def raising(c, row, *args, **kwargs):
         if row["owner"] == "bot:ops":
+            raised.append(row["id"])
             raise RuntimeError("ops's open task cannot be read")
         return real(c, row, *args, **kwargs)
     monkeypatch.setattr(auto_tasks, "refusal", raising)
+    # ops's task is looked at first, so its error is met before cpo's task could answer the claim.
+    monkeypatch.setattr(execution, "turns_here", lambda c, runner_id: {"cpo": 0, "ops": -1})
     turn = claim(api, machine)
+    assert raised and set(raised) == {tasks["ops"]["id"]}
     assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
 
 
@@ -818,6 +822,36 @@ def test_a_bot_check_that_passes_again_in_the_backfill_ends_its_back_off_and_fin
     bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
     assert claim(api, machine) is None
     assert api.app.state.execution.check_backoff["ops"][1] == 1
+
+
+def test_a_check_that_passes_after_a_restart_still_ends_its_finding(api, monkeypatch):
+    """The back-off lives in the server's memory and a restart forgets it; the Health finding is in the database, and
+    the first clean check after the restart ends it."""
+    machine = runner(api, "ana")
+    open_task_only(api, machine, ("ops",))
+    monkeypatch.setattr(auto_tasks, "refusal", lambda *a, **k: "auto_start_off")
+    real = run_backoff.refusal
+    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+    assert claim(api, machine) is None
+    assert claim_check_bots(api) == ["claim_check:ops"]
+    monkeypatch.setattr(run_backoff, "refusal", real)
+    api.app.state.execution.check_backoff.clear()
+    assert claim(api, machine) is None
+    assert claim_check_bots(api) == []
+
+
+def test_a_draining_bot_keeps_its_check_back_off(api, monkeypatch):
+    """Draining refuses the bot before its checks run, so it says nothing of whether they pass: the back-off and the
+    finding stay."""
+    machine = runner(api, "ana")
+    open_task_only(api, machine, ("ops",))
+    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+    assert claim(api, machine) is None
+    monkeypatch.setattr(execution, "_claim_refusal", lambda c, settings, runner, bot, *a, **k: ("draining", None))
+    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_MAX + 1))
+    assert claim(api, machine) is None
+    assert claim_check_bots(api) == ["claim_check:ops"]
+    assert "ops" in api.app.state.execution.check_backoff
 
 
 @pytest.mark.parametrize("check", ["bot", "job"])

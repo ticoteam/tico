@@ -2847,7 +2847,7 @@ class Execution:
         if row is None and people_only:
             return self.held_answer(c, who.runner_id)
         if row is None and (auto_tasks.missing(c, self.store.settings, runner, body, failed, self.check_waiting)
-                            or failed or failed is not None and failed.clean & self.check_backoff.keys()):
+                            or failed or failed is not None and self.check_recovered(c, failed.clean)):
             return None         # a bot whose check raised, or passes again, is recorded under the writer lock
         if row is not None and selected is not None:
             selected.append(row)
@@ -3341,13 +3341,22 @@ class Execution:
         wait = self.check_backoff.get(bot)
         return wait is not None and H.now() < wait[0]
 
+    def check_recovered(self, c, bots):
+        """Whether any of `bots`, whose checks just passed, still has a back-off or a Health finding to clear. The
+        finding is read, not inferred from the back-off, which a restart forgets."""
+        if bots & self.check_backoff.keys():
+            return True
+        marks = ",".join("?" * len(bots))
+        return bool(bots) and c.execute(f"SELECT 1 FROM service_health WHERE service IN ({marks}) LIMIT 1",
+                                        [claim_holds.CHECK + bot for bot in sorted(bots)]).fetchone() is not None
+
     def hold_failed(self, c, failed):
         """Record what the claim's ClaimFaults found, and clear it: each job it could not evaluate or start is held, and
         each bot whose check raised is logged once, named in Health (claim_holds.check_failed) and passed over until
         its back-off ends (check_waiting). A bot whose check passes again loses its back-off and its Health finding."""
         for bot in failed.clean - failed.bots.keys():
-            if self.check_backoff.pop(bot, None):
-                claim_holds.check_passed(c, bot)
+            self.check_backoff.pop(bot, None)
+            claim_holds.check_passed(c, bot)
         failed.clean.clear()
         while failed.jobs:
             job_id, error = failed.jobs.pop(0)
