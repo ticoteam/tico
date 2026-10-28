@@ -785,7 +785,6 @@ def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_com
 
 # ------------------------------------------------------------------ support and the Librarian as the person who asked
 def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_rights(api, botops, monkeypatch):
-    import json
     import httpx
     from backend import support
     from backend.tests.test_support import FakeHQ
@@ -799,7 +798,10 @@ def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_ri
     ana = turn(api, botops, person="ana-test", text="Report the sync fault and turn on the Librarian")
     filed = act(api, ana, "POST", "support/tickets", {"message": "[BotOps] Sync fails", "source": "botops"})
     assert filed.status_code == 200, filed.text
-    assert json.loads(hq.seen[-1].content)["source"] == "botops"    # BotOps' own request keeps its label
+    assert filed.json()["needs_confirm"] and not hq.seen
+    done = post(api, f"assistant/actions/{filed.json()['action']['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done", done
+    assert json.loads(hq.seen[-1].content)["source"] == "botops"    # BotOps' own request keeps its label on her tap
     assert act(api, ana, "POST", "librarian/turn-on", {}).status_code == 200
 
 
