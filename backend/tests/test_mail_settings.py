@@ -162,7 +162,7 @@ def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
 
     reply = {"thread_id": "t-1", "thread_senders": [sender]}
     inside = (([colleague], {}), ([colleague], {"cc": [lead]}))
-    outside = (([sender], reply), ([forward], {}), ([colleague], {"cc": [sender]}), ([colleague, sender], {}))
+    outside = (([sender], reply), ([forward], {}), ([colleague], {"cc": [sender]}), ([colleague, sender], reply))
     try:
         for to, extra in inside + outside[:2] + outside[3:]:            # the ordinary bot's paths are as they were
             assert send("ops", ops, to, **extra).allowed, (to, extra)
