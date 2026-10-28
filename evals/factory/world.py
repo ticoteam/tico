@@ -262,7 +262,7 @@ class World:
         revision = self.sql("SELECT revision FROM bot_config WHERE bot=?", (slug,))[0]["revision"]
         self.post(f"bots/{slug}/control", {"action": "pause", "expected_revision": revision})
 
-    def fallbacks(self):
+    def runtime_fallbacks(self):
         """The runtimes the enabled providers sign in, in the company's order."""
         return [RUNTIME_OF[p] for p in self.enabled if p in RUNTIME_OF]
 
@@ -274,7 +274,7 @@ class World:
         with self.store.read() as c:
             if not login_holds.holding(c, rid, "", PRIMARY, job_id):
                 return PRIMARY, False
-            for name in self.fallbacks():
+            for name in self.runtime_fallbacks():
                 if name in self.signed_in and not login_holds.holding(c, rid, "", name):
                     return name, True
         return PRIMARY, False

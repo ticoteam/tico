@@ -113,18 +113,31 @@ def spend_under(cap_usd, since, until):
     return check
 
 
+def hour_spent(run, when):
+    """The company's spend in the clock hour of `when`, from the turns that had finished by then: the figure a cap is
+    compared with, as usage_limits counts it."""
+    at = (START + when).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = [dict(r) for r in run.w.sql("SELECT est_cost_usd FROM turns WHERE substr(started,1,13)=? AND finished < ?",
+                                       (at[:13], at))]
+    return sum(r["est_cost_usd"] or 0 for r in rows)
+
+
 def resumes_within(when, minutes):
-    """Once the limit lifts at `when`, a turn starts within `minutes` while work is waiting."""
+    """Once the limit lifts at `when`, a turn starts within `minutes` while work is waiting. The detail says what the
+    board had to work with at the lift: the free slots, the work waiting and the hour's spend."""
     def check(run):
         t0 = START + when
         after = [m for m in run.marks if m["at"] >= t0]
         if not any(m["claimable"] for m in after):
             return True, "no work was waiting once it lifted"
         first = next((m["at"] for m in after if m["started"]), None)
+        waiting = "yes" if after[0]["claimable"] else "no"
+        state = (f"at the lift {after[0]['free']} slots free, work waiting {waiting}, the hour spent "
+                 f"${hour_spent(run, when):.2f}")
         if first is None:
-            return False, f"no turn started in the {len(after)} claim rounds after it lifted"
+            return False, f"no turn started in the {len(after)} claim rounds after it lifted; {state}"
         gap = (first - t0).total_seconds() / 60
-        return gap <= minutes, f"first turn {gap:.0f} min after it lifted (limit {minutes} min)"
+        return gap <= minutes, f"first turn {gap:.0f} min after it lifted (limit {minutes} min) at {first:%H:%M}; {state}"
     return check
 
 
