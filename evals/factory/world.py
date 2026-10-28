@@ -184,7 +184,7 @@ class World:
     # ------------------------------------------------------------------ API
     def call(self, method, path, body=None, token="ana-test", ok=True):
         headers = {"Authorization": "Bearer " + token}
-        if method == "post":
+        if method != "get":      # the server wants a key on every write, PUT included
             headers["Idempotency-Key"] = str(uuid.uuid4())
         response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
                                                 **({"json": body} if body is not None else {}))
@@ -198,7 +198,7 @@ class World:
         """One API call that answers with its status and body rather than raising: a claim the server fails is a finding
         (a 500, with the traceback when the app raised), not the end of the run."""
         headers = {"Authorization": "Bearer " + token}
-        if method == "post":
+        if method != "get":      # the server wants a key on every write, PUT included
             headers["Idempotency-Key"] = str(uuid.uuid4())
         try:
             response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
