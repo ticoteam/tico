@@ -40,7 +40,8 @@ const RULE_TASK_ACTIONS = {note: 'add a note', set_wait: 'set a wait', relate: '
   wake_bot: 'wake a bot', create_task: 'create a task', send_webhook: 'send a webhook'};
 const RULE_TASK_SCOPES = ['team', 'type', 'department', 'bot'];
 const RULE_PAUSED = 'Paused: too many runs';
-const ruleTaskTrigger = event => event in RULE_TASK_TRIGGERS || (RULES?.task_triggers || []).includes(event);
+// Own keys only: `in` would also match an inherited name such as constructor.
+const ruleTaskTrigger = event => Object.hasOwn(RULE_TASK_TRIGGERS, event) || (RULES?.task_triggers || []).includes(event);
 const ruleTaskTriggers = listing => (listing?.task_triggers?.length ? listing.task_triggers : Object.keys(RULE_TASK_TRIGGERS));
 const ruleTaskActions = listing => (listing?.task_actions?.length ? listing.task_actions : Object.keys(RULE_TASK_ACTIONS));
 const ruleTypeName = id => TASK_TYPES.find(t => t.id === id || t.name === id)?.name || id;

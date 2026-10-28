@@ -296,10 +296,15 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     await page.locator('#set-rules [data-rule-new]').click();
     const general = page.locator('[data-rule-form]:not([data-task-trigger-form])'); await general.waitFor();
     assert.deepEqual(await general.locator('[name="event"] optgroup[label="Task Trigger"] option').evaluateAll(o => o.map(x => x.value)), TASK_VOCAB.task_triggers);
+    await general.locator('[name="scope_kind"]').selectOption('type');
+    await general.locator('[name="scope_id"]').selectOption('dev');
     await general.locator('[name="event"]').selectOption('task.closed');
     await tf.waitFor();
     assert.equal(await general.count(), 0);
     assert.equal(await tf.locator('[name="event"]').inputValue(), 'task.closed');
+    assert.equal(await tf.locator('[name="scope_kind"]').inputValue(), 'type', 'the swap keeps the scope');
+    assert.equal(await tf.locator('[name="scope_id"]').inputValue(), 'dev');
+    assert.equal(await page.evaluate(() => [ruleTaskTrigger('constructor'), ruleTaskTrigger('toString'), ruleTaskTrigger('task.done')].join()), 'false,false,true');
     await tf.getByText('Cancel', {exact: true}).click();
     assert.deepEqual(errors, []);
     await page.close();
