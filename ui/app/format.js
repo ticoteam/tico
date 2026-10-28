@@ -158,3 +158,11 @@ const modelChoiceWords = (model, effort, harness, ownHarness) => {
   const via = harness && ownHarness && harness !== ownHarness ? ` in ${harnessWords(harness)}` : '';
   return name + via + (effort ? ` · ${effort}` : '');
 };
+
+// Shared with the bot page's state pill: lifecycle pause takes precedence over a running turn.
+function botPausedBadge(slug, link = false) {
+  if (stateOf(slug) !== 'paused') return '';
+  const words = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M2 1h3v10H2zm5 0h3v10H7z"/></svg>Paused';
+  return link ? `<a class="pill waiting bot-paused-badge" href="#/bot/${encodeURIComponent(slug)}">${words}</a>`
+    : `<span class="pill waiting bot-paused-badge">${words}</span>`;
+}

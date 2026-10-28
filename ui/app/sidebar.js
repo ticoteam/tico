@@ -731,7 +731,7 @@ function renderTree() {
         ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
+        ${botPausedBadge(e.name)}${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };

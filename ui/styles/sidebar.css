@@ -150,7 +150,7 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree a.node:hover{background:var(--surface2);text-decoration:none}
 .tree a.node.cur{background:var(--surface2);font-weight:600}
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
-.tree a.node.paused .av{opacity:.5}
+.tree a.node.paused{opacity:.6}
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.js renderTree). */
 .tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:default}
 .tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -168,3 +168,5 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-tool.on{color:var(--accent)}
 .org-bet-pop{margin:4px 0 6px 18px;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop)}
 .org-bet-pop .org-bet-f select{height:32px;font-size:var(--t-base)}
+
+.bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
