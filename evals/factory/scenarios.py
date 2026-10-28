@@ -154,7 +154,50 @@ def board_keeps_moving(since, waits=(), evidence=()):
                            "and queued bots: " + ", ".join(short[:6]))
         note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
         return True, f"all {judged} claim rounds with a free slot and queued work started the smaller of the two{note}"
-    return check
+    return _with_diagnosis(check, since, waits, evidence)
+
+
+def _with_diagnosis(check, since, waits, evidence):
+    """Investigation branch only: the check's verdict, then the claim rounds' breakdown."""
+    def diagnosed(run):
+        ok, detail = check(run)
+        return ok, detail + " || " + _diagnose(run, since, waits, evidence)
+    return diagnosed
+
+
+def _diagnose(run, since, waits, evidence):
+    start = START + since
+    labelled = [(START + lo, START + hi, "declared wait") for lo, hi in waits]
+    labelled += [(lo, hi, label) for read in evidence for lo, hi, label in read(run)]
+    cats, short, sample = Counter(), [], []
+    before_event = sum(1 for m in run.marks if m["at"] < start)
+    fallback_rounds = 0
+    for m in run.marks:
+        if m["at"] < start:
+            continue
+        cover = sorted({label for lo, hi, label in labelled if lo <= m["at"] < hi})
+        if not m["free"]:
+            cats["no free slot"] += 1
+        elif not m["queued"]:
+            cats["no queued bot"] += 1
+        elif cover:
+            cats["waived"] += 1
+        else:
+            cats["judged"] += 1
+        lines = [b for b in m.get("before") or [] if not b.startswith("computer:")]
+        if m["free"] and m["queued"]:
+            ready = sum(1 for b in lines if "hands out" in b and ("codex free" in b or "claude free" in b))
+            fallback_rounds += bool(ready)
+            if len(sample) < 2 and cover and ready:
+                sample.append(f"{m['at']:%H:%M} waived by {cover}: " + " | ".join(lines)[:500])
+        if m["free"] and m["queued"] and m["started"] < min(m["free"], m["queued"]):
+            short.append(f"{m['at']:%H:%M} free {m['free']} queued {m['queued']} started {m['started']} "
+                         f"held {m['held']} cover {cover or 'none'}: " + " | ".join(lines)[:400])
+    windows = [f"{lo:%H:%M}-{hi:%H:%M} {label}" for lo, hi, label in labelled]
+    return (f"DIAG marks {len(run.marks)}, before {start:%H:%M} {before_event}, from {start:%H:%M} "
+            f"{sum(cats.values())}: {dict(cats)}; rounds with free slot, queued bot and a ready fallback "
+            f"{fallback_rounds}; windows {windows}; short rounds {len(short)}: " + " || ".join(short[:6])
+            + " ;; waived samples: " + " || ".join(sample))
 
 
 def lead_heard_of(word):

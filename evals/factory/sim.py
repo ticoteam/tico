@@ -174,7 +174,7 @@ class Run:
                 break
             team.bot(attempt["bot"]).start(attempt)
             started += 1
-        mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started}
+        mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started, "before": before}
         if free and queued and started < min(free, queued):
             # Diagnostic: the server's view of each queued bot before the claims, and the last claim's answer.
             mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the claim body was {body} "
