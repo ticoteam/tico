@@ -179,7 +179,7 @@ class Run:
             mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the claim body was {body} "
                            f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
                            f"paused {sorted(self.paused)}")
-            if self.trace_rounds < 12:
+            if self.trace_rounds < 60:
                 self.trace_rounds += 1
                 self.traces.extend(self.trace(w, body, idle))
         self.marks.append(mark)
@@ -231,15 +231,21 @@ class Run:
                 # The candidate's bot first: it is the one the claim would start.
                 order = [any_job["bot"]] if any_job and any_job["bot"] in slugs else []
                 order += [slug for slug in sorted(slugs) if slug not in order]
+                # Keeper notices the claim's write path cancels before it chooses (its `obsolete` step): a candidate
+                # among them is suppressed under the lock, while the read path and Health still see it queued.
+                obsolete = {row[0] for row in c.execute("SELECT j.id " + X.obsolete_notices_sql() + " LIMIT 50",
+                                                         (rid, X.H.KEEPER, now)).fetchall()}
                 traced = 0
                 for slug in order:
                     if traced >= limit:
                         break
                     reasons = list(X.queued_reasons(c, w.store.settings, rid, slug, oldest=True))
-                    if not reasons or reasons[0][1] is not None:
+                    # The candidate's own job is traced, not the bot's oldest: it is the one the claim would hand out.
+                    chosen = any_job is not None and slug == any_job["bot"]
+                    if not chosen and (not reasons or reasons[0][1] is not None):
                         continue
                     traced += 1
-                    job = reasons[0][0]
+                    job = any_job if chosen else reasons[0][0]
                     assigned = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
                                          "WHERE a.runner_id=? AND a.bot=? AND b.state='active'",
                                          (rid, slug)).fetchone() is not None
@@ -278,6 +284,11 @@ class Run:
                                      f"{run_backoff.probe_due(c, slug, rb) if rb.get('held_at') else '-'}")
                         msg = store_h.message(c, job["message_id"])
                         gates.append(f"message readable {task_privacy.message_readable(c, 'bot:' + slug, msg)}")
+                        gates.append(f"obsolete notice {job['id'] in obsolete}, live meeting ref "
+                                     f"{bool((msg.get('refs') or {}).get('live_meeting'))}")
+                        kind = c.execute("SELECT m.kind AS kind, m.from_actor AS src FROM jobs j JOIN messages m "
+                                         "ON m.id=j.message_id WHERE j.id=?", (job["id"],)).fetchone()
+                        gates.append(f"message {kind['kind']} from {kind['src']}")
                     except Exception as error:      # a diagnostic never stops the run
                         gates.append(f"budget gate error {error!r}")
                     out.append(f"{stamp} {slug} oldest {job['id'][:6]}: " + "; ".join(gates))
