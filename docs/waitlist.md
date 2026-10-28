@@ -47,8 +47,6 @@ See [Your starting credit and what happens at $0](account.md#your-starting-credi
 
 ## Your automatic visual address
 
-**Unreleased:** this describes the intended setup behavior; live availability is not confirmed.
-
 Every new and existing company whose Tico server we host gets its own visual address, such as `acme.ticofiles.com`.
 Tico sets it up automatically, free, whether or not you buy Tico file hosting.
 You have no setup step or visuals on/off switch. Paid file storage is separate.
