@@ -30,8 +30,7 @@ EVENT = "goal.read_back"
 SAVED = "goal.read_back_save"
 NEW = "{new}"                 # a step's goal is the one the change's first step created
 CLOSING_ONE = "Reply yes to save exactly this; any other reply saves nothing."
-CLOSING_MANY = ("Reply yes to save exactly these, or yes to some by number (like “yes to 1 and 3”); any other reply "
-                "saves nothing.")
+CLOSING_MANY = "You can also say yes to some by number (like “yes to 1 and 3”).\n" + CLOSING_ONE
 
 # The routes a yes to a read-back saves through. Everything else on Goals stays a click or a card.
 _SAVING = [re.compile(p) for p in (

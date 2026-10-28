@@ -641,16 +641,10 @@ def run(args, who=None):
             links = s3links.apply(client, body, ("note",))
             return s3links.annotate(post("tasks/" + args.id, body, delegate=asked), links)
     if cmd == "goal":
-        if sub == "create":
-            body = Path(args.body_file).read_text() if args.body_file else args.body
-            return post("goals", {"owner": target(args.owner), "title": args.title, "parent_id": args.parent,
-                        "body": body or "", "top": bool(args.top), "bet_id": args.bet_id})["goal"]
-        if sub == "update":
-            body = {"title": args.title, "parent_id": args.parent, "owner": target(args.owner) if args.owner else None,
-                    "rank": args.rank, "top": bool(args.top), "bet_id": args.bet_id}
-            if args.body_file or args.body is not None:
-                body["body"] = Path(args.body_file).read_text() if args.body_file else args.body
-            return post("goals/" + args.id, body)["goal"]
+        if sub in ("create", "update"):
+            args.parent_id = args.parent
+            if args.body_file:
+                args.body = Path(args.body_file).read_text()
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)

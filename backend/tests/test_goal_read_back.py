@@ -365,3 +365,65 @@ def test_only_the_owners_ceo_bot_turn_saves_on_a_yes(api):
     # Another person's Assistant still proposes a goal on a card, as before.
     refused = asked(api, "goals", {"title": "x", "owner": "ops"}, attempt["token"], "turn", expected=403)["error"]
     assert refused["code"] == "confirm_required"
+
+
+def test_repeated_changes_are_refused_before_posting_a_draft(api):
+    ceo(api)
+    r, attempt = turn(api, "goal-manager", "ana-test", "Set a goal")
+    before = room_messages(api)
+    result = read_back(api, attempt, NEW_GOAL, dict(reversed(list(NEW_GOAL.items()))), expected=422)
+    assert result['error']['code'] == 'validation'
+    assert 'repeated' in result['error']['detail']
+    assert room_messages(api) == before
+
+
+def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch, capsys):
+    from clients import hubcli, remotecli
+    from clients.tico import APIError
+    from backend.tests.test_api import headers
+
+    class TurnClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            extra = {'X-Tico-On-Behalf-Of': delegate} if delegate else {}
+            response = api.request(method, '/api/v2/' + path, json=body,
+                                   headers={**headers(attempt['token']), **extra})
+            value = response.json()
+            if response.status_code >= 400:
+                error = value['error']
+                raise APIError(error['code'], error['detail'], response.status_code, False)
+            return value
+
+        def get(self, path, **query):
+            response = api.get('/api/v2/' + path, headers=headers(attempt['token']))
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        def post(self, path, body, key=None):
+            return self.call('POST', path, body, key)
+
+    ceo(api)
+    r, attempt = turn(api, 'goal-manager', 'ana-test', 'Set two goals')
+    monkeypatch.setattr(remotecli, 'Client', TurnClient)
+    monkeypatch.setenv('HUB_API_URL', 'https://synthetic.invalid')
+    changes = [{'kind': 'goal_create', 'owner': 'company', 'title': 'First', 'why': 'Purpose'},
+               {'kind': 'goal_create', 'owner': 'company', 'title': 'Second'}]
+    assert hubcli.main(['goal', 'read-back', json.dumps(changes)]) == 0
+    back = json.loads(capsys.readouterr().out)
+    assert back['message_id'] == room_messages(api)[-1]['id']
+    assert back['text'].endswith('Reply yes to save exactly this; any other reply saves nothing.')
+    attempt = reply(api, r, attempt, 'yes')
+    # No citation is not authorization, even during the yes turn.
+    assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First']) == 2
+    assert json.loads(capsys.readouterr().out)['error'] == 'not_agreed'
+    assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First', '--on-behalf-of', 'turn']) == 0
+    gid = json.loads(capsys.readouterr().out)['id']
+    step = back['changes'][0]['steps'][1]
+    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body_json'],
+                       '--created-goal', gid, '--on-behalf-of', 'turn']) == 0
+    capsys.readouterr()
+    with api.app.state.store.read() as c:
+        assert G.goal(c, gid)['why'] == 'Purpose'
+        assert not c.execute("SELECT id FROM goals WHERE title='Second'").fetchone()

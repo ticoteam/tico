@@ -1201,6 +1201,47 @@ def task_wait(api, args):
 
 
 # ----------------------------------------------------------------------------- goals
+GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id. On not_agreed read back again, never retry the save.")
+
+
+@tool("hub_goal_read_back", "Tico writes and stores the read-back in the owner's CEO Bot chat. Saves nothing without a plain yes. "
+      "Returns message_id, text and exact method/path/body_json steps; save agreed steps with hub_goal_save. "
+      "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
+      {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
+      required=("changes",), writes=True)
+def goal_read_back(api, args):
+    changes = args["changes"]
+    if isinstance(changes, str):
+        changes = json.loads(changes)
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
+        raise ValueError("changes must be a JSON array of 1 to 20 change objects")
+    return api.post("goals/read-back", {"changes": changes}, key=_key(args))
+
+
+@tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
+      "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry.",
+      {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
+       "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
+       "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
+def goal_save(api, args):
+    path = args["path"]
+    if "{new}" in path:
+        created = args.get("created_goal")
+        if not created or not re.fullmatch(r"[A-Za-z0-9_-]+", created):
+            raise ValueError("created_goal must be the goal id from the first save")
+        path = path.replace("{new}", created)
+    # This helper only replays goal read-back writes; the server checks the cited yes and exact body.
+    if args["method"] != "POST" or not re.fullmatch(
+            r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/[^/]+/decide)", path):
+        raise ValueError("path must be a goal read-back save step")
+    if not args.get("on_behalf_of"):
+        raise ValueError("cite the owner's plain yes with on_behalf_of")
+    body = json.loads(args["body_json"])
+    if not isinstance(body, dict):
+        raise ValueError("body_json must be a JSON object")
+    return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
+
+
 @tool("hub_goal_list", "What you are for: your goals in order, the goals they support, and your reports' goals. Read this before you read a task. `all` is every "
       "live goal in the team.",
       {"owner": _s("Someone else's: a bot slug or a person id; default is yourself"),
@@ -1227,10 +1268,10 @@ def goal_show(api, args):
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
        "body": _s("What it means, what counts, what does not", default=""),
        "top": {"type": "boolean", "default": False, "description": "Put it first in the owner's order"},
-       "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)")},
+       "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)"), "on_behalf_of": GOAL_YES},
       required=("owner", "title"), writes=True)
 def goal_create(api, args):
-    return api.post("goals", {"owner": _target(api, args["owner"]), "title": args["title"],
+    return _asked(api, args).post("goals", {"owner": _target(api, args["owner"]), "title": args["title"],
                               "parent_id": args.get("parent_id"), "body": args.get("body") or "",
                               "top": bool(args.get("top")), "bet_id": args.get("bet_id") or None},
                     key=_key(args))["goal"]
@@ -1361,13 +1402,13 @@ def goal_ceo_bot_log(api, args):
        "owner": _s("New owner: a bot slug or a person id"),
        "rank": {"type": "integer", "description": "Position in the owner's order"},
        "top": {"type": "boolean", "default": False},
-       "bet_id": _s("The strategy bet it serves; an empty string unlinks it")},
+       "bet_id": _s("The strategy bet it serves; an empty string unlinks it"), "on_behalf_of": GOAL_YES},
       required=("id",), writes=True)
 def goal_update(api, args):
     body = {k: args.get(k) for k in ("title", "body", "parent_id", "rank", "bet_id")}
     body["owner"] = _target(api, args["owner"]) if args.get("owner") else None
     body["top"] = bool(args.get("top"))
-    return api.post("goals/" + args["id"], body, key=_key(args))["goal"]
+    return _asked(api, args).post("goals/" + args["id"], body, key=_key(args))["goal"]
 
 
 # The target lives on the link between a goal and a KPI: an improvement (baseline, target, deadline) or a
@@ -1427,13 +1468,16 @@ def kpi_show(api, args):
       "deadline; or a range: min/max). The CEO Bot proposes instead (hub_proposal_create).",
       {"name": _s("'booked Calendly demos per two weeks'"), "goal_id": _s("Link it to this goal"),
        "owner": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
-       **KPI_PROPS, **TARGET_PROPS},
+       **KPI_PROPS, **TARGET_PROPS, "on_behalf_of": GOAL_YES},
       required=("name",), writes=True)
 def kpi_add(api, args):
     body = {"name": args["name"], "goal_id": args.get("goal_id"),
             "owner": _target(api, args["owner"]) if args.get("owner") else None,
             **{k: args[k] for k in KPI_PROPS if args.get(k) is not None}, **_target_body(args)}
-    return api.post("kpis", body, key=_key(args))["kpi"]
+    if args.get("on_behalf_of") and args.get("goal_id"):
+        body.pop("goal_id")
+        return _asked(api, args).post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+    return _asked(api, args).post("kpis", body, key=_key(args))["kpi"]
 
 
 @tool("hub_kpi_update", "Change a KPI. A change to what it measures (definition, unit, direction, cadence, "
@@ -1463,17 +1507,24 @@ def kpi_restore(api, args):
       "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
       "linked. The goal's owner or someone above them; the CEO Bot proposes instead.",
       {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id (auto:<bot>:<metric> for a bot's automatic KPI)"),
-       **TARGET_PROPS},
+       **TARGET_PROPS, "on_behalf_of": GOAL_YES},
       required=("goal_id", "kpi_id"), writes=True)
 def kpi_link(api, args):
     body = {"kpi_id": args["kpi_id"], **_target_body(args)}
-    return api.post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+
+
+@tool("hub_kpi_target", "Set or remove the target on a goal's measure. Cite the owner's plain yes to its read-back.",
+      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id"), **TARGET_PROPS, "on_behalf_of": GOAL_YES},
+      required=("goal_id", "kpi_id"), writes=True)
+def kpi_target(api, args):
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}", _target_body(args), key=_key(args))["kpi"]
 
 
 @tool("hub_kpi_unlink", "Take a KPI off a goal. The KPI and its readings stay.",
-      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id")}, required=("goal_id", "kpi_id"), writes=True)
+      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id"), "on_behalf_of": GOAL_YES}, required=("goal_id", "kpi_id"), writes=True)
 def kpi_unlink(api, args):
-    return api.post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}/unlink", {}, key=_key(args))["goal"]
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}/unlink", {}, key=_key(args))["goal"]
 
 
 @tool("hub_kpi_log", "Log a reading on a KPI: a fact, with the period it describes, where it came from and how "
@@ -1534,13 +1585,14 @@ def proposal_list(api, args):
       "the goal or the KPI: a bot is refused. Confirming makes the change as that person.",
       {"id": _s("Proposal id"), "decision": {"type": "string", "enum": ["confirm", "reject"]},
        "note": _s("Why, optionally"),
-       "option": {"type": "integer", "description": "A recovery: approve this option (0 is the first), not the pick"}},
+       "option": {"type": "integer", "description": "A recovery: approve this option (0 is the first), not the pick"}, "on_behalf_of": GOAL_YES},
       required=("id", "decision"), writes=True)
 def proposal_decide(api, args):
     body = {"decision": args["decision"], "note": args.get("note") or ""}
     if args.get("option") is not None:
         body["option"] = int(args["option"])
-    return api.post(f"proposals/{args['id']}/decide", body, key=_key(args))["proposal"]
+    path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
+    return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 
 # ----------------------------------------------------------------------------- strategy
@@ -5370,7 +5422,7 @@ REQUESTER = PEOPLE + BOTOPS
 REQUESTER_READ = REQUESTER + ("assistant",)
 HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are refused
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
-ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
+ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
@@ -5415,7 +5467,7 @@ AUDIENCE = {
     "hub_mcp_stats": PEOPLE + BOTS,   # a bot the owner granted outcome stats; the server refuses the rest
     "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
-    "hub_proposal_decide": PEOPLE,
+    "hub_proposal_decide": HUMANS_AND_ASSISTANT,
     "hub_bot_mail": PEOPLE,                         # backend/mail_settings.py: a person only
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
