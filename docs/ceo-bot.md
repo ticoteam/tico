@@ -138,6 +138,11 @@ Nobody else talks to it: everyone else, administrators included, keeps the Assis
 (`403`). Bots still message it, in its goals session, never in your chat. Your chats with your Assistant from before
 stay readable under **Earlier chats** on the same page, also while the CEO Bot is paused.
 
+When it proposes a goal change in chat, the CEO Bot reads back the exact change before saving it. Reply **Yes** to that
+read-back in the same chat within 30 minutes. The cited yes saves only the field and value the CEO Bot read back; if the
+goal changed, you sent another message, or the read-back expired, nothing is saved and the CEO Bot must read it back
+again. Other changes need their own read-back and yes.
+
 If you hand ownership to someone else (Settings > People), the CEO Bot tab and its chat history go with the owner seat
 to the new owner. You get your Assistant back, with your own earlier Assistant chats; the new owner does not see those.
 Cards the CEO Bot had waiting on you are withdrawn.
