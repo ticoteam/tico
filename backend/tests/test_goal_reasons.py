@@ -117,9 +117,13 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     post(api, f"goal-proposals/{named['id']}/decide", {"decision": "reject", "note": "Inbox again"})
     assert rejected(api, "cara-test")[named["id"]]["decision_note"] == ""
     assert "Inbox again" not in str(get(api, f"goals/{hers['id']}", "cara-test"))
-    # A note typed with a yes is kept from her the same way.
+    # A note typed with a yes is kept from her the same way. Confirming this one is refused now (it would show her the
+    # inbox bot's measure), so it stands for a yes given before she lost the inbox bot, history line included.
     yes = propose(api, "goal_kpi", {"kpi": {"name": "Replies read"}, "owner": "inbox"}, hers["id"])
-    post(api, f"goal-proposals/{yes['id']}/decide", {"decision": "confirm", "note": "Inbox wants it"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE goal_proposals SET status='confirmed', decision_note='Inbox wants it', decided_by='human:ana' "
+                  "WHERE id=?", (yes["id"],))
+        G._event(c, hers["id"], "human:ana", "proposal", "goal_kpi", "confirmed", "Inbox wants it")
     for path in ("goal-proposals?status=confirmed", "goal-proposals?status=all", f"goals/{hers['id']}"):
         assert "Inbox wants it" not in str(get(api, path, "cara-test")), path
     assert "Inbox wants it" in str(get(api, "goal-proposals?status=confirmed"))
