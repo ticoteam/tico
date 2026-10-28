@@ -6451,6 +6451,116 @@
         ]
       }
     },
+    "/api/v2/goals/read-back": {
+      "post": {
+        "summary": "The CEO Bot only, in the owner's own chat: Tico writes the read-back of up to 20 changes to goals, measures and suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) within 30 minutes lets exactly those saves through (each step's method, path and body_json, sent as it is), cited with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
+        "operationId": "readBackGoalChanges",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalReadBack"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/goals/read-back/{mid}": {
+      "get": {
+        "summary": "One goal read-back: each change with its exact saves, whether it is saved and, in the turn the owner's reply started, whether that reply says yes to it and why not",
+        "operationId": "getGoalReadBack",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
     "/api/v2/goals/refresh": {
       "post": {
         "summary": "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
@@ -27028,6 +27138,27 @@
           "status"
         ],
         "additionalProperties": true
+      },
+      "GoalReadBack": {
+        "properties": {
+          "changes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Changes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "title": "GoalReadBack",
+        "description": "Up to 20 changes the CEO Bot reads back in the owner's chat (backend/goal_read_back.py): each one an object with a\n`kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."
       },
       "GoalRefresh": {
         "properties": {

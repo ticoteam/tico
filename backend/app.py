@@ -482,6 +482,7 @@ def create_app(settings=None):
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
     from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
+    from . import goal_read_back
     from . import assistant as assistant_mod
     from . import botops_act
 
@@ -681,7 +682,14 @@ def create_app(settings=None):
                     # A direct setting from the catalogue the person asked for runs on their words the same way.
                     setting = (not approves and request.state.identity.via == "assistant"
                                and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    if not (asked and request.state.identity.via == "assistant" and assistant_direct()
+                    # The owner's yes to a goal read-back in their CEO Bot chat (backend/goal_read_back.py): the goal,
+                    # measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
+                    goal_yes = (not approves and goal_read_back.ceo_turn(request.state.identity)
+                                and goal_read_back.saving(request.method, request.url.path))
+                    if goal_yes and not asked:
+                        raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
+                                                        "read-back, citing it (`--on-behalf-of turn`)")
+                    if not goal_yes and not (asked and request.state.identity.via == "assistant" and assistant_direct()
                             and (setting or assistant_instructed(request.method, request.url.path, raw,
                                                                  decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
@@ -695,6 +703,16 @@ def create_app(settings=None):
                                       + settings.app_name, 403)
                     def cited():
                         with store.read() as c:
+                            if goal_yes:
+                                try:
+                                    record = assistant_instruction(c, request.state.identity, asked)
+                                except Problem as exc:
+                                    raise goal_read_back.not_agreed(exc.detail.split(";")[0]) from None
+                                # Recorded on every save as the owner, via the CEO Bot, citing their yes and the
+                                # read-back it answered.
+                                return {**record, "assistant": request.state.identity.task_actor,
+                                        **goal_read_back.agreement(c, request.state.identity, record["cited"],
+                                                                   request.method, request.url.path, raw)}
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
@@ -6616,6 +6634,17 @@ def create_app(settings=None):
                                         request.headers.get("idempotency-key"), selected)
             if idle is not None:
                 return idle
+            # Only a registered computer's claim cleans up: anyone else is refused before any write.
+            due = (execution.runner(c, request.state.identity) is not None
+                   and execution.maintenance_due(c, request.state.identity))
+            if c.in_transaction:
+                c.rollback()
+        if due:
+            # Lapsed leases go back in the queue in a short write of their own, before the read below chooses: the
+            # claim's write then rechecks one job instead of choosing again under the lock (TK-INSRN53V).
+            store.write(request.state.identity, execution.maintain)
+            selected.clear()
+        with store.read() as c:
             if not selected:
                 selected.append(execution.candidate(c, request.state.identity, body,
                                                     execution.runner(c, request.state.identity)))
@@ -6625,7 +6654,7 @@ def create_app(settings=None):
                 c.rollback()
             def work(write):
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0], prepared=True)
+                                       selected=selected[0], prepared=True, maintained=True)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")
