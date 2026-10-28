@@ -36,9 +36,8 @@ def probe_runs(run):
     queue while a probe is live (login_holds.holding: "probing")."""
     now, out = run.w.now(), []
     for job in sorted(run.probe_seen):
-        for row in run.w.sql("SELECT created, finished, ended_at, lease_until FROM attempts WHERE job_id=?", (job,)):
-            end = row["finished"] or row["ended_at"]
-            end = _utc(end) if end else min(_utc(row["lease_until"]), now)
+        for row in run.w.sql("SELECT created, finished, lease_until FROM attempts WHERE job_id=?", (job,)):
+            end = _utc(row["finished"]) if row["finished"] else min(_utc(row["lease_until"]), now)
             out.append((_utc(row["created"]), end, f"probe {job[:6]} holds its login's queue"))
     return out
 

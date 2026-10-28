@@ -461,10 +461,10 @@ class Run:
             out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
                        f"streak {win['streak']})")
         for job in sorted(self.probe_seen):
-            for row in w.sql("SELECT id,state,created,started,finished,ended_at,lease_until FROM attempts "
+            for row in w.sql("SELECT id,state,created,started,finished,lease_until FROM attempts "
                              "WHERE job_id=? ORDER BY created", (job,)):
                 out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created']} "
-                           f"started {row['started']} finished {row['finished'] or row['ended_at']} "
+                           f"started {row['started']} finished {row['finished']} "
                            f"lease {row['lease_until']}")
         out += self.traces
         return out
