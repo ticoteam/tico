@@ -85,14 +85,14 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind != "person" or e.why, e.key
         # A Confirm card can only carry a route a person may confirm from BotOps.
         if e.kind == "confirm":
-            path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+            path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
 
 
 def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
     for e in ENTRIES:
-        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
         if e.key in NO_CARD_YET:
             assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
             assert e.kind == "person" or e.when_held == "person", e.key
@@ -117,13 +117,12 @@ def test_a_wake_rule_that_sends_outside_is_not_direct():
     quiet = {"scope_kind": "team", "event": "task.created", "then": "wake"}
     assert "run" in settings_catalog.plan(None, None, _owner(), e, quiet, propose=card)
     for action in ("send_webhook", "forward"):
-        with pytest.raises(Problem) as refused:
-            settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
-                                  propose=card)
-        assert refused.value.code == "person_only", action
+        # Settings stage 3: a Confirm card, where it was the person's own in Settings before BotOps could make one.
+        assert settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
+                                     propose=card) == {"needs_confirm": True}, action
 
 
-def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api, botops):
+def test_botops_puts_a_partial_edit_of_a_stored_outbound_wake_rule_on_a_card_and_changes_nothing(api, botops):
     # These are synthetic rows in the test database; no webhook delivery worker runs here.
     hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook",
                                    "events": ["*"]})["webhook"]
@@ -138,7 +137,8 @@ def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api,
                   {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}}):
         err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value},
                            ana["token"])
-        assert err and refused.get("error") == "person_only", refused
+        # The partial update is classed with the stored rule read in: it sends outside, so it waits for the tap.
+        assert not err and refused.get("needs_confirm"), refused
         with api.app.state.store.read() as c:
             stored = c.execute("SELECT enabled,then_outcome,params_json,revision FROM rules WHERE id=?",
                                (rule["id"],)).fetchone()
@@ -273,3 +273,25 @@ def test_catalogue_resolves_the_bot_for_id_addressed_routines_and_transitions(ap
     err, refused = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
                    "value": {"enabled": False}}, "ben-test")
     assert err and "bot's owners" in str(refused), refused
+
+
+def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
+    """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
+    the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
+    made, so BotOps sent the admin to Settings."""
+    from backend.tests.test_usage_limits import groups
+    groups(api, "product")
+    ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
+    err, card = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": "groups/eng",
+                                              "value": {"daily_usd": 50}}, ben["token"])
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
+    assert "$50" in card["action"]["description"], card["action"]
+    finish(api, botops, ben)
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None      # nothing until the tap
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
+    for bad in ("groups", "groups/eng/x", "eng"):
+        err, refused = mcp(api, "hub_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}},
+                           "ben-test")
+        assert err and refused["error"] == "validation", (bad, refused)

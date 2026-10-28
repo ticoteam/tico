@@ -176,7 +176,7 @@ KEEPS_THE_STORED_ACTION = ({"expected_revision": 1, "on": True},
                            {"expected_revision": 1, "then": "action", "params": None, "on": True})
 
 
-def test_the_assistant_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api):
+def test_a_partial_edit_of_a_stored_outbound_wake_rule_waits_for_the_persons_tap(api):
     rule, quiet = outbound_and_quiet_rules(api)
     before = stored_rule(api, rule["id"])
     r, attempt = assistant_turn(api, "ana-test", "Update my wake rules")
@@ -184,29 +184,29 @@ def test_the_assistant_cannot_partially_enable_or_edit_a_stored_outbound_wake_ru
     cited = {**headers(token), "X-Tico-On-Behalf-Of": "turn"}
     # Left out or sent as null, the rule's action and params stay the stored send-out (rules.update).
     for value in KEEPS_THE_STORED_ACTION:
-        # Neither the catalogue nor the write itself, sent on the person's words: the body keeps the stored send-out.
-        err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value,
-                                                     "on_behalf_of": "turn"}, token)
-        assert err and refused["error"] == "person_only", refused
+        # The body keeps the stored send-out, so it sends outside: the catalogue makes a Confirm card, and the write
+        # itself, sent on the person's words, changes nothing.
+        err, card = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value,
+                                                  "on_behalf_of": "turn"}, token)
+        assert not err and card["needs_confirm"] is True, card
         raw = api.post(f"/api/v2/rules/{rule['id']}", json=value, headers=cited)
-        assert raw.status_code == 403 and raw.json()["error"]["code"] == "person_only", raw.text
-        assert api.app.state.store.settings.public_url.rstrip("/") + "/#/settings/" in raw.json()["error"]["detail"]
+        assert raw.status_code == 403, raw.text
         assert stored_rule(api, rule["id"]) == before == (0, "action", "send_webhook", 1)
     # A stored rule that keeps to Tico turns on at once on their words.
     raw = api.post(f"/api/v2/rules/{quiet['id']}", json={"expected_revision": 1, "on": True}, headers=cited)
     assert raw.status_code == 200 and stored_rule(api, quiet["id"])[0] == 1, raw.text
 
 
-def test_a_card_never_holds_a_change_to_a_stored_outbound_wake_rule(api, monkeypatch):
-    # Wake rules are not on cards yet (NO_CARD_YET); once they are, a card holds the same class `plan` gives.
-    monkeypatch.setattr(assistant_mod, "catalogue_card", lambda method, path: True)
+def test_a_card_for_a_stored_outbound_wake_rule_runs_only_on_the_tap(api):
+    # A card holds the class `plan` gives, with the stored rule read in: a send-out is a confirm, run by the tap alone.
     rule, quiet = outbound_and_quiet_rules(api)
     r, attempt = assistant_turn(api, "ana-test", "Turn my wake rules on")
-    for value in KEEPS_THE_STORED_ACTION:
-        refused = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
-                                                  "path": f"/api/v2/rules/{rule['id']}", "body": value},
-                       token=attempt["token"], expected=422)
-        assert "not the person's own to change in Settings" in refused["error"]["detail"], (value, refused)
+    value = {"expected_revision": 1, "on": True}
+    card = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
+                                           "path": f"/api/v2/rules/{rule['id']}", "body": value}, token=attempt["token"])
+    assert card["action"]["status"] == "pending" and stored_rule(api, rule["id"])[0] == 0, card
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")
+    assert stored_rule(api, rule["id"]) == (1, "action", "send_webhook", 2)
     card = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
                                            "path": f"/api/v2/rules/{quiet['id']}",
                                            "body": {"expected_revision": 1, "on": True}}, token=attempt["token"])
@@ -301,9 +301,13 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
 
 def test_the_assistant_may_card_every_catalogue_route_botops_may():
     for e in ENTRIES:
-        path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+        path = settings_catalog.probe(e)
         if e.kind != "person":
             assert valid_operation(e.method, path, None, "assistant") == valid_operation(e.method, path, None, "botops"), e.key
+        if "/{" in e.route and e.route.split("/{")[0] + "/" in settings_catalog.ID_SHAPES:
+            # A repository (`owner/name`) or a pool (`groups/<id>`): probed as the two segments the route takes, so
+            # the equality above is about a path BotOps really cards, not one neither could.
+            assert path[len("/api/v2/"):].count("/") == e.route.count("/") + 1 and valid_operation(e.method, path, None, "botops"), e.key
 
 
 @pytest.mark.parametrize("role", ["owner", "admin", "member"])
