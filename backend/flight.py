@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS flight_requests(ts INTEGER NOT NULL, span INTEGER NOT
   caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
   p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, span, route, caller)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, route TEXT, caller TEXT,
-  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER);
+  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top_json TEXT);
 CREATE TABLE IF NOT EXISTS flight_process(ts INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
   fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
   txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
@@ -58,6 +58,8 @@ CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, ts);
 SLOW_MS = 1000                  # a request this slow is logged on its own
 SLOW_PER_MINUTE = 50
 SLOW_KEEP = 5000
+TOP_STATEMENTS = 5              # a slow request names its costliest statement shapes, this many
+STATEMENT_KEYS = 400            # distinct statement texts kept per request; later new ones are only counted
 STALL_S = 2.0                   # the event loop late by this much is a stall
 STACK_GAP = 60                  # every thread's stack with a stall, at most this often
 TICK = 0.25
@@ -92,6 +94,21 @@ def fingerprint(sql):
     return _LIST.sub("(?,…)", text)[:300]
 
 
+def top_statements(statements, fingerprints=None):
+    """A request's TOP_STATEMENTS costliest statement shapes, [{sql, n, ms}], literals folded as in flight_sql."""
+    if not statements:
+        return []
+    shapes = {}
+    for sql, (n, ms) in list(statements.items()):
+        fp = fingerprints.get(sql) if fingerprints is not None else None
+        fp = fp or fingerprint(sql)
+        row = shapes.setdefault(fp, [0, 0.0])
+        row[0] += n
+        row[1] += ms
+    ranked = sorted(shapes.items(), key=lambda kv: -kv[1][1])[:TOP_STATEMENTS]
+    return [{"sql": fp, "n": n, "ms": round(ms, 1)} for fp, (n, ms) in ranked]
+
+
 def quantile(hist, q):
     total = sum(hist.values())
     if not total:
@@ -114,8 +131,9 @@ def _merge(into, hist):
         into[int(k)] = into.get(int(k), 0) + v
 
 
-# Per request: SQL milliseconds, write-lock wait milliseconds and statements, added to by the request's own threads. The
-# middleware sets a fresh list; threads the request runs on copy the context, so they add to the same list.
+# Per request: SQL milliseconds, write-lock wait milliseconds, statements and {statement: [n, ms]}, added to by the
+# request's own threads. The middleware sets a fresh list; threads the request runs on copy the context, so they add to
+# the same list. The statements let a slow request name where its SQL time went (TOP_STATEMENTS).
 _COST = contextvars.ContextVar("tico_flight_cost", default=None)
 # The request's method and ASGI scope, so a write transaction that holds the lock too long can name its route.
 _ROUTE = contextvars.ContextVar("tico_flight_route", default=None)
@@ -124,7 +142,7 @@ ACTIVE = None                   # the server's recorder, for write transactions 
 
 
 def request_started(method=None, scope=None):
-    cost = [0.0, 0.0, 0]
+    cost = [0.0, 0.0, 0, {}]
     return cost, (_COST.set(cost), _ROUTE.set((method, scope) if scope is not None else None))
 
 
@@ -269,8 +287,9 @@ class Recorder:
     def request(self, route, caller, status, ms, nbytes=0, actor="", cost=None):
         if len(self.samples) >= BUFFER:
             self.dropped += 1
-        sql_ms, wait_ms, queries = cost or (0.0, 0.0, 0)
-        self.samples.append(("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries))
+        sql_ms, wait_ms, queries = cost[:3] if cost else (0.0, 0.0, 0)
+        statements = cost[3] if cost is not None and len(cost) > 3 else None
+        self.samples.append(("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements))
 
     def query(self, sql, ms, locked=False):
         if len(self.samples) >= BUFFER:
@@ -280,6 +299,13 @@ class Recorder:
         if cost is not None:
             cost[0] += ms
             cost[2] += 1
+            if len(cost) > 3:
+                seen = cost[3].get(sql)
+                if seen is not None:
+                    seen[0] += 1
+                    seen[1] += ms
+                elif len(cost[3]) < STATEMENT_KEYS:
+                    cost[3][sql] = [1, ms]
 
     def transaction(self, wait_ms, hold_ms, locked=False):
         if len(self.samples) >= BUFFER:
@@ -336,7 +362,7 @@ class Recorder:
                     if locked:
                         self.locked += 1
                 elif kind == "r":
-                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries = s
+                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements = s
                     row = self.requests.get((route, caller))
                     if row is None:
                         row = self.requests[(route, caller)] = [0, 0, 0, 0.0, 0.0, {}, 0, 0.0, 0.0]
@@ -350,13 +376,15 @@ class Recorder:
                     row[7] += sql_ms
                     row[8] += wait_ms
                     if ms >= SLOW_MS and len(self.slow) < SLOW_PER_MINUTE:
+                        top = top_statements(statements, fingerprints)
                         slow = (int(time.time()), route, caller, actor, round(ms, 1), nbytes or 0, status,
-                                round(sql_ms, 1), round(wait_ms, 1), queries)
+                                round(sql_ms, 1), round(wait_ms, 1), queries,
+                                json.dumps(top, separators=(",", ":")) if top else None)
                         self.slow.append(slow)
                         self.slow_file.append({"kind": "slow", "route": route, "caller": caller, "actor": actor,
                                                "ms": slow[4], "bytes": slow[5], "status": status,
                                                "sql_ms": round(sql_ms, 1), "wait_ms": round(wait_ms, 1),
-                                               "queries": queries})
+                                               "queries": queries, **({"top": top} if top else {})})
                 elif kind == "t":
                     _, wait, hold, locked = s
                     self.txns += 1
@@ -445,7 +473,8 @@ class Recorder:
 
 def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", taken["requests"])
-    c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries) VALUES(?,?,?,?,?,?,?,?,?,?)", taken["slow"])
+    c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top_json) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?)", taken["slow"])
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
     for hold in taken.get("long_holds") or []:
@@ -1043,9 +1072,10 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
     if "requests" in sections:
         out["requests"] = _requests(c, since)
     if "slow" in sections:
-        out["slow"] = [dict(r) for r in c.execute(
-            "SELECT ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries FROM flight_slow WHERE ts>=? ORDER BY id DESC LIMIT 50",
-            (since,))]
+        out["slow"] = [{**{k: r[k] for k in r.keys() if k != "top_json"},
+                        **({"top": json.loads(r["top_json"])} if r["top_json"] else {})} for r in c.execute(
+            "SELECT ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top_json FROM flight_slow "
+            "WHERE ts>=? ORDER BY id DESC LIMIT 50", (since,))]
     if "process" in sections:
         out["process"] = _process(c, since)
     if "sql" in sections:
