@@ -120,11 +120,11 @@ async function navigation(browser) {
   }
   // Even if old navigation is still painted, losing a role cannot expose a restricted pane.
   await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = false; });
-  // A tab this person can't see opens General and says why; an unknown one opens General without the line.
+  // A group this person can't see opens You and says why; an unknown name opens You without the line.
   for (const [restricted, denied] of [['people', true], ['unknown-tab', false]]) {
     await page.evaluate(tab => settingsShow(tab), restricted);
-    assert.equal(await page.locator('#settings-general').isVisible(), true, `${restricted} safely falls back`);
-    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general');
+    assert.equal(await page.locator('#settings-group-you').isVisible(), true, `${restricted} safely falls back`);
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'you');
     assert.equal(await page.locator('#settings-denied').isVisible(), denied, `${restricted}: the admins-only line`);
   }
   // History keeps Runs for everyone; Changes is the owner's. The old Runs page lands there.
@@ -132,18 +132,20 @@ async function navigation(browser) {
   assert.equal(await page.locator('#set-runs').isVisible(), true, 'runs opens History on Runs');
   assert.equal(await page.locator('#set-history').isVisible(), false, 'Changes stays hidden without the owner role');
   assert.equal(await page.locator('#settings-history-view').isVisible(), false);
-  // Team, Assistant, Privacy and Storage are sections of General; the ones this person lost stay hidden there.
-  for (const alias of ['team', 'assistant', 'privacy', 'storage']) {
+  // Assistant is on You. Team, Privacy and Storage are on Company & policies, which this person lost: they open You
+  // with the admins-only line, and stay hidden.
+  for (const alias of ['assistant', 'team', 'privacy', 'storage']) {
     await page.evaluate(alias => settingsShow(alias), alias);
-    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general', `${alias} opens General`);
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'you', `${alias} opens You`);
     assert.equal(await page.locator('#settings-assistant-pane').isVisible(), true);
+    assert.equal(await page.locator('#settings-denied').isVisible(), alias !== 'assistant', `${alias}: the admins-only line`);
     for (const id of ['team', 'privacy', 'storage']) assert.equal(await page.locator('#settings-' + id).isVisible(), false, `${id} stays hidden`);
   }
-  // AI providers is now Models on Computers; the Chat tab is gone.
+  // AI providers is now AI models; the Chat tab is gone.
   for (const alias of ['providers', 'models', 'chat']) {
     await page.evaluate(alias => settingsShow(alias), alias);
-    assert.equal(await page.locator('#settings-models').isVisible(), true, `${alias} opens Computers`);
-    assert.equal(await page.evaluate(() => sessionStorage.getItem('tico.settings.tab')), 'devices');
+    assert.equal(await page.locator('#settings-models').isVisible(), true, `${alias} opens AI models`);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('tico.settings.tab')), 'models');
   }
   for (const alias of ['credentials', 'cloud']) {
     assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
@@ -159,7 +161,7 @@ async function computers(browser) {
   // An old link to Subscriptions opens Computers.
   await page.evaluate(() => settingsShow('bots'));
   await page.evaluate(() => { location.hash = '#/settings/subscriptions'; });
-  await page.waitForFunction(() => location.hash === '#/settings/devices' && SETTINGS_TAB === 'devices');
+  await page.waitForFunction(() => location.hash === '#/settings/computers' && SETTINGS_TAB === 'computers');
   await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   // One connection per AI tool, the computer's own login: the named subscriptions it still reports are not shown.
@@ -218,7 +220,7 @@ async function oldServer(browser) {
 
 async function phone(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
-  await page.evaluate(() => settingsShow('devices'));
+  await page.evaluate(() => settingsShow('computers'));
   await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   await detail.locator('[data-connection]').first().waitFor();

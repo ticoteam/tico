@@ -819,7 +819,7 @@ function recruitFor({department, briefing, share}) {
     await shot(page, 'desktop-5d-review');
     if (shots) { await page.setViewportSize({width: 390, height: 844}); await shot(page, 'phone-5d-review'); await page.setViewportSize({width: 1100, height: 800}); }
     assert.match(await page.locator('.onb-summary').textContent(), /AI providers\s*Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
-    assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; Computers/);
+    assert.match(await page.evaluate(() => onbSummaryHTML({...ONB, providers: null})), /Choose later in Settings &gt; AI models/);
     for (const width of [1100, 390]) {
       await page.setViewportSize({width, height: 844});
       const aligned = await page.locator('.onb-summary > div').evaluateAll(rows => rows.every(row => {
@@ -989,7 +989,7 @@ function recruitFor({department, briefing, share}) {
 
     // ---- Settings -> Bots: the same cards, adding one bot from the catalog.
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.locator('#machine-kind').selectOption('linux');
     assert.equal(await page.locator('#machine-label').inputValue(), "Ana Rivera's server");
     // The first-run enrollment step already checks the Linux server command; keep this distinct Windows installer path.
@@ -1024,7 +1024,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(created[0].owners, ['ana']);
 
     // Inbox bots ask whose mailbox, then append Mailbox: so BotOps can fill {{mailbox}}.
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.locator('[data-settings-tab=bots]').click();
     await page.locator('#settings-add-catalog:not([disabled])').click();
     await page.locator('#catalog-picker-grid').waitFor();
@@ -1214,7 +1214,7 @@ function recruitFor({department, briefing, share}) {
     await waiting.setViewportSize({width: 1100, height: 800});
     // Add a computer opens Settings > Computers.
     await waiting.locator('[data-onb-go=devices]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
+    await waiting.locator('#settings-tabs [data-settings-tab=computers][aria-selected=true]').waitFor();
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor({state: 'attached'});
     // A poll that changes nothing leaves Add a computer focused; one that sees a computer arrive swaps the next step in place.
@@ -1225,7 +1225,7 @@ function recruitFor({department, briefing, share}) {
     await waiting.waitForTimeout(200);
     assert.equal(await waiting.evaluate(() => document.activeElement?.dataset.onbGo), 'devices');
     await waiting.keyboard.press('Enter');
-    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();
+    await waiting.locator('#settings-tabs [data-settings-tab=computers][aria-selected=true]').waitFor();
     await waiting.goto('https://tico-ui.test/#/welcome');
     await waiting.locator('[data-onb-bot=coo]').waitFor({state: 'attached'});
     machine = enrolled;
@@ -1245,7 +1245,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > :first-child').first().getAttribute('id'), 'fr-providers');
     await waiting.locator('#fr-providers [data-gs-tab=models]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();   // lands on Computers, where Models is
+    await waiting.locator('#settings-tabs [data-settings-tab=models][aria-selected=true]').waitFor();   // lands on AI models
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

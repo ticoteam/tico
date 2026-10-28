@@ -57,7 +57,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     // Only the computer that has a screen offers the choice.
     // In each computer's pop-up.
     await page.locator('#set-machines .machine-name[data-computer-open=c2]').click();
@@ -97,10 +97,10 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     assert.equal(await page.locator('#scr-retry').isVisible(), true);
     // Back leaves the viewer and closes the session.
     await page.locator('#scr-back').click();
-    await page.waitForFunction(() => S.route === '#/settings' && location.hash === '#/settings/devices' && !document.querySelector('#scr'));
+    await page.waitForFunction(() => S.route === '#/settings' && location.hash === '#/settings/computers' && !document.querySelector('#scr'));
     // At View the viewer opens a view session and offers no switch.
     answer = true;
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     await page.locator('[data-screen-mode=c1]').selectOption('view');
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'view');

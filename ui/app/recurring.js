@@ -291,7 +291,7 @@ async function routineSetEnabled(input) {
 async function routineChanged() {
   if (TASKS_ST && TASKS_ST.view === 'recurring' && $('#task-body')) return tasksLoad(TASKS_ST);
   await refresh(true);     // the bot page's Routines card and the overview read the employee rows
-  if (SETTINGS_TAB === 'recurring' && $('#set-recurring')) renderSettingsRecurring();
+  if (SETTINGS_TAB === 'automation' && $('#set-recurring')) renderSettingsRecurring();
   // A deleted routine stayed on the bot page. route() only switches tabs on the
   // same bot, so redraw the two routine cards from the fresh employee rows here.
   const e = BOT && S.emps.find(x => x.name === BOT.slug);

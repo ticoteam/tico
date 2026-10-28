@@ -45,7 +45,7 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=inbox]').click();
+    await page.locator('[data-settings-tab=you]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
     assert.match(await pane.innerText(), /Google Workspace for acme\.example has a policy that blocks Tico/);
@@ -65,7 +65,7 @@ const {unrouted} = require('./support/routes.cjs');
     // Connected: back on Settings > Inbox, read only, with Disconnect, which revokes.
     google = {...google, status: 'connected', kind: null, message: null, hint: null, can: ['read']};
     await page.goto('https://tico-ui.test/#/settings/inbox');
-    await page.locator('[data-settings-tab=inbox][aria-selected=true]').waitFor();
+    await page.locator('[data-settings-tab=you][aria-selected=true]').waitFor();
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /Connected: Tico reads cara@acme\.example's mail and calendar, read only/);
     await page.locator('#set-google [data-google-disconnect]').click();

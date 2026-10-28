@@ -181,7 +181,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
 
     // Health keeps the one that holds nothing as a note, and it is still reviewed from there.
-    await page.locator('#settings-more > summary').click();
     await page.locator('[data-settings-tab=health]').click();
     const note = page.locator('#hl-page .hl-notes [data-execution-review="writer"]');
     await note.waitFor({timeout: t(5000)});

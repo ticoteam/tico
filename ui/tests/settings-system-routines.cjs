@@ -98,8 +98,7 @@ async function open(browser, role) {
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  await page.locator('#settings-more summary').click();
-  await page.locator('[data-settings-tab="recurring"]').click();
+  await page.locator('[data-settings-tab="automation"]').click();
   await page.locator('[data-system-routine="stale_review"]').waitFor();
   return {page, errors, asked, writes};
 }
@@ -116,9 +115,16 @@ const saved = async (page, writes, count, key) => {
   try {
     for (const role of ['owner', 'admin', 'member']) {
       const {page, errors, asked, writes} = await open(browser, role);
-      // One flat list above the bot routines: no group headings, a search box on top.
-      const headings = await page.locator('#settings-recurring h2:visible').allInnerTexts();
-      assert.deepEqual(headings.map(h => h.trim()), ['What Tico runs on its own', 'What wakes a bot', 'Bot routines'], role);
+      // Automation: Bot routines first, then Rules, then one flat list with no group headings and a search box on top.
+      const headings = await page.locator('#settings-group-automation h2:visible').allInnerTexts();
+      assert.deepEqual(headings.map(h => h.trim()), ['Bot routines', 'Rules', 'What Tico runs on its own', ...(role === 'member' ? [] : ['Listening'])], role);
+      // Each card's first line is the Tasks Owner's signed-off wording (Dev 648 item 7), under the group's own line.
+      assert.equal(await page.locator('#settings-group-automation .settings-group-line').innerText(), 'What happens without anyone clicking: routines, rules and the jobs Tico runs on its own.');
+      assert.deepEqual(await page.locator('#settings-group-automation .card:visible > .settings-card-line').allInnerTexts(), [
+        'Work a bot does on a schedule or when an event comes in. Switch one off here, or Edit what it does and when.',
+        "What Tico does when something happens: wake a bot, leave it for the bot's next run, ask a person, or act on the task. Each rule names its trigger and its action.",
+        "Jobs built into Tico, such as due reminders and stale ticket review, and your departments' task rules. Each shows when it runs and when it last ran.",
+        ...(role === 'member' ? [] : ['Sources you choose for Listening to watch, and who can read what it finds.'])], role);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
       assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 10);

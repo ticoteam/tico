@@ -332,7 +332,7 @@ async function roles(browser) {
   await page.locator('[data-settings-tab="bots"]').click();
 
   // ---- Settings > Computers: an admin says which computers take members' bots
-  await page.locator('[data-settings-tab="devices"]').click();
+  await page.locator('[data-settings-tab="computers"]').click();
   await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();   // under Settings in its pop-up
   const box = page.locator('[data-member-bots=r1]');
   assert.equal(await box.isChecked(), false);

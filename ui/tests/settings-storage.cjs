@@ -64,7 +64,6 @@ const shots = process.env.TICO_SHOTS || '';
     const redraw = () => page.evaluate(() => hlRefresh());
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
     await page.locator('[data-settings-tab=health]').click();
     const row = page.locator('#hl-page .hl-storage');
     await row.waitFor();

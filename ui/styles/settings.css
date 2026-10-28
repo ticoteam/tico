@@ -4,22 +4,23 @@
 .pchip{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:1px 8px 1px 2px;border-radius:11px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap;vertical-align:middle}
 
 .tree a.node:hover .ub,.tree a.node.cur .ub{opacity:.9;filter:none}
-.settings-tabs{margin-bottom:16px}
-/* A phone: the tabs are one row that scrolls sideways (as the task list's and meetings' filter rows do), More's
-   tabs open inline at its end, and settingsTabIntoView() keeps the current tab in view. The rule under the row is
-   an inset shadow, so the scrolling box does not clip the current tab's underline. */
+/* The groups (settings stage 2): a list down the left on desktop, one picker on a phone, the shown group beside it. */
+.settings-layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:start}
+.settings-groups{position:sticky;top:0}
+.settings-group-list{display:flex;flex-direction:column;gap:2px}
+.settings-group-list button{display:flex;align-items:center;gap:6px;background:none;border:0;text-align:left;padding:7px 10px;border-radius:6px;color:var(--muted);cursor:pointer;font:inherit}
+.settings-group-list button:hover{background:var(--surface2);color:var(--ink)}
+.settings-group-list button.cur{background:var(--surface2);color:var(--ink);font-weight:600}
+.settings-group-divider{border:0;border-top:1px solid var(--line);margin:6px 0}
+.settings-group-pick{display:none}
+.settings-group-line{margin:0 0 12px;color:var(--muted)}
+/* A card's first line: what it controls, in plain words. */
+.settings-card-line{margin:0 0 12px;color:var(--muted)}
 @media (max-width:760px){
-  .tabs.settings-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain;gap:0;border-bottom:0;box-shadow:inset 0 -1px 0 var(--line);margin-left:-4px;margin-right:-4px;padding:0 4px}
-  .tabs.settings-tabs::-webkit-scrollbar{display:none}
-  .tabs.settings-tabs button{flex:none;display:inline-flex;align-items:center;white-space:nowrap;margin-bottom:0;min-height:40px;padding:0 11px}
-  .tabs.settings-tabs .settings-more{flex:none;display:flex;white-space:nowrap}
-  .tabs.settings-tabs .settings-more::details-content{display:contents}
-  .tabs.settings-tabs .settings-more[open]{flex-basis:auto}
-  .tabs.settings-tabs .settings-more summary{display:inline-flex;align-items:center;min-height:40px;padding:0 11px;list-style:none;vertical-align:top}
-  .tabs.settings-tabs .settings-more summary::-webkit-details-marker{display:none}
-  .tabs.settings-tabs .settings-more summary::after{content:"›";margin-left:5px}
-  .tabs.settings-tabs .settings-more[open] summary::after{content:"‹"}
-  .tabs.settings-tabs .settings-more>div{display:inline-flex;flex-wrap:nowrap;gap:0;vertical-align:top}
+  .settings-layout{grid-template-columns:minmax(0,1fr);gap:12px}
+  .settings-groups{position:static}
+  .settings-group-list{display:none}
+  .settings-group-pick{display:block;width:100%;min-height:40px}
 }
 .settings-pane[hidden]{display:none}
 .settings-table{width:100%;border-collapse:collapse;font-size:var(--t-base)}
@@ -639,10 +640,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .sb-sub{margin-left:0}
 }
 
-/* Secondary settings remain keyboard accessible without crowding the main tabs. */
-.settings-more summary{padding:8px 12px;cursor:pointer;color:var(--muted)}
-.settings-more>div{display:flex;flex-wrap:wrap;gap:4px}
-.settings-more[open]{flex-basis:100%}
 .assistant-decisions{list-style:none;margin:0;padding:0}.assistant-decisions li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-top:1px solid var(--line)}.assistant-decisions li .settings-cell-note{display:block;margin:2px 0 0}
 .settings-version{margin:0;color:var(--muted);font-size:var(--t-xs)}
 .settings-log{background:none;border:0;padding:0;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}

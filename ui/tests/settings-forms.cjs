@@ -65,8 +65,9 @@ const {unrouted} = require('./support/routes.cjs');
     // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
     await page.goto('https://tico-ui.test/#/settings/devices');
     const machine = page.locator('#machine-label'), token = page.locator('#settings-token-form input[name=label]');
-    await machine.waitFor(); await token.waitFor();
-    await machine.fill('Build server'); await token.fill('CI script');
+    await machine.waitFor(); await machine.fill('Build server');
+    await page.locator('[data-settings-tab=connections]').click();
+    await token.waitFor(); await token.fill('CI script');
     // The same-route redraw starts its own loadSettings; wait for that one to finish too.
     await page.evaluate(async () => {
       await loadSettings();
@@ -78,8 +79,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await machine.inputValue(), 'Build server', 'Computer name survives loadSettings');
     assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
     await page.locator('[data-settings-tab=bots]').click();
-    assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
-    assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
+    assert.equal(await page.locator('#settings-bots-card #settings-add-bot').isVisible(), true);
+    assert.equal(await page.locator('#settings-group-computers #settings-add-bot').count(), 0);
     // Bots search: it filters as typed, keeps the box and the cursor through a reload, and a bot it hides
     // drops out of the selection, so a bulk change never reaches a bot that is not on screen.
     const botSearch = page.locator('[data-bots-search]');
@@ -114,12 +115,11 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
     assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').getAttribute('aria-label'), 'Access: You: See · Read · Write');
     await page.setViewportSize({width: 1440, height: 900});
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=recurring]').click();
+    await page.locator('[data-settings-tab="automation"]').click();
     await page.locator('#set-recurring [data-new-routine]').click();
     assert.equal(await page.locator('#routine-editor select[name=bot]').inputValue(), 'helper');
     await page.locator('#routine-editor [data-routine-close]').first().click();
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=models]').click();
     await page.locator('#set-prov-save').waitFor();
     assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
     assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);
@@ -144,7 +144,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(writes.filter(row => row.p === '/api/v2/providers').at(-1).body.check_models, ['grok', 'codex']);
     await page.locator('[data-settings-tab=people]').click();
     await page.locator('#people-add').waitFor();
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
     page.once('dialog', confirm => confirm.accept());
     await page.locator('[data-computer-remove]').click();

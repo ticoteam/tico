@@ -64,7 +64,6 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     };
     const base = {current: '0.2.17', latest: '0.2.17', available: false, url: '', published_at: '', name: ''};
     const health = async page => {
-      await page.locator('#settings-more summary').click();
       await page.locator('[data-settings-tab="health"]').click();
       await page.locator('#hl-setup-check').waitFor({state: 'visible'});
     };

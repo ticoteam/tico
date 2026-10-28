@@ -55,8 +55,7 @@ async function open(browser, role, width = 1440) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
   if (role !== 'member') {
-    await page.locator('#settings-more summary').click();
-    await page.locator('[data-settings-tab="listening"]').click();
+    await page.locator('[data-settings-tab="automation"]').click();
     await page.locator('[data-listen-dest]').first().waitFor();
   }
   return {page, errors, writes, dests};
@@ -132,10 +131,11 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await page.close();
     }
     {
-      // A member has no Listening tab.
+      // A member has no Listening card.
       const {page} = await open(browser, 'member');
-      await page.locator('#settings-more summary').click();
-      assert.equal(await page.locator('[data-settings-tab="listening"]').count(), 0);
+      await page.locator('[data-settings-tab="automation"]').click();
+      await page.locator('#set-routines-card').waitFor();
+      assert.equal(await page.locator('#settings-listening').count(), 0);
       await page.close();
     }
     console.log('listening-settings: ok');

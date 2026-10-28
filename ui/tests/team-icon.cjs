@@ -47,7 +47,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-settings-tab=policies]').click();
     const input = page.locator('#settings-team-icon-file'), status = page.locator('#settings-team-icon-status');
     // A toast lasts a few seconds, so an earlier save's Saved is still up during the next one: each wait counts only
     // toasts that appeared after this mark.
@@ -100,15 +100,15 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     // moved to Settings > Rules (ui/app/settings-recurring.js): one line with a link, no switch here.
     role = 'owner'; cloud = false;
     await page.reload();
-    await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-settings-tab=policies]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
     assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
     const moved = page.locator('#settings-team [data-settings-moved]');
-    assert.equal(await moved.innerText(),'Moved to Settings > Rules');
+    assert.equal(await moved.innerText(),'Moved to Settings > Automation');
     await moved.click();
-    await page.waitForFunction(() => !document.querySelector('#settings-recurring')?.hidden);
+    await page.waitForFunction(() => !document.querySelector('#settings-group-automation')?.hidden);
     assert.deepEqual(ruleWrites,[]);
     assert.deepEqual(errors,[]);
-    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > Rules');
+    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > Automation');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

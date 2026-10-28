@@ -558,7 +558,7 @@ function pendingHintHTML(x) {
   if (x?.state !== 'queued') return '';
   if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="models">Add an AI provider</a>';
   return x.readiness_reason === 'model_sign_in'
-    ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="computers">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
     : '';
 }
 function v2PendingHTML(state) {

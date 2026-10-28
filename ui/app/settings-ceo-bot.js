@@ -13,7 +13,8 @@ async function renderSettingsCeoBot() {
   if (!host || formBusy(host)) return;
   const v = await v2Get('/v2/ceo-bot');
   const name = esc(v?.name || ceoBotName());
-  if (!v) { host.innerHTML = `<div class="empty">Couldn't load the ${name}'s settings. Try again in a moment.</div>`; return; }
+  // Bots draws this card first, so an answer without its levels says so here instead of breaking the group.
+  if (!Array.isArray(v?.levels)) { host.innerHTML = `<div class="empty">Couldn't load the ${name}'s settings. Try again in a moment.</div>`; return; }
   const pick = v.levels.find(lv => lv.level === CEO_BOT_PICK && lv.level !== v.level);
   const now = v.levels.find(lv => lv.level === v.level);
   const last = v.level_changed_at ? `${esc(now?.name || 'Level ' + v.level)} since ${esc(fmt(v.level_changed_at))}, chosen by ${esc(v.level_changed_by_name || v.level_changed_by)}.`

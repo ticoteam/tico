@@ -495,7 +495,7 @@ async function goalManagerMount(pageState) {
       const rows = messages.map(m => v2MessageHTML({...m, run:null}));
       const live = execution && execution.state !== 'completed' ? execution.text : '';
       if (live) rows.push(`<div data-gm-live>${v2MessageHTML({from_actor:'bot:' + GM, body:live})}</div>`);
-      else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(ceoBotName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>');
+      else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(ceoBotName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; AI models</a></p>');
       else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
       // An empty chat offers three starters; a tap sends its words as the owner's message.
       const html = rows.join('') || `<div class="gm-starters">${GM_STARTERS.map(words =>
