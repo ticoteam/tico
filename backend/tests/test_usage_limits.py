@@ -168,3 +168,37 @@ def test_subscription_runs_count_unless_the_team_turns_that_off(api):
     assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
     assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
     assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is True
+
+
+SURGE_BOTS = ("coo", "ops", "cpo", "finance")
+
+
+def test_a_fresh_hour_does_not_let_every_queued_job_past_the_team_limit_while_nothing_has_finished(api):
+    """A run is priced only when it ends, so the hour that has just turned over reads $0 however many runs are out.
+    Counting each running run at what the bot's runs cost on average keeps the team's hourly limit from admitting
+    the whole queue at once after a reset or an outage."""
+    r = runner(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (r["runner_id"],))
+    for bot in SURGE_BOTS:
+        assign(api, r, bot)
+    ready(api, r, list(SURGE_BOTS))
+    for bot in SURGE_BOTS:                                                        # each bot's history: $5 a run
+        post(api, "tasks", {"owner": bot, "title": "Earlier work", "body": "Look at the Acme invoice."})
+        complete(api, r, claim(api, r, bot), cost(500_000))
+    with api.app.state.store.transaction() as c:                                   # ...from two hours ago
+        c.execute("UPDATE turns SET started=strftime('%Y-%m-%dT%H:%M:%S', started, '-2 hours'), "
+                  "finished=strftime('%Y-%m-%dT%H:%M:%S', finished, '-2 hours')")
+    put(api, "usage/pools/company", {"hourly_usd": 7})
+    for bot in SURGE_BOTS:
+        post(api, "tasks", {"owner": bot, "title": "New work", "body": "Check the Acme order."})
+    admitted = [a for a in (claim(api, r, bot) for bot in SURGE_BOTS) if a]
+    assert len(admitted) == 2                                                     # $10 expected against $7; not all four
+    with api.app.state.store.read() as c:
+        from backend import usage_limits
+        held = usage_limits.over(c, SURGE_BOTS[-1])
+        assert held["scope"] == "company" and held["spent"] == 0                  # nothing has finished this hour
+        assert held["running"] == 2 and held["running_usd"] == 10
+    for attempt in admitted:                                                      # they finish cheaper than expected
+        complete(api, r, attempt, cost(100_000))
+    assert claim(api, r, SURGE_BOTS[-1]) is not None                              # $2 spent: the hour has room again

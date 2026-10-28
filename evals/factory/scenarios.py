@@ -189,6 +189,20 @@ def hourly_spend_under(cap):
     return check
 
 
+def hour_total_under(cap, factor=2):
+    """No clock hour's runs (by when they started) cost more than `factor` times the cap. A limit that counted only
+    finished runs let every queued job start in the minutes after a reset or an outage, and that hour cost several caps
+    once those runs finished; counting running runs at their expected cost keeps it near one cap."""
+    def check(run):
+        per = Counter()
+        for r in run.w.sql("SELECT started, est_cost_usd FROM turns"):
+            per[r["started"][:13]] += r["est_cost_usd"] or 0      # the day too: a run can pass midnight
+        over = {h: v for h, v in per.items() if v > cap * factor}
+        top = ", ".join(f"{h[11:13]}:00 ${v:.2f}" for h, v in per.most_common(3))
+        return not over, f"costliest hours {top} against ${cap * factor:.2f}"
+    return check
+
+
 def company_cap(hourly):
     def setup(run, w, team):
         from backend import usage_limits
@@ -332,7 +346,13 @@ SCENARIOS = [
              checks=standard(*REVIEW_TIMEOUT)),
     Scenario("engineering_budget", "An hourly budget of $10 for the team (below what it would spend): work slows to it, and still ships.",
              setup=company_cap(10), hours=24,
-             checks=standard(("the $10 hourly cap holds", None, hourly_spend_under(10)))),
+             checks=standard(("the $10 hourly cap holds", None, hourly_spend_under(10)),
+                             ("no hour costs more than two caps", None, hour_total_under(10)))),
+    Scenario("recovery_burst", "Every computer is off for 2h under a $10 hourly team budget while tickets queue: when they come back, "
+             "the budget paces the backlog instead of starting it all at once.",
+             setup=company_cap(10), during=outage(at(1), 2, kind="off"), hours=12,
+             checks=standard(("the $10 hourly cap holds", None, hourly_spend_under(10)),
+                             ("no hour costs more than two caps", None, hour_total_under(10)))),
     Scenario("forgetful_builder", "Builders often forget to hand a ticket on after fixes: the hourly sweep unsticks it.",
              setup=lambda run, w, team: tickets(run, w, 6), styles={"builder": {"forget_move": 0.4}},
              checks=standard(*HOE_CHECKS)),
