@@ -93,7 +93,13 @@ class Run:
                     break
                 w.advance(ready=[b.slug for b in team.all if b.available],
                           beat=lambda: [b.renew() for b in team.all if b.available])
+                ready_before = {b.slug for b in team.all if b.available}
                 s.during(self, w, team, i)
+                ready_now = [b.slug for b in team.all if b.available]
+                if set(ready_now) != ready_before:
+                    # A computer that went off or came back is reported before this tick's claims: the readiness
+                    # the server holds is the one advance() sent, from before the change.
+                    w.heartbeat(ready_now)
                 self.release(w, i)
                 self.assign(w, team)
                 w.scheduler_pass()
@@ -169,10 +175,25 @@ class Run:
         lease. A short round reports these in its mark; no check judges them."""
         from backend import login_holds
         from backend.execution import queued_reasons
+        from backend.store import H
         rid = w.runner["runner_id"]
         stamp = lambda value: (value or "")[5:16].replace("T", " ")
         out = []
         with w.store.read() as c:
+            try:
+                # The claim's own gates on this computer, read before its per-bot answers: places held against capacity,
+                # starts waiting, overload, pause, and the awake check.
+                from backend import performance, runner_versions, start_places
+                cap =c.execute("SELECT capacity,awake_since FROM runners WHERE id=?", (rid,)).fetchone()
+                waits = c.execute("SELECT count(*) FROM org_turn_waits").fetchone()[0]
+                out.append(f"computer: capacity {cap['capacity']}, places held "
+                           f"{sum(start_places.held(c, rid).values())}, starts waiting "
+                           f"{start_places.ready_waiting(c, rid)}, overloaded "
+                           f"{performance.load_status(c, rid)['overloaded']}, paused "
+                           f"{runner_versions.paused(c, rid)}, awake since {cap['awake_since']}, now {H.now()}, "
+                           f"company waits {waits}")
+            except Exception as error:      # a diagnostic never stops the run
+                out.append(f"computer: diagnostic error {error!r}")
             for slug in sorted(slugs):
                 try:
                     reasons = list(queued_reasons(c, w.store.settings, rid, slug, oldest=True))
@@ -180,6 +201,11 @@ class Run:
                         continue
                     job, why = reasons[0]
                     parts = [f"claim {why or 'hands out'} {job['id'][:6]}"]
+                    status = H.status(c, slug) or {}
+                    if status.get("state") == "limited" and status.get("since"):
+                        from backend.execution import limit_until
+                        parts[0] += (f" (limited since {stamp(status['since'])}, until "
+                                     f"{stamp(limit_until(c, slug, status['since']))})")
                     for name in (PRIMARY, *w.runtime_fallbacks()):
                         if name != PRIMARY and name not in w.signed_in:
                             continue
@@ -194,13 +220,14 @@ class Run:
                             if row:
                                 # Who sent the probe attempt's renew and event posts (the sim's own calls), and the
                                 # server's lease events for it: a lease the server extends shows here with no post.
-                                posts = [(when, caller) for when, path, _, caller in w.attempt_posts
-                                         if row["aid"] and path.startswith(f"attempts/{row['aid']}/")]
+                                posts = [(when, caller, slug, on, running) for when, path, caller, slug, on, running
+                                         in w.attempt_posts if row["aid"] and path.startswith(f"attempts/{row['aid']}/")]
                                 leases = c.execute("SELECT ts, action FROM events WHERE target=? AND "
                                                    "action LIKE 'attempt.lease%' ORDER BY ts", (row["aid"],)).fetchall()
                                 text += (f", probe {probe[:6]} job {row['job']} attempt {row['attempt']} "
                                          f"lease {stamp(row['lease_until'])}; {len(posts)} sim posts"
-                                         + "".join(f" [{when:%H:%M} {caller}]" for when, caller in posts[-3:])
+                                         + "".join(f" [{when:%H:%M} {slug} on={on} running={running} {caller}]"
+                                                   for when, caller, slug, on, running in posts[-3:])
                                          + "; lease events " + (", ".join(f"{stamp(e['ts'])} {e['action']}"
                                                                          for e in leases) or "none"))
                         parts.append(text)

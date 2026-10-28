@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import random
+import sys
 import tempfile
 import traceback
 import uuid
@@ -60,7 +61,7 @@ class World:
         self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
         self.server_errors = []             # (when, route, status, body) for each call the server answered with a 5xx
         self.input_reads = []               # (when, bot, attempt, message ids): the inputs a turn read as it started
-        self.attempt_posts = []             # (when, path, sent with the runner's token) for each renew or events post
+        self.attempt_posts = []             # (when, path, caller, bot, bot on, bot running) for each renew or events post
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -204,7 +205,14 @@ class World:
         headers = {"Authorization": "Bearer " + token}
         if method == "post" and path.startswith("attempts/") and path.rsplit("/", 1)[-1] in ("renew", "events"):
             caller = " > ".join(frame.name for frame in traceback.extract_stack()[-6:-1])
-            self.attempt_posts.append((self.now(), path, token == self.runner["token"], caller))
+            # The bot making the call: the nearest frame with a bot in scope, read for its slug, computer and turn.
+            frame, bot = sys._getframe(1), None
+            while frame is not None and bot is None:
+                owner = frame.f_locals.get("self")
+                bot = owner if hasattr(owner, "slug") and hasattr(owner, "available") else None
+                frame = frame.f_back
+            self.attempt_posts.append((self.now(), path, caller, bot.slug if bot else None,
+                                       bot.available if bot else None, bot.running if bot else None))
         if method != "get":      # the server wants a key on every write, PUT included
             headers["Idempotency-Key"] = str(uuid.uuid4())
         route = f"{method.upper()} /api/v2/{path}"
