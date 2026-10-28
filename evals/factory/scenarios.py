@@ -108,6 +108,55 @@ def no_uncertain_runs(run):
     return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
 
 
+def no_server_error(run):
+    """No call the sim makes gets a server error: a route that raises or answers 500 fails the run's checks, with the
+    first error and its traceback when the app raised. Each claim's status is counted in the detail."""
+    errors = run.w.server_errors
+    counts = ", ".join(f"{status} x{n}" for status, n in sorted(run.claims.items())) or "no claims"
+    if not errors:
+        return True, f"no call got a server error; claims: {counts}"
+    when, route, status, body = errors[0]
+    text = body if len(body) <= 500 else body[:200] + " ... " + body[-300:]
+    return False, (f"{len(errors)} calls got a server error; first {status} on {route} at {when:%H:%M}: {text}; "
+                   f"claims: {counts}")
+
+
+def board_keeps_moving(since, waits=(), evidence=()):
+    """From `since` on, each claim round with a free slot and queued work starts as many turns as the smaller of the
+    two. Queued work is the bots with a job not held, read from the queue before the claims, and a turn started takes
+    its bot out of the count. A round inside `waits` is not judged: the scenario knows the work waits there, on a limit
+    in force or on a login's probe. `evidence` are functions of the run returning (from, to, why) windows of absolute
+    times from the server's own records (a bot's cooling off, a probe holding its login); they are read when the check
+    runs. A judged round that starts fewer turns is a stall, whatever its cause. A run with no judged round fails, since
+    nothing then shows the board moved."""
+    def check(run):
+        if not run.marks:
+            return False, "no runner claim rounds: this check needs runner-style claims"
+        start = START + since
+        windows = [(START + lo, START + hi) for lo, hi in waits]
+        windows += [(lo, hi) for read in evidence for lo, hi, _ in read(run)]
+        judged, short, waived = 0, [], 0
+        for m in run.marks:
+            if m["at"] < start or not m["free"] or not m["queued"]:
+                continue
+            if any(lo <= m["at"] < hi for lo, hi in windows):
+                waived += 1
+                continue
+            judged += 1
+            need = min(m["free"], m["queued"])
+            if m["started"] < need:
+                short.append(f"{m['at']:%H:%M} started {m['started']} of {need}"
+                             + (f" ({m['why']})" if m.get("why") else ""))
+        if not judged:
+            return False, "no claim round had a free slot and queued work outside the waits: nothing shows the board moved"
+        if short:
+            return False, (f"{len(short)} of {judged} claim rounds started fewer turns than the smaller of free slots "
+                           "and queued bots: " + ", ".join(short[:6]))
+        note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        return True, f"all {judged} claim rounds with a free slot and queued work started the smaller of the two{note}"
+    return check
+
+
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):
@@ -201,7 +250,8 @@ def company_cap(hourly):
 
 BASE = [("tickets not merged by the end", REPORT, all_through),
         (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
-        ("merged tickets never Blocked", HOLD, never_blocked_after_merge)]
+        ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
+        ("no call got a server error", None, no_server_error)]
 
 
 # ---------------------------------------------------------------------------------------------- events
