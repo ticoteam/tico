@@ -70,6 +70,12 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note=""):
     held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
     if held and held["ask_json"]:
         return json.loads(held["ask_json"])["task"]
+    waiting = c.execute("SELECT 1 FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
+                        "json_extract(ask_json, '$.asker')=? AND json_extract(ask_json, '$.key')=?",
+                        (chosen.actor, action["id"], asker.actor, e.key)).fetchone()
+    if waiting:                 # refused before anything is kept: the card just made goes with the transaction
+        raise Problem("already_asked", f"You already asked {_name(c, chosen.actor)} about {e.name}; their answer to "
+                      "that comes first (they confirm or cancel it, or it expires after a day)", 409)
     asker_name = _name(c, asker.actor)
     body = (f"{asker_name} asked to change {e.name} ({e.where}) and may not change it themselves. "
             f"The Confirm card in your chat with BotOps does it: {action.get('description') or action['summary']}.\n\n"
@@ -110,6 +116,8 @@ def sweep(c, at=None):
     from .batch_work import isolated
     at = at or H.now()
     gone = []
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_actions'").fetchone():
+        return gone                                     # a database made without the Assistant's tables
     for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask_json IS NOT NULL "
                                  "AND created<? ORDER BY created", (H.shift(at, hours=-CONFIRM_TTL_H),))):
         with isolated(c, "settings_asks", row["id"]):

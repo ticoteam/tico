@@ -109,10 +109,9 @@ def test_no_ask_for_a_setting_the_asker_may_change_or_one_only_a_person_changes(
     assert err and got["error"] == "person_only" and "the owner changes it in Settings" in got["detail"], got
     err, got = ask(api, botops, "cara", "release.times", "09:30", to="cara")
     assert err and got["error"] == "no_one", got                               # never the asker
-    err, got = ask(api, botops, "cara", "me.tokens", "{}")                      # each person's own: no one to ask
-    assert err and got["error"] == "person_only" and "for themselves" in got["detail"], got
-    err, got = ask(api, botops, "cara", "webhooks.outgoing.create", "{}")      # hers to make, in Settings
-    assert err and got["error"] == "person_only" and "you change it yourself" in got["detail"], got
+    for key in ("me.tokens", "webhooks.outgoing.create"):                       # hers to make, in Settings
+        err, got = ask(api, botops, "cara", key, "{}")
+        assert err and got["error"] == "person_only" and "you change it yourself" in got["detail"], got
     assert not asks(api, "ben") and not asks(api, "ana")
 
 
@@ -121,13 +120,18 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
     is declined, the asker is told and the ask no longer holds one of her five. A newer card is left alone."""
     from backend import approval_expiry
     before = times(api)
-    ask(api, botops, "cara", "release.times", "07:45")
-    ask(api, botops, "cara", "release.times", "08:15")
-    old, new = sorted((card for _, card in asks(api, "ben")), key=lambda card: card["body_json"])
+    assert not ask(api, botops, "cara", "release.times", "07:45")[0]
+    err, got = ask(api, botops, "cara", "release.times", "08:15")              # one waiting ask per setting
+    assert err and got["error"] == "already_asked" and len(asks(api, "ben")) == 1, got
+    [(_, old)] = asks(api, "ben")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE assistant_actions SET created=? WHERE id=?", (H.shift(H.now(), hours=-25), old["id"]))
         assert approval_expiry.sweep(c)["cards"] == [old["id"]]
         assert approval_expiry.sweep(c)["cards"] == []                           # once
+    assert not ask(api, botops, "cara", "release.times", "08:15")[0]           # asked afresh once it expired
+    [new] = [card for _, card in asks(api, "ben") if card["id"] != old["id"]]
+    with api.app.state.store.transaction() as c:
+        assert approval_expiry.sweep(c)["cards"] == []                           # a newer card is left alone
     status = {card["id"]: (card["status"], task["status"]) for task, card in asks(api, "ben")}
     assert status == {old["id"]: ("expired", "declined"), new["id"]: ("pending", "open")}, status
     [said] = told(api, "cara", old["id"])

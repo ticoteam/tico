@@ -558,7 +558,8 @@ their tap changes it, with their rights; their tap or cancel settles the task, d
 in the chat they asked from. A card nobody taps expires after a day (the hourly approval expiry sweep), which declines
 the task and tells the asker too. The Assistant cites the person's words for it; a bot on its own rights never asks, a
 person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each person's own, by
-them), and someone who may change it is told to set it. A person has at most five asks waiting at once.
+them), and someone who may change it is told to set it. A person has at most five asks waiting at once, one per
+setting (asking again for one that waits is refused, `already_asked`).
 
 `backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
