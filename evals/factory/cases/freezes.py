@@ -4,6 +4,8 @@ answers is one a computer sends. Limits, holds and pauses are set through the pr
 sign-in state. A group is a roster entry the sim writes itself (World.add_group), and the limit a turn meets is the error
 line its runtime gives (`hit`). The sim also loses a probe turn (its computer goes off, or its job is cancelled before it
 finishes), and marks that where it happens."""
+import datetime as dt
+
 from evals.factory.scenarios import BASE, Scenario, at, board_keeps_moving, both, tickets
 from evals.factory.world import START
 
@@ -136,29 +138,64 @@ def steer(slug):
 
 
 # ---------------------------------------------------------------------------------------------- checks
-def spend_under(cap_usd, since, until):
-    """No turn starts in [since, until) in a clock hour whose spend, from the runs that finished before it started, has
-    reached the cap: usage_limits counts it that way. The cap must first be reached by `until`, the window's end: a cap
-    nothing reached holds no turn, and the check would pass on nothing."""
-    lo, hi = ((START + t).strftime("%Y-%m-%dT%H:%M:%S") for t in (since, until))
+FMT = "%Y-%m-%dT%H:%M:%S"
+
+
+def clock_text(when):
+    """A clock offset of the scenario, as a turn's start text reads it."""
+    return (START + when).strftime(FMT)
+
+
+def window_of(text):
+    """The UTC half hour a turn's start text falls in, as [from, to) texts: the window the server counts a 30-minute cap
+    in (backend/usage_limits.py)."""
+    at = dt.datetime.strptime(text[:19], FMT)
+    lo = at.replace(minute=30 if at.minute >= 30 else 0, second=0)
+    return lo.strftime(FMT), (lo + dt.timedelta(minutes=30)).strftime(FMT)
+
+
+def pool_turns(run, scope):
+    """The turns the pool covers: every turn for the company, or the turns of the bots the server counts in the group."""
+    from backend import usage_limits
+    turns = [dict(r) for r in run.w.sql("SELECT bot, started, finished, est_cost_usd FROM turns ORDER BY started")]
+    if scope == usage_limits.COMPANY:
+        return turns
+    with run.w.store.read() as c:
+        members = usage_limits.members(c, scope)
+    return [r for r in turns if r["bot"] in members]
+
+
+def spend_under(cap_usd, since, until, scope="company"):
+    """No turn of the pool starts in [since, until) in a UTC half hour whose spend, from the pool's turns that had
+    finished before it started, has reached the window's cap. The server holds an hourly cap set through the API as the
+    half hour that replaces it (usage.py: half of it, up to the next $0.10), so that is the figure checked. The cap must
+    first be reached by `until` in the half hour it falls in: a cap nothing reached holds no turn, and the check would
+    pass on nothing. `scope` is the pool: the company, or `group:<id>`."""
+    from backend import usage_limits
+    limit = usage_limits.half(cap_usd)
 
     def check(run):
-        reached = hour_spent(run, until)
-        if reached < cap_usd:
-            return False, f"the hour spent ${reached:.2f} by {START + until:%H:%M}, short of the ${cap_usd:g} cap"
-        runs = [dict(r) for r in run.w.sql("SELECT started, finished, est_cost_usd FROM turns ORDER BY started")]
+        turns = pool_turns(run, scope)
+        lo_t, hi_t = clock_text(since), clock_text(until)
+        window_lo, window_hi = window_of(hi_t)
+        reached = sum(r["est_cost_usd"] or 0 for r in turns
+                      if window_lo <= r["started"][:19] < window_hi and r["finished"]
+                      and r["finished"][:19] < hi_t)
+        if reached < limit:
+            return False, (f"the half hour spent ${reached:.2f} by {START + until:%H:%M}, short of the ${limit:g} "
+                           f"window cap an ${cap_usd:g} hourly cap holds")
         late = []
-        for r in runs:
-            if not lo <= r["started"][:19] < hi:
+        for r in turns:
+            if not lo_t <= r["started"][:19] < hi_t:
                 continue
-            hour = r["started"][:13]
-            spent = sum(x["est_cost_usd"] or 0 for x in runs if x is not r and x["started"][:13] == hour
-                        and x["finished"] and x["finished"] < r["started"])
-            if spent >= cap_usd:
+            lo, hi = window_of(r["started"])
+            spent = sum(x["est_cost_usd"] or 0 for x in turns if x is not r and lo <= x["started"][:19] < hi
+                        and x["finished"] and x["finished"][:19] < r["started"][:19])
+            if spent >= limit:
                 late.append(f"{r['started'][11:16]} (${spent:.2f})")
         if late:
-            return False, f"{len(late)} turns started past the ${cap_usd:g} cap: " + ", ".join(late[:4])
-        return True, f"no turn started past the ${cap_usd:g} cap"
+            return False, f"{len(late)} turns started past the ${limit:g} window cap: " + ", ".join(late[:4])
+        return True, f"no turn started past the ${limit:g} window cap (an ${cap_usd:g} hourly cap)"
     return check
 
 
@@ -296,7 +333,7 @@ SCENARIOS = [
              during=at_times([(at(1, 30), cap("groups/engineering", 3)), (at(1, 42), cap("groups/engineering", 40))]),
              checks=freeze_checks(at(1, 30),
                                   ("no turn starts past the cap while it is lowered", None,
-                                   spend_under(3, at(1, 30), at(1, 42))),
+                                   spend_under(3, at(1, 30), at(1, 42), "group:engineering")),
                                   ("the board resumes within 15 minutes of the raise", None,
                                    resumes_within(at(1, 42), 15)),
                                   waits=LOWERED)),

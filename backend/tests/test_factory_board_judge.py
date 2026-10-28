@@ -2,6 +2,7 @@
 is given, and a real run whose server passes over ready work, which the judge must fail."""
 from types import SimpleNamespace
 
+from evals.factory.cases.freezes import spend_under
 from evals.factory.scenarios import board_keeps_moving
 from evals.factory.sim import Run, Scenario, at, tickets
 from evals.factory.world import START
@@ -89,3 +90,34 @@ def test_the_judge_fails_a_server_that_passes_over_every_claim(monkeypatch):
     assert not passed, "a stalled board passed the judge"
     assert "started 0" in detail, detail
     assert run.claims[200] > 0 and sum(m["started"] for m in run.marks) == 0
+
+
+def turn(started, finished, cost, bot="fleet-01"):
+    """A turn row as the sim reads it: start and finish clock offsets, and its estimated cost."""
+    text = lambda offset: (START + offset).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    return {"bot": bot, "started": text(started), "finished": text(finished) if finished is not None else None,
+            "est_cost_usd": cost}
+
+
+def turns_run(turns):
+    """A stand-in run whose records are these turns, for the company pool (no store needed)."""
+    return SimpleNamespace(w=SimpleNamespace(sql=lambda statement, args=(): turns))
+
+
+def test_a_company_cap_holds_a_burst_only_once_the_half_hour_has_spent_it():
+    # The cap of $3 an hour is held as the half hour at $1.5. A burst that starts in a fresh half hour is admitted, and
+    # the half hour reached $1.5 by 10:42 (the turns that finished by then count).
+    burst = [turn(at(1, 30), at(1, 40), 1.0), turn(at(1, 31), at(1, 39), 0.6)]
+    assert spend_under(3, at(1, 30), at(1, 42))(turns_run(burst))[0]
+
+
+def test_a_turn_that_starts_after_the_half_hour_reached_its_cap_fails():
+    late = [turn(at(1, 30), at(1, 33), 1.6), turn(at(1, 35), at(1, 40), 0.4)]
+    passed, detail = spend_under(3, at(1, 30), at(1, 42))(turns_run(late))
+    assert not passed and "10:35" in detail, detail
+
+
+def test_a_window_that_never_reached_the_cap_fails_so_the_check_cannot_pass_on_nothing():
+    passed, detail = spend_under(3, at(1, 30), at(1, 42))(turns_run([turn(at(1, 30), at(1, 35), 0.5)]))
+    assert not passed and "short of the $1.5 window cap" in detail, detail
+
