@@ -2784,8 +2784,9 @@ class Execution:
         self.expire(c, limit=CLAIM_MAINTENANCE)
 
     def claim(self, c, who, body, selected=None, *, prepared=False, maintained=False):
-        """`maintained`: the claim route ran `maintain` in its own write before its read snapshot chose `selected`,
-        so a job that expiry requeued was there to choose, and this write rechecks only that job."""
+        """`maintained`: the claim route checked `maintenance_due` and, when it was, ran `maintain` in its own write
+        before its read snapshot chose `selected`. A job that expiry requeued was there to choose, so this write runs
+        no expiry and rechecks only that job; a lease lapsing in between is expired by the next claim."""
         runner = self.runner(c, who)
         if runner:
             note_claim(runner["id"], body)

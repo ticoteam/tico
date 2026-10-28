@@ -85,6 +85,31 @@ def test_a_watcher_with_nothing_to_send_answers_from_a_read_while_the_write_lock
         assert c.execute("SELECT count(*) FROM events WHERE action='credential.sent_to_computer'").fetchone()[0] == 1
 
 
+def test_a_grant_revoked_between_the_watchers_read_and_its_write_sends_nothing(api, monkeypatch):
+    # The read only decides whether a write is needed: the write checks the grant again before it decrypts or records.
+    from contextlib import contextmanager
+    local(api)
+    computer = runner(api)
+    assign(api, computer, "ops")
+    row = jira(api)
+    grant = post(api, f"credentials/{row['id']}/grants", {"subject": "bot:ops"})
+    store = api.app.state.store
+    original, armed = store.read_transaction, [True]
+
+    @contextmanager
+    def read_then_revoke():
+        with original() as c:
+            yield c
+        if armed[0]:
+            armed[0] = False
+            post(api, f"credentials/{row['id']}/grants/{grant['id']}/revoke", {})
+    monkeypatch.setattr(store, "read_transaction", read_then_revoke)
+    assert get(api, "runner-watcher-credentials?bot=ops", computer["token"]) == {"credentials": []}
+    assert not armed[0]
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM events WHERE action='credential.sent_to_computer'").fetchone()
+
+
 # ------------------------------------------------------------------ a vault with no KMS key
 def test_the_vault_works_with_a_local_key_and_reads_it_back_after_a_restart(api):
     path = local(api)
