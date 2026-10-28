@@ -109,6 +109,7 @@ class Run:
                     elif bot.running and w.now() >= bot.ends:
                         bot.end()
                 if s.claim == "runner":
+                    self.sweep(w)
                     self.runner_round(w, team)
                 self.observe(w, team)
             self.final = w.tickets()
@@ -128,21 +129,29 @@ class Run:
                 break
             bot.start(attempt)
 
+    def sweep(self, w):
+        """The history sweep the server runs beside itself (read_deps.loop), here once per tick: a claim that moves an
+        input an earlier run read meets the index the sweep keeps, as it does on a live server."""
+        from backend import read_deps
+        with w.store.read() as c:
+            read_deps.sweep(c, gate=w.store.writer)
+
     def runner_round(self, w, team):
         """One claim round as a real runner runs it: while it has a free slot it asks for work, naming the bots it is
-        already running. The server's own pick is read first (`claimable`), so a board that stalls with work it could
-        take shows in `marks`."""
+        already running. The work the board could hand out is counted from the queue and its holds before the claims
+        (`queued`), not from the claim's own pick, so a claim that passes over work it could take shows in `marks`."""
+        body = self.runner_body(team)
         free = w.capacity - sum(1 for b in team.all if b.running)
-        waiting = self.claimable(w, team)
+        queued = w.unheld_queued({b.slug for b in team.all} - set(body["busy_bots"]))
         started = 0
         for _ in range(max(0, free)):
-            _, reply = self.claim_once(w, self.runner_body(team))
+            _, reply = self.claim_once(w, body)
             attempt = reply.get("attempt") if isinstance(reply, dict) else None
             if not attempt:
                 break
             team.bot(attempt["bot"]).start(attempt)
             started += 1
-        self.marks.append({"at": w.now(), "free": free, "claimable": waiting, "started": started})
+        self.marks.append({"at": w.now(), "free": free, "queued": queued, "started": started})
 
     def runner_body(self, team):
         """What a runner claims with: no bot named, and the bots it is running (or whose computer is off) as busy. The
@@ -150,19 +159,6 @@ class Run:
         busy = [b.slug for b in team.all if b.running or not b.available]
         return {"next_run": True, "busy_bots": busy, "busy_lanes": [f"{slug}|main" for slug in busy],
                 "start_places": True}
-
-    def claimable(self, w, team):
-        """Whether the server would hand the runner a job now: its own pick, read without claiming."""
-        from backend.auth import Identity
-        from backend.models import Claim
-        rid = w.runner["runner_id"]
-        execution = w.app.state.execution
-        who = Identity("runner:" + rid, "runner", runner_id=rid)
-        with w.store.read() as c:
-            found = execution.candidate(c, who, Claim(**self.runner_body(team)), execution.runner(c, who))
-            if c.in_transaction:
-                c.rollback()
-        return bool(found)
 
     def claim_once(self, w, body):
         """One claim, its status counted. A 5xx is recorded with its body (or the traceback, when the app raised) and

@@ -120,15 +120,16 @@ def no_claim_5xx(run):
 
 
 def board_keeps_moving(since):
-    """From `since` on, in every hour, a turn starts whenever the server would hand the runner a job and a slot is free.
-    A board that stalls with work it could take is frozen, whatever the cause."""
+    """From `since` on, in every hour, a turn starts whenever a job is queued that a bot could take (not held, paused,
+    over a limit, or behind a held login) and a slot is free. A board that stalls with work it could take is frozen,
+    whatever the cause."""
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
         stalled, hours, t = [], 0, START + since
         while t < run.end:
             window = [m for m in run.marks if t <= m["at"] < t + at(1)]
-            if any(m["claimable"] and m["free"] for m in window):
+            if any(m["queued"] and m["free"] for m in window):
                 hours += 1
                 if not sum(m["started"] for m in window):
                     stalled.append(t.strftime("%H:%M"))

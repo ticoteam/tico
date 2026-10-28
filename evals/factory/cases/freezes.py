@@ -9,6 +9,7 @@ from evals.factory.world import START
 WEEKLY = "You've hit your weekly limit · resets Oct 27, 9am (UTC)"      # a reset days away: the login is held for it
 SESSION = "You've hit your session limit · resets 10:30am (UTC)"        # a reset within the hour
 TWO_DAYS = "You've hit your session limit · resets Oct 22, 9am (UTC)"   # a second login, held two days
+PACKET_BOT = "fleet-01"                                                 # the bot the moved-input run messages
 
 
 def hit(runtime, text):
@@ -90,6 +91,30 @@ def setup_with(tasks, each=0, providers=(), groups=()):
     return setup
 
 
+def packet_task(slug):
+    """One task the bot owns, which the person's messages to it are about: the run keeps its id."""
+    def setup(run, w, team):
+        made = w.post("tasks", {"owner": slug, "title": "Acme packet", "body": "Check the packet figures."})
+        run.packet = made.get("task", made)["id"]
+    return setup
+
+
+def say(*texts):
+    """A person's messages to the bot, on the task the run gave it: its queue for that task."""
+    def act(run, w, team):
+        for text in texts:
+            w.post("messages", {"to": PACKET_BOT, "text": text, "refs": {"task": run.packet}})
+    return act
+
+
+def steer(slug):
+    """The bot reads what is queued for its turn while the turn runs, and acks it."""
+    def act(run, w, team):
+        w.steer_bots.add(slug)
+    return act
+
+
+
 # ---------------------------------------------------------------------------------------------- checks
 def spend_under(cap_usd, since, until):
     """No turn starts in [since, until) in a clock hour whose spend, from the runs that finished before it started, has
@@ -123,9 +148,9 @@ def hour_spent(run, when):
 
 
 def waiting_since(marks, t):
-    """The first claim round at or after `t` with a free slot and work the runner could take: where a wait for the
+    """The first claim round at or after `t` with a free slot and queued work a bot could take: where a wait for the
     board starts. A round with every slot busy waits on capacity, not on the limit or the probe."""
-    return next((m["at"] for m in marks if m["at"] >= t and m["free"] > 0 and m["claimable"]), None)
+    return next((m["at"] for m in marks if m["at"] >= t and m["free"] > 0 and m["queued"]), None)
 
 
 def resumes_within(when, minutes):
@@ -173,6 +198,14 @@ def probe_resumes(minutes):
         gap = (first - ready).total_seconds() / 60
         return gap <= minutes, (f"first turn {gap:.0f} min after work waited at {ready:%H:%M} (limit {minutes} min), "
                                 f"the probe was lost at {lost:%H:%M}")
+    return check
+
+
+def turns_from(when):
+    """Once the login is back at `when`, the bots finish turns again: a turn that ended without the limit."""
+    def check(run):
+        ran = [r for r in run.turns(since=START + when) if r["kind"] != "limited"]
+        return bool(ran), f"{len(ran)} turns finished from {START + when:%H:%M} on"
     return check
 
 
@@ -237,4 +270,15 @@ SCENARIOS = [
              during=both(at_times([(at(0, 30), hit("fake", SESSION))]), lose_probe("missing")),
              checks=freeze_checks(at(1, 30), ("the queue takes a new probe once the probe is gone", None,
                                               probe_resumes(15)))),
+    Scenario("freeze_moved_input",
+             "A person's two messages reach a bot on its task while its turn runs: the turn reads them, then its login's "
+             "limit stops it before it answers. A third message queues after the stop, and the claims that take the login "
+             "back move the two unanswered ones to the run that takes the work.",
+             setup=packet_task(PACKET_BOT), claim="runner", signed_in=("fake",), fleet=1,
+             during=at_times([(at(0, 20), steer(PACKET_BOT)),
+                              (at(0, 20), say("Check the packet figures.", "Confirm the totals before you answer.")),
+                              (at(0, 20), hit("fake", SESSION)),
+                              (at(0, 45), say("Is the packet final?"))]),
+             checks=freeze_checks(at(0, 20), ("turns run again once the login is back", None,
+                                              turns_from(at(1, 30))))),
 ]

@@ -56,6 +56,7 @@ class World:
         self.signed_in = tuple(signed_in)   # runtimes the computer reports signed in; when set, readiness is structured
         self.capacity = capacity            # the computer's slots, as its heartbeat says
         self.enabled = []                   # the company's providers in order: their runtimes are the fallbacks
+        self.steer_bots = set()             # bots that read the inputs queued for their turn while it runs
         self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
 
     # ------------------------------------------------------------------ lifecycle
@@ -534,3 +535,27 @@ class World:
         rows = self.sql("SELECT bot, count(*) n, sum(held) held FROM jobs WHERE state='queued' "
                         + ("AND bot=? " if slug else "") + "GROUP BY bot", (slug,) if slug else ())
         return {r["bot"]: (r["n"], r["held"] or 0) for r in rows}
+
+    def unheld_queued(self, slugs):
+        """Queued jobs of these bots that a free slot could take, counted from the queue and the holds the claim reads
+        rather than from the claim's pick. A job waits while its bot is paused or over a limit, while its login is
+        held and no fallback signed in is free for it, or while the server holds it until a limit resets."""
+        from backend import login_holds, usage_limits
+        rid = self.runner["runner_id"]
+        fallbacks = [name for name in self.runtime_fallbacks() if name in self.signed_in]
+        count, over = 0, {}
+        with self.store.read() as c:
+            paused = {r["bot"] for r in c.execute("SELECT bot FROM bot_control WHERE draining=1")}
+            for job in c.execute("SELECT id, bot FROM jobs WHERE state='queued' AND held=0").fetchall():
+                bot = job["bot"]
+                if bot not in slugs or bot in paused:
+                    continue
+                if bot not in over:
+                    over[bot] = bool(usage_limits.blocked(c, bot))
+                if over[bot]:
+                    continue
+                if login_holds.holding(c, rid, "", PRIMARY, job["id"]) and not any(
+                        login_holds.holding(c, rid, "", name) is None for name in fallbacks):
+                    continue
+                count += 1
+        return count

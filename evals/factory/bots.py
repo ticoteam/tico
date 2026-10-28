@@ -89,6 +89,8 @@ class Bot:
                        "stale": self.stale(task, message), "action": None,
                        "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime}
         w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
+        if self.slug in w.steer_bots:
+            self.steer()
         self.ends = w.now() + __import__("datetime").timedelta(minutes=self.minutes(task))
 
     def minutes(self, task):
@@ -174,6 +176,13 @@ class Bot:
             self.world.call("post", f"attempts/{attempt['id']}/complete",
                             {"outcome": "interrupted", "text": "Runner restarted during execution", "last_seq": 0},
                             token=self.world.runner["token"], ok=False)
+
+    def steer(self):
+        """Read the inputs queued for the turn while it runs, as a running turn does between its steps, and ack each one.
+        An input read and then left unanswered is the one the next run takes over."""
+        w, attempt = self.world, self.attempt
+        for message in w.post(f"attempts/{attempt['id']}/inputs", {}, token=self.token)["messages"]:
+            w.post(f"attempts/{attempt['id']}/inputs/{message['id']}/ack", {}, token=self.token)
 
     def renew(self):
         if self.running:
