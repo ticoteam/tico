@@ -157,8 +157,9 @@ class Run:
         mark = {"at": w.now(), "free": free, "queued": queued, "held": held, "started": started}
         if free and queued and started < min(free, queued):
             # Diagnostic: the server's view of each queued bot before the claims, and the last claim's answer.
-            mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the sim sent "
-                           f"{len(body['busy_bots'])} busy bots")
+            mark["why"] = (f"{' | '.join(before)}; the last claim answered {reply}; the claim body was {body} "
+                           f"to runner {w.runner['runner_id'][:8]}; capacity {w.capacity}, {w.capacity - free} running, "
+                           f"paused {sorted(self.paused)}")
         self.marks.append(mark)
 
     def refusals(self, w, slugs):
@@ -187,12 +188,21 @@ class Run:
                         if hold:
                             text += f" (hold ends {stamp(hold.get('until'))})"
                             probe = hold.get("probe_job")
-                            row = c.execute("SELECT j.state AS job, a.state AS attempt, a.lease_until FROM jobs j "
-                                            "LEFT JOIN attempts a ON a.job_id=j.id WHERE j.id=? "
+                            row = c.execute("SELECT j.state AS job, a.id AS aid, a.state AS attempt, a.lease_until "
+                                            "FROM jobs j LEFT JOIN attempts a ON a.job_id=j.id WHERE j.id=? "
                                             "ORDER BY a.rowid DESC LIMIT 1", (probe,)).fetchone() if probe else None
                             if row:
+                                # Who sent the probe attempt's renew and event posts (the sim's own calls), and the
+                                # server's lease events for it: a lease the server extends shows here with no post.
+                                posts = [(when, caller) for when, path, _, caller in w.attempt_posts
+                                         if row["aid"] and path.startswith(f"attempts/{row['aid']}/")]
+                                leases = c.execute("SELECT ts, action FROM events WHERE target=? AND "
+                                                   "action LIKE 'attempt.lease%' ORDER BY ts", (row["aid"],)).fetchall()
                                 text += (f", probe {probe[:6]} job {row['job']} attempt {row['attempt']} "
-                                         f"lease {stamp(row['lease_until'])}")
+                                         f"lease {stamp(row['lease_until'])}; {len(posts)} sim posts"
+                                         + "".join(f" [{when:%H:%M} {caller}]" for when, caller in posts[-3:])
+                                         + "; lease events " + (", ".join(f"{stamp(e['ts'])} {e['action']}"
+                                                                         for e in leases) or "none"))
                         parts.append(text)
                     out.append(f"{slug}: " + "; ".join(parts))
                 except Exception as error:      # a diagnostic never stops the run

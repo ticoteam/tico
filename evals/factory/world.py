@@ -60,6 +60,7 @@ class World:
         self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
         self.server_errors = []             # (when, route, status, body) for each call the server answered with a 5xx
         self.input_reads = []               # (when, bot, attempt, message ids): the inputs a turn read as it started
+        self.attempt_posts = []             # (when, path, sent with the runner's token) for each renew or events post
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -201,6 +202,9 @@ class World:
         """One API call that answers with its status and body rather than raising. A server error (a 500, or the app
         raising) is a finding: it is recorded with its route and body, and the run goes on."""
         headers = {"Authorization": "Bearer " + token}
+        if method == "post" and path.startswith("attempts/") and path.rsplit("/", 1)[-1] in ("renew", "events"):
+            caller = " > ".join(frame.name for frame in traceback.extract_stack()[-6:-1])
+            self.attempt_posts.append((self.now(), path, token == self.runner["token"], caller))
         if method != "get":      # the server wants a key on every write, PUT included
             headers["Idempotency-Key"] = str(uuid.uuid4())
         route = f"{method.upper()} /api/v2/{path}"
