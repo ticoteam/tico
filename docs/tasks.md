@@ -1249,8 +1249,13 @@ The bot decides what to do and whether to move the step. Ask once per version an
 answer; attach a new version when the work changes.
 
 The API uses the existing ask/answer protocol (`messages.kind`, `refs.questions`, `refs.target`,
-and `refs.answer`); plain questions and text replies keep working. Plain comments keep structured
-questions open; an older Computer's plain answer closes its target and reads as `{by, text, at}`.
+and `refs.answer`); questions offering only free text still accept ordinary text answers.
+For a question with options, an authorized recipient's reply through `messages/{mid}/answer`
+settles the decision only when it exactly matches one unique option label on a single targeted
+question. It records the same structured answer as a card pick. Unmatched or ambiguous text is
+saved as a note, leaving the options and any person wait open. Repeating the same structured
+answer does not record another decision. Settling a question does not approve or execute a
+separate publish, send, spend or hire action.
 Needs you excludes closed, cancelled, archived and declined tasks, even with an open question.
 The version's metadata points to its ask message. These routes use the usual Idempotency-Key contract:
 
