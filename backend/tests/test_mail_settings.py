@@ -166,3 +166,80 @@ def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
         assert not send("goal-manager", ceo, [forward], approval=approval).allowed   # the yes names another address
     finally:
         pl.SERVER_GET, pl.HUB_GET = saved
+
+
+def test_only_an_exact_unspent_tico_send_approval_sends_the_ceo_bots_outside_mail(api):
+    """The CEO Bot's outside message goes only under a Tico send approval that names it exactly: approved, unspent, its
+    To and Cc, and its text's sha256. The owner's message telling it to send and a closed approval Issue bind neither the
+    recipients and the text nor a single use, so neither lifts its switch, though both still lift another bot's.
+    The server setting is the API's own answer; the approval, message and Issue reads are stubbed. Synthetic addresses;
+    nothing is sent and no mail provider is called (check_send only decides)."""
+    import hashlib
+    import json
+
+    from backend.tests.test_company import bot, with_ceo_bot
+    from connectors.mail import policy as pl
+    ceo, ops = with_ceo_bot(api), bot(api, "ops")
+    seen = setting(api, ceo, bot="goal-manager")
+    assert (seen["outbound_send"], seen["forward_to"], bool(seen["per_message"])) == (False, [], True), seen
+    assert setting(api, ops)["outbound_send"] is False                       # another bot, its switch off too
+
+    outside, other, body = "ava@creator.example", "eve@other.example", "Thanks, we have it.\n"
+    digest = hashlib.sha256(body.strip().encode()).hexdigest()
+    ids = {k: f"{n}1111111-2222-3333-4444-555555555555" for n, k in enumerate(
+        ("exact", "recipient", "text", "spent", "order_ceo", "order_ops"), 1)}
+
+    def approval(to=outside, sha=digest, consumed=None):
+        return {"kind": "send", "decision": "approved", "consumed_at": consumed, "payload": {
+            "to": [to], "cc": [], "subject": "Re: help", "mailbox": "box@acme.example", "body_sha256": sha}}
+
+    def order(slug):            # the owner's Tico message telling the bot to email the outside address
+        return {"from_actor": f"human:{pl.OWNER}", "to_actor": f"bot:{slug}",
+                "body": f"Please email {outside} and tell them we have it."}
+
+    rows = {f"approvals/{ids['exact']}": approval(), f"approvals/{ids['recipient']}": approval(to=other),
+            f"approvals/{ids['text']}": approval(sha=hashlib.sha256(b"Another text").hexdigest()),
+            f"approvals/{ids['spent']}": approval(consumed="2026-10-27T12:00:00Z"),
+            f"messages/{ids['order_ceo']}": order("goal-manager"), f"messages/{ids['order_ops']}": order("ops")}
+    reads = []
+
+    def hub_get(path):
+        reads.append(path)
+        row = rows.get(path)
+        return dict(row, id=path.split("/")[1]) if row else None
+
+    class Issue:                # `gh issue view`: closed, labelled, its `Send to:` line matching, another text
+        returncode, stderr = 0, ""
+        stdout = json.dumps({"state": "CLOSED", "title": "Reply to Ava",
+                             "labels": [{"name": f"owner:{pl.OWNER}"}, {"name": "type:decision"}],
+                             "body": f"Send to: {outside}\n\nSay we will refund them in full today."})
+
+    pol = pl.builtin("goal-manager", env={"TICO_INTERNAL_DOMAINS": "acme.example"})
+    saved = pl.SERVER_GET, pl.HUB_GET, pl.RUN
+    pl.HUB_GET, pl.RUN = hub_get, lambda *a, **k: Issue()
+
+    def send(slug, token, approval_id):
+        pl.SERVER_GET = lambda s: get(api, f"bots/{s}/mail-settings", token=token)
+        return pl.check_send(pol, slug, "box@acme.example", [outside], manifest={}, verbs=["send"], body=body,
+                             approval=approval_id)
+
+    try:
+        for ops_yes in (ids["order_ops"], "4242"):                  # the ordinary bot's paths are as they were
+            assert send("ops", ops, ops_yes).allowed, ops_yes
+        refusals = {"owner message": ids["order_ceo"], "closed Issue": "4242", "another recipient": ids["recipient"],
+                    "another text": ids["text"], "spent": ids["spent"]}
+        for case, approval_id in refusals.items():
+            reads.clear()
+            d = send("goal-manager", ceo, approval_id)
+            assert (d.allowed, d["gate"]) == (False, "outbound_send"), (case, d)
+            assert "exact message" in d["reason"] and not any(c["gate"] == "recipient" for c in d["checks"]), (case, d)
+            assert not any(p.startswith("messages/") for p in reads), (case, reads)     # no owner-message fallback
+        assert "another text" in send("goal-manager", ceo, ids["text"])["reason"]
+        assert "already spent" in send("goal-manager", ceo, ids["spent"])["reason"]
+        assert f"to=['{other}']" in send("goal-manager", ceo, ids["recipient"])["reason"]
+        assert "not a Tico send approval" in send("goal-manager", ceo, "4242")["reason"]
+        d = send("goal-manager", ceo, ids["exact"])
+        assert d.allowed, d
+        assert "per-message approval" in [c for c in d["checks"] if c["gate"] == "outbound_send"][0]["detail"], d
+    finally:
+        pl.SERVER_GET, pl.HUB_GET, pl.RUN = saved
