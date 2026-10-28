@@ -3149,7 +3149,7 @@ def create_app(settings=None):
                 raise Problem("not_found", "Message not found", 404)
             conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
             lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
-            if (msg.get("refs") or {}).get("questions"):
+            if H.has_pick_options(msg):
                 from .task_review import answer_text
                 return answer_text(c, auth, who, msg, body.text, unknown=body.unknown)
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)

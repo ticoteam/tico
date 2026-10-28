@@ -2837,13 +2837,12 @@ def _close_open_asks(conn, actor, target, kind, msg):
             return
         scope = MESSAGE_TASK_SQL
     open_asks = [r["id"] for r in _rows(conn.execute(
-        "SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        "SELECT m.id,m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE m.to_actor=? AND m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL "
         "AND m.answered_by IS NULL AND m.id NOT IN (SELECT in_reply_to FROM messages "
         "WHERE kind='answer' AND in_reply_to IS NOT NULL) "
-        f"AND {scope}=? "
-        "AND (json_type(m.refs_json,'$.questions') IS NULL OR ?)",
-        (actor, target, scope_id, bool(refs.get("answer")))))]
+        f"AND {scope}=?",
+        (actor, target, scope_id))) if refs.get("answer") or not has_pick_options(r)]
     if not open_asks:
         return
     conn.executemany("UPDATE messages SET answered_by=? WHERE id=?",
@@ -3152,6 +3151,12 @@ def _ask_depth(conn, actor, refs, in_reply_to):
     return max(declared, deepest + 1, 1)
 
 
+def has_pick_options(msg):
+    """Questions offering only free text keep the ordinary answer protocol."""
+    refs = msg.get("refs") or _json(msg.get("refs_json"), {}) or {}
+    return any(q.get("options") for q in refs.get("questions", []))
+
+
 def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, comment_target=None, classify_text=None):
     """Reply to an ask. A checked task comment may also answer a structured task ask."""
     _writer(conn, actor)
@@ -3168,7 +3173,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
-    if (asked.get("refs") or {}).get("questions") and not refs.get("answer"):
+    if has_pick_options(asked) and not refs.get("answer"):
         refs.update({"decision_open": True})
         about = message_task_id(asked, conversation(conn, asked["conversation_id"]))
         if about:
@@ -5069,9 +5074,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if actor != KEEPER or ask:
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     now_row = task(conn, task_id) or {}
-    if now_row.get("status") == "waiting" and now_row.get("waiting_on") == actor:
-        # The person it waited on has spoken: the next move is the bot's, and it leaves their
-        # Needs you. The bot sets it waiting on them again if it still needs something.
+    if (now_row.get("status") == "waiting" and now_row.get("waiting_on") == actor
+            and not any(a.get("to_actor") == actor and has_pick_options(a)
+                        for a in open_task_asks(conn, now_row))):
+        # Plain replies clear a person wait; a structured decision keeps waiting until a choice is recorded.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", actor, None, "")
         from . import task_holds

@@ -317,7 +317,9 @@ class Rule5Tasks(HubCase):
         asked = H.task_comment(self.conn, CMO, row["id"], "Which image?", ask={"questions": [
             {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
              "multi": False, "other": True}], "who": ANA})
-        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"])
+        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"],
+                              extra_refs={"answer": {"target": {"comment": asked["id"]},
+                                                     "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
         self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")

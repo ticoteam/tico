@@ -339,9 +339,8 @@ def test_a_question_from_a_private_source_is_not_quoted_in_a_company_task_s_reas
         assert wait(c, plain)["blocked_reason"] == f"Waiting on {ana}: Keep the same cleaner?"
 
 
-def test_answering_on_any_route_ends_the_wait_on_that_person(api):
-    """Criterion 6 over the API: a bot's task waiting on Ana for her question goes back to work once she answers, whether
-    she answers the question itself, comments on its task or picks on its card."""
+def test_structured_answers_end_the_wait_but_an_unmatched_note_keeps_it(api):
+    """A direct exact label or card pick clears the wait; an unmatched task note preserves it."""
     def asked(c, title):
         tid = bot_task(c, title)
         q = H.task_comment(c, "bot:ops", tid, "Which month should the report use?", wake=False, ask={
@@ -362,7 +361,10 @@ def test_answering_on_any_route_ends_the_wait_on_that_person(api):
     post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
     with api.app.state.store.read() as c:
         ana = task_holds.name(c, "human:ana")
-        for tid in (direct, commented, picked):
+        note_row = H.task(c, commented)
+        assert H.open_task_asks(c, note_row)
+        assert (note_row["status"], note_row["waiting_on"]) == ("waiting", "human:ana")
+        for tid in (direct, picked):
             row = H.task(c, tid)
             assert not H.open_task_asks(c, row), tid
             assert (row["status"], row["waiting_on"]) == ("open", None), (tid, row["status"], row["blocked_reason"])
@@ -370,9 +372,8 @@ def test_answering_on_any_route_ends_the_wait_on_that_person(api):
             assert tid not in [t["id"] for t in H.needs_you(c, "human:ana")["waiting"]]
 
 
-def test_a_person_s_task_says_an_answer_cleared_it_on_any_route(api):
-    """Scope 4 for a question on a person's own task: answered on any route, the task stays at its step and says the
-    answer is what cleared, with the stranded clock running from then."""
+def test_a_person_s_task_distinguishes_a_structured_answer_from_a_note(api):
+    """A structured answer clears the question without moving a person's task; a note leaves it open."""
     def asked(c, title):
         tid = H.task_create(c, "bot:ops", title, "x", "human:ana")["id"]
         q = H.task_comment(c, "bot:ops", tid, "Which month for the review?", wake=False, ask={
@@ -393,7 +394,10 @@ def test_a_person_s_task_says_an_answer_cleared_it_on_any_route(api):
     post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
     with api.app.state.store.read() as c:
         ana, ops = task_holds.name(c, "human:ana"), task_holds.name(c, "bot:ops")
-        for tid in (direct, commented, picked):
+        note_row = H.task(c, commented)
+        assert H.open_task_asks(c, note_row)
+        assert (note_row["status"], note_row["step_id"]) == ("waiting", steps[commented])
+        for tid in (direct, picked):
             row = H.task(c, tid)
             assert (row["status"], row["step_id"]) == ("waiting", steps[tid]), tid
             assert row["blocked_reason"] == f"Nothing left to wait on: {ana} answered {ops}'s question", tid

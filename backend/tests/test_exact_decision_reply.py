@@ -72,3 +72,12 @@ def test_publish_label_settles_question_without_approving_a_send(api):
     with api.app.state.store.read() as c:
         assert [tuple(r) for r in c.execute('SELECT * FROM approvals')] == approvals
     assert get(api, f'tasks/{tid}/answers')['answers'][0]['answers'] == {'decision': ['Publish']}
+
+
+def test_question_without_options_still_accepts_a_text_answer(api):
+    tid, mid = question(api, questions=[{'id': 'detail', 'header': '', 'question': 'Which month?',
+                                      'options': [], 'other': True}])
+    reply = post(api, f'messages/{mid}/answer', {'text': 'September'})
+    assert reply['kind'] == 'answer'
+    assert not reply.get('decision_open')
+    assert get(api, f'tasks/{tid}')['task']['open_asks'] == 0
