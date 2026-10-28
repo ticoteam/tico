@@ -2356,7 +2356,7 @@ def create_app(settings=None):
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             # The CEO Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
-            # A person who hid the CEO Bot from their chart gets it without the CEO Bot, and with nothing moved under it.
+            # A person who hid the CEO Bot from their chart gets it without the CEO Bot, nothing moved under it.
             from . import ceo_bot
             hide_ceo = ceo_bot.hidden_for(c, who)
             chart = ceo_bot.chart_entries(c, settings, roster, configs, archived, hidden=hide_ceo)

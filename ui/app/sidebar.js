@@ -89,6 +89,9 @@ function orgTreeByParent() {
   }
   for (const e of bots) {
     let boss = orgBossKey({kind: 'bot', ...e});
+    // Under a CEO Bot this person hid: the next row up, where GET /api/v2/org hangs it too.
+    const hiddenBoss = boss.startsWith('b:') && (S.emps || []).find(x => x.name === boss.slice(2) && x.chart_hidden);
+    if (hiddenBoss) boss = orgBossKey({kind: 'bot', ...hiddenBoss});
     if (boss.startsWith('b:') && !empIds.has(boss.slice(2))) {
       const owner = e.operator || e.users?.[0]?.id;
       boss = owner ? 'p:' + owner : '';
@@ -330,6 +333,8 @@ async function ceoChartHideFromTree() {
     await ceoChartSet(true);
     toast(`${name} is hidden from your chart. Settings > Bots > ${name} shows it again.`, false,
       {label: 'Show on my chart', run: () => ceoChartSet(false)});
+    // Its row and menu are gone: the way back has focus.
+    [...document.querySelectorAll('.toast button')].pop()?.focus();
   } catch (e) { toast(e.message, true); renderTree(); }
 }
 async function orgDrop(from, to) {

@@ -207,7 +207,7 @@ HIDE_PREF = "chart.hide_ceo_bot"
 def hidden_for(c, who):
     """Whether the caller, a person, chose Hide from my chart on the CEO Bot. A bot's or a token's view is never hidden.
     Only the chart reads it (`chart_entries`, `chart_groups`, `chart_hidden_row`)."""
-    if getattr(who, "role", "") not in ("owner", "human"):
+    if getattr(who, "role", "") not in ("owner", "human") or getattr(who, "via_token", False):
         return False
     row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (who.actor, HIDE_PREF)).fetchone()
     return bool(row) and json.loads(row[0]) is True

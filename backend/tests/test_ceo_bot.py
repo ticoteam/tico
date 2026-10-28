@@ -230,7 +230,8 @@ def drawn(api, headers):
     return {"org": {b["id"]: (b["org_parent"], b["reports_to"]) for b in org["bots"]},
             "org_groups": {g["id"]: g["org_parent"] for g in org["org_groups"]},
             "org_seats": {s["id"]: s["org_parent"] for s in org["seats"]},
-            "employees": {name: (e["org_parent"], e.get("chart_hidden", False)) for name, e in rows(api, headers).items()},
+            "employees": {name: (e["org_parent"], e.get("chart_hidden", False))
+                          for name, e in rows(api, headers).items()},
             "humans_groups": {g["id"]: g["org_parent"] for g in humans["org_groups"]},
             "humans_seats": {s["id"]: s["org_parent"] for s in humans["seats"]},
             "seats": {s["id"]: s["org_parent"] for s in api.get("/api/v2/seats", headers=headers).json()["seats"]}}
@@ -242,7 +243,8 @@ def test_a_person_hides_the_ceo_bot_from_their_own_chart(environment):
     Anyone else's chart, and a bot's, is unchanged. Nothing about the bot changes: its config, reports_to, access,
     level, name and its row in the bot list (Goals, chat, Settings > Bots). Show on my chart brings today's back."""
     api = company(environment)
-    seat = api.post("/api/v2/seats", json={"title": "Chief of Staff", "reports_to": "goal-manager"}, headers=signed_in())
+    seat = api.post("/api/v2/seats", json={"title": "Chief of Staff", "reports_to": "goal-manager"},
+                    headers=signed_in())
     assert seat.status_code == 200, seat.text
     sid = seat.json()["id"]
     riley, bot = as_person(api, "riley"), as_bot(api, "botops")
@@ -268,8 +270,9 @@ def test_a_person_hides_the_ceo_bot_from_their_own_chart(environment):
     assert {slug: parent for slug, (parent, _) in mine["org"].items()} == expected
     assert not any(parent == "b:goal-manager" for parent, _ in mine["org"].values())
     assert mine["org"]["eng-lead"][0] != "b:goal-manager" and mine["org"]["support"][0] == "b:sales-lead"
+    # reports_to as stored
     assert {slug: row[1] for slug, row in mine["org"].items()} == \
-        {slug: row[1] for slug, row in before["morgan"]["org"].items() if slug != "goal-manager"}   # reports_to as stored
+        {slug: row[1] for slug, row in before["morgan"]["org"].items() if slug != "goal-manager"}
     assert mine["org_groups"] == mine["humans_groups"] == {"sales": "", "home": ""}
     assert mine["org_seats"][sid] == "p:morgan"
     # The employee rows: every bot still listed, the CEO Bot marked for the chart to leave off, nothing moved under it.
@@ -301,7 +304,8 @@ def test_a_person_hides_the_ceo_bot_from_their_own_chart(environment):
 
 
 def test_hiding_the_ceo_bot_is_a_persons_own_yes_or_no(environment):
-    """The preference is a person's: true or false only, and a bot can't set one (its view is never hidden)."""
+    """The preference is a person's: true or false only, and a bot can't set one (its view is never hidden), nor
+    is a call on the person's API token."""
     api = company(environment)
     refused = hide(api, "yes")
     assert refused.status_code == 422, refused.text
@@ -312,3 +316,9 @@ def test_hiding_the_ceo_bot_is_a_persons_own_yes_or_no(environment):
     assert "goal-manager" in chart(api, as_bot(api, "botops"))
     assert hide(api, True, as_person(api, "riley")).status_code == 200
     assert "goal-manager" not in chart(api, as_person(api, "riley")) and "goal-manager" in chart(api)
+    # A call on the person's API token reads the whole chart: an agent finding who handles work.
+    settings = api.app.state.store.settings
+    settings.test_identities["riley-token"] = Identity("human:riley", "human", email="riley@acme.example",
+                                                       via_token=True)
+    assert "goal-manager" in chart(api, signed_in("riley-token"))
+    assert not rows(api, signed_in("riley-token"))["goal-manager"].get("chart_hidden")

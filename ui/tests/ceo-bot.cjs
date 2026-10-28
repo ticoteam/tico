@@ -12,12 +12,14 @@ const {unrouted} = require('./support/routes.cjs');
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 // What the server sends: the Heads, and the Head's department (Marketing), hang under the CEO Bot. For a person who chose
 // Hide from my chart (`hidden`), nothing is moved under it and its row says `chart_hidden` (backend/ceo_bot.py).
-const bots = (name, home, hidden) => [
+const bots = (name, home, hidden, analyst) => [
   bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:coo'), bot('librarian', 'Librarian', 'p:ana'),
   bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
   bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
   bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', operator: 'ana', ...(home ? {team: 'home'} : {})}),
+  // Reports to the CEO Bot itself and runs on Bo's computer: hidden, it hangs from the next row up, the owner.
+  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', operator: 'bo'})] : []),
 ];
 // With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the CEO Bot.
 const groups = (home, hidden) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
@@ -36,7 +38,7 @@ async function open(browser, server, width = 1440) {
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
-    if (p === '/api/employees') return json(bots(server.name ?? 'CEO Bot', home, server.hidden));
+    if (p === '/api/employees') return json(bots(server.name ?? 'CEO Bot', home, server.hidden, server.analyst));
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@example.test', role: 'owner', mover: true, cloud: true, config: {}});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: '', ...(home ? {team: 'home'} : {})}], org_groups: groups(home, server.hidden)});
     if (p === '/api/v2/preferences/chart.hide_ceo_bot' && req.method() === 'POST') {
@@ -116,7 +118,7 @@ async function check(page, name = 'CEO Bot') {
     // gone and the bots it headed sit where their own lines put them; Goals still has it. Settings > Bots shows it again,
     // on its row and in its editor, by the same name.
     {
-      const server = {name: 'Atlas'};
+      const server = {name: 'Atlas', analyst: true};
       const {page, errors} = await open(browser, server);
       // By keyboard, as for Move: Tab from its row to its menu button, open it, and the first item is Hide from my chart.
       await page.locator('#tree a.node[data-org="b:goal-manager"]').focus();
@@ -126,6 +128,9 @@ async function check(page, name = 'CEO Bot') {
       assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Hide from my chart');
       await page.keyboard.press('Enter');
       await page.locator('#tree a.node[data-org="b:goal-manager"]').waitFor({state: 'detached'});
+      await page.waitForFunction(() => document.activeElement?.closest('.toast')
+        && document.activeElement.textContent === 'Show on my chart');
+      assert.deepEqual(await above(page, 'b:analyst'), ['p:ana'], 'a bot reporting to it hangs from the next row up');
       assert.deepEqual(server.saves, [true]);
       await page.locator('.toast', {hasText: 'Atlas is hidden from your chart. Settings > Bots > Atlas shows it again.'}).waitFor();
       assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
