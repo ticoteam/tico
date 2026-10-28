@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from . import bots as B
 from .board import dev_board
-from .world import World
+from .world import Refusal, World
 
 PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}   # $ per million: uncached input, cached input, output
 
@@ -47,6 +47,9 @@ class Run:
         self.violations = defaultdict(list)
         self.merged_at = {}        # ticket id -> when it first reached a merged step
         self.peak_doing = Counter()
+        self.claims = Counter()    # claim replies by HTTP status: an exception the app raised counts as a 500
+        self.claim_errors = []     # (when, status, body or traceback) for each claim the server failed
+        self.marks = []            # per runner claim round: free slots, whether the server had work, turns started
 
     def team(self, w):
         styles = self.scenario.styles
@@ -69,13 +72,14 @@ class Run:
         return team
 
     def members(self):
-        return {**TEAM, **(ARCHITECT if self.scenario.architect else {})}
+        fleet = {f"fleet-{n + 1:02d}": ("other", "claude") for n in range(self.scenario.fleet)}
+        return {**TEAM, **(ARCHITECT if self.scenario.architect else {}), **fleet}
 
     def go(self):
         s = self.scenario
         board = s.board()
         with World(board, self.members(), tick_minutes=s.tick_minutes, rng=random.Random(f"{self.seed}:world"),
-                   ci_fail=s.ci_fail) as w:
+                   ci_fail=s.ci_fail, signed_in=s.signed_in, capacity=s.capacity) as w:
             self.w = w
             team = self.team(w)
             self.t = team
@@ -100,21 +104,77 @@ class Run:
                         bot.lose()   # its computer went off under the run: the lease lapses
                     if bot.available:
                         bot.recover()
-                    for _ in range(8):
-                        if bot.running and w.now() >= bot.ends:
-                            bot.end()
-                        if bot.running or not bot.available:
-                            break
-                        attempt = w.call("post", "jobs/claim", {"bot": bot.slug, "start_places": True},
-                                         token=w.runner["token"])
-                        attempt = attempt and attempt.get("attempt")
-                        if not attempt:
-                            break
-                        bot.start(attempt)
+                    if s.claim == "bot":
+                        self.bot_turns(w, bot)
+                    elif bot.running and w.now() >= bot.ends:
+                        bot.end()
+                if s.claim == "runner":
+                    self.runner_round(w, team)
                 self.observe(w, team)
             self.final = w.tickets()
             self.end = w.now()
             return self
+
+    def bot_turns(self, w, bot):
+        """One bot's turns under per-bot claims: finish the running one, then claim the next while the bot is free."""
+        for _ in range(8):
+            if bot.running and w.now() >= bot.ends:
+                bot.end()
+            if bot.running or not bot.available:
+                break
+            _, reply = self.claim_once(w, {"bot": bot.slug, "start_places": True})
+            attempt = reply.get("attempt") if isinstance(reply, dict) else None
+            if not attempt:
+                break
+            bot.start(attempt)
+
+    def runner_round(self, w, team):
+        """One claim round as a real runner runs it: while it has a free slot it asks for work, naming the bots it is
+        already running. The server's own pick is read first (`claimable`), so a board that stalls with work it could
+        take shows in `marks`."""
+        free = w.capacity - sum(1 for b in team.all if b.running)
+        waiting = self.claimable(w, team)
+        started = 0
+        for _ in range(max(0, free)):
+            _, reply = self.claim_once(w, self.runner_body(team))
+            attempt = reply.get("attempt") if isinstance(reply, dict) else None
+            if not attempt:
+                break
+            team.bot(attempt["bot"]).start(attempt)
+            started += 1
+        self.marks.append({"at": w.now(), "free": free, "claimable": waiting, "started": started})
+
+    def runner_body(self, team):
+        """What a runner claims with: no bot named, and the bots it is running (or whose computer is off) as busy. The
+        sim advertises no lanes, so a busy bot is held on its one lane."""
+        busy = [b.slug for b in team.all if b.running or not b.available]
+        return {"next_run": True, "busy_bots": busy, "busy_lanes": [f"{slug}|main" for slug in busy],
+                "start_places": True}
+
+    def claimable(self, w, team):
+        """Whether the server would hand the runner a job now: its own pick, read without claiming."""
+        from backend.auth import Identity
+        from backend.models import Claim
+        rid = w.runner["runner_id"]
+        execution = w.app.state.execution
+        who = Identity("runner:" + rid, "runner", runner_id=rid)
+        with w.store.read() as c:
+            found = execution.candidate(c, who, Claim(**self.runner_body(team)), execution.runner(c, who))
+            if c.in_transaction:
+                c.rollback()
+        return bool(found)
+
+    def claim_once(self, w, body):
+        """One claim, its status counted. A 5xx is recorded with its body (or the traceback, when the app raised) and
+        the run goes on; any other refusal is the sim's own fault and stops the run."""
+        status, reply = w.request("post", "jobs/claim", body, token=w.runner["token"])
+        self.claims[status] += 1
+        if status >= 500:
+            self.claim_errors.append((w.now(), status, str(reply)[:4000]))
+            return status, None
+        if status >= 400:
+            raise Refusal(status, str(reply))
+        return status, reply
 
     def release(self, w, i):
         """The Release Manager bot ships every few hours: each ticket at a release step moves to the next step. Its
@@ -219,6 +279,7 @@ class Run:
             "refused": sum(1 for r in turns if str(r["action"]).startswith("refused")),
             "fallbacks": dict(Counter(f[3].split(":")[0] for f in self.w.fallbacks)),
             "lead_time_h": self.lead_time(),
+            "claims": {str(k): v for k, v in sorted(self.claims.items())},
         }
 
     def lead_time(self):
@@ -245,6 +306,10 @@ class Scenario:
     board: object = dev_board
     architect: bool = False  # a senior architect builders ask to plan major tickets
     major: float = 0.0       # share of tickets tagged major
+    claim: str = "bot"       # "runner": one claim round as a runner makes it (no bot named) instead of one claim per bot
+    signed_in: tuple = ()    # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
+    capacity: int = 4        # the computer's slots, as its heartbeat says
+    fleet: int = 0           # extra bots beyond the team, for a backlog (their turns do nothing)
 
 
 def tickets(run, w, n, owner=None, step=None, title="Ticket"):

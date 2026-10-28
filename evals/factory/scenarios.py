@@ -108,6 +108,40 @@ def no_uncertain_runs(run):
     return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
 
 
+def no_claim_5xx(run):
+    """No claim got a server error. The live freeze showed as a claim that answered 500 hundreds of times an hour, so the
+    status counts and the first error are reported."""
+    counts = ", ".join(f"{status} x{n}" for status, n in sorted(run.claims.items())) or "no claims"
+    if not run.claim_errors:
+        return True, f"claims: {counts}"
+    when, status, body = run.claim_errors[0]
+    text = body if len(body) <= 500 else body[:200] + " ... " + body[-300:]
+    return False, f"claims: {counts}; first {status} at {when:%H:%M}: {text}"
+
+
+def board_keeps_moving(since):
+    """From `since` on, in every hour, a turn starts whenever the server would hand the runner a job and a slot is free.
+    A board that stalls with work it could take is frozen, whatever the cause."""
+    def check(run):
+        if not run.marks:
+            return False, "no runner claim rounds: this check needs runner-style claims"
+        stalled, hours, t = [], 0, START + since
+        while t < run.end:
+            window = [m for m in run.marks if t <= m["at"] < t + at(1)]
+            if any(m["claimable"] and m["free"] for m in window):
+                hours += 1
+                if not sum(m["started"] for m in window):
+                    stalled.append(t.strftime("%H:%M"))
+            t += at(1)
+        if stalled:
+            return False, (f"no turn started in {len(stalled)} of {hours} hours with work and a free slot: "
+                           + ", ".join(stalled[:6]))
+        if not hours:
+            return True, "no hour had work and a free slot"
+        return True, f"turns started in each of {hours} hours with work and a free slot"
+    return check
+
+
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):

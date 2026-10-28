@@ -9,6 +9,7 @@ import json
 import os
 import random
 import tempfile
+import traceback
 import uuid
 from pathlib import Path
 
@@ -22,6 +23,8 @@ import time_machine  # noqa: E402
 START = dt.datetime(2026, 10, 20, 9, tzinfo=dt.timezone.utc)
 SECRET = "factory-sim"
 REPO = "acme/app"
+PRIMARY = "fake"   # the bots' own login: a usage limit on it holds their turns (login_holds keys the login by this runtime)
+RUNTIME_OF = {"openai": "codex", "anthropic": "claude"}   # the runtime each AI provider signs in
 
 
 
@@ -34,7 +37,7 @@ class Refusal(Exception):
 class World:
     """One run of one scenario. Use as a context manager: it starts the clock and the server, and stops both."""
 
-    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0):
+    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4):
         self.board = board
         self.bot_slugs = list(bots)
         self.roles = {}
@@ -50,6 +53,10 @@ class World:
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
         self.next_pr = 100
+        self.signed_in = tuple(signed_in)   # runtimes the computer reports signed in; when set, readiness is structured
+        self.capacity = capacity            # the computer's slots, as its heartbeat says
+        self.enabled = []                   # the company's providers in order: their runtimes are the fallbacks
+        self.limit_next = {}                # runtime -> usage limit text: the next turn on it meets that limit
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
@@ -161,9 +168,18 @@ class World:
         return move_retry.tick(self.app.state.github_app, store=self.store, force=True)
 
     def heartbeat(self, ready):
-        self.post("runners/heartbeat", {"version": "test", "platform": "test",
-                                        "readiness": {slug: slug in ready for slug in self.bot_slugs}},
-                  token=self.runner["token"])
+        self.post("runners/heartbeat", {"version": "test", "platform": "test", "capacity": self.capacity,
+                                        "readiness": self.readiness(ready)}, token=self.runner["token"])
+
+    def readiness(self, ready):
+        """The computer's readiness: the flat map of bots when no runtime is set, else the structured document a runner
+        sends (each runtime signed in, each bot on its runtime)."""
+        if not self.signed_in:
+            return {slug: slug in ready for slug in self.bot_slugs}
+        return {"schema_version": 1,
+                "runtimes": {name: {"installed": True, "authenticated": "ready"} for name in self.signed_in},
+                "bots": {slug: {"ready": slug in ready, "runtime": PRIMARY, "repository_present": True,
+                                "configuration_valid": True} for slug in self.bot_slugs}}
 
     # ------------------------------------------------------------------ API
     def call(self, method, path, body=None, token="ana-test", ok=True):
@@ -177,6 +193,22 @@ class World:
                 raise Refusal(response.status_code, response.text)
             return None
         return response.json()
+
+    def request(self, method, path, body=None, token="ana-test"):
+        """One API call that answers with its status and body rather than raising: a claim the server fails is a finding
+        (a 500, with the traceback when the app raised), not the end of the run."""
+        headers = {"Authorization": "Bearer " + token}
+        if method == "post":
+            headers["Idempotency-Key"] = str(uuid.uuid4())
+        try:
+            response = getattr(self.client, method)("/api/v2/" + path, headers=headers,
+                                                    **({"json": body} if body is not None else {}))
+        except Exception:   # TestClient re-raises what the app raised; a live server would answer 500
+            return 500, "raised:\n" + traceback.format_exc()[-3000:]
+        try:
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, response.text
 
     def post(self, path, body, token="ana-test"):
         return self.call("post", path, body, token)
@@ -203,6 +235,55 @@ class World:
     def sql(self, query, args=()):
         with self.store.read() as c:
             return [dict(r) for r in c.execute(query, args)]
+
+    # ------------------------------------------------------------------ the company's limits, sign-ins and bots
+    def set_pool(self, scope, hourly):
+        """A team's or a group's hourly limit, set as its owner sets it (an empty body lifts it)."""
+        self.call("put", f"usage/pools/{scope}", {"hourly_usd": hourly} if hourly is not None else {})
+
+    def add_group(self, gid, name):
+        """An org group in the roster, which a group limit names; the bots of the team of that name are in it."""
+        from backend.store import encode
+        with self.store.transaction() as c:
+            doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+            doc.setdefault("org_groups", {})[gid] = {"name": name}
+            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+
+    def enable_providers(self, enabled):
+        """The company's AI providers, in the order their runtimes fall back to, as the owner saves them."""
+        view = self.get("providers")
+        self.enabled = list(enabled)
+        self.call("put", "providers", {"enabled": self.enabled,
+                                       "model": (view.get("default") or {}).get("model") or "",
+                                       "expected_revision": view["revision"]})
+
+    def pause(self, slug):
+        """The owner pauses a bot: it claims nothing until it is resumed."""
+        revision = self.sql("SELECT revision FROM bot_config WHERE bot=?", (slug,))[0]["revision"]
+        self.post(f"bots/{slug}/control", {"action": "pause", "expected_revision": revision})
+
+    def fallbacks(self):
+        """The runtimes the enabled providers sign in, in the company's order."""
+        return [RUNTIME_OF[p] for p in self.enabled if p in RUNTIME_OF]
+
+    def turn_runtime(self, job_id):
+        """Where a turn the runner just claimed runs: its own login unless a hold keeps it off for this job, then the
+        first fallback that is signed in and not held. Returns (runtime, held)."""
+        from backend import login_holds
+        rid = self.runner["runner_id"]
+        with self.store.read() as c:
+            if not login_holds.holding(c, rid, "", PRIMARY, job_id):
+                return PRIMARY, False
+            for name in self.fallbacks():
+                if name in self.signed_in and not login_holds.holding(c, rid, "", name):
+                    return name, True
+        return PRIMARY, False
+
+    def limit_events(self, attempt, text):
+        """The runtime's error line for a turn that met its usage limit: the login hold reads the reset from its text."""
+        self.post(f"attempts/{attempt['id']}/events",
+                  {"events": [{"seq": 1, "kind": "error", "payload": {"error": text, "limit": True}}]},
+                  token=self.runner["token"])
 
     # ------------------------------------------------------------------ fake GitHub
     def hook(self, event, payload):
