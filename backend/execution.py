@@ -773,6 +773,11 @@ def quiet_source_wait(c, job, facts=None, *, started_counts=None, attempt_times=
     return facts['safe'] and facts['lease_lost']
 
 
+def _held_key(who, actor, bot):
+    # task_sql's fence depends on the role as well as the actor.
+    return ("readable_held", actor, who.role, bot)
+
+
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
     under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
@@ -780,18 +785,44 @@ def _readable_held(c, who, auth, bot):
 
     Operations / status call held_runs, isolation_refused and stopped_rows for the same bot; cache the list for the
     read snapshot and batch message/attempt privacy once instead of message_readable per uncertain job per caller.
+    `prime_readable_held` fills it for every uncertain bot at once.
     """
     from . import read_cache
     actor = privacy.actor(who)
     values = read_cache.cache(c)
-    # task_sql's fence depends on the role as well as the actor.
-    key = ("readable_held", actor, who.role, bot)
+    key = _held_key(who, actor, bot)
     if values is not None and key in values:
         return iter(values[key])
+    out = _readable_held_for(c, who, auth, [bot])[bot]
+    if values is not None:
+        values[key] = out
+    return iter(out)
+
+
+def prime_readable_held(c, who, auth, bots):
+    """`_readable_held` for many bots in one set of reads, kept for this snapshot (a status or operations page
+    checks every stopped run of every bot): the queries scale with the runs, not with the bots."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    actor = privacy.actor(who)
+    todo = [bot for bot in dict.fromkeys(bots) if _held_key(who, actor, bot) not in values]
+    if not todo:
+        return
+    found = _readable_held_for(c, who, auth, todo)
+    for bot in todo:
+        values[_held_key(who, actor, bot)] = found[bot]
+
+
+def _readable_held_for(c, who, auth, bots):
+    """{bot: [(row, task or None, readable)]} for the stopped runs of `bots`, each bot's list oldest first."""
+    actor = privacy.actor(who)
     fence = auth.task_sql(c, who)
+    marks = ",".join("?" * len(bots))
     rows = list(c.execute(
-        "SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-        "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)))
+        "SELECT m.*,j.attempt_id,j.id AS job_id,j.bot AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
+        f"WHERE j.bot IN ({marks}) AND j.state='uncertain' ORDER BY j.created", list(bots)))
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     kept = [r for r in rows if r["id"] in shown
@@ -815,7 +846,7 @@ def _readable_held(c, who, auth, bot):
             marks = ",".join("?" * len(part))
             for a in c.execute(f"SELECT id, started, finished FROM attempts WHERE id IN ({marks})", part):
                 attempt_times[a["id"]] = a
-    out = []
+    out = {bot: [] for bot in bots}
     for row in kept:
         job = jobs.get(row["job_id"])
         if not job or quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times):
@@ -826,12 +857,10 @@ def _readable_held(c, who, auth, bot):
         readable = bool(task and H.task_private_readable(c, actor, task)
                         and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone())
         if task and not readable:
-            out.append((row, None, False))
+            out[row["held_bot"]].append((row, None, False))
         else:
-            out.append((row, task, True))
-    if values is not None:
-        values[key] = out
-    return iter(out)
+            out[row["held_bot"]].append((row, task, True))
+    return out
 
 
 def held_runs(c, who, auth, bot, limit=3):
@@ -1762,7 +1791,7 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks)."""
@@ -1787,7 +1816,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER and not refs.get("run_now"):
         # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
         # do not hold it back, though a snooze, a person, an approval or a worktree still does.
-        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message):
+        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
@@ -2009,6 +2038,20 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
 
 
+def _queue_suspects(c, queue):
+    """The queued jobs' tasks that auto_tasks.waiting might hold, read as one set (auto_tasks.maybe_waiting)."""
+    tasks = []
+    for job in queue:
+        message = H.message(c, job["message_id"])
+        if not message:
+            continue
+        task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        if task:
+            tasks.append(task)
+    return auto_tasks.maybe_waiting(c, tasks)
+
+
 def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
     """Each queued job with its own claim reason; common bot fences are read once."""
     from .read_cache import one, rows
@@ -2032,13 +2075,14 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
     busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
+    suspect = _queue_suspects(c, queue)
     for job in queue:
         if not job["in_scope"]:
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         yield job, why
 

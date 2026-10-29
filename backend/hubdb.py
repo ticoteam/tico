@@ -1290,6 +1290,14 @@ def migrate(conn, adopt_legacy=False):
             # columns, and the predicate matches its query word for word, so the scan never opens a body.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
                          "id, requester, owner, guest, private) WHERE private IS NOT 0")
+            # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
+            # answered from an index alone: the table's pages hold every body, and these reads need none of them.
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
+                         "rank, created, id, owner, requester, private, guest)")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_status_cover ON tasks("
+                         "owner, status, id, requester, private, guest, waiting_on)")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
+                         "requester, status, id, owner, private, guest, waiting_on)")
     # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
     # The conversation row holds participants_json, and the primary key scan reads those pages.
     conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
@@ -1429,6 +1437,8 @@ def migrate(conn, adopt_legacy=False):
     # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
     # however long ago they started.
     conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished)")
+    # Each bot's last finished run, for the bot list (views.employee_rows): one seek per bot, not a sort of all runs.
+    conn.execute("CREATE INDEX IF NOT EXISTS turns_bot_finished ON turns(bot, finished, id) WHERE finished IS NOT NULL")
     conn.execute("CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
                  "value_json TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
@@ -5691,7 +5701,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False):
+                quiet_notice=False, from_private=False, routine=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5707,6 +5717,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `number` keeps an imported task's number: a mover's (`mover`, as in `task_update`), and free.
     `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
     (backend/blocker_asks.py) wakes when that ask is done.
+    `routine` is an automation's own run (a routine's, before the move): a Monitor or Reviewer takes it as its own work.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5718,7 +5729,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     owner = route(conn, actor, owner)
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
-    _takes_tasks(conn, actor, target, title, parent_id)
+    _takes_tasks(conn, actor, target, title, parent_id, routine)
     _learning(conn, actor, target)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
@@ -9087,8 +9098,19 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
                     "created, id")
     else:
         raise ValueError("task order is queue, finished or step")
-    rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
-                              (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))))
+    page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
+    if order == "queue" and limit is not None:
+        # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the
+        # sorter (26 MB of bodies at TIDY's 10.8k tasks) on each list page; tasks_queue_cover answers the ids alone.
+        ids = [row[0] for row in conn.execute("SELECT id" + sql[len("SELECT *"):] + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
+                                              page)]
+        found = {}
+        for part in chunks(ids):
+            found.update((row["id"], row) for row in _rows(conn.execute(
+                f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(part))})", part)))
+        rows = [found[ident] for ident in ids if ident in found]
+    else:
+        rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?", page))
     hydrate_task_tags(conn, rows)
     return rows
 

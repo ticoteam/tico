@@ -545,7 +545,9 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
                        "message.notice")
 EVENT_RETENTION_DAYS = 30
-EVENT_SWEEP_BATCH = 5000     # rows per write transaction, so the one writer waits for a few thousand deletes at a time
+# Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
+# held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
+EVENT_SWEEP_BATCH = 500
 EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger backlog drains over later passes
 
 
@@ -810,6 +812,9 @@ class Store:
         self.writer = WriterGate()
         from .provenance_clock import Cache
         self.provenance_cache = Cache()
+        self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
+        from .row_clock import Cache as RowCache
+        self.row_cache = RowCache()
 
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
@@ -1612,6 +1617,12 @@ class Store:
                                    # but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_parties",
                                     "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
+                                   ("tasks_queue_cover", "tasks(rank, created, id, owner, requester, private, guest)"),
+                                   ("tasks_owner_status_cover",
+                                    "tasks(owner, status, id, requester, private, guest, waiting_on)"),
+                                   ("tasks_requester_status_cover",
+                                    "tasks(requester, status, id, owner, private, guest, waiting_on)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.
@@ -1695,8 +1706,11 @@ class Store:
             except Exception:
                 c.rollback()
                 raise
-            from . import provenance_clock
+            from . import provenance_clock, roster_clock
             provenance_clock.ensure(c)
+            roster_clock.ensure(c)
+            from . import row_clock
+            row_clock.ensure(c)
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
@@ -1743,6 +1757,9 @@ class Store:
                 stale, self.pool, self.pool_file = self.pool, [], identity
                 from .provenance_clock import Cache
                 self.provenance_cache = Cache()
+                self.roster_rows = {}
+                from .row_clock import Cache as RowCache
+                self.row_cache = RowCache()
             else:
                 stale = []
             c = self.pool.pop() if self.pool else None
@@ -1753,6 +1770,8 @@ class Store:
             c.pool_file = identity
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
+        c.roster_rows = self.roster_rows
+        c.row_cache = self.row_cache
         c.write_transaction = False
         c.after_commit = []
         c.provenance_changes = c.total_changes

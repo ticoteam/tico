@@ -23,7 +23,7 @@ from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
 from . import models as M
-from . import providers, routines
+from . import providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 
@@ -341,7 +341,7 @@ def listing(c, settings, bot):
         else:
             tools.append(repo)
     from .repositories import access
-    app_row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    app_row = read_cache.one(c, "SELECT org FROM github_app WHERE id='app'")
     if repo and not app_row and repo in tools:
         repo["detail"] += "; uses the computer's own GitHub sign-in (the GitHub App is not connected)"
     from .github_app import repo_of

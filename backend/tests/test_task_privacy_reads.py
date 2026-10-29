@@ -508,6 +508,80 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
             assert counts[300, key, brief] <= counts[30, key, brief] + 5, counts
 
 
+def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_private_tasks(api):
+    """The tag list reads every tag's links and attach events together, so a tag on 100 tasks costs what one on 10
+    does, and passes exactly the tags tag_readable passes one by one: a tag only on another's private tasks, still
+    named by an attach event after it came off, stays hidden."""
+    store = api.app.state.store
+
+    def attach(size):
+        with store.transaction() as c:
+            for n in range(size):
+                hidden = H.task_create(c, "human:cara", f"Plan {size}-{n}", "Secret", "human:cara", private=True,
+                                       lint=False)
+                H._set_task_tags(c, "human:cara", hidden["id"], [f"secret-{size}", "mixed"])
+                H._set_task_tags(c, "human:cara", hidden["id"], ["mixed"])        # the attach event stays
+                shared = H.task_create(c, "human:ana", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
+                H._set_task_tags(c, "human:ana", shared["id"], ["mixed", f"open-{size}"])
+
+    counts = {}
+    for size in (10, 100):
+        attach(size)
+        for token, person in (("ben-test", "human:ben"), ("cara-test", "human:cara")):
+            listed, counts[size, person] = traced_get(api, "tags", token)
+            with store.read() as c:
+                one_by_one = [t["id"] for t in H.tags(c) if task_privacy.tag_readable(c, Identity(person, "human"), t)]
+            assert [t["id"] for t in listed["tags"]] == one_by_one
+            keys = {t["key"] for t in listed["tags"]}
+            assert {"mixed", f"open-{size}"} <= keys
+            assert (f"secret-{size}" in keys) == (person == "human:cara")
+    assert counts[100, "human:ben"] <= counts[10, "human:ben"] + 5, counts
+    assert counts[100, "human:cara"] <= counts[10, "human:cara"] + 5, counts
+
+
+def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_run(api):
+    """GET /api/employees reads each bot's computer, open tasks, declared settings and last finished run for every
+    bot at once, so 40 more bots add no statements (each open task still has its own start checks); the last run is found by an index seek per bot, not a sort of
+    every run, and is the one the old window query picked (latest finish, then highest id)."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        source = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
+        config = dict(c.execute("SELECT * FROM bot_config WHERE bot='ops'").fetchone())
+        for n in range(40):
+            for table, row in (("bots", {**source, "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
+                c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+            H.task_create(c, "human:ana", f"Step {n}", "Do it.", f"bot:crew{n}", lint=False)
+            for turn, finished in (("a", "2026-01-02"), ("b", "2026-01-03"), ("c", "2026-01-03"), ("d", None)):
+                c.execute("INSERT INTO turns(id,bot,started,finished) VALUES(?,?,?,?)",
+                          (f"t{n}{turn}", f"crew{n}", "2026-01-01", finished))
+    before = {}
+    for token in ("ana-test", "ben-test"):
+        _, before[token] = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
+    with store.transaction() as c:
+        for n in range(40, 80):
+            for table, row in (("bots", {**source, "slug": f"crew{n}"}), ("bot_config", {**config, "bot": f"crew{n}"})):
+                c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    for token in ("ana-test", "ben-test"):
+        response, statements = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
+        assert response.status_code == 200
+        assert len(statements) <= len(before[token]) + 5, (len(before[token]), len(statements))
+        flows = {e["name"]: e.get("task_flow") for e in response.json()}
+        assert {flows.get(f"crew{n}")["waiting"] for n in range(40) if flows.get(f"crew{n}")} == {1}
+        assert {flows.get(f"crew{n}")["waiting"] for n in range(40, 80) if flows.get(f"crew{n}")} == {0}
+    with store.read() as c:
+        latest = dict(c.execute("SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY "
+                                "finished DESC,id DESC) AS n FROM turns WHERE finished IS NOT NULL) WHERE n=1"))
+        assert latest["crew3"] == "t3c"
+        sought = dict(row for row in c.execute(
+            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
+            "ORDER BY t.finished DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
+        assert sought == {bot: tid for bot, tid in latest.items() if bot in sought} and "crew3" in sought
+        plan = " ".join(r[3] for r in c.execute(
+            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
+            "ORDER BY t.finished DESC,t.id DESC LIMIT 1) FROM bots b"))
+        assert "turns_bot_finished" in plan and "TEMP B-TREE" not in plan, plan
+
+
 def busy(api):
     """Another bot's write: it moves the provenance clock, so the next request rebuilds what it caches by it."""
     with api.app.state.store.transaction() as c:

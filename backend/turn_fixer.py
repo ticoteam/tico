@@ -53,7 +53,8 @@ def dead(c, now=None):
     """[(attempt row, why)] for every proven-dead turn: 'stopped' or 'gone'."""
     now = now or H.now()
     out = []
-    for row in c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND "
+    # INDEXED BY: the OR below defeats the live-run index, and the plain plan scanned every attempt ever made (44-63 ms).
+    for row in c.execute("SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') AND "
                          "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
                          "ORDER BY created,id", (now,)).fetchall():
         if row['state'] == 'leased' and row['started'] is None and row['stop_requested']:

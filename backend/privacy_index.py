@@ -8,6 +8,7 @@ from functools import cached_property, lru_cache
 import re
 
 from .store import H, Problem
+from . import row_clock
 from . import task_privacy as privacy
 from .live_privacy import ROOM_PREFIX, Sources as MeetingSources
 
@@ -24,9 +25,7 @@ class ReadIndex:
         self.meetings = MeetingSources(c)
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
-        self.private = {r["id"]: dict(r) for r in c.execute(
-            "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties "
-            "WHERE private IS NOT 0")}
+        self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.

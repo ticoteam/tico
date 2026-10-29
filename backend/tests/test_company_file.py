@@ -697,6 +697,51 @@ def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
     assert yaml.safe_load(C.to_yaml(none, CREATED))["rules"]["never_without_a_person"] == []
 
 
+def test_a_bot_s_team_is_written_only_when_set_and_reads_back_as_it_was_written():
+    """The name of a bot's group rides in the file as `team`, for an employee and for an agent the visitor runs."""
+    draft, _ = run(started(), ("agent_set", {"runtime": "codex", "job": "Reviews pull requests"}))
+    staff = next(b for b in draft["bots"] if not b["core"] and not b["existing"])
+    agent = next(b for b in draft["bots"] if b["existing"])
+    staff["team"], agent["team"] = "Lab network", "Biopharma accounts"
+    text = C.to_yaml(draft, CREATED)
+    doc = yaml.safe_load(text)
+    assert [e["team"] for e in doc["employees"] if "team" in e] == ["Lab network"]
+    assert [e["team"] for e in doc["existing_agents"]] == ["Biopharma accounts"]
+    assert C.to_yaml(C.from_yaml(text), CREATED) == text
+    assert {b["title"]: b["team"] for b in C.from_yaml(text)["bots"] if "team" in b} == {
+        staff["title"]: "Lab network", agent["title"]: "Biopharma accounts"}
+    # A bot with no team has no such line, and the draft holds none.
+    assert all("team" not in e for e in yaml.safe_load(C.to_yaml(started(), CREATED))["employees"])
+
+
+def test_a_team_is_trimmed_clipped_and_scrubbed_on_read_and_a_blank_one_is_no_team():
+    doc = yaml.safe_load(C.to_yaml(started(), CREATED))
+    first, blank, secret, wrong = doc["employees"][:4]
+    first["team"], blank["team"], secret["team"] = "  " + "L" * 50 + "  ", "   ", GITHUB
+    bots = {b["id"]: b for b in C.from_yaml(yaml.safe_dump(doc, sort_keys=False))["bots"]}
+    assert bots[first["id"]]["team"] == "L" * 40
+    assert "team" not in bots[blank["id"]]
+    assert bots[secret["id"]]["team"] == "[removed]"
+    wrong["team"] = ["Lab", "network"]
+    with pytest.raises(D.DraftError, match="team"):
+        C.from_yaml(yaml.safe_dump(doc, sort_keys=False))
+    draft = started()
+    draft["bots"][0]["team"] = "x" * 41
+    with pytest.raises(D.DraftError, match="team"):
+        C.to_yaml(draft, CREATED)
+
+
+def test_a_team_rides_in_the_starter_plan_as_text_and_packed():
+    draft = started()
+    draft["company"]["name"] = "Acme Build"
+    draft["bots"] = draft["bots"][:4]           # a small chart: the packed plan must fit the 7 KB environment limit
+    next(b for b in draft["bots"] if not b["core"])["team"] = "Lab network"
+    text = C.to_yaml(draft, CREATED)
+    saved = starter.load(text)
+    assert [b["team"] for b in saved["bots"] if "team" in b] == ["Lab network"]
+    assert starter.unpack(starter.pack(text)) == saved
+
+
 def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_file_draws():
     draft, _ = run(started(), ("person_set", {"name": "Maya", "role": "CEO"}), ("person_set", {"name": "Jo", "role": "Ops"}),
                    ("bot_set_reports_to", {"bot": "Builder", "to": "Jo"}))

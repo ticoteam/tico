@@ -40,6 +40,9 @@ team is set up on the welcome page, the server starts with the file fixed back t
 company file at all, or the owner presses **Dismiss** on the welcome page. A server start with the same broken file
 shows it again.
 
+**Unreleased:** A role's optional `team` (the name of its group) puts it in a group of that name: one group per name, made
+from the file, or the group that already has it. Without one, a role goes in its template's group.
+
 **Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
 it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
 [strategy draft](strategy.md#setup): the summary and vision, and the four sections marked

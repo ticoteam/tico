@@ -68,8 +68,7 @@ def run_health_scan(store, auth, at, failures=None):
     # finding the last scan did not have.
     with SR.recording(store, "health_scan", failures, "health_monitor") as run:
         from . import health_monitor
-        with store.transaction() as c:
-            woke = health_monitor.scan(c, auth, store.settings)
+        woke = health_monitor.check(store, auth, store.settings)
         run.did(SR.words_of(woke, "new finding", "No new findings"))
 
 

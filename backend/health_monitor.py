@@ -725,16 +725,33 @@ def _open_task(c, key):
     return task if task and task["status"] not in ("done", "closed", "declined") else None
 
 
-def scan(c, auth, settings):
-    """One pass. Returns the keys that opened or woke a task; nothing when the Health Monitor is off.
+def check(store, auth, settings):
+    """The scheduler's pass: `scan` in two steps. The findings are read in one read snapshot, outside the write lock,
+    and only the changes are written after it, in a short transaction. Read under the lock, the hourly scan held every
+    runner call for seven seconds on TIDY (12:26 UTC, Oct 29, 2026). Same shape as invariants.sweep."""
+    with store.read() as r:
+        if not active(r):
+            return []
+        found = findings(r, settings)
+    with store.transaction() as c:
+        return apply(c, auth, found)
 
-    Every finding seen counts once a scan. Only a new finding, one whose severity rose, or one back after its task was
-    finished wakes the bot; seeing it again otherwise moves its count and last-seen time and starts no run."""
+
+def scan(c, auth, settings):
+    """One pass in one transaction. Returns the keys that opened or woke a task; nothing when the Health Monitor is off."""
+    if not active(c):
+        return []
+    return apply(c, auth, findings(c, settings))
+
+
+def apply(c, auth, found):
+    """Records what `findings` found and wakes the bot for what is new. Every finding seen counts once a scan. Only a new
+    finding, one whose severity rose, or one back after its task was finished wakes the bot; seeing it again otherwise
+    moves its count and last-seen time and starts no run."""
     if not active(c):
         return []
     from .watchers import deliver
     now, woke = H.now(), []
-    found = findings(c, settings)
     keys = {item["key"] for item in found}
     for item in found:
         row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()

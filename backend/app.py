@@ -6025,7 +6025,7 @@ def create_app(settings=None):
         """What is wrong with the bots this person may see, most urgent first, each with its one fix."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        with store.read_transaction() as c:      # one snapshot: company-wide reads are shared by every bot's row
             result = fleet_check_module.check(c, who, auth, settings)
             result["computers"] = computer_rows(c, who)
             result["services"] = views.team_services(c, who, auth)

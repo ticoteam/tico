@@ -1019,10 +1019,37 @@ def guard_write(c, who, path, auth):
 def tag_readable(c, who, row):
     snapshot(c)
     linked = {r[0] for r in c.execute("SELECT task_id FROM task_tags WHERE tag_id=?", (row["id"],))}
-    for event in c.execute("SELECT detail_json FROM events WHERE target=? AND action='tag.attach'", (row["id"],)):
-        linked.update(references(c, H._json(event[0], {}) or {}))
+    attached = [H._json(event[0], {}) or {} for event in
+                c.execute("SELECT detail_json FROM events WHERE target=? AND action='tag.attach'", (row["id"],))]
+    return _tag_readable(c, who, row, linked, attached)
+
+
+def tags_readable(c, who, rows):
+    """The rows tag_readable passes, with every tag's task links and attach events read together and the tasks they
+    name looked up together first: one query per tag and per attachment was most of a tag list's SQL."""
+    snapshot(c)
+    rows = list(rows)
+    linked, attached = {}, {}
+    for part in H.chunks([row["id"] for row in rows]):
+        marks = ",".join("?" * len(part))
+        for tag, tid in c.execute(f"SELECT tag_id,task_id FROM task_tags WHERE tag_id IN ({marks})", part):
+            linked.setdefault(tag, set()).add(tid)
+        for tag, detail in c.execute(f"SELECT target,detail_json FROM events WHERE target IN ({marks}) "
+                                     "AND action='tag.attach'", part):
+            attached.setdefault(tag, []).append(H._json(detail, {}) or {})
+    prime_references(c, [detail for found in attached.values() for detail in found] + rows)
+    _task_rows(c, set().union(*linked.values()))
+    return [row for row in rows if _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))]
+
+
+def _tag_readable(c, who, row, linked, attached):
+    linked = set(linked)
+    for detail in attached:
+        linked.update(references(c, detail))
+    # The parties row (id, private, owner, requester, guest) is all task_readable reads; no body is loaded.
+    parties = _task_rows(c, linked) if linked and not row.get("is_template") else {}
     return (not linked or bool(row.get("is_template")) or
-            any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
+            any(task_readable(c, who, parties[tid]) for tid in linked)) and content_readable(c, actor(who), row)
 
 
 def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None, sealed=()):
@@ -1087,7 +1114,7 @@ def status_tasks_sql(match):
     return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner{match} AND {live} "
             f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester{match} AND {live} "
             # `+` keeps the few private tasks on their own index (tasks_private), not the owner's every task.
-            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE private IS NOT 0 "
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0 "
             f"AND (+owner{match} OR +requester{match})")
 
 

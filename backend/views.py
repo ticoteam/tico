@@ -488,6 +488,9 @@ def operation_issues(c, who, auth):
     prime_machines(c, shown)
     queues = pipeline_stats.job_queues(c, who, [b["slug"] for b in bots if b["slug"] in status_inputs
                                                 and b["state"] != "archived"])
+    # Every stopped run of every bot that has one, read together: its checks below read each bot's runs from here.
+    from .execution import prime_readable_held
+    prime_readable_held(c, who, auth, [slug for slug, found in queues.items() if found["uncertain"]])
     for bot in bots:
         slug = bot["slug"]
         if not readable.get(slug, auth.FULL)["read"]:
@@ -1940,9 +1943,10 @@ def install_views(app, store, auth, mutate, task_view):
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
-        latest_run = {row["bot"]: row["id"] for row in c.execute(
-            "SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY finished DESC,id DESC) AS n "
-            "FROM turns WHERE finished IS NOT NULL) WHERE n=1")}
+        # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
+        latest_run = {slug: tid for slug, tid in c.execute(
+            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
+            "ORDER BY t.finished DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
         latest_models = {}
@@ -1954,6 +1958,21 @@ def install_views(app, store, auth, mutate, task_view):
             latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
+        # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
+        # declared configuration from the rows above.
+        shown = [bot["slug"] for bot in bots if bot.get("state") != "archived"
+                 and access.get(bot["slug"], auth.FULL)["see"]]
+        prime_machines(c, [slug for slug in shown if access.get(slug, auth.FULL)["read"]])
+        open_tasks = {}
+        for part in H.chunks([slug for slug in shown if access.get(slug, auth.FULL)["read"]]):
+            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ",".join("?" * len(part)) +
+                                          ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
+                open_tasks.setdefault(H.actor_id(task["owner"]), []).append(task)
+        from .shared_bots import _json as config_of
+
+        def declared(slug):
+            row = registries.get(slug)
+            return config_of(row["config_json"]) if row else {}
         from .report_order import positions
         places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
@@ -2001,7 +2020,7 @@ def install_views(app, store, auth, mutate, task_view):
                 rows.append({"name": slug, "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
                              "reports_to": reports, "my_access": level, **policy,
-                             "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
+                             "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                              **strategy_bot.chart_hidden_row(slug, hide_strategy),
@@ -2038,11 +2057,11 @@ def install_views(app, store, auth, mutate, task_view):
                          if show_latest and latest_family else "Unknown provider" if show_latest else "",
                          "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
-                         "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
+                         "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "keep_tasks_going": auto_tasks.of(config),
                          "turns_at_once": start_places.bot_limit(config),
-                         "task_flow": auto_tasks.counts(c, slug, who),
+                         "task_flow": auto_tasks.counts(c, slug, who, open_tasks.get(slug, [])),
                          "team": P.team_of(slug, configs, people),
                          "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
