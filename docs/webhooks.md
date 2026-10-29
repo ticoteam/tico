@@ -298,7 +298,8 @@ endpoint, so you can build the receiver before real events come.
 
 ### Check the signature
 
-Every delivery is signed as [Standard Webhooks](https://www.standardwebhooks.com), with three headers:
+Every delivery is signed as [Standard Webhooks](https://www.standardwebhooks.com), with three headers (an endpoint made for a
+QM bot is signed with `x-signature` instead, as [QM in Tico](qm.md#d-instant-hand-off-optional) describes):
 
 - `webhook-id`: stable across retries. Use it to ignore a delivery you already handled, because delivery is at least once.
 - `webhook-timestamp`: new on every try.

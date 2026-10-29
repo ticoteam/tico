@@ -1,7 +1,13 @@
-"""A person's external agents synced in (Grok Bot, Dots): placed under them, transcripts copied once, never dispatched to."""
+"""A person's external agents synced in (Grok Bot, Dots, Muse, QM): placed under them, transcripts copied once, never
+dispatched to. A QM bot takes tasks, and one given to it is posted to its wake address, signed as QM checks it."""
+
+import hashlib
+import hmac
+import json
 
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.test_webhooks import net, run, sends  # noqa: F401
 
 GROK_ID = "4a7e880c-eb8e-49df-9789-3abfff190aa7"
 
@@ -526,3 +532,98 @@ def test_a_thousand_and_one_keys_roll_over_and_a_resent_old_key_still_posts_noth
     assert report({"key": "k0", "role": "bot", "text": "Message 0."},
                   {"key": "k999", "role": "bot", "text": "Message 999."}) == {"after": "k999", "posted": 0}
     assert len([m for m in room_messages_of(api, "cara", "grok-designer") if m["from_actor"] == "bot:grok-designer"]) == 1001
+
+
+def test_a_member_links_their_own_qm_as_one_bot_under_them(api):
+    out = post(api, "external/sync", {"provider": "qm", "bots": [
+        {"name": "QM", "messages": [{"role": "bot", "text": "Triaged two tasks.", "at": "2026-10-28T08:00:00Z"}]}]},
+        token="cara-test")
+    [bot] = out["bots"]
+    assert bot["created"] and bot["bot"] == "qm" and bot["messages_added"] == 1
+    again = post(api, "external/sync", {"provider": "qm", "bots": [{"name": "QM"}]}, token="cara-test")
+    assert again["bots"][0]["bot"] == "qm" and not again["bots"][0]["created"]      # one QM per person
+    row = next(b for b in get(api, "bots") if b["slug"] == "qm")
+    assert row["reports_to"] == "human:cara" and row["operator"] == "cara" and row["harness"] == "qm"
+    assert row["agent"]["label"] == "QM"
+    post(api, "external/sync", {"provider": "qm", "bots": [{"name": "A"}, {"name": "B"}]}, token="cara-test", expected=422)
+
+
+WAKE = "https://qm.example.com/v1/webhooks/incoming/wh_cara"
+WAKE_SECRET = "qm-signing-secret-0123"
+
+
+def qm(api):
+    post(api, "external/sync", {"provider": "qm", "bots": [{"name": "QM"}]}, token="cara-test")
+
+
+def set_wake(api, url=WAKE, secret=WAKE_SECRET, expected=200, slug="qm"):
+    r = api.put(f"/api/v2/bots/{slug}/qm-wake", json={"url": url, "secret": secret}, headers=headers("cara-test"))
+    assert r.status_code == expected, r.text
+    assert WAKE_SECRET not in r.text
+    return r.json()
+
+
+def qm_config(api):
+    with api.app.state.store.read() as c:
+        return H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='qm'").fetchone()[0], {})["qm"]
+
+
+def test_a_task_given_to_a_qm_bot_wakes_it_at_once_with_the_task_signed_as_qm_checks_it(api, net):
+    qm(api)
+    assert set_wake(api) == {"bot": "qm", "wake": True}
+    assert qm_config(api)["wake_url"] == WAKE and "secret" not in qm_config(api)
+    task = post(api, "tasks", {"owner": "qm", "title": "Draft the launch email", "body": "For Friday."})
+    assert run(api, net) == 1
+    request = net.seen[0]
+    assert request.headers["host"] == "qm.example.com" and request.url.path == "/v1/webhooks/incoming/wh_cara"
+    assert request.headers["webhook-id"] == sends(api)[0]["id"]
+    body = json.loads(request.content)
+    assert set(body) == {"event", "task_id", "title", "url", "requester", "due"}
+    assert body["event"] == "task.assigned" and body["task_id"] == task["id"] and body["title"] == "Draft the launch email"
+    assert body["url"].endswith(task["id"]) and body["requester"] and body["due"] == ""
+    want = hmac.new(WAKE_SECRET.encode(), request.content, hashlib.sha256).hexdigest()
+    assert request.headers["x-signature"] == "sha256=" + want
+
+
+def test_a_task_moved_to_a_qm_bot_wakes_it_too_and_a_bot_without_an_address_only_waits(api, net):
+    qm(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Pick up the report", "body": "x"})
+    assert sends(api) == []                                       # no address yet: nothing is sent
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "qm"})
+    assert sends(api) == []
+    set_wake(api)
+    moved = post(api, "tasks", {"owner": "ops", "title": "Pick up the invoice", "body": "x"})
+    post(api, "tasks/" + moved["id"], {"version": moved["version"], "owner": "qm"})
+    assert [s["type"] for s in sends(api)] == ["task.assigned"]
+    assert run(api, net) == 1 and json.loads(net.seen[0].content)["task_id"] == moved["id"]
+
+
+def test_a_private_task_moved_to_a_qm_bot_wakes_its_operator_who_reads_it_only_as_the_new_owner(api, net):
+    qm(api)
+    set_wake(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Private handoff", "body": "x", "private": True})
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "qm"})
+    assert [s["type"] for s in sends(api)] == ["task.assigned"]
+    assert run(api, net) == 1 and json.loads(net.seen[0].content)["task_id"] == task["id"]
+
+
+def test_clearing_the_address_stops_the_wake_and_a_bad_secret_or_a_bot_that_is_not_qm_is_refused(api, net):
+    qm(api)
+    set_wake(api, secret="too short", expected=422)
+    set_wake(api, slug="ops", expected=422)
+    set_wake(api)
+    set_wake(api, url="", secret="", expected=200)
+    assert "wake_hook" not in qm_config(api) and "wake_url" not in qm_config(api)
+    post(api, "tasks", {"owner": "qm", "title": "Nothing to wake", "body": "x"})
+    assert sends(api) == []
+
+
+def test_a_qm_on_this_computer_is_woken_over_plain_http_only_with_the_owners_switch(api, net):
+    qm(api)
+    local = {"url": "http://localhost:3000/v1/webhooks/incoming/wh_cara", "secret": WAKE_SECRET}
+    path = "/api/v2/bots/qm/qm-wake"
+    assert api.put(path, json=local, headers=headers("cara-test")).status_code == 422      # no switch: https only
+    assert api.put(path, json={**local, "allow_http": True}, headers=headers("cara-test")).status_code == 403
+    r = api.put(path, json={**local, "allow_http": True}, headers=headers("ana-test"))      # the owner may
+    assert r.status_code == 200, r.text
+    assert qm_config(api)["wake_url"] == local["url"]

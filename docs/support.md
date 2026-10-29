@@ -197,7 +197,7 @@ server cannot tell one is connected. One list in `backend/beta.py` drives all of
 - Listening: [listening](listening.md)
 - Live Meetings API and Recorder: [live-meetings-api](live-meetings-api.md)
 - Computer screen (View and Control): [install](install.md#screen), [permissions](permissions.md#a-computers-screen)
-- External agents: Hermes, OpenClaw, Grok Bot, Dots, Muse sync: [hermes-agents](hermes-agents.md), [openclaw-agents](openclaw-agents.md), [external-agent-sync](external-agent-sync.md)
+- External agents: Hermes, OpenClaw, Grok Bot, Dots, Muse, QM sync: [hermes-agents](hermes-agents.md), [openclaw-agents](openclaw-agents.md), [external-agent-sync](external-agent-sync.md), [qm](qm.md)
 - Behaviour replay and the computer Performance page: [releasing](releasing.md#behaviour-replay), [permissions](permissions.md#a-computers-performance)
 - The Mac desktop app: [desktop](desktop.md)
 

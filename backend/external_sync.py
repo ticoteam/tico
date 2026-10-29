@@ -1,8 +1,8 @@
 """External agent sync: a person's bots on another platform, as bots under them on the team chart.
 
 Some agents live on their maker's platform with no API, export or webhook for Tico to call: Grok
-Bot (xAI's cloud agents, any number per account), and Dots (OpenAI's) and Muse (Meta's), each one
-always-on agent per account. What they can do is call Tico's MCP tools as their person, on a routine. So the person
+Bot (xAI's cloud agents, any number per account), and Dots (OpenAI's), Muse (Meta's) and QM (Y Combinator's open-source
+multiplayer agent harness, docs/qm.md), each one always-on agent per account. What they can do is call Tico's MCP tools as their person, on a routine. So the person
 links them with their own sign-in and the agent calls `hub_external_sync` (docs/external-agent-sync.md).
 Tico does the rest here:
 
@@ -22,6 +22,10 @@ Tico does the rest here:
 Nothing is dispatched to these bots, so presence is "last synced" rather than a heartbeat, unless the person
 delivers one through its desktop app on their computer (backend/app_delivery.py): then a message to it is a job
 for that computer, and the sync still brings its history and instructions without handing that message over too.
+
+A QM bot is the exception for tasks: it takes them, since QM calls Tico's tools as its person. A task given to it is
+also posted to its wake address, when the person has set one (`wake`), so QM starts a turn at once; without one the
+task waits for the next sync.
 """
 
 import base64
@@ -29,6 +33,7 @@ import binascii
 import hashlib
 import ipaddress
 import json
+import logging
 import mimetypes
 import re
 import socket
@@ -37,6 +42,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from fastapi import Request
 from pydantic import Field
 
 from . import access as Access
@@ -45,6 +51,8 @@ from . import people as P
 from . import rooms
 from .blobs import register
 from .store import H, Problem, encode
+
+log = logging.getLogger(__name__)
 
 # A routine runs on a schedule of days, not minutes: a bot synced within the last day and a bit
 # is reporting in.
@@ -85,7 +93,7 @@ class SyncedBot(M.Contract):
 
 
 class ExternalSync(M.Contract):
-    provider: str = Field(default="grokbot", pattern=r"^(grokbot|dots|muse)$")
+    provider: str = Field(default="grokbot", pattern=r"^(grokbot|dots|muse|qm)$")
     bots: list[SyncedBot] = Field(min_length=1, max_length=50)
     source: str = Field(default="", max_length=200)      # which bot ran the sync, for the page
     # The caller hands `inbox` on to its bots. Only then is it filled, and its messages marked delivered: a routine
@@ -118,6 +126,7 @@ PROVIDERS = {
     "grokbot": Provider("grokbot", "Grok Bot", "grok", "xai", False, local_name),
     "dots": Provider("dots", "Dots", "dots", "openai", True),
     "muse": Provider("muse", "Muse", "muse", "meta", True),
+    "qm": Provider("qm", "QM", "qm", "qm", True),
 }
 HARNESSES = tuple(PROVIDERS)
 SINGLE_ID = "default"
@@ -471,3 +480,103 @@ def presence(c, bot, harness, config, now=None):
              "synced": True, "label": provider.label, "section": record.get("section") or "",
              "instructions_updated": record.get("instructions_updated")}
     return {"online": online, "awake": online, "ready": online, "machine": None, "agent": agent}
+
+
+# ----------------------------------------------------------------------------------------------------- QM wake
+# A QM bot takes tasks. When one is given to it, Tico posts `task.assigned` to its wake address (QM's inbound webhook
+# for its person's scope) and QM starts a turn at once. That is one outgoing endpoint per QM bot, made by
+# webhooks.signed_endpoint and sent to only by its own id (webhooks.publish with `only`): the same queue, signing
+# headers, retries and log as every outgoing webhook. Its secret is sealed in the webhooks table, as those are.
+QM_EVENT = "task.assigned"
+WAKE_SECRET_MIN = 16
+WAKE_SECRET_MAX = 200
+
+
+class QMWake(M.Contract):
+    """A QM bot's wake address (QM's inbound webhook URL for its person's scope) and that webhook's signing secret.
+    An empty `url` turns the wake off (docs/qm.md). `allow_http` lets the owner wake a QM on this computer over plain
+    http, as a webhook endpoint's switch does."""
+    url: str = Field(default="", max_length=2000)
+    secret: str = Field(default="", max_length=WAKE_SECRET_MAX)
+    allow_http: bool = False
+
+
+def _named(c, actor):
+    """A person's or bot's name for a task's requester, or the actor itself when it has none."""
+    actor = str(actor or "")
+    if H.is_human(actor):
+        return (H.human(c, actor) or {}).get("name") or actor
+    if H.is_bot(actor):
+        return (H.bot(c, actor) or {}).get("display_name") or actor
+    return actor
+
+
+def wake(c, task_id, owner, revision):
+    """Post a task given to a QM bot to its wake address, inside the write that gave it, as the other outgoing events
+    are. Nothing happens for a bot without one, and a failure here never refuses the task."""
+    try:
+        from . import webhooks
+        from .harnesses import resolve_harness
+        if not H.is_bot(owner):
+            return
+        config = config_of(c, H.actor_id(owner))
+        hook = (config.get("qm") or {}).get("wake_hook")
+        if not hook or resolve_harness(config) != "qm":
+            return
+        row = H.task(c, task_id) or {}
+        payload = {"event": QM_EVENT, "task_id": task_id, "title": row.get("title") or "",
+                   "url": webhooks.links_for(QM_EVENT, task_id, {}).get("app", ""),
+                   "requester": _named(c, row.get("requester")), "due": row.get("due") or ""}
+        webhooks.publish(c, QM_EVENT, task_id, payload, H.KEEPER, only=hook, revision=revision,
+                         body=json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - a wake that cannot be sent never refuses the task
+        log.warning("QM wake for task %s was not sent", task_id, exc_info=True)
+
+
+def config_of(c, slug):
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    return (H._json(row["config_json"], {}) or {}) if row else {}
+
+
+def set_wake(c, vault, auth, who, bot, body):
+    """Set a QM bot's wake address, or clear it with an empty `url`. Only the person who synced the bot, or an admin,
+    may. The address goes in `config_json.qm.wake_url`; the signing secret stays sealed in the webhooks table."""
+    from . import webhooks
+    from .harnesses import resolve_harness
+    row = c.execute("SELECT b.display_name, bc.config_json, bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.slug "
+                    "WHERE b.slug=?", (H.actor_id(bot),)).fetchone()
+    if not row:
+        raise Problem("not_found", "Bot not found", 404)
+    config = H._json(row["config_json"], {}) or {}
+    person = str(row["operator"] or "")
+    if resolve_harness(config) != "qm":
+        raise Problem("external_sync", "Only a QM bot has a wake address", 422)
+    if who.actor != "human:" + person and not (who.role == "owner" or auth.bot_admin(who)):
+        raise Problem("forbidden", "Only the person who synced this QM bot, or an admin, sets its wake address", 403)
+    webhooks.owner_only_http(who, body.allow_http)
+    qm = dict(config.get("qm") or {})
+    if body.url:
+        if len(body.secret) < WAKE_SECRET_MIN:
+            raise Problem("external_sync", f"The signing secret is at least {WAKE_SECRET_MIN} characters", 422)
+        qm["wake_url"] = body.url
+        qm["wake_hook"] = webhooks.signed_endpoint(c, vault, "human:" + person, f"QM wake: {row['display_name'] or bot}",
+                                                   body.url, body.secret, qm.get("wake_hook", ""), body.allow_http)
+    else:
+        hook = qm.pop("wake_hook", "")
+        if hook:
+            webhooks.delete(c, who, hook)
+        qm.pop("wake_url", None)
+    config["qm"] = qm
+    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), H.actor_id(bot)))
+    H.event(c, who.actor, "bot.qm_wake", H.actor_id(bot), {"on": bool(qm.get("wake_hook"))})
+    return {"bot": H.actor_id(bot), "wake": bool(qm.get("wake_hook"))}
+
+
+def install(app, auth):
+    @app.put("/api/v2/bots/{bot}/qm-wake")
+    def qm_wake(request: Request, bot: str, body: QMWake):
+        """Set (or, with an empty `url`, clear) where a QM bot is woken for a task. The answer never shows the secret;
+        a repeat with the same Idempotency-Key is a replay, as for a webhook's secret (webhooks.install)."""
+        vault, who = request.app.state.vault, request.state.identity
+        return vault.change(who, request.url.path, request.headers.get("idempotency-key"), body, lambda c, w: None,
+                            lambda c: set_wake(c, vault, auth, who, bot, body))
