@@ -230,8 +230,8 @@ class Auth:
     def sync_access(self, c):
         """Adopt the stored owner and access list. One indexed read per request keeps a transfer
         or a list change effective at once, with no restart."""
-        rows = tuple(sorted(tuple(r) for r in c.execute(
-            "SELECT key,value_json FROM registry_metadata WHERE key IN ('owner','access','rules')")))
+        from . import row_clock
+        rows = row_clock.access_rows(c)
         if rows == self._access_seen:
             return
         from . import access
