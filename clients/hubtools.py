@@ -5526,6 +5526,29 @@ def docs_fetch(api, args):
         return {"error": exc.code, "detail": exc.message, "retryable": exc.code in ("timeout", "network", "dns")}
 
 
+@tool("hub_browser_fill", "Type a website login's username, password or current 2FA code into the focused field of your "
+      "Chrome on this computer (bots with the `chrome` tool). The login must be granted to you and the page must be one "
+      "of its sites; you never see the value, only {ok: true} or {ok: false, error}: not_granted, site_mismatch, no_totp, "
+      "no_page, no_field, no_element, no_run, browser_unavailable. Click or pass `selector` for the field first; submit "
+      "the form yourself. No login yet: ask with hub_credential_request kind `login`.",
+      {"credential": _s("The login's name or id, as Credentials lists it"),
+       "field": _s("What to type", enum=["username", "password", "totp"]),
+       "selector": _s("A CSS selector for the field to focus first; the focused field when left out"),
+       "target_id": _s("A CDP target id for the tab; the focused tab when left out")},
+      required=("credential", "field"), local=True)
+def browser_fill(api, args):
+    from clients import chrome
+    return chrome.fill(args["credential"], args["field"], args.get("selector"), args.get("target_id"))
+
+
+@tool("hub_browser_status", "Your Chrome on this computer (bots with the `chrome` tool): {running, version, display, "
+      "profile, downloads} and a `problem` when it cannot run. Drive it with the chrome-devtools tools, or Playwright's "
+      "connect_over_cdp on $TICO_BROWSER_URL.", {}, local=True)
+def browser_status(api, args):
+    from clients import chrome
+    return chrome.status()
+
+
 REPLAY_WINDOW = {
     "from": _s("Start, ISO 8601 with a zone (2026-10-10T00:00:00Z); default 24 hours before `to`"),
     "to": _s("End, ISO 8601 with a zone; default now. At most 31 days after `from`"),
@@ -5739,6 +5762,8 @@ AUDIENCE = {
     "hub_bot_task_model": REQUESTER + ("bot", "agent"),
     # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
     "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
+    # A bot's own Chrome, on its own computer (runner-rs/src/browser): only its runs have TICO_BROWSER_URL.
+    "hub_browser_fill": BOTS, "hub_browser_status": BOTS,
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,

@@ -114,6 +114,8 @@ pub struct Vault {
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
     pub turn_user: Option<crate::turn_users::Lease>,
+    /// The run's hold on its bot's Chrome (crate::browser), let go with the turn; the browser stays up.
+    pub browser: Option<crate::browser::Lease>,
 }
 
 impl Vault {

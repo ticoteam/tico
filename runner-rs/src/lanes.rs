@@ -71,7 +71,8 @@ pub fn release(name: &str) {
 /// The capabilities this heartbeat advertises.
 pub fn capabilities() -> Vec<&'static str> {
     let screen = crate::screen::offers(crate::screen::readiness().as_ref()).then_some(crate::screen::CAPABILITY);
-    CAPABILITIES.iter().copied().chain(screen).filter(|c| !held_back(c)).collect()
+    let browser = crate::browser::offers().then_some(crate::browser::CAPABILITY);
+    CAPABILITIES.iter().copied().chain(screen).chain(browser).filter(|c| !held_back(c)).collect()
 }
 
 /// Root-level heartbeat fields an older server may refuse; each is left out for ten minutes after a refusal.
@@ -111,10 +112,10 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         if let Some(index) = regex::Regex::new(r"capabilities[.\[]([0-9]+)").ok()?.captures(detail)
             .and_then(|m| m[1].parse::<usize>().ok()) {
             if let Some(name) = caps.get(index) {
-                if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
+                if CAPABILITIES.contains(&name.as_str()) || name == crate::browser::CAPABILITY { return Some(name.clone()); }
             }
         }
-        for name in ["turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+        for name in [crate::browser::CAPABILITY, "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
                      crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
                      crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
                      crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",

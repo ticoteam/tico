@@ -909,6 +909,8 @@ impl Runner {
             state_dir: self.state.directory.clone(),
         };
         self.perbot.watchers.tick(&self.config, &assignments, ctx);
+        // Chrome for bots that declare it (crate::browser): installed ahead of their first run, stopped once they go.
+        crate::browser::tick(&self.config, &assignments);
         // The server reserves starts atomically; waiting workers do not consume computer capacity.
         while {
             let mut places = self.places.lock().unwrap();

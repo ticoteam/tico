@@ -223,6 +223,14 @@ pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
         let server = json!({"transport": "stdio", "command": hub["command"], "args": hub["args"], "env": vars});
         args.extend(["-c".into(), format!("mcp_servers.hub={server}")]);
     }
+    if let Some(chrome) = super::browser_mcp_server(&settings.env) {
+        let vars: Map<String, Value> =
+            chrome["env"].as_object().into_iter().flatten().map(|(k, v)| {
+                (k.clone(), if k == crate::browser::URL_ENV { json!(format!("${{{k}}}")) } else { v.clone() })
+            }).collect();
+        let server = json!({"transport": "stdio", "command": chrome["command"], "args": chrome["args"], "env": vars});
+        args.extend(["-c".into(), format!("mcp_servers.{}={server}", super::BROWSER_MCP)]);
+    }
     let (config, extra) = muse_config(&settings.mcp_servers, &settings.env);
     for (name, server) in config {
         args.extend(["-c".into(), format!("mcp_servers.{name}={server}")]);

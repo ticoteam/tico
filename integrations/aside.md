@@ -3,7 +3,7 @@ service: aside
 title: Aside
 kind: browser
 summary: Signed-in websites through the dedicated bot browser, Aside, with the sites and verbs a bot may use declared in its bot.yaml.
-access: "`$HUB_DIR/connectors/browser.py` — nobody drives Chrome, the Orca browser or `aside` directly"
+access: "`$HUB_DIR/connectors/browser.py` — on a Mac nobody drives Chrome, the Orca browser or `aside` directly (a Linux bot's own Chrome is the chrome Tool)"
 credentials:
   - none in a bot's environment — the owner signs in to each site once, in Aside; sessions and re-logins are Aside's business
   - ASIDE_CLI (optional) — path to the `aside` binary when it is not ~/.local/bin/aside
@@ -71,7 +71,7 @@ refused it. The REPL stops after 120 s; a `task` after 900 s (`ASIDE_TASK_TIMEOU
 - Logins are never a bot's job. The owner signs in once in Aside; a login page, a captcha or a
   challenge means stop and say so.
 - Never drive Chrome, the Orca browser or the `aside` CLI directly; the Tool is the only
-  audited path.
+  audited path. A bot with its own Chrome on a Linux computer uses the chrome Tool (`chrome.md`).
 
 ## Recipes
 

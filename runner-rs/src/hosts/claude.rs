@@ -580,6 +580,9 @@ impl ClaudeHost {
         if let Some(hub) = hub_mcp_server(&t.settings.env) {
             servers.insert("hub".into(), hub);
         }
+        if let Some(chrome) = super::browser_mcp_server(&t.settings.env) {
+            servers.insert(super::BROWSER_MCP.into(), chrome);
+        }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
         // claude.ai connectors) (hosts/claude.py _argv).
