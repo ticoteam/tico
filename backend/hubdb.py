@@ -1415,6 +1415,12 @@ def migrate(conn, adopt_legacy=False):
                  "created TEXT NOT NULL, fired_job TEXT, settled TEXT, how TEXT, attempt TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS deferrals_waiting ON deferrals(bot, conversation_id) WHERE settled IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS deferrals_due ON deferrals(due) WHERE settled IS NULL AND due IS NOT NULL")
+    # The hot queries in backend/delivery.py: a claim finds its carried rows by attempt, a run's end finds the deadline
+    # runs still open by fired_job, and a stalled task checks for a deferral by item. Settled rows stay (no pruning yet),
+    # so only the attempt index is not partial to unsettled rows.
+    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_attempt ON deferrals(attempt) WHERE attempt IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_fired ON deferrals(fired_job) WHERE settled IS NULL AND fired_job IS NOT NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_item ON deferrals(item, kind) WHERE settled IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
     # Health's waits-on-a-person check (backend/health.py silent_waits) reads only these few rows.
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_waiting_on ON tasks(waiting_on) WHERE waiting_on IS NOT NULL")
