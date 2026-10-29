@@ -536,33 +536,37 @@ class Vault:
 
 
 # A credential is used when a bot's run receives it or its computer is sent it; a person revealing it is not a use.
-# The newest use lives on the credential row (use_at, use_actor, use_by), so last_used is exact however many events
-# are written. A run reads its credentials once per attempt and a watcher re-sends them every few minutes, so the same
-# actor's repeat use of the same bot's credential within USE_WINDOW writes no event row (the events log grew ~27k a day
-# on TIDY from this). Reveals by a person, reveals with no attempt, and computer sends by model key always write one.
+# credential_uses keeps the newest use per (credential, actor, bot), so last_used is exact however many events are
+# written. Within USE_WINDOW of the pair's last use, a repeat (`windowed`) writes no event row: a run reads its
+# credentials once per attempt and a watcher re-sends them every few minutes. Each use moves the pair's `at`, so a
+# steady stream writes one row until it has been quiet for USE_WINDOW. Reveals by a person, reveals with no attempt,
+# and computer sends by model key always write one.
 USE_WINDOW=3600
 
 
 def record_use(c,actor,action,cid,detail,windowed):
-    """Record one use of a credential: its audit row (unless it repeats the last use: same actor, same bot, within
-    USE_WINDOW, and `windowed`), and the newest-use fields on the credential row."""
+    """Record one use of a credential: its audit row, unless it repeats this actor's use of the same bot's credential
+    within USE_WINDOW (and `windowed`); then move that pair's newest-use time. A person's reveal is never a use."""
     if actor.startswith('human:'):
         H.event(c,actor,action,cid,detail)
         return
     now=H.now()
     by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
-    last=c.execute('SELECT use_at,use_actor,use_by FROM credentials WHERE id=?',(cid,)).fetchone()
-    repeat=(windowed and last is not None and last['use_actor']==actor and (last['use_by'] or '')==by
-            and (last['use_at'] or '')>=H.shift(now,seconds=-USE_WINDOW))
+    last=c.execute('SELECT at FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
+    repeat=windowed and last is not None and (last['at'] or '')>=H.shift(now,seconds=-USE_WINDOW)
     if not repeat:
         H.event(c,actor,action,cid,detail)
-    c.execute('UPDATE credentials SET use_at=?,use_actor=?,use_by=? WHERE id=?',(now,actor,by,cid))
+    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at) VALUES(?,?,?,?) '
+              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at',(cid,actor,by,now))
 
 
-def last_used(row):
+def last_used(c,cid):
     """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
-    key) for Library › Tools: the newest use, as record_use keeps it on the row."""
-    return {'last_used':row['use_at'],'last_used_by':row['use_by'] or ''}
+    key) for Library › Tools: the newest use of the credential, from credential_uses."""
+    row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
+    if not row:
+        return {'last_used':None,'last_used_by':''}
+    return {'last_used':row['at'],'last_used_by':row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -674,7 +678,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 revealable=permitted(c,who,row['id'],vault.admins)
                 if not (revealable or mine):continue
                 added|=mine
-                item=vault.brief(row)|{'can_reveal':revealable}|last_used(row)
+                item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]

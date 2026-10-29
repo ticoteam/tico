@@ -1026,20 +1026,21 @@ class UnknownDatabase(RuntimeError):
 
 
 def backfill_credential_uses(conn):
-    """Once: copy each credential's newest use from the events log onto its row (the same rule record_use applies
-    from now on: a bot's run or a computer sent it, never a person's reveal)."""
+    """Once: each credential's newest use per (actor, bot), from the events log (the rule credentials.record_use
+    applies from now on: a bot's run or a computer sent it, never a person's reveal). One grouped read: a per-credential
+    loop measured 62 s cold on TIDY against 16 s for this (2 s each warm). Reads events by (target, action)."""
     if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
         return
-    for (cid,) in conn.execute("SELECT id FROM credentials").fetchall():
-        row = conn.execute("SELECT ts,actor,detail_json FROM events WHERE target=? AND action IN "
-                           "('credential.revealed','credential.sent_to_computer') AND actor NOT LIKE 'human:%' "
-                           "ORDER BY ts DESC LIMIT 1", (cid,)).fetchone()
-        if not row:
-            continue
-        detail = json.loads(row[2]) if str(row[2] or "").startswith("{") else {}
-        actor = row[1] or ""
-        by = detail.get("bot") or (actor[4:] if actor.startswith("bot:") else "")
-        conn.execute("UPDATE credentials SET use_at=?,use_actor=?,use_by=? WHERE id=?", (row[0], actor, by, cid))
+    known = {row[0] for row in conn.execute("SELECT id FROM credentials")}
+    rows = conn.execute("SELECT target, actor, COALESCE(NULLIF(CASE WHEN detail_json LIKE '{%' "
+                        "THEN json_extract(detail_json,'$.bot') END,''), "
+                        "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(ts) "
+                        "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
+                        "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot").fetchall()
+    conn.executemany("INSERT INTO credential_uses(credential_id,actor,bot,at) VALUES(?,?,?,?) "
+                     "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=MAX(at,excluded.at)",
+                     [(target, actor, bot or '', at) for target, actor, bot, at in rows
+                      if at and target in known])
     conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
