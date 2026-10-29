@@ -34,8 +34,8 @@ def session_config(conversation, bot, config):
     return config
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -43,8 +43,8 @@ def _roster(c):
     return P.load(json.loads(row[0])) if row else P.load({"people": H.humans(c)})
 
 
-def entries(c):
-    return read_cache.value(c, ("room_entries",), lambda: _entries(c))
+def entries(c, shared=False):
+    return read_cache.value(c, ("room_entries",), lambda: _entries(c), shared)
 
 
 def _entries(c):
@@ -101,7 +101,8 @@ def shared_member_bots(c, auth, actor, slugs):
     if not slugs or not str(actor).startswith("human:"):
         return set()
     actor_id = H.actor_id(actor)
-    people, configs = roster(c), entries(c)
+    # Read only below: the snapshot's own roster and configurations, never copied (read_cache.value).
+    people, configs = roster(c, shared=True), entries(c, shared=True)
     owner_email = auth.owner_email
     owner = next((p["id"] for p in people["people"] if str(p.get("email") or "").lower() == owner_email), None)
     stored = {}

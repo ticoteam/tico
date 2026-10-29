@@ -166,6 +166,7 @@ class Scheduler:
         self.go_lives_checked = None
         self.gateway_checked = None
         self.billing_checked = None
+        self.cloud_checked = None
         self.stale_checked = None
         self.hosted_checked = None
         self.invariants_checked = None
@@ -294,7 +295,8 @@ class Scheduler:
                     with isolated(c, "assigned_start", task_id, failures):
                         assigned_start.sweep(c, stamp(at), [task_id])
             from . import queue_refusals
-            with self.store.read() as c:
+            # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
+            with self.store.read_transaction() as c:
                 observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
             for change in observations:
                 with locked("queue_refusals:" + change[0]) as c:
@@ -493,6 +495,17 @@ class Scheduler:
                     from . import tico_storage
                     tico_storage.sync_later(self.store, report=True)
                 run.did("Checked" if due else "No Gateway key set")
+        from . import cloud_access
+        if cloud_access.due(self.store, at, self.cloud_checked):
+            # A Tico Cloud company's access (open, frozen or locked) from HQ: every minute while it is a cloud company,
+            # hourly otherwise (backend/cloud_access.py). On its own thread; nothing at all without a gateway key.
+            self.cloud_checked = at
+            from . import gateway_connection
+            from .credentials import Vault
+            with self.store.read() as c:
+                linked = gateway_connection.connected(c, self.store.settings)
+            if linked:
+                cloud_access.sync_later(self.store, Vault(self.store), self.store.settings)
         # Tico file hosting's keys last an hour: HQ is asked again every 5 minutes while the company has it, and
         # before they end (backend/tico_storage.py `_plan`). On its own thread; nothing at all without it.
         from . import tico_storage

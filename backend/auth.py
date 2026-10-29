@@ -703,9 +703,11 @@ class Auth:
         def context():
             if not shared:
                 from . import views
-                roster = views.roster(c)
+                # Read only: P.person, P.group_chain, P.manages and above never change them, so the snapshot's own
+                # copies are shared rather than copied for every bot list.
+                roster = views.roster(c, shared=True)
                 shared.update(
-                    roster=roster, entries=views.entries(c),
+                    roster=roster, entries=views.entries(c, shared=True),
                     archived={r["slug"] for r in H.bots(c) if r.get("state") == "archived"},
                     parents={r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)},
                     bare=True)               # a bot's bare person id in reports_to is that person (people.py)
