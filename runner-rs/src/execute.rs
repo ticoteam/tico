@@ -1604,7 +1604,6 @@ impl Runner {
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
-            eprintln!("DEBUGBUILD resumed={resumed} rules={} changed={}", text_of(&attempt["_repo_rules"]).len(), attempt["_repo_rules_changed"]);
             let built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
@@ -3467,9 +3466,9 @@ for line in sys.stdin:
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
-        for (n, extra) in turns.iter().enumerate() {
+        for (n, turn) in turns.iter().enumerate() {
             let mut config = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot"});
-            config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            config.as_object_mut().unwrap().extend(turn.as_object().cloned().unwrap_or_default());
             let mut attempt = json!({"id": format!("a-claude-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c1", "kind": "chat"},
                                  "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
