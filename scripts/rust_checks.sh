@@ -19,7 +19,7 @@ for crate in $CRATES; do
 
   rc=0
   (cd "$crate" && cargo fmt --check) >"$log" 2>&1 || rc=$?
-  files=$(grep '^Diff in' "$log" | sed -E 's/^Diff in (.*):[0-9]+:$/\1/' | sort -u | wc -l | tr -d ' ')
+  files=$({ grep '^Diff in' "$log" || true; } | sed -E 's/^Diff in (.*):[0-9]+:$/\1/' | sort -u | wc -l | tr -d ' ')
   if [ "$rc" -ne 0 ] && [ "$files" = 0 ]; then
     echo "fmt: $crate: cargo fmt --check failed"; cat "$log"; status=1
   elif grep -qx "$crate" "$PENDING"; then
