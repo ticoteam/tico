@@ -17,9 +17,9 @@ in `automation_turn_answers`, which the run picks up when it is saved.
 
 Reading mail and Slack is the owner's: an automation hears and finds only what its owner may read (`may_read_inbox`),
 checked on save and again when a message arrives. A turn holds its bot's usual cost against the spend cap until it is
-priced (`automation_holds`). The run guard pauses an automation whose runs keep coming: RUN_GUARD runs for one
-trigger_ref in RUN_GUARD_MINUTES, RUN_GUARD runs in each of two windows in a row (a loop that keeps going), or
-RUN_GUARD_BURST runs in one window (a flood). One burst of distinct events is a backlog and simply queues.
+priced (`automation_holds`). The run guard pauses an automation whose runs keep coming over time: RUN_GUARD_SUSTAINED
+runs in RUN_GUARD_SPAN minutes spread over at least RUN_GUARD_SPREAD of those minutes (a loop), or RUN_GUARD_BURST runs
+in RUN_GUARD_MINUTES (a flood). A burst of distinct events inside a minute or two is a backlog and simply queues.
 
 Mail actions are carried out by the computer that reads the mailbox: it claims them (a lease of MAIL_LEASE_MINUTES,
 MAIL_TRIES claims at most) and reports each result; their step and run wait until then (`settle_mail`).
@@ -92,8 +92,11 @@ TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
-RUN_GUARD, RUN_GUARD_MINUTES = 60, 10   # runs queued for one trigger_ref in that time: a loop, the automation is paused
-RUN_GUARD_BURST = 500                   # runs queued in one window for any refs: a flood, paused; fewer is a backlog
+RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
+RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, paused
+RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
+RUN_GUARD_SUSTAINED = 120               # runs in RUN_GUARD_SPAN that make it sustained...
+RUN_GUARD_SPREAD = 15                   # ...if they fall in at least this many distinct minutes (a burst does not)
 TURN_COST = 0.25         # what a turn holds against the spend cap when its bot has no priced turns
 TURN_COST_SAMPLE = 20    # its bot's recent priced turns averaged for the hold
 HOLD_STALE_HOURS = 24    # a hold whose turn never ended (its job lost) is swept then, and the sweep recorded
@@ -758,38 +761,35 @@ def _ring(c):
 
 
 def _guard(c, row):
-    """The backstop for loops the chain cannot see (a webhook that calls back, a bot's own writes). It pauses the
-    automation, with one task in its owner's Needs you and one notice to the Health Monitor, when one rule holds:
-    `repeat`: RUN_GUARD runs for one trigger_ref in the last RUN_GUARD_MINUTES ('' and 'manual' are not one event);
-    `sustained`: RUN_GUARD runs in the last window and RUN_GUARD in the window before it (a loop with fresh ids keeps
-    going; one burst of distinct events is one hot window and queues); `flood`: RUN_GUARD_BURST runs in the last
-    window. The check runs before the insert, so the trigger that trips it queues nothing and every later trigger
-    finds the automation off. Returns whether it tripped."""
+    """The backstop for loops the chain cannot see (a webhook that calls back with a new id each time, a mail rule
+    answered by mail). It pauses the automation, with one task in its owner's Needs you and one notice to the Health
+    Monitor, when one rule holds: `flood`: RUN_GUARD_BURST runs in the last RUN_GUARD_MINUTES; `sustained`: at least
+    RUN_GUARD_SUSTAINED runs in the last RUN_GUARD_SPAN minutes that fall in at least RUN_GUARD_SPREAD distinct minutes
+    of it (a loop keeps going over time; a backlog lands in a minute or two and does not spread). Exact repeats are
+    not counted here: redelivery is deduped per source, and a bot's own writes are stopped by the chain. The check
+    runs before the insert, so the trigger that trips it queues nothing and every later trigger finds the automation
+    off. Returns whether it tripped."""
     now = H.now()
-    since = H.shift(now, minutes=-RUN_GUARD_MINUTES)
-    before = H.shift(now, minutes=-2 * RUN_GUARD_MINUTES)
-    last = c.execute("SELECT trigger_ref, count(*) FROM automation_runs WHERE automation_id=? AND started>=? "
-                     "GROUP BY trigger_ref", (row["id"], since)).fetchall()
-    n = sum(k for _, k in last)
-    repeats = max((k for ref, k in last if ref not in ("", "manual")), default=0)
-    prev = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=? AND started<?",
-                     (row["id"], before, since)).fetchone()[0]
-    rule = ("repeat" if repeats >= RUN_GUARD else
-            "sustained" if n >= RUN_GUARD and prev >= RUN_GUARD else
-            "flood" if n >= RUN_GUARD_BURST else "")
+    flood_since = H.shift(now, minutes=-RUN_GUARD_MINUTES)
+    span_since = H.shift(now, minutes=-RUN_GUARD_SPAN)
+    flood = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=?",
+                      (row["id"], flood_since)).fetchone()[0]
+    span, minutes = c.execute("SELECT count(*), count(DISTINCT substr(started,1,16)) FROM automation_runs "
+                              "WHERE automation_id=? AND started>=?", (row["id"], span_since)).fetchone()
+    rule = ("flood" if flood >= RUN_GUARD_BURST else
+            "sustained" if span >= RUN_GUARD_SUSTAINED and minutes >= RUN_GUARD_SPREAD else "")
     if not rule:
         return False
     flow = flow_of(row)
     _save(c, H.KEEPER, row["id"], {**flow, "enabled": False}, flow, via="run_guard")
-    why = {"repeat": f"it queued {RUN_GUARD} runs for the same event in {RUN_GUARD_MINUTES} minutes",
-           "sustained": f"it kept queuing runs for {2 * RUN_GUARD_MINUTES} minutes "
-                        f"({RUN_GUARD}+ in each {RUN_GUARD_MINUTES}-minute window)",
-           "flood": f"it queued more than {RUN_GUARD_BURST} runs in {RUN_GUARD_MINUTES} minutes"}[rule]
+    why = {"flood": f"it queued more than {RUN_GUARD_BURST} runs in {RUN_GUARD_MINUTES} minutes",
+           "sustained": f"it kept queuing runs for {RUN_GUARD_SPAN} minutes ({RUN_GUARD_SUSTAINED}+ runs spread over "
+                        f"{RUN_GUARD_SPREAD}+ of those minutes)"}[rule]
     words = (f"Automation {flow['name']} was paused: {why}, which is most often a loop. "
              "Look at its runs, fix what starts it, then turn it back on.")
     refs = {"kind": "run_guard", "automation": row["id"]}
     H.event(c, H.KEEPER, "automation.run_guard", row["id"],
-            {"rule": rule, "runs": n, "repeats": repeats, "minutes": RUN_GUARD_MINUTES})
+            {"rule": rule, "runs": span, "minutes": minutes, "flood": flood})
     lead = A.acts_as(c, {"flow": flow})
     person = owner_person(c, flow["owner"]) or (lead[6:] if lead.startswith("human:") else "")
     if person:
