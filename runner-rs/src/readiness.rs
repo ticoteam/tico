@@ -420,6 +420,12 @@ async fn git(path: &Path, args: &[&str]) -> Option<(bool, String)> {
     Some((out.status.success(), String::from_utf8_lossy(&out.stdout).into()))
 }
 
+/// Whether the server says a person's subscription signs `runtime` in for this bot (runners/assignments
+/// `subscriptions`: {runtime: kind}).
+fn subscribed(entry: &Value, runtime: &str) -> bool {
+    entry["subscriptions"].get(runtime).and_then(Value::as_str).is_some_and(|k| !k.is_empty())
+}
+
 /// Each assigned bot's row: what blocks its turns here (`problems`) and what only warns.
 pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<String, Value>, computer_logins: bool) -> Vec<Map<String, Value>> {
     let mut rows = vec![];
@@ -499,6 +505,9 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
         } else if runtimes.get(&runtime).is_none_or(|r| r["installed"] != true) {
             let installing = crate::harness_tools::shared().and_then(|h| h.try_lock().ok()?.installing(&runtime));
             problems.push(installing.unwrap_or_else(|| "Runtime executable is not on PATH".into()));
+        } else if subscribed(entry, &runtime) {
+            // Its own or its team's subscription signs this runtime in at each turn (crate::person_subscriptions):
+            // this computer's sign-in, missing or refused, does not decide.
         } else if let Some(problem) = &data_problem {
             // Signed in, but its turns can't save a session: the folder is the problem, not the sign-in.
             problems.push(problem.clone());
@@ -714,6 +723,14 @@ pub fn changed_agent_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runtime_a_subscription_signs_in_needs_no_sign_in_here() {
+        let entry = serde_json::json!({"bot": "ops", "subscriptions": {"claude": "claude_token"}});
+        assert!(subscribed(&entry, "claude"));
+        assert!(!subscribed(&entry, "codex"));
+        assert!(!subscribed(&serde_json::json!({"bot": "ops"}), "claude"));
+    }
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
