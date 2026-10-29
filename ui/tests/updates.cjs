@@ -375,7 +375,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask', 'Tasks', 'Updates', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'More']);
     const navWidths=await p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().width));
     assert.equal(navWidths.length,6);
     assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'six evenly spaced navigation items');

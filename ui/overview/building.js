@@ -161,7 +161,7 @@ function faceTexture(face) {
   };
   if (face.svg) { img = new Image(); img.decoding = 'async'; img.onload = draw; img.src = face.svg; }
   else if (face.glyph) {
-    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=33c472c80ec5)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
+    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=95d5a76f3a2a)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
     symbolsFont.then(draw, () => {});
   }
   draw(); resources.add(tex); faceCache.set(key, tex); return tex;
