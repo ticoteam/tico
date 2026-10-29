@@ -600,7 +600,8 @@ def run(args, who=None):
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "wait":
-            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove})
+            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove,
+                                                   **({"note": args.note} if getattr(args, "note", None) else {})})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]

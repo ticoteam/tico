@@ -292,3 +292,23 @@ def test_a_wait_note_comes_back_in_the_wake_and_a_task_wait_takes_none(api):
     r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "task:" + other["id"], "note": "later"},
                  headers=headers())
     assert r.status_code >= 400 and "note" in r.text
+
+
+def test_a_changed_wait_note_is_a_task_change_with_history_and_the_later_wake_carries_it(api):
+    _, waiter = pair(api)
+    hook(api, "pull_request", pr_event("opened"))
+    wait(api, waiter, "pr:" + PR)                                   # first stored with no note
+    version = shown(api, waiter)["version"]
+    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    assert shown(api, waiter)["version"] == version + 1, "a changed note bumps the task version"
+    again = raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration"})
+    assert again["readback"][0].startswith("Already: ")
+    assert shown(api, waiter)["version"] == version + 1, "the same note again changes nothing"
+    raw(api, f"tasks/{waiter['id']}/waits", {"on": "pr:" + PR, "note": "Check the migration, then QA"})
+    with api.app.state.store.read() as c:
+        notes = [(r["old"], r["new"]) for r in c.execute(
+            "SELECT old,new FROM task_events WHERE task_id=? AND field='milestone_wait_note' ORDER BY ts,id",
+            (waiter["id"],))]
+    assert notes == [(None, "Check the migration"), ("Check the migration", "Check the migration, then QA")], notes
+    merge(api)
+    assert wakes(api, waiter)[-1].endswith("\nYour note: Check the migration, then QA")

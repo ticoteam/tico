@@ -148,11 +148,11 @@ def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(
     shown = post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "  Ask the vendor  "})
     assert shown["snoozed_note"] == "Ask the vendor"
     back = post(api, f"tasks/{task['id']}/unsnooze", {})
-    assert back["snoozed_note"] is None
+    assert back.get("snoozed_note") is None      # a cleared note is left out of the view
     with store.read() as c:
         woken = snooze_wakes(c, task["id"], "Unsnoozed")
         assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Ask the vendor")
     post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "Check the vendor"})
     done = post(api, f"tasks/{task['id']}", {"version": get(api, "tasks/" + task["id"])["task"]["version"],
                                               "status": "done"})
-    assert done["snoozed_until"] is None and done["snoozed_note"] is None
+    assert done["snoozed_until"] is None and done.get("snoozed_note") is None

@@ -1040,6 +1040,8 @@ def create_app(settings=None):
             value["quiet"] = quiet
         # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
+        if not value.get("snoozed_note"):
+            value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only

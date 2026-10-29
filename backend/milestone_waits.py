@@ -137,8 +137,15 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None)
     added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created,note) "
                       "VALUES(?,?,?,?,?,?,?,?)", (task_row["id"], kind, target, label, url, actor, H.now(), note)).rowcount == 1
     if not added and note:
-        c.execute("UPDATE task_milestone_waits SET note=? WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
-                  (note, task_row["id"], kind, target))
+        # A changed note is a change to the task: its history shows who changed it, and clients see the new version.
+        was = c.execute("SELECT note FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
+                        (task_row["id"], kind, target)).fetchone()
+        if was and was[0] != note:
+            c.execute("UPDATE task_milestone_waits SET note=? WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
+                      (note, task_row["id"], kind, target))
+            H._task_event(c, task_row["id"], actor, "milestone_wait_note", was[0], note, "")
+            c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+            H.event(c, actor, "task.milestone_wait_note", task_row["id"], {"kind": kind, "target": target})
     if added:
         H._task_event(c, task_row["id"], actor, "milestone_wait", None, f"{kind}:{target}", "")
         c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
