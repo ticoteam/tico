@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, quarantine_stops, run_backoff, turn_budgets
+from . import claim_holds, cloud_access, quarantine_stops, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -1568,6 +1568,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
     lanes, every bot with a running turn. `ready` is the computer's readiness document."""
     if draining:
         return "draining", None
+    if cloud_access.locked(c):
+        return "cloud_locked", None         # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
         return ("maintaining" if lanes_on(runner) else "lane_held"), None
     if (why := run_backoff.refusal(c, bot)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
@@ -1583,6 +1585,11 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "login_upgrade", None
     record = providers.load(c, settings)
     filled = providers.fill(record, config)
+    if cloud_access.frozen(c) and (gateway_connection.is_tico(filled.get("model"))
+                                   or models_preset.waiting(record, ready, filled)):
+        # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
+        # still runs; this one starts again once credit lands, with no restart.
+        return "out_of_credit", None
     if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
         # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
         # runner would refuse the turn, so the work waits here instead of failing there.
@@ -2940,6 +2947,8 @@ class Execution:
                          "(SELECT 1 FROM org_turn_waits w WHERE w.job_id=j.id) LIMIT 1").fetchone():
                 return None
             return {'attempt': None, 'waiting': org_turns.REASON}
+        if cloud_access.locked(c):
+            return {"attempt": None, "paused": cloud_access.LOCKED}
         if c.execute('SELECT 1 FROM org_turn_waits LIMIT 1').fetchone():
             return None
         why = runner_versions.paused(c, who.runner_id)
@@ -3062,6 +3071,8 @@ class Execution:
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}
+        if cloud_access.locked(c):
+            return {"attempt": None, "paused": cloud_access.LOCKED}
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}

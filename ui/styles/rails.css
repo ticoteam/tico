@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* An 8px strip over the rail's border; a line shows on hover, while dragging and on keyboard focus. */
 .rail-edge{position:fixed;top:0;bottom:0;left:calc(var(--rail-left) - 4px);width:8px;z-index:21;cursor:col-resize;touch-action:none;outline:none}
-html.demo .rail-edge[data-rail="left"]{top:var(--demo-h)}
+html.strip .rail-edge[data-rail="left"]{top:var(--demo-h)}
 .rail-edge::after{content:"";position:absolute;top:0;bottom:0;left:3px;width:2px;border-radius:1px;background:var(--accent);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .rail-edge:hover::after,.rail-edge.active::after,.rail-edge:focus-visible::after{opacity:.7}
 /* The bot page's right rail runs the page's full height beside the chat, on a wide window only; its edge is its left border. */

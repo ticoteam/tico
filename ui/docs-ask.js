@@ -20,7 +20,7 @@
   const css = `
 .dask-backdrop{position:fixed;inset:0;z-index:1500;background:rgba(10,14,18,.4)}
 .dask{position:fixed;top:0;right:0;bottom:0;z-index:1501;width:min(460px,100vw);display:flex;flex-direction:column;background:var(--surface);color:var(--ink);border-left:1px solid var(--line);animation:dask-in .18s ease-out}
-html.demo .dask{top:var(--demo-h)}
+html.strip .dask{top:var(--demo-h)}
 @keyframes dask-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
 @media (prefers-reduced-motion:reduce){.dask{animation:none}.dask-think i{animation:none}}
 .dask-head{display:flex;align-items:center;gap:6px;min-height:44px;padding:6px 6px 6px 14px;border-bottom:1px solid var(--line)}
@@ -82,7 +82,7 @@ html:not(.has-librarian) [data-librarian-open]{display:none}
 @media (max-width:760px){
   .dask{inset:0;width:auto;border-left:0;box-shadow:none;height:100dvh}
   .dask-form textarea{font-size:16px}
-  html.demo .dask{height:calc(100dvh - var(--demo-h))}
+  html.strip .dask{height:calc(100dvh - var(--demo-h))}
   .dask-backdrop{display:none}
 }
 /* Desktop: a rail beside the page, which gives up its room on the right. */

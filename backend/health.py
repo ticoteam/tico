@@ -757,7 +757,11 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 # where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
+BILLING = ("Open Billing", "#/settings", "billing")
 HELD = {
+    # A Tico Cloud company's access (backend/cloud_access.py): out of credit, or locked behind Pay to continue.
+    "out_of_credit": ("Out of credit: its Tico model turns start once credit is added", BILLING),
+    "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its assigned task waits for a snooze, prerequisite, person, check or an owner's 60-minute queue return", RUNS),
     "task_next_run": ("Its assigned task is deferred to its next run, held by a run that carried it, or waiting on a stored resume condition", RUNS),

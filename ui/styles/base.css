@@ -34,20 +34,32 @@ html.no-support [data-setup-help]{display:none}
 #feedback-ask label{font-weight:600}
 .feedback-row{display:flex;align-items:center;gap:8px}
 .privacy-row{display:flex;align-items:center;gap:8px;font-size:var(--t-md)}.privacy-row input{width:auto;flex:none}
-html.demo{--demo-h:30px;padding-top:var(--demo-h)}
+/* A strip over the top of every page (the demo's, a rehearsal's, Tico Cloud's Out of credit): the page below shortened to fit. */
+html.strip{--demo-h:30px;padding-top:var(--demo-h)}
 html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap;overflow:hidden}
 html.demo #demo-banner strong{color:var(--ink);font-weight:600}
 html.demo #demo-banner span{overflow:hidden;text-overflow:ellipsis}
-html.demo body{min-height:calc(100vh - var(--demo-h))}
-html.demo #side{top:var(--demo-h)}
-html.demo #main.chat-layout{height:calc(100dvh - var(--demo-h))}
-@media (min-width:761px){html.demo #main.chat-layout{height:100%}}
+html.strip body{min-height:calc(100vh - var(--demo-h))}
+html.strip #side{top:var(--demo-h)}
+html.strip #main.chat-layout{height:calc(100dvh - var(--demo-h))}
+@media (min-width:761px){html.strip #main.chat-layout{height:100%}}
 @media (max-width:760px){
   html.demo #demo-banner span{display:none}
-  html.demo #side{height:auto;bottom:0}
-  html.demo body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
-  html.demo #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
+  html.strip #side{height:auto;bottom:0}
+  html.strip body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
+  html.strip #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
 }
+/* Tico Cloud (ui/app/cloud-access.js): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
+#cloud-banner,#cloud-lock{display:none}
+html.cloud-frozen:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap}
+#cloud-banner strong{color:var(--ink);font-weight:600}
+#cloud-banner a{color:var(--ink);font-weight:600}
+html.cloud-locked #cloud-lock{position:fixed;inset:0;z-index:3300;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg)}
+html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility:hidden}
+.cloud-lock-card{width:min(380px,100%);display:flex;flex-direction:column;gap:12px;padding:22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.cloud-lock-card h1{margin:0;font-size:var(--t-lg,18px);font-weight:600}
+.cloud-lock-card p{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.cloud-lock-card .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 /* one spacing scale, used everywhere instead of ad-hoc pixel values */
 :root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:22px;--s6:32px;--radius:9px;--mobile-nav-height:64px}
 /* corners: controls 6px, menus and popovers 10px, cards --radius. Controls get one height from 20px lines and padding
