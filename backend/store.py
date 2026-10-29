@@ -545,7 +545,9 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
                        "message.notice")
 EVENT_RETENTION_DAYS = 30
-EVENT_SWEEP_BATCH = 5000     # rows per write transaction, so the one writer waits for a few thousand deletes at a time
+# Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
+# held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
+EVENT_SWEEP_BATCH = 500
 EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger backlog drains over later passes
 
 
