@@ -274,7 +274,8 @@ class Scheduler:
         if not self.store.settings.rehearsal:
             unstarted = []
             try:
-                with self.store.read() as c:
+                # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
+                with self.store.read_transaction() as c:
                     saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
                                       (assigned_start.CURSOR_KEY,)).fetchone()
                     cursor = [H._json(saved[0], "") if saved else ""]

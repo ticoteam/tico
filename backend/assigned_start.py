@@ -91,8 +91,11 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             bot = H.actor_id(row['owner'])
             floor, touched = attempts.get(bot, ("9999", {}))
             if earliest < floor:
-                for attempt in c.execute("SELECT id,created FROM attempts WHERE bot=? AND created>=? AND created<? ORDER BY created DESC",
-                                         (bot, earliest, floor)).fetchall():
+                found = c.execute("SELECT id,created FROM attempts WHERE bot=? AND created>=? AND created<? ORDER BY created DESC",
+                                  (bot, earliest, floor)).fetchall()
+                # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
+                privacy.prime_attempts(c, [attempt['id'] for attempt in found])
+                for attempt in found:
                     for tid in privacy.attempt_tasks(c, attempt['id']):
                         touched.setdefault(tid, attempt['created'])
                 attempts[bot] = earliest, touched

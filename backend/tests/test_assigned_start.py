@@ -1,4 +1,6 @@
 """Lost handoffs recover once; execution holds stay visible without bypassing them."""
+import json
+
 import pytest
 
 from backend import assigned_start as A, health, health_monitor, queue_refusals
@@ -609,3 +611,70 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     assert [s for s in seen if s.startswith('SELECT detail_json FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
     assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1
+
+
+def fleet(store, bots, tasks, attempts, *, days=30):
+    """A synthetic fleet for statement counts: `bots` active bots with `tasks` open tasks between them and `attempts`
+    runs spread over `days` days (every 5th with an input, every 4th with a run-task event, every 10th task carried)."""
+    now = H.now()
+    back = lambda hours: H.shift(now, hours=-hours)  # noqa: E731
+    slugs = [f'fleet-{b:02d}' for b in range(bots)]
+    with store.transaction() as c:
+        c.execute("INSERT INTO conversations(id,kind,subject,created,last_message_at) VALUES('fleet-conv','task','',?,?)",
+                  (now, now))
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen,readiness_json) "
+                  "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
+        for slug in slugs:
+            c.execute("INSERT INTO bots(slug,display_name,runtime,state,created) VALUES(?,?,'fake','active',?)",
+                      (slug, slug, now))
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,'{}','ana')", (slug,))
+        for k in range(tasks):
+            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,rank,created,updated,conversation_id) "
+                      "VALUES(?,?,'','human:ana',?,'open',?,?,?,'fleet-conv')",
+                      (f'fleet-t-{k:05d}', f'Fleet task {k}', 'bot:' + slugs[k % bots], k,
+                       back(24 * (days - 2) - k), now))
+        ids_by_bot = {b: [f'fleet-t-{k:05d}' for k in range(tasks) if k % bots == b] for b in range(bots)}
+        for i in range(attempts):
+            b = i % bots
+            at = back(24 * days - 24 * days * i / attempts)
+            task = ids_by_bot[b][i // bots % len(ids_by_bot[b])] if ids_by_bot[b] else None
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                      "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
+                      (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
+            # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
+            c.execute("UPDATE jobs SET state='done' WHERE id=?", (f'fleet-m-{i}',))
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+                      "VALUES(?,?,?,'fleet-runner',1,?,'done',?,?)",
+                      (f'fleet-a-{i}', f'fleet-m-{i}', slugs[b], f'fleet-h-{i}', now, at))
+            if i % 5 == 0 and task:
+                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                          "VALUES(?, 'fleet-conv','bot:' || ?,'human:ana','chat','',?,?)",
+                          (f'fleet-in-{i}', slugs[b], json.dumps({'task': task}), at))
+                c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (f'fleet-a-{i}', f'fleet-in-{i}'))
+            if i % 4 == 0 and ids_by_bot[b]:
+                H.event(c, H.KEEPER, 'task.next-run.carried', f'fleet-a-{i}',
+                        {'tasks': ids_by_bot[b][:3]})
+        for k in range(0, tasks, 10):
+            b = k % bots
+            j = (k // 10) % max(1, attempts // bots)
+            if b + bots * j < attempts:
+                c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (f'fleet-a-{b + bots * j}', f'fleet-t-{k:05d}'))
+    return slugs
+
+
+def test_recovery_selection_primes_each_bots_attempt_provenance_in_fixed_statements(api):
+    """The scheduler's selection runs in one snapshot; each bot's runs are primed together, so no run costs its own
+    queries (the per-run statements of task_privacy._attempt_tasks)."""
+    store = api.app.state.store
+    fleet(store, 3, 30, 90)
+    seen = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            A.due(c, H.now(), cursor=[""])
+        finally:
+            c.set_trace_callback(None)
+    per_run = ('SELECT m.* FROM attempts a JOIN jobs', 'SELECT id FROM tasks WHERE carried_by=?',
+               'SELECT detail_json FROM events WHERE action IN')
+    assert [s for s in seen if s.startswith(per_run)] == []
+    assert any(s.startswith('SELECT a.id AS primed_attempt') for s in seen)
