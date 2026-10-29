@@ -6406,6 +6406,7 @@ export type StartSignInParams = {
   code_challenge?: string;
   fresh?: string;
   next?: string;
+  prompt?: string;
 };
 export type StartSignInBody = never;
 export type StartSignInResponse = void;
