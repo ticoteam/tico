@@ -583,8 +583,9 @@ Do not ask about anything a sensible default answers.
 
 ## What wakes
 A "What wakes" automation (`wakes: {scope_kind, scope_id}`) holds the wake rules of one scope: a bot, a type, a
-department or the team. Each Filter rule runs when a task enters a step (`event is step_entered`, `task.step is <step>`)
-and wakes a bot, notes, archives or leaves it for a person. Its trigger is `tico.wake`; keep `stop` on.
+department or the team. Each Filter rule matches one event (`event is <name>`; a step rule is `step_entered` with
+`task.step is <step>`) and wakes a bot, notes, archives or leaves it for a person. Its trigger is `tico.wake`; keep
+`stop` on.
 - A `task.step` value is the exact name or id of a step on that task type, ignoring case. List a type's steps with
   `hub task types <id or name>` (`hub_task_types`).
 - Read `problems` on `hub automation show <id>` and `hub automation list` before and after an edit. Each entry is a
