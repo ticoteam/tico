@@ -810,6 +810,7 @@ class Store:
         self.writer = WriterGate()
         from .provenance_clock import Cache
         self.provenance_cache = Cache()
+        self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
 
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
@@ -1695,8 +1696,9 @@ class Store:
             except Exception:
                 c.rollback()
                 raise
-            from . import provenance_clock
+            from . import provenance_clock, roster_clock
             provenance_clock.ensure(c)
+            roster_clock.ensure(c)
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
@@ -1743,6 +1745,7 @@ class Store:
                 stale, self.pool, self.pool_file = self.pool, [], identity
                 from .provenance_clock import Cache
                 self.provenance_cache = Cache()
+                self.roster_rows = {}
             else:
                 stale = []
             c = self.pool.pop() if self.pool else None
@@ -1753,6 +1756,7 @@ class Store:
             c.pool_file = identity
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
+        c.roster_rows = self.roster_rows
         c.write_transaction = False
         c.after_commit = []
         c.provenance_changes = c.total_changes
