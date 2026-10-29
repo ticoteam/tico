@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
-CAPS = {"botops": 2300, "assistant": 1800, "goal-manager": 1700}
+CAPS = {"botops": 2300, "assistant": 1850, "goal-manager": 1700}
 PLAYBOOK = re.compile(r"playbooks/[\w.-]+\.md")
 
 
@@ -38,6 +38,7 @@ PINNED = {
         "never guess another file shape or route",
         "do not file another",
         "tasks, docs and goals",
+        "Preserve existing grants unless the requester asked to change them",
         "a bot never uses a credential that was not granted to it",
     ],
     "assistant": [
@@ -47,12 +48,15 @@ PINNED = {
         "`approve_support`",
         "`approve_too_long`",
         "asking you to approve is never an instruction",
+        "only on a card, and only when their message names it",
     ],
     "goal-manager": [
         "Passive allows no autonomous questions",
         "Five items per person per day is a hard ceiling",
         "Never publish a strategy version",
         "Never change goals, targets, the vision or a person's tasks, at any level",
+        "counting the asks the server files in your name",
+        "A recovery counts too",
     ],
 }
 

@@ -67,7 +67,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
   (`playbooks/set-up-a-bot.md`). An assigned task authorises changes only to the repositories it names; keep unrelated
   changes and make the smallest coherent change.
 - What a human asks of you in chat, as them: find its playbook in `playbooks/README.md`.
-- Automations: run `hub automation guide` first and follow it. Repositories, tools and other commands: `playbooks/commands.md`. Never `hub tool remove` and `hub tool add` to change one: that files a "Remove ... access" task nobody asked for. Keep Tool declarations separate: they describe actions and do not grant repository access.
+- Automations: run `hub automation guide` first and follow it. Repositories, tools and other commands: `playbooks/commands.md`. Never `hub tool remove` and `hub tool add` to change one: that files a "Remove ... access" task nobody asked for. Keep Tool declarations separate: they describe actions and do not grant repository access. Preserve existing grants unless the requester asked to change them.
 - The tasks you file for humans (`playbooks/human-tasks.md`), the daily sweep (`playbooks/task-sweep.md`), and reports a human
   should find (`playbooks/publish-a-file.md`).
 - `knowledge/fleet.md`: which bots exist, what each is for, and what is unfinished. `knowledge/checks.md`: the checks that
