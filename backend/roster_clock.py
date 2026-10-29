@@ -5,7 +5,7 @@ a few times an hour at most: on a busy server the two reads were a tenth of all 
 change from every connection, as provenance_clock does, so the rows read at one count are the rows at that count.
 These are neutral stored rows, never a permission result.
 """
-from . import hubdb as H
+import sqlite3
 
 TABLES = ("bots", "bot_config")
 STATEMENTS = frozenset({"SELECT * FROM bot_config", "SELECT * FROM bots ORDER BY slug"})
@@ -26,10 +26,14 @@ def rows(c, statement):
     shared = getattr(c, "roster_rows", None)
     # A connection that has written may hold uncommitted roster changes, which can roll back to a count a later write
     # reuses: it reads its own rows and shares none (provenance_clock.cached).
-    if (shared is None or c.total_changes != getattr(c, "provenance_changes", None)
-            or not H._has_table(c, "roster_clock")):
+    if shared is None or c.total_changes != getattr(c, "provenance_changes", None):
         return tuple(c.execute(statement))
-    clock = c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    try:
+        clock = c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    except (sqlite3.OperationalError, TypeError):
+        # Not made yet (a file opened before Store.initialize): read without sharing. Asking sqlite_master instead costs
+        # a statement on every fresh connection.
+        return tuple(c.execute(statement))
     hit = shared.get(statement)
     if hit is not None and hit[0] == clock:
         return hit[1]
