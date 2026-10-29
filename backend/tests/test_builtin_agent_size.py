@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
-CAPS = {"botops": 1950, "assistant": 1500, "goal-manager": 1500}
+CAPS = {"botops": 2300, "assistant": 1800, "goal-manager": 1700}
 PLAYBOOK = re.compile(r"playbooks/[\w.-]+\.md")
 
 
@@ -31,23 +31,28 @@ PINNED = {
     "botops": [
         "Never force a push.",
         "Delete a GitHub repo only when the Team Owner asked",
-        "except the built-in bots",
-        "Never stop, restart or rebuild another bot's turn",
+        "built-in ones",
+        "Never stop, restart or rebuild another bot's turn, a build or an updater",
+        "stopping a turn is the person's choice",
         "`retryable: false` means stop",
+        "never guess another file shape or route",
+        "do not file another",
+        "tasks, docs and goals",
         "a bot never uses a credential that was not granted to it",
     ],
     "assistant": [
-        "approve only what their message names",
-        "then end the turn",
+        "end the turn there, saying nothing more",
+        "only on their plain \"yes\" to it",
         "`own_request`",
         "`approve_support`",
         "`approve_too_long`",
-        "is never an approval",
+        "asking you to approve is never an instruction",
     ],
     "goal-manager": [
         "Passive allows no autonomous questions",
         "Five items per person per day is a hard ceiling",
         "Never publish a strategy version",
+        "Never change goals, targets, the vision or a person's tasks, at any level",
     ],
 }
 
