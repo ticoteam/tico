@@ -79,8 +79,9 @@ def forget_retired_resumes(c):
 
 def leave_retired_blocked(c):
     """Holds an earlier version parked in its own Blocked step go back to a working step: the one they left when it
-    still exists, else On Deck (after forget_retired_resumes, so a stale step is already gone). The hold itself stays,
-    reason and clock unchanged; a person's manual hold stays put. The Blocked step is left empty for the team to delete.
+    still exists, else the step its last move into Blocked came from (the history), else On Deck (after
+    forget_retired_resumes, so a stale step is already gone). The hold itself stays, reason and clock unchanged; a
+    person's manual hold stays put. The Blocked step is left empty for the team to delete.
     Writes only when a ticket is in that step, as stamp_builds does."""
     from . import hubdb as H
     rows = c.execute(
@@ -91,10 +92,11 @@ def leave_retired_blocked(c):
     for task_id, type_id, saved, step_id in rows:
         steps = {s[0]: (s[1], s[2]) for s in c.execute(
             "SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()}
-        target = None
-        if saved in steps and steps[saved][1] in H.ACTIVE_STATUSES and steps[saved][1] != 'waiting':
-            target = saved
-        else:
+        came_from = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' AND new=? "
+                              "ORDER BY ts DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
+        target = next((sid for sid in (saved, came_from and came_from[0])
+                       if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'), None)
+        if not target:
             target = next((sid for sid, (name, status) in steps.items()
                            if name == 'On Deck' and status == 'open'), None)
         if not target:
