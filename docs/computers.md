@@ -168,12 +168,13 @@ can move to its fallback model; that is set in Models and per bot ([How it works
 
 A **subscription** is your own model login or key, saved once in Tico rather than on a computer: a Claude setup-token
 (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is signed in,
-usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. Add, rename, reconnect or remove them under
-**Subscriptions** on your own person page. The list shows each one's name, kind, status and the bots, teams and tasks
-that use it; the value is never shown again.
+usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. Add, reconnect or remove them in **Settings >
+Computers > Subscriptions**. The list shows each one's name, kind, status and the bots, teams and tasks that use it;
+the value is never shown again.
 
-Pick one for a tool in three places: on a **task** (that task's turns only), on a **bot** (bot settings), or on a
-**team** (every bot on that team and the teams below it). A turn uses the first of: the task's pick, the bot's pick,
+Pick one for a tool in three places: on a **task** (its Subscription section; that task's turns only), on a **bot**
+(Subscription under Model in its settings, saved with Save bot), or on a **team** (the Subscription button on the
+team's page; every bot on that team and the teams below it). A turn uses the first of: the task's pick, the bot's pick,
 its team's pick, the team above's, and so on; with none it runs on the computer's login, else the Tico AI Gateway
 under the company's models choice. Each picker shows what is in effect and where it comes from.
 

@@ -634,6 +634,17 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 /* Compact at sits under Model: space it off Model's subscription line, and size it like Model's own selects. */
 .sb-compact{margin-top:8px}.sb-row.sb-compact .settings-inline-select{font-size:16px}
 .sb-sub .pill{font-size:var(--t-xs)}
+/* Subscriptions (ui/app/subscriptions.js): the bot editor's per-tool selects, the pickers on a task and a team, the add form */
+.subs-selects{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}.subs-selects .settings-inline-select{font-size:16px}
+.subs-tool{font-size:var(--t-sm);color:var(--muted)}
+.subs-pick{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0 0 6px;font-size:var(--t-sm);min-width:0}
+.subs-pick select{min-width:0;max-width:100%}
+.subs-now{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;color:var(--ink);overflow-wrap:anywhere}
+.subs-now .pill{font-size:var(--t-xs)}
+.settings-subs-form textarea,.settings-subs-reconnect textarea{width:100%;min-width:240px;font-family:var(--mono, monospace);font-size:var(--t-sm)}
+.settings-subs-form [data-subs-secret]{flex:1 1 240px;min-width:0;display:flex}
+.settings-subs-form [data-subs-secret] input{flex:1;min-width:0}
+.settings-subs-reconnect{display:grid;gap:var(--s3)}
 @media (max-width:760px){
   .sb-sub{margin-left:0}
 }

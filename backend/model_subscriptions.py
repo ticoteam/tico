@@ -1,4 +1,4 @@
-"""Model subscriptions a person saves once in Tico, and which bots run on them (Settings > Subscriptions).
+"""Model subscriptions a person saves once in Tico, and which bots run on them (Settings > Computers > Subscriptions).
 
 A subscription is one person's model login or key, kept here rather than on a computer: a Claude setup-token
 (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from the person's own `codex login`), or an Anthropic or
@@ -608,7 +608,7 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     """The provider refused the turn's sign-in for `runtime`. When the turn ran on a subscription for it, that
     subscription needs reconnecting and its picks are passed over from the next turn on (the next level, the
     computer's login or the Gateway takes the requeued work); the computer's own login is not touched and no card
-    holds the task, since something else may run it. Its owner sees it in Settings > Subscriptions and the bot's
+    holds the task, since something else may run it. Its owner sees it in Settings > Computers > Subscriptions and the bot's
     status says so. Returns the subscription row, or None when the turn was on the computer's login."""
     found = handed(c, attempt_id, runtime)
     sub = row(c, found["subscription_id"]) if found else None

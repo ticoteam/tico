@@ -245,6 +245,7 @@ function pageSettings() {
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-subscriptions"><header><h2>Subscriptions</h2></header><div id="set-subscriptions">${skelRows(2, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
@@ -574,6 +575,7 @@ async function loadSettings() {
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
     void renderSettingsTokens();
+    void renderSettingsSubscriptions();
     void renderSettingsHosted();
     void renderSettingsSleep();
     void renderSettingsTurnLevels();

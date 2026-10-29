@@ -6,6 +6,12 @@
 //  - the bot editor has no connection picker, only the line under Model "Runs on <tool> · Computer's login on
 //    <computer>" from GET /v2/bots/{bot}/subscription;
 //  - an older server (404) shows no line; a phone has no sideways scroll.
+// And a person's own saved subscriptions (backend/model_subscriptions.py):
+//  - Settings > Computers lists them with status and where each is picked; add (a ChatGPT login is pasted as
+//    auth.json), reconnect and remove; no value is ever shown back;
+//  - the bot editor's Subscription row is held until Save bot, and the line under Model names the one in effect;
+//  - a task's and a team's pickers save when picked, offer only the caller's own, and show what is in effect and
+//    what was passed over.
 // SUBS_SHOTS=<dir> saves the screenshots for the owner.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -38,7 +44,46 @@ function fixtures() {
     },
     groups: [{id: 'g-eng', name: 'Engineering', parent: '', order: 1}, {id: 'g-web', name: 'Web', parent: 'g-eng', order: 1},
       {id: 'g-ops', name: 'Operations', parent: '', order: 2}],
+    // Ana's own subscriptions, and Lee's one picked for the Web team (GET /v2/me/subscriptions answers the caller's).
+    mySubs: [
+      {id: 's1', name: 'Claude Max', kind: 'claude_token', label: 'Claude', runtime: 'claude', status: 'working', owner: 'human:ana', preview: 'sk-ant-oat01-…wxyz'},
+      {id: 's2', name: 'ChatGPT Pro', kind: 'codex_login', label: 'ChatGPT', runtime: 'codex', status: 'needs_reconnect', owner: 'human:ana', preview: 'ana@acme.example'}],
+    others: [{id: 's9', name: 'Lee Claude', kind: 'claude_token', label: 'Claude', runtime: 'claude', status: 'working', owner: 'human:lee'}],
+    picks: {'bot:builder:claude': 's1', 'team:g-web:claude': 's9', 'team:g-eng:codex': 's2'},
   };
+}
+const SUB_NAMES = {'human:ana': 'Ana', 'human:lee': 'Lee'};
+// GET /v2/subscription-picks, as backend/model_subscriptions.py picks_view builds it: task -> bot -> team chain.
+function picksView(data, scope, id) {
+  const all = [...data.mySubs, ...data.others], sub = sid => all.find(x => x.id === sid);
+  const brief = x => ({id: x.id, name: x.name, kind: x.kind, label: x.label, runtime: x.runtime, status: x.status, owner: x.owner});
+  const bot = scope === 'bot' ? id : scope === 'task' ? 'builder' : null;
+  const chain = team => { const out = []; for (let at = team; at; at = data.groups.find(g => g.id === at)?.parent) out.push(at); return out; };
+  const levels = [...(scope === 'task' ? [['task', id]] : []), ...(bot ? [['bot', bot]] : []),
+    ...chain(scope === 'team' ? id : 'g-web').map(g => ['team', g])];
+  const name = (sc, sid) => sc === 'team' ? data.groups.find(g => g.id === sid).name : sc === 'bot' ? 'Builder' : 'Fix the build';
+  const runtimes = (bot ? ['claude'] : ['claude', 'codex']).map(runtime => {
+    const passed = [];
+    let effect = null;
+    for (const [sc, sid] of levels) {
+      const s = sub(data.picks[`${sc}:${sid}:${runtime}`]); if (!s) continue;
+      if (s.status === 'needs_reconnect') { passed.push({scope: sc, scope_id: sid, subscription: brief(s), why: 'needs_reconnect'}); continue; }
+      effect = {source: sc, scope_id: sid, name: name(sc, sid), subscription: {...brief(s), owner_name: SUB_NAMES[s.owner]}};
+      break;
+    }
+    effect ||= bot ? {source: 'computer', computer: "Sam's Mac"} : {source: 'none'};
+    const own = sub(data.picks[`${scope}:${id}:${runtime}`]);
+    return {runtime, label: runtime === 'claude' ? 'Claude Code' : 'Codex', effect: {...effect, passed},
+      pick: own ? {...brief(own), set_by: own.owner, mine: own.owner === 'human:ana'} : null,
+      options: data.mySubs.filter(x => x.runtime === runtime).map(brief)};
+  });
+  return {scope, id, bot, can_pick: true, runtimes};
+}
+function mySubsView(data) {
+  return data.mySubs.map(x => ({...x, used_by: Object.entries(data.picks).filter(([, sid]) => sid === x.id).map(([key]) => {
+    const [scope, id, runtime] = key.split(':');
+    return {scope, id, runtime, name: scope === 'team' ? data.groups.find(g => g.id === id).name : scope === 'bot' ? 'Builder' : 'Fix the build'};
+  })}));
 }
 // GET /v2/bots/builder/subscription, as backend/subscriptions.py bot_subscription builds it.
 function lineFor() {
@@ -91,6 +136,24 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     if (p === '/api/v2/bots/builder/subscription') return old ? json({detail: 'Not Found'}, 404) : json(lineFor());
     if (p.startsWith('/api/v2/subscriptions')) { writes.push({p, method}); return json({detail: 'Method Not Allowed'}, 405); }
+    if (old && (p === '/api/v2/subscription-picks' || p.startsWith('/api/v2/me/subscriptions'))) return json({detail: 'Not Found'}, 404);
+    if (p === '/api/v2/me/subscriptions' && method === 'GET') return json({subscriptions: mySubsView(data)});
+    if (p.startsWith('/api/v2/me/subscriptions')) {
+      const body = method === 'DELETE' ? null : req.postDataJSON(), sid = p.split('/')[5];
+      writes.push({p, method, body});
+      if (method === 'DELETE') { data.mySubs = data.mySubs.filter(x => x.id !== sid); return json({deleted: true, id: sid}); }
+      if (sid) { const x = data.mySubs.find(y => y.id === sid); x.status = 'new'; return json(x); }
+      const x = {id: 's3', name: body.name || 'ChatGPT', kind: body.kind, label: 'ChatGPT', runtime: 'codex', status: 'new', owner: 'human:ana', preview: ''};
+      data.mySubs.push(x);
+      return json(x);
+    }
+    if (p === '/api/v2/subscription-picks') {
+      if (method === 'GET') return json(picksView(data, url.searchParams.get('scope'), url.searchParams.get('id')));
+      const body = req.postDataJSON(); writes.push({p, method, body});
+      const key = `${body.scope}:${body.id}:${body.runtime}`;
+      if (body.subscription) data.picks[key] = body.subscription; else delete data.picks[key];
+      return json(picksView(data, body.scope, body.id));
+    }
     const login = p.match(/^\/api\/v2\/computers\/([^/]+)\/logins$/);
     if (login && method === 'POST') {
       const body = req.postDataJSON(); writes.push({p, body});
@@ -185,7 +248,8 @@ async function computers(browser) {
 }
 
 async function botEditor(browser) {
-  const {page, errors, writes} = await open(browser);
+  const {page, errors, writes, data} = await open(browser);
+  data.picks = {};                                    // nobody picked a subscription: the computer's login
   await page.evaluate(() => settingsEditBot('builder'));
   const rows = page.locator('#bot-editor [data-bot-people]');
   const line = rows.locator('[data-bot-sub-line]');
@@ -201,6 +265,104 @@ async function botEditor(browser) {
   assert.deepEqual(writes, []);
   assert.deepEqual(errors, []);
   console.log('bot editor: ok');
+  await page.close();
+}
+
+// Settings > Computers > Subscriptions: the list, add, reconnect and remove.
+async function personSubs(browser) {
+  const {page, errors, writes} = await open(browser);
+  await page.evaluate(() => settingsShow('devices'));
+  const card = page.locator('#set-subscriptions');
+  await card.locator('[data-sub-row]').nth(1).waitFor();
+  const row = id => card.locator(`[data-sub-row="${id}"]`);
+  assert.equal(await row('s1').locator('.pill.ok').count(), 1, 'working');
+  assert.equal(await row('s2').locator('.pill.fail').count(), 1, 'needs reconnect');
+  assert.match(await row('s1').innerText(), /Builder/);
+  assert.match(await row('s2').innerText(), /Engineering team/);
+  // A ChatGPT login is the whole auth.json, pasted into a box; a token or key is a password field.
+  const form = card.locator('#settings-subs-form');
+  assert.equal(await form.locator('input[name=secret][type=password]').count(), 1);
+  await form.locator('select[name=kind]').selectOption('codex_login');
+  const login = '{"tokens":{"refresh_token":"acme-refresh"}}';
+  await form.locator('textarea[name=secret]').fill(login);
+  await form.locator('input[name=name]').fill('Acme ChatGPT');
+  await form.locator('button[type=submit]').click();
+  await card.locator('[data-sub-row="s3"]').waitFor();
+  assert.deepEqual(writes.find(w => w.p === '/api/v2/me/subscriptions')?.body, {kind: 'codex_login', name: 'Acme ChatGPT', secret: login});
+  assert.equal(await form.locator('input[name=secret][type=password]').count(), 1, 'the form starts over');
+  // Reconnect: a new value in a dialog of its own.
+  await row('s2').locator('[data-sub-reconnect]').click();
+  const dialog = page.locator('dialog[open] [data-subs-reconnect]');
+  await dialog.locator('textarea[name=secret]').fill('{"tokens":{"access_token":"acme-new"}}');
+  await dialog.locator('button[type=submit]').click();
+  await page.waitForFunction(() => !document.querySelector('dialog[open] [data-subs-reconnect]'));
+  assert.deepEqual(writes.find(w => w.p === '/api/v2/me/subscriptions/s2')?.body, {secret: '{"tokens":{"access_token":"acme-new"}}'});
+  // Remove asks first.
+  await row('s1').locator('[data-sub-remove]').click();
+  await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
+  await row('s1').waitFor({state: 'detached'});
+  assert.ok(writes.some(w => w.p === '/api/v2/me/subscriptions/s1' && w.method === 'DELETE'));
+  assert.doesNotMatch(await page.locator('body').innerText(), /acme-refresh|acme-new/, 'a value is never shown back');
+  if (SHOTS) await card.screenshot({path: path.join(SHOTS, 'subscriptions-card-dark.png')});
+  assert.deepEqual(errors, []);
+  console.log('person subscriptions: ok');
+  await page.close();
+}
+
+// The bot editor: the bot's own pick, held until Save bot; the line under Model names it.
+async function botPick(browser) {
+  const {page, errors, writes} = await open(browser);
+  await page.evaluate(() => settingsEditBot('builder'));
+  const rows = page.locator('#bot-editor [data-bot-people]');
+  const select = rows.locator('[data-bot-subs] select[data-subs-select=claude]');
+  await select.waitFor();
+  assert.equal(await select.inputValue(), 's1');
+  assert.equal(await rows.locator('[data-bot-sub-line] .sb-sub-text').innerText(), "Runs on Claude Code · Claude Max (Ana) on Sam's Mac");
+  assert.deepEqual(await select.locator('option').evaluateAll(list => list.map(o => o.value)), ['', 's1'], 'only my own Claude subscriptions');
+  await select.selectOption('');
+  if (SHOTS) { await select.scrollIntoViewIfNeeded(); await page.screenshot({path: path.join(SHOTS, 'bot-subscription-dark.png')}); }
+  assert.match(await page.locator('#bot-editor').innerText(), /Not saved yet: subscription/);
+  assert.equal(writes.filter(w => w.p === '/api/v2/subscription-picks').length, 0, 'held until Save bot');
+  await page.locator('#bot-editor [type=submit]').click();
+  // With the bot's own pick off, the Web team's (Lee's) is the one in effect.
+  await rows.locator('[data-bot-sub-line] .sb-sub-text', {hasText: 'Lee Claude'}).waitFor();
+  assert.equal(await rows.locator('[data-bot-sub-line] .sb-sub-text').innerText(), "Runs on Claude Code · Lee Claude (Lee) on Sam's Mac");
+  assert.deepEqual(writes.find(w => w.p === '/api/v2/subscription-picks')?.body, {scope: 'bot', id: 'builder', runtime: 'claude', subscription: null});
+  assert.deepEqual(errors, []);
+  console.log('bot pick: ok');
+  await page.close();
+}
+
+// A task's and a team's pickers save when picked and show what is in effect, from where, and what was passed over.
+async function taskAndTeam(browser) {
+  const {page, errors, writes} = await open(browser);
+  await page.evaluate(() => {
+    const d = document.createElement('div'); d.id = 'subs-task-fixture';
+    d.innerHTML = subsTaskHTML({id: 't1', owner: 'bot:builder', run_model: null});
+    document.body.append(d); subsTaskBind(d, {id: 't1'});
+  });
+  const task = page.locator('#subs-task-fixture [data-task-subs]');
+  await task.locator('select[data-subs-select=claude]').waitFor();
+  assert.equal(await task.locator('[data-subs-effect=claude]').innerText(), "Claude Max (Ana) · the bot's");
+  await task.locator('select[data-subs-select=claude]').selectOption('s1');
+  await task.locator('[data-subs-effect=claude]', {hasText: /^Claude Max \(Ana\)$/}).waitFor();
+  assert.deepEqual(writes.find(w => w.p === '/api/v2/subscription-picks')?.body, {scope: 'task', id: 't1', runtime: 'claude', subscription: 's1'});
+  // The Web team: Lee's pick is shown as not mine; its Codex comes from Engineering, whose pick needs reconnecting.
+  await page.evaluate(() => { location.hash = '#/team/g-web'; });
+  await page.locator('#dash-root [data-subs-team]:not([hidden])').click();
+  const team = page.locator('dialog[open] [data-subs-box]');
+  await team.locator('select[data-subs-select=claude]').waitFor();
+  assert.equal(await team.locator('select[data-subs-select=claude]').inputValue(), 's9');
+  assert.match(await team.locator('select[data-subs-select=claude] option:checked').innerText(), /Lee Claude · not yours/);
+  assert.equal(await team.locator('[data-subs-runtime=codex] .pill.fail').innerText(), 'ChatGPT Pro needs reconnect');
+  assert.equal(await team.locator('[data-subs-effect=codex]').innerText(), "Each bot's own");
+  await team.locator('select[data-subs-select=codex]').selectOption('s2');
+  await page.waitForFunction(() => document.querySelector('dialog[open] [data-subs-effect=codex]') && document.querySelector('dialog[open] select[data-subs-select=codex]')?.value === 's2' && !document.querySelector('dialog[open] select[data-subs-select=codex]').disabled);
+  assert.equal(await team.locator('[data-subs-runtime=codex] .pill.fail').count(), 1, 'one line per subscription passed over');
+  if (SHOTS) await page.locator('dialog[open]').screenshot({path: path.join(SHOTS, 'team-subscription-dark.png')});
+  assert.deepEqual(writes.filter(w => w.p === '/api/v2/subscription-picks').at(-1).body, {scope: 'team', id: 'g-web', runtime: 'codex', subscription: 's2'});
+  assert.deepEqual(errors, []);
+  console.log('task and team picks: ok');
   await page.close();
 }
 
@@ -234,6 +396,6 @@ async function phone(browser) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  try { await navigation(browser); await computers(browser); await botEditor(browser); await oldServer(browser); await phone(browser); }
+  try { await navigation(browser); await computers(browser); await botEditor(browser); await personSubs(browser); await botPick(browser); await taskAndTeam(browser); await oldServer(browser); await phone(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

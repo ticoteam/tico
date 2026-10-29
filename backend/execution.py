@@ -4796,7 +4796,7 @@ class Execution:
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
-                          (f"reconnect {subscription['name']} in Settings > Subscriptions" if subscription and requeue
+                          (f"reconnect {subscription['name']} in Settings > Computers > Subscriptions" if subscription and requeue
                            else "sign in on this computer to continue" if requeue else "this run is saved for review"),
                           claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:

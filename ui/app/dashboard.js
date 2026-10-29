@@ -96,6 +96,7 @@ async function pageDashboard(place) {
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
       <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
+      ${team ? '<button type="button" class="ghost" data-subs-team hidden>Subscription</button>' : ''}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
@@ -110,6 +111,7 @@ async function pageDashboard(place) {
     return;
   }
   if (DASH !== state) return;
+  if (team) void subsTeamMount(state.root, place.slice('team:'.length));   // ui/app/subscriptions.js
   if (!Array.isArray(state.view?.pins)) state.view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
   dashDraw(state);
 }

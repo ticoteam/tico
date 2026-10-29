@@ -267,6 +267,7 @@ function taskModalBind(d, task, full = false) {
     };
   }
   taskRunModelBind(d, task);
+  subsTaskBind(d, task);
   d.querySelectorAll('[data-copy-session]').forEach(b => b.onclick = () =>
     void copyText(b.dataset.copySession).then(() => toast('Copied'), () => toast('Could not copy', true)));
   d.querySelectorAll('[data-drop-link]').forEach(b => b.onclick = async () => {
@@ -1074,6 +1075,7 @@ function hubModalHTML(t, it, opts = {}) {
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
       ${roadmapTaskHTML(t)}
       ${taskRunModelHTML(t)}
+      ${subsTaskHTML(t)}
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
