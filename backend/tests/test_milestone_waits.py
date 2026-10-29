@@ -275,3 +275,20 @@ def test_a_release_published_while_the_server_was_down_wakes_once_after_restart(
                              f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.milestone') IS NOT NULL",
                              (following["id"],)).fetchone()[0]
         assert woke == 1
+
+
+def test_a_wait_note_comes_back_in_the_wake_and_a_task_wait_takes_none(api):
+    _, waiter = pair(api)
+    hook(api, "pull_request", pr_event("opened"))
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "pr:" + PR, "note": "Check the migration, then QA"},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+    assert shown(api, waiter)["milestone_waits"][0]["note"] == "Check the migration, then QA"
+    merge(api)
+    assert len(wakes(api, waiter)) == 1
+    assert wakes(api, waiter)[0].endswith("\nYour note: Check the migration, then QA")
+    # A task: wait is the blocked_by relation, which has no note of its own: refused rather than dropped.
+    other = post(api, "tasks", {"owner": "cmo", "title": "Pick the logo", "body": "x"})
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={"on": "task:" + other["id"], "note": "later"},
+                 headers=headers())
+    assert r.status_code >= 400 and "note" in r.text

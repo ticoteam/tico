@@ -12,8 +12,8 @@ place; only `snoozed_until` (and `snoozed_by`) are set. Until that moment:
 
 When the moment passes, the scheduler clears the snooze (`wake_ended`): the task is back everywhere and
 its owner bot gets one "Snooze over" notice, which also stands in for a "Due:" reminder that fell
-inside the snooze. Finishing, declining or closing a task, or handing it on for review, clears its snooze
-(`H._set_status`). The requester is told when someone else snoozes their task.
+inside the snooze. A note the snoozer left (`snoozed_note`) goes in that notice as "Your note:". Finishing,
+declining or closing a task, or handing it on for review, clears its snooze (`H._set_status`). The requester is told when someone else snoozes their task.
 
 This module imports nothing from hubdb at load, so hubdb can import it.
 """
@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 from .batch_work import isolated
 
 MAX_DAYS = 730
+# The note the snoozer leaves for the bot's wake when the snooze ends: what to check, in a sentence or two.
+NOTE_MAX = 500
 # A date without a time is the start of that day where the team keeps its calendar (backend/updates.py).
 ZONE = ZoneInfo("America/Los_Angeles")
 
@@ -57,6 +59,14 @@ def parse_until(value):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+def clean_note(conn, actor, note):
+    """The note stripped, or None when there is none; refused when it is longer than NOTE_MAX."""
+    text = str(note or "").strip()
+    if len(text) > NOTE_MAX:
+        _H().refuse(conn, actor, "note", f"the note is at most {NOTE_MAX} characters: say only what to check")
+    return text or None
+
+
 def may_snooze(conn, actor, row, mover=False):
     """The parties and their managers, a role holder, a mover or the keeper."""
     H = _H()
@@ -82,8 +92,9 @@ def _label(until):
     return until[:10]
 
 
-def snooze(conn, actor, task_id, until, mover=False):
-    """Snooze a live task until `until` (see parse_until); snoozing it again moves the date."""
+def snooze(conn, actor, task_id, until, mover=False, note=None):
+    """Snooze a live task until `until` (see parse_until); snoozing it again moves the date. `note` is what to
+    check when the snooze ends; snoozing again replaces it (none clears it)."""
     H = _H()
     row = _check(conn, actor, task_id, mover)
     if row["status"] not in H.ACTIVE_STATUSES:
@@ -96,9 +107,10 @@ def snooze(conn, actor, task_id, until, mover=False):
         H.refuse(conn, actor, "date", "snooze until a moment in the future")
     if stamp > H.shift(at, days=MAX_DAYS):
         H.refuse(conn, actor, "date", f"snooze for at most {MAX_DAYS} days; close it if nobody will")
-    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by=?, updated=? WHERE id=?",
-                 (stamp, actor, at, task_id))
-    H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp)
+    note = clean_note(conn, actor, note)
+    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by=?, snoozed_note=?, updated=? WHERE id=?",
+                 (stamp, actor, note, at, task_id))
+    H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
     # The owner learns nobody expects it before then; a bot reads it on its next real run, not now.
     if after["owner"] != actor:
@@ -119,15 +131,26 @@ def unsnooze(conn, actor, task_id, mover=False):
     row = _check(conn, actor, task_id, mover)
     if not row.get("snoozed_until"):
         return row
+    left = row.get("snoozed_note")
     after = _clear(conn, actor, row, "unsnoozed")
     if after["owner"] != actor and after["status"] in H.ACTIVE_STATUSES:
-        H._wake(conn, after, after["owner"], f"Unsnoozed: {after['title']}", {"wake": "snooze"})
+        H._wake(conn, after, after["owner"], f"Unsnoozed: {after['title']}" + _note_line(left),
+                _wake_refs({"wake": "snooze"}, left))
     return after
+
+
+def _note_line(note):
+    return f"\nYour note: {note}" if note else ""
+
+
+def _wake_refs(refs, note):
+    return {**refs, "note": note} if note else refs
 
 
 def _clear(conn, actor, row, note):
     H = _H()
-    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by=NULL, updated=? WHERE id=?", (H.now(), row["id"]))
+    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by=NULL, snoozed_note=NULL, updated=? WHERE id=?",
+                 (H.now(), row["id"]))
     H._task_event(conn, row["id"], actor, "snoozed_until", row["snoozed_until"], None, note)
     H.recount(conn, [row["owner"], row["requester"]])
     return H.task(conn, row["id"])
@@ -161,7 +184,9 @@ def wake_ended(conn, at, failures=None):
             if after.get("due") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
                 # This notice is the due date's reminder too; the Due pass would only repeat it.
                 conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due"], at))
-            H._wake(conn, after, after["owner"], f"Snooze over: {after['title']}", {"wake": "snooze"}, trigger="schedule")
+            left = row.get("snoozed_note")
+            H._wake(conn, after, after["owner"], f"Snooze over: {after['title']}" + _note_line(left),
+                    _wake_refs({"wake": "snooze"}, left), trigger="schedule")
             woken.append(after["id"])
     return woken
 

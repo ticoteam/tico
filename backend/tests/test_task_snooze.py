@@ -1,4 +1,5 @@
 """A snoozed task is off the lists and quiet until its date, then back with one wake (backend/task_snooze.py)."""
+import json
 from datetime import timedelta
 
 from backend import still_wanted
@@ -112,3 +113,46 @@ def test_the_requester_is_told_and_review_hands_it_back_awake(api):
         H.task_update(c, "bot:ops", row["id"], status="review")
         assert H.task(c, row["id"])["snoozed_until"] is None
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued'").fetchone()[0] == 1
+
+
+def snooze_wakes(c, task_id, prefix):
+    return c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:ops' AND body LIKE ? "
+                     "AND json_extract(refs_json,'$.task')=?", (prefix + "%", task_id)).fetchall()
+
+
+def test_a_bot_snoozes_its_own_task_with_a_note_and_the_note_comes_back_when_it_ends(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        row = H.task_create(c, H.human_actor("ana"), "Chase the lease signature", "Waiting on the landlord.", "bot:ops")
+        H.task_update(c, "bot:ops", row["id"], status="doing")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
+        # The owner bot sets its own task aside: the note says what to check when it wakes.
+        H.TS.snooze(c, "bot:ops", row["id"], ahead(2), note="Check whether the landlord replied by mail")
+        assert H.task(c, row["id"])["snoozed_note"] == "Check whether the landlord replied by mail"
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 0
+    at = H.parse_ts(ahead(2)) + timedelta(seconds=1)
+    Scheduler(store, api.app.state.execution).tick(at)
+    with store.read() as c:
+        woken = snooze_wakes(c, row["id"], "Snooze over")
+        assert len(woken) == 1
+        body, refs = woken[0][0], json.loads(woken[0][1])
+        assert body.endswith("\nYour note: Check whether the landlord replied by mail")
+        assert refs["note"] == "Check whether the landlord replied by mail" and refs["wake"] == "snooze"
+        assert H.task(c, row["id"])["snoozed_note"] is None
+
+
+def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(api):
+    store = api.app.state.store
+    task = post(api, "tasks", {"owner": "ops", "title": "Renew the certificate", "body": "x"})
+    post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "x" * 501}, expected=422)
+    shown = post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "  Ask the vendor  "})
+    assert shown["snoozed_note"] == "Ask the vendor"
+    back = post(api, f"tasks/{task['id']}/unsnooze", {})
+    assert back["snoozed_note"] is None
+    with store.read() as c:
+        woken = snooze_wakes(c, task["id"], "Unsnoozed")
+        assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Ask the vendor")
+    post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "Check the vendor"})
+    done = post(api, f"tasks/{task['id']}", {"version": get(api, "tasks/" + task["id"])["task"]["version"],
+                                              "status": "done"})
+    assert done["snoozed_until"] is None and done["snoozed_note"] is None

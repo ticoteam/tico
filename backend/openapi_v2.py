@@ -742,6 +742,7 @@ SCHEMAS = {
                 snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
                                "off lists and Needs you, and quiet, until then"},
                 snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},
+                snoozed_note={"type": ["string", "null"], "description": "What to check when the snooze ends (sent in the owner's wake)"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
                        "chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody "
                        "holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task "

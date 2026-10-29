@@ -1323,6 +1323,8 @@ def migrate(conn, adopt_legacy=False):
     # A task snoozed until a date, and who snoozed it (backend/task_snooze.py).
     add_column(conn, "tasks", "snoozed_until", "TEXT")
     add_column(conn, "tasks", "snoozed_by", "TEXT")
+    # What the snoozer wants checked when the snooze ends, shown in the wake (backend/task_snooze.py).
+    add_column(conn, "tasks", "snoozed_note", "TEXT")
     # A review or QA child's verdict (approve|changes|pass|fail) and the pull request head it judged (record_verdict).
     add_column(conn, "tasks", "verdict", "TEXT")
     add_column(conn, "tasks", "verdict_head", "TEXT")

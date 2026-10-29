@@ -49,6 +49,7 @@ class TaskRow(TypedDict):
     checkpoint_blocked: int
     snoozed_until: str | None
     snoozed_by: str | None
+    snoozed_note: str | None
     verdict: str | None
     verdict_head: str | None
     blocked_since: str | None

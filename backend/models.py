@@ -533,9 +533,11 @@ class TaskLink(Contract):
 
 class TaskWait(Contract):
     """What the task waits on: `task:<id>` (blocked_by), `pr:<url>` or `pr:<task>` (until that pull request merges),
-    `release:<tag>` (until that release is published). `remove` takes it off."""
+    `release:<tag>` (until that release is published). `remove` takes it off. `note` goes in the owner's wake when a
+    pr or release wait fires (not on task:, which is a blocked_by)."""
     on: Annotated[str, Field(min_length=3, max_length=400)]
     remove: bool = False
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskRelation(Contract):
@@ -2420,6 +2422,8 @@ class BotGoLive(Contract):
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
+    # What to check when the snooze ends, put in the owner's wake (at most 500 characters once stripped).
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskQaWaiver(Contract):

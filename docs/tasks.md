@@ -214,6 +214,7 @@ hub task wait <task> --on pr:https://github.com/<owner>/<repo>/pull/943   # unti
 hub task wait <task> --on pr:<other task>                                  # the one pull request linked on it
 hub task wait <task> --on release:v0.3.64                                  # until that release is published
 hub task wait <task> --on task:<other task>                                # the same as blocked_by
+hub task wait <task> --on pr:<url> --note "Check the migration notes, then QA"  # a note comes back in the wake
 hub task wait <task> --on pr:<url> --remove                                # take it off
 ```
 
@@ -222,8 +223,9 @@ GitHub webhook), the owner gets one wake; the task it came from keeps its own st
 A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
 never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
 named (`release:<owner>/<repo>@v0.3.64`), and a version tag only (major.minor at least). Who may add or remove a
-wait is who may add a blocked_by: the task's owner, or a person on a team that moves tasks. A deleted task keeps its
-waits in the trash and gets them back when restored. The MCP tool is `hub_task_wait`; the API is
+wait is who may add a blocked_by: the task's owner, or a person on a team that moves tasks. `--note` on a pr: or
+release: wait is shown on the task and comes back in its wake as `Your note:`; a repeat with a note replaces it. A
+deleted task keeps its waits in the trash and gets them back when restored. The MCP tool is `hub_task_wait`; the API is
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
@@ -660,6 +662,9 @@ before then. Its requester, its owner, their managers, anyone on it by role, or 
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
 `snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
+The snoozer may leave a **note** (`--note`, `note` on the API, `hub_task_snooze`): what to check when it ends.
+It goes in the **Snooze over** wake, as `Your note:`, and is shown on the task as `snoozed_note` until then
+(at most 500 characters; a longer one is refused).
 When someone other than its requester snoozes a task, the requester is told. A role holder's
 manager gains no snooze permission unless they also manage the owner or requester.
 
@@ -678,8 +683,8 @@ Until that moment:
 When the date comes, the task is back everywhere and its owner bot gets one **Snooze over** notice,
 which also stands in for a due date that passed during the snooze. **Unsnooze** (the **…** menu, the
 **Snoozed to** chip on the task, `hub task unsnooze <id>` or `POST /api/v2/tasks/{id}/unsnooze`)
-brings it back early and wakes its owner bot once. Finishing, declining or closing a task, or
-moving it to review, ends its snooze.
+brings it back early and wakes its owner bot once, with the note if one was left. Finishing, declining or
+closing a task, or moving it to review, ends its snooze and clears the note.
 
 ## Done and Closed
 
