@@ -3440,6 +3440,9 @@ class Execution:
                             # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
                             # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                             "gateway": gateway_connection.wanted(config),
+                            # Listed sites that leave through an exit computer: the runner gives the turn a proxy
+                            # that sends only these there (backend/exits.py; runner-rs/src/exit_proxy.rs).
+                            **({"exit_routes": exit_routes} if (exit_routes := exits.routes(c, row["bot"])) else {}),
                             "generation": row["generation"], "lease_until": until,
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,

@@ -77,7 +77,7 @@ def test_only_the_operator_or_an_admin_turns_an_exit_on_and_only_on_a_runner_tha
         "exit": {"on": False, "bots": []}, "exit_available": True}                 # an admin turns it off
 
 
-def test_a_site_picks_an_exit_only_when_that_computer_takes_the_bot_and_runs_get_only_exit_routes(api, world):
+def test_a_site_picks_an_exit_only_when_that_computer_takes_the_bot_and_the_run_gets_only_exit_routes(api, world):
     bot_box, mac = world
     exit_ = f"computer:{mac['runner_id']}"
     sites = {"sites": [{"host": "shop.acme.example", "exit": exit_}]}
@@ -92,9 +92,12 @@ def test_a_site_picks_an_exit_only_when_that_computer_takes_the_bot_and_runs_get
                              {"host": "shop.acme.example", "exit": exit_, "exit_name": "Home Mac", "exit_takes_bot": True}]
     assert view["exits"] == [{"exit": exit_, "name": "Home Mac"}]
     _, attempt = task_attempt(api, bot_box)
-    routes = get(api, f"runners/me/exit/routes?attempt={attempt['id']}", token=bot_box["token"])["routes"]
-    assert routes == [{"host": "shop.acme.example", "exit": exit_, "name": "Home Mac"}]      # direct stays out
-    get(api, f"runners/me/exit/routes?attempt={attempt['id']}", token=mac["token"], expected=403)   # not its run
+    # The whole list, since an exact direct name beats a wildcard through an exit; no list without an exit in it.
+    assert attempt["exit_routes"] == [{"host": "*.cdn.example", "exit": "direct", "name": ""},
+                                      {"host": "shop.acme.example", "exit": exit_, "name": "Home Mac"}]
+    put(api, "bots/ops/sites", {"sites": [{"host": "*.cdn.example"}]})
+    with api.app.state.store.read() as c:
+        assert exits.routes(c, "ops") == []   # the claim then leaves exit_routes out
 
 
 def test_every_stream_is_authorized_against_the_run_the_site_list_and_the_exits_own_list(api, world):

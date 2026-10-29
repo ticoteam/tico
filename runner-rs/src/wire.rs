@@ -32,6 +32,8 @@ pub struct HeartbeatAnswer {
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,
+    /// True while this computer is an exit for bots (backend/exits.py): keep the exit link open (crate::exit_link).
+    pub exit: Option<bool>,
 }
 
 /// `POST jobs/claim`. The attempt stays JSON: the turn reads it whole (execute.rs, state.rs).

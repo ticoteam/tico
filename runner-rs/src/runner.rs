@@ -477,6 +477,8 @@ impl Runner {
             self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
             crate::perf::set_enabled(beat.performance == Some(true));
+            // Exit for bots: serve only while the computer's owner has it on (crate::exit_link).
+            crate::exit_link::set_serving(beat.exit == Some(true));
             if beat.restart == Some(true) && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {

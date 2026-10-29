@@ -367,6 +367,15 @@ function machineTurnsNote(machine) {
   return machine.turn_limit != null && machine.turns_at_once > machine.turn_limit
     ? `This computer runs at most ${machine.turn_limit}` : '';
 }
+// Exit for bots: the bots ticked here may send the sites on their own lists out through this computer's connection.
+// None ticked is off. Only the computer's operator or an admin sees it (the server checks the same).
+function machineExitHTML(machine) {
+  const on = new Set(machine.exit?.bots || []);
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !e.shared_from);
+  return `<details class="computer-detail-check" data-machine-details="${esc(machine.id)}:exit"><summary>Exit for bots <span class="muted">${on.size ? `${on.size} bot${on.size === 1 ? '' : 's'}` : 'Off'}</span></summary>
+    <p class="muted">Sites on these bots' lists go out through this computer's internet connection.</p>
+    ${bots.map(e => `<label class="computer-detail-check"><input type="checkbox" data-exit-bot="${esc(machine.id)}" value="${esc(e.name)}"${on.has(e.name) ? ' checked' : ''}> ${esc(e.display_name || e.name)}</label>`).join('') || '<p class="muted">No bots yet.</p>'}</details>`;
+}
 function machineSettingsHTML(machine) {
   const admin = settingsIsAdmin(), manage = !machine.revoked_at && machineCanSignIn(machine);
   const turns = machine.turns_at_once == null ? '' : String(machine.turns_at_once);
@@ -379,6 +388,7 @@ function machineSettingsHTML(machine) {
       <span class="muted" data-turns-note>${esc(machineTurnsNote(machine))}</span></label>` : '',
     admin ? `<label class="computer-detail-check"><input type="checkbox" data-member-bots="${esc(machine.id)}"${machine.accepts_member_bots ? ' checked' : ''}> Accepts members' bots</label>`
       : machine.accepts_member_bots ? '<p>Accepts members\' bots.</p>' : '',
+    machine.exit_available && screenMayOpen(machine) ? machineExitHTML(machine) : '',
     screenMayOpen(machine) ? `<label class="computer-detail-check"><input type="checkbox" data-performance-mode="${esc(machine.id)}"${machine.performance !== 'off' ? ' checked' : ''}> Performance diagnostics</label>` : '',
     `<button type="button" class="ghost" data-computer-performance="${esc(machine.id)}">Performance${betaPill('replay_performance')}</button>`];
   const revoke = manage ? `<button type="button" class="ghost danger-text computer-detail-revoke" data-computer-remove="${esc(machine.id)}">Revoke computer</button>` : '';

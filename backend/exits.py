@@ -212,12 +212,17 @@ def replace_sites(c, actor, bot, entries):
 
 
 def routes(c, bot):
-    """What a turn's proxy sends through an exit: only the listed sites whose exit is not direct."""
+    """What a turn's proxy routes by: the bot's whole site list (direct entries too, since an exact direct name beats a
+    wildcard through an exit), or nothing when no entry names an exit. The claim hands it to the run as `exit_routes`
+    (backend/execution.py), so a run that has any always starts with its proxy."""
+    listed = sites(c, bot)
+    if not any((parse_exit(s["exit"]) or (DIRECT,))[0] != DIRECT for s in listed):
+        return []
     out = []
-    for s in sites(c, bot):
+    for s in listed:
         parsed = parse_exit(s["exit"])
-        if parsed and parsed[0] != DIRECT:
-            out.append({"host": s["host"], "exit": s["exit"], "name": computer_label(c, parsed[1])})
+        out.append({"host": s["host"], "exit": s["exit"],
+                    "name": computer_label(c, parsed[1]) if parsed and parsed[0] != DIRECT else ""})
     return out
 
 
@@ -473,20 +478,6 @@ def install(app, store, auth, mutate, execution, settings):
                              (*args, limit + 1)).fetchall()
         page = [history_view(r) for r in rows[:limit]]
         return {"sessions": page, **({"before": page[-1]["started"]} if len(rows) > limit else {})}
-
-    @app.get("/api/v2/runners/me/exit/routes")
-    def exit_routes(request: Request, attempt: str):
-        """The sites a run's proxy sends through an exit, to the computer running it: only non-direct entries."""
-        who = request.state.identity
-        with store.read() as c:
-            if not execution.runner(c, who):
-                raise Problem("forbidden", "Only a registered computer may ask for this", 403)
-            row, _ = _attempt(c, attempt)
-            if not row or row["runner_id"] != who.runner_id:
-                raise Problem("forbidden", "That run is not on this computer", 403)
-            if row["state"] not in ("leased", "running"):
-                raise Problem("stale_lease", "That run has ended", 409)
-            return {"routes": routes(c, row["bot"])}
 
     @app.post(PRIVATE_PATH, include_in_schema=False)
     def authorize(request: Request, body: dict):
