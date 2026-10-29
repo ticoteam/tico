@@ -44,6 +44,22 @@ These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and 
 `GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
 fold into one row (`count`).
 
+## On hold
+
+An automation that keeps starting runs for 20 minutes (120 or more, spread over at least 15 of those minutes), or
+starts 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
+same, so nothing is lost: its queued runs and every new one wait as **Held** instead of running, up to 500 (past that a
+trigger is counted as dropped, and the hold shows how many). Its owner gets one Needs-you task, and the Health Monitor
+one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
+queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
+
+```
+hub automation held <id> release|drop
+```
+
+Over MCP this is `hub_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
+or `{"action": "drop"}`. Whoever may change the automation may do either.
+
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice
   ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)). Leave them out to use the bot's

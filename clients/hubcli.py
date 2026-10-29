@@ -267,6 +267,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub automation delete <id>
     hub automation run <id> [--input JSON] run now with a sample trigger output; prints the run
     hub automation runs <id> [--limit N] [--before RUN]
+    hub automation held <id> release|drop  end a run-guard hold: queue its held runs, or skip them
     hub automation recent-runs [--range 5m|1h|24h|7d] [--status S] [--trigger T] [--owner O] [--limit N] [--before B]
                                            runs across every automation you may see, newest first
     hub automation stats [--range 5m|1h|24h|7d]
@@ -1993,9 +1994,13 @@ def parser():
     s.add_argument("--limit", type=int)
     s.add_argument("--before", help="`next` from the page before")
     s.set_defaults(fn="automation runs")
+    s = auto.add_parser("held", help="end a run-guard hold: release queues its held runs, drop skips them")
+    s.add_argument("id")
+    s.add_argument("action", choices=["release", "drop"])
+    s.set_defaults(fn="automation held")
     s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
     s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.add_argument("--status", choices=["done", "failed", "waiting", "running"])
+    s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
     s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event or system")
     s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
     s.add_argument("--limit", type=int)

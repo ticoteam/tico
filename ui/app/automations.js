@@ -185,6 +185,28 @@ function auHeadSwitch(a, name) {
   if (auMayPause(a)) return auSwitch(a.enabled !== false, name + ' on', 'data-on-cur');
   return a.enabled === false ? `<span class="pill${a.paused ? ' waiting' : ''}">${a.paused ? 'Paused' : 'Off'}</span>` : '';
 }
+// The run guard's hold, on its own line: how many runs wait, and Release or Drop for whoever may change it.
+function auHoldLine(a) {
+  const h = a.hold;
+  if (!h) return '';
+  const n = h.held + ' held' + (h.dropped ? ` · ${h.dropped} dropped` : '');
+  return `<div class="au-hold"><span class="pill waiting">On hold</span><span>${esc(n)}</span>`
+    + (a.can_edit ? `<button class="au-chip" type="button" data-hold="release">Release</button>
+      <button class="au-chip" type="button" data-hold="drop">Drop</button>` : '') + '</div>';
+}
+async function auHoldAct(action) {
+  const a = AU.cur, state = AU;
+  if (!a?.hold || (action === 'drop' && !confirm(`Drop ${a.hold.held} held runs of ${a.name}?`))) return;
+  try {
+    const out = auNormal(await post(`${auApi(a.id)}/held`, {action}));
+    if (AU !== state) return;
+    delete out.moved;
+    out.hold ??= null;   // the list row keeps what it had unless told the hold is gone
+    auAdopt(out);
+    if (state.runs) { state.runs = null; void auRunsLoad(state); }
+    toast(action === 'release' ? 'Released' : 'Dropped');
+  } catch (e) { toast(e.message, true); }
+}
 // Why a built-in has no switch, on its own line under the name so the name stays whole.
 const auHeadLock = a => a.builtin && !auMayPause(a)
   ? '<span class="au-lock"><span class="nav-icon" aria-hidden="true">lock</span>Built-in: can’t be turned off</span>' : '';
@@ -208,7 +230,7 @@ function auDrawHead() {
     </div>
     <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}</button>
     <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
-    ${auHeadLock(a)}${auWarn(a)}` : ''}`;
+    ${auHeadLock(a)}${auHoldLine(a)}${auWarn(a)}` : ''}`;
 }
 
 function auDrawPane() {
@@ -291,6 +313,7 @@ function auOnClick(e) {
   if ((m = t.closest('[data-dot]'))) { auPathsGo(m); return; }
   if ((m = t.closest('[data-run]'))) { auRunToggle(m.dataset.run); return; }
   if ((m = t.closest('[data-runs-more]'))) { void auRunsLoad(AU, true); return; }
+  if ((m = t.closest('[data-hold]'))) { void auHoldAct(m.dataset.hold); return; }
   if (t.closest('.au-sw')) return;
   if ((m = t.closest('[data-open]'))) { auEdOpenStep(m.dataset.open, m.dataset.path); return; }
 }

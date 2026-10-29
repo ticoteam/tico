@@ -1754,6 +1754,77 @@
         ]
       }
     },
+    "/api/v2/automations/{aid}/held": {
+      "post": {
+        "summary": "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
+        "operationId": "endAutomationHold",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeldAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationHeld"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
     "/api/v2/automations/{aid}/run": {
       "post": {
         "summary": "Run it now with `input` standing in for the trigger's output; answers the run",
@@ -26526,7 +26597,42 @@
           },
           "paused": {
             "type": "boolean",
-            "description": "Off because the run guard paused it"
+            "description": "Off because an earlier run guard paused it"
+          },
+          "hold": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "enum": [
+                  "flood",
+                  "sustained"
+                ]
+              },
+              "since": {
+                "type": "string"
+              },
+              "held": {
+                "type": "integer"
+              },
+              "dropped": {
+                "type": "integer"
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "dropped",
+              "held",
+              "rule",
+              "since",
+              "task"
+            ],
+            "additionalProperties": true,
+            "description": "Present while the run guard keeps its new runs held, not run, until someone releases or drops them; `task` is the Needs-you task"
           },
           "schedule": {
             "type": "string",
@@ -26564,6 +26670,176 @@
         },
         "required": [
           "text"
+        ],
+        "additionalProperties": true
+      },
+      "AutomationHeld": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "object"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "can_edit": {
+            "type": "boolean"
+          },
+          "can_pause": {
+            "type": "boolean"
+          },
+          "spend_cap": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "batch": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "last_run": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "today": {
+                "type": "object",
+                "properties": {
+                  "runs": {
+                    "type": "integer"
+                  },
+                  "dropped": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "dropped",
+                  "runs"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "today"
+            ],
+            "additionalProperties": true
+          },
+          "next_run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "warning": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The trigger as the overview groups it; system for Tico's own jobs"
+          },
+          "problems": {
+            "type": "array",
+            "description": "Wake rules that name a step their task type does not have (they never fire until changed): rule id, the step named and why",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule": {
+                  "type": "string"
+                },
+                "step": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "rule",
+                "step",
+                "why"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Off because an earlier run guard paused it"
+          },
+          "hold": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "enum": [
+                  "flood",
+                  "sustained"
+                ]
+              },
+              "since": {
+                "type": "string"
+              },
+              "held": {
+                "type": "integer"
+              },
+              "dropped": {
+                "type": "integer"
+              },
+              "task": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "dropped",
+              "held",
+              "rule",
+              "since",
+              "task"
+            ],
+            "additionalProperties": true,
+            "description": "Present while the run guard keeps its new runs held, not run, until someone releases or drops them; `task` is the Needs-you task"
+          },
+          "schedule": {
+            "type": "string",
+            "description": "A system job's schedule in words"
+          },
+          "moved": {
+            "type": "integer",
+            "description": "Runs released or dropped"
+          }
+        },
+        "required": [
+          "can_edit",
+          "id"
         ],
         "additionalProperties": true
       },
@@ -26908,7 +27184,8 @@
               "ok",
               "failed",
               "empty",
-              "skipped"
+              "skipped",
+              "held"
             ]
           },
           "cost": {
@@ -32642,6 +32919,21 @@
           "checks"
         ],
         "additionalProperties": true
+      },
+      "HeldAction": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "pattern": "^(release|drop)$",
+            "title": "Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "HeldAction"
       },
       "IfNoAnswer": {
         "properties": {

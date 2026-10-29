@@ -17,9 +17,15 @@ in `automation_turn_answers`, which the run picks up when it is saved.
 
 Reading mail and Slack is the owner's: an automation hears and finds only what its owner may read (`may_read_inbox`),
 checked on save and again when a message arrives. A turn holds its bot's usual cost against the spend cap until it is
-priced (`automation_holds`). The run guard pauses an automation whose runs keep coming over time: RUN_GUARD_SUSTAINED
-runs in RUN_GUARD_SPAN minutes spread over at least RUN_GUARD_SPREAD of those minutes (a loop), or RUN_GUARD_BURST runs
-in RUN_GUARD_MINUTES (a flood). A burst of distinct events inside a minute or two is a backlog and simply queues.
+priced (`automation_holds`).
+
+The run guard stops spending, never work. An automation whose runs keep coming over time (RUN_GUARD_SUSTAINED runs in
+RUN_GUARD_SPAN minutes spread over at least RUN_GUARD_SPREAD of those minutes) or flood in (RUN_GUARD_BURST runs in
+RUN_GUARD_MINUTES) is put on hold (`automation_guard_holds`): its queued runs and every new one are kept as `held`, which
+the drain never claims, up to RUN_GUARD_BURST of them (past that each is counted as dropped, on the hold too). No rate
+tells a slow catch-up from a loop, so a person decides: release the held runs to the queue, or drop them (skipped).
+Turning the automation off or deleting it skips them too. A burst of distinct events inside a minute or two is a
+backlog and simply queues.
 
 Mail actions are carried out by the computer that reads the mailbox: it claims them (a lease of MAIL_LEASE_MINUTES,
 MAIL_TRIES claims at most) and reports each result; their step and run wait until then (`settle_mail`).
@@ -86,6 +92,10 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS automation_holds(ref TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT NOT NULL, "
     "amount REAL NOT NULL, at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS automation_holds_of ON automation_holds(automation_id, at)",
+    # The run guard's hold on an automation, live while `cleared` is null; one row each, the last hold kept so the
+    # guard counts only runs since it was cleared. `dropped`: triggers past RUN_GUARD_BURST held runs.
+    "CREATE TABLE IF NOT EXISTS automation_guard_holds(automation_id TEXT PRIMARY KEY, rule TEXT NOT NULL, "
+    "since TEXT NOT NULL, dropped INTEGER NOT NULL DEFAULT 0, task_id TEXT, cleared TEXT)",
 )
 KEEP_DAYS = 30           # step detail; the daily counts and the run rows stay
 TURN_WAIT_DAYS = 1
@@ -93,7 +103,7 @@ STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued a
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
 RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
-RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, paused
+RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
 RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
 RUN_GUARD_SUSTAINED = 120               # runs in RUN_GUARD_SPAN that make it sustained...
 RUN_GUARD_SPREAD = 15                   # ...if they fall in at least this many distinct minutes (a burst does not)
@@ -157,6 +167,8 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
         guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
                           (row["id"],)).fetchone()[0]
         out["paused"] = bool(guard and guard >= row["updated"])
+    if hold := hold_of(c, row["id"]):
+        out["hold"] = hold
     job = AO.system_key(flow)
     if job:
         known = (jobs if jobs is not None else AO.system_jobs(c)).get(job) or {}
@@ -235,6 +247,8 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
                   (*columns, aid, now, actor, "" if idle else now, due))
     if audit:
         audit_log.write(c, actor, "automation:" + aid, before, flow, via)
+    if before and before.get("enabled") and not flow["enabled"]:
+        _unhold(c, aid, actor, "drop", via)   # turned off, by whoever: what it held is skipped, as a delete skips it
     source = flow.get("source")
     if before and bool(before.get("enabled")) != bool(flow["enabled"]) and isinstance(source, dict) \
             and source.get("kind") == "routine" and source.get("id"):
@@ -762,43 +776,89 @@ def _ring(c):
 
 def _guard(c, row):
     """The backstop for loops the chain cannot see (a webhook that calls back with a new id each time, a mail rule
-    answered by mail). It pauses the automation, with one task in its owner's Needs you and one notice to the Health
-    Monitor, when one rule holds: `flood`: RUN_GUARD_BURST runs in the last RUN_GUARD_MINUTES; `sustained`: at least
-    RUN_GUARD_SUSTAINED runs in the last RUN_GUARD_SPAN minutes that fall in at least RUN_GUARD_SPREAD distinct minutes
-    of it (a loop keeps going over time; a backlog lands in a minute or two and does not spread). Exact repeats are
-    not counted here: redelivery is deduped per source, and a bot's own writes are stopped by the chain. The check
-    runs before the insert, so the trigger that trips it queues nothing and every later trigger finds the automation
-    off. Returns whether it tripped."""
+    answered by mail): the rule that holds now, with what it counted, or None. `flood`: RUN_GUARD_BURST runs in the
+    last RUN_GUARD_MINUTES; `sustained`: at least RUN_GUARD_SUSTAINED runs in the last RUN_GUARD_SPAN minutes that fall
+    in at least RUN_GUARD_SPREAD distinct minutes of it (a loop keeps going over time; a backlog lands in a minute or
+    two and does not spread). Exact repeats are not counted here: redelivery is deduped per source, and a bot's own
+    writes are stopped by the chain. Only runs since its last hold was cleared count, so runs a person released do not
+    put it straight back on hold."""
     now = H.now()
-    flood_since = H.shift(now, minutes=-RUN_GUARD_MINUTES)
-    span_since = H.shift(now, minutes=-RUN_GUARD_SPAN)
+    last = c.execute("SELECT cleared FROM automation_guard_holds WHERE automation_id=?", (row["id"],)).fetchone()
+    floor = (last and last["cleared"]) or ""
+    flood_since = max(H.shift(now, minutes=-RUN_GUARD_MINUTES), floor)
+    span_since = max(H.shift(now, minutes=-RUN_GUARD_SPAN), floor)
     flood = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=?",
                       (row["id"], flood_since)).fetchone()[0]
     span, minutes = c.execute("SELECT count(*), count(DISTINCT substr(started,1,16)) FROM automation_runs "
                               "WHERE automation_id=? AND started>=?", (row["id"], span_since)).fetchone()
     rule = ("flood" if flood >= RUN_GUARD_BURST else
             "sustained" if span >= RUN_GUARD_SUSTAINED and minutes >= RUN_GUARD_SPREAD else "")
-    if not rule:
-        return False
+    return (rule, {"runs": span, "minutes": minutes, "flood": flood}) if rule else None
+
+
+def _hold_row(c, aid):
+    return c.execute("SELECT * FROM automation_guard_holds WHERE automation_id=? AND cleared IS NULL", (aid,)).fetchone()
+
+
+def hold_of(c, aid):
+    """The automation's live hold as its readers get it ({rule, since, held, dropped, task}), or None."""
+    row = _hold_row(c, aid)
+    if not row:
+        return None
+    held = c.execute("SELECT count(*) FROM automation_runs WHERE status='held' AND automation_id=?", (aid,)).fetchone()[0]
+    return {"rule": row["rule"], "since": row["since"], "held": held, "dropped": row["dropped"], "task": row["task_id"]}
+
+
+def _hold(c, row, rule):
+    """Put the automation on hold: what it has queued is held now, so a loop stops spending at once."""
+    c.execute("INSERT INTO automation_guard_holds(automation_id,rule,since) VALUES(?,?,?) ON CONFLICT(automation_id) "
+              "DO UPDATE SET rule=excluded.rule, since=excluded.since, dropped=0, task_id=NULL, cleared=NULL",
+              (row["id"], rule, H.now()))
+    c.execute("UPDATE automation_runs SET status='held' WHERE automation_id=? AND status='queued'", (row["id"],))
+
+
+def _hold_told(c, row, rule, counted, held):
+    """Once a hold: a task in its owner's Needs you (closed when the hold ends) and a notice to the Health Monitor."""
     flow = flow_of(row)
-    _save(c, H.KEEPER, row["id"], {**flow, "enabled": False}, flow, via="run_guard")
-    why = {"flood": f"it queued more than {RUN_GUARD_BURST} runs in {RUN_GUARD_MINUTES} minutes",
-           "sustained": f"it kept queuing runs for {RUN_GUARD_SPAN} minutes ({RUN_GUARD_SUSTAINED}+ runs spread over "
-                        f"{RUN_GUARD_SPREAD}+ of those minutes)"}[rule]
-    words = (f"Automation {flow['name']} was paused: {why}, which is most often a loop. "
-             "Look at its runs, fix what starts it, then turn it back on.")
+    why = {"flood": f"it queued {RUN_GUARD_BURST} runs in {RUN_GUARD_MINUTES} minutes",
+           "sustained": f"it kept queuing runs for {RUN_GUARD_SPAN} minutes"}[rule]
+    words = (f"Automation {flow['name']} is on hold: {why}. That is most often a loop. {held} runs are waiting. "
+             "Release them if this was real work, or drop them, after fixing what starts it.")
     refs = {"kind": "run_guard", "automation": row["id"]}
-    H.event(c, H.KEEPER, "automation.run_guard", row["id"],
-            {"rule": rule, "runs": span, "minutes": minutes, "flood": flood})
+    H.event(c, H.KEEPER, "automation.run_guard", row["id"], {"rule": rule, **counted, "held": held})
     lead = A.acts_as(c, {"flow": flow})
     person = owner_person(c, flow["owner"]) or (lead[6:] if lead.startswith("human:") else "")
     if person:
-        H.task_create(c, H.KEEPER, f"Automation {flow['name']} paused: too many runs"[:300], words,
-                      "human:" + person, lint=False, deduplicate=False)
+        task = H.task_create(c, H.KEEPER, f"Automation {flow['name']} on hold"[:300], words, "human:" + person,
+                             lint=False, deduplicate=False, wake_refs=refs)
+        c.execute("UPDATE automation_guard_holds SET task_id=? WHERE automation_id=?", (task["id"], row["id"]))
     from . import health_monitor
     if health_monitor.active(c):   # the optional Health Monitor, when it is on
         H.notice(c, H.KEEPER, "bot:" + health_monitor.SLUG, words, refs=refs)
-    return True
+
+
+def _unhold(c, aid, actor, how, via=None):
+    """End the hold: its held runs go back to the queue (`release`) or are skipped (`drop`, and a turn off or delete),
+    its Needs-you task is closed, and the change is on record. Returns how many runs it moved, or None with no hold."""
+    hold = _hold_row(c, aid)
+    if not hold:
+        return None
+    now = H.now()
+    if how == "release":
+        n = c.execute("UPDATE automation_runs SET status='queued' WHERE automation_id=? AND status='held'", (aid,)).rowcount
+        _ring(c)
+    else:
+        n = c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? AND status='held'",
+                      (now, aid)).rowcount
+    c.execute("UPDATE automation_guard_holds SET cleared=? WHERE automation_id=?", (now, aid))
+    task = H.task(c, hold["task_id"]) if hold["task_id"] else None
+    if task and task["status"] not in ("closed", "done", "declined"):
+        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True)
+    before = {"hold": {"rule": hold["rule"], "since": hold["since"], "dropped": hold["dropped"]}}
+    H.event(c, actor, "automation.hold_" + ("released" if how == "release" else "dropped"), aid,
+            {"runs": n, "rule": hold["rule"], "dropped": hold["dropped"]})
+    audit_log.write(c, actor, "automation:" + aid, before, {"hold": None, how: n}, via)
+    return n
 
 
 def _absorbed(c, row):
@@ -857,10 +917,11 @@ def _no_input(c, row, settings, at, zone):
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
-    while its last task is open (`_absorbed`), and the run guard may pause it."""
+    while its last task is open (`_absorbed`), and on hold (the run guard's, `_guard`) the run is kept as `held`, the
+    one that trips it included; past RUN_GUARD_BURST held runs it is dropped, and a manual run is refused."""
     if (not manual and _finds(flow_of(row)["steps"]) and c.execute(
-            "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting') LIMIT 1",
-            (row["id"],)).fetchone()):
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting','held') "
+            "LIMIT 1", (row["id"],)).fetchone()):
         _count(c, row["id"], "dropped")
         return None
     if not manual and _absorbed(c, row):
@@ -870,15 +931,32 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
             (row["id"], str(ref)[:200])).fetchone():
         # One Slack message, one run: a channel message offered once may come back as an `@Tico` event.
         return None
-    if _guard(c, row):
+    held = _hold_row(c, row["id"])
+    if held and manual:
         return None
-    rid = "run_" + H.new_id()
-    state = E.start(payload, manual=manual)
-    c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
-              "VALUES(?,?,?,?,?,'queued',?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
-                                                  json.dumps(state, default=str), json.dumps(list(chain))))
-    _count(c, row["id"], "runs")
-    _ring(c)
+    tripped = None if held else _guard(c, row)
+    if tripped:
+        _hold(c, row, tripped[0])
+    on_hold = bool(held or tripped)
+    waiting = c.execute("SELECT count(*) FROM automation_runs WHERE status='held' AND automation_id=?",
+                        (row["id"],)).fetchone()[0] if on_hold else 0
+    rid = None
+    if on_hold and waiting >= RUN_GUARD_BURST:
+        _count(c, row["id"], "dropped")
+        c.execute("UPDATE automation_guard_holds SET dropped=dropped+1 WHERE automation_id=?", (row["id"],))
+    else:
+        rid = "run_" + H.new_id()
+        state = E.start(payload, manual=manual)
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
+                                              "held" if on_hold else "queued", json.dumps(state, default=str),
+                                              json.dumps(list(chain))))
+        _count(c, row["id"], "runs")
+        waiting += on_hold
+        if not on_hold:
+            _ring(c)
+    if tripped:
+        _hold_told(c, row, tripped[0], tripped[1], waiting)
     return rid
 
 
@@ -1045,7 +1123,10 @@ def on_webhook(c, trigger_id, name, type_, delivery, payload, content):
     queued = fire(c, "webhook", {"webhook": {"id": trigger_id, "name": name, "type": type_, "delivery": delivery,
                                              "data": payload, "content": content}},
                   f"webhook:{trigger_id}:{delivery}", lambda t: t["id"] == trigger_id)
-    return [{"outcome": "automation", "target": rid, "ok": True, "detail": "run queued"} for rid in queued]
+    held = {r[0] for r in c.execute("SELECT id FROM automation_runs WHERE status='held' AND id IN "
+                                    "(SELECT value FROM json_each(?))", (json.dumps(queued),))} if queued else set()
+    return [{"outcome": "automation", "target": rid, "ok": True, "detail": "run held" if rid in held else "run queued"}
+            for rid in queued]
 
 
 def on_listening(c, intake, post):
@@ -1527,8 +1608,8 @@ def _requeue(c, row):
 def _settle_run(c, run_id):
     """A mail action's result reached its run. A run being advanced settles as it is saved (Hub.go)."""
     run = c.execute("SELECT status, state_json, finished FROM automation_runs WHERE id=?", (run_id,)).fetchone()
-    if not run or not run["state_json"] or run["status"] in ("queued", "running"):
-        return
+    if not run or not run["state_json"] or run["status"] in ("queued", "running", "held"):
+        return   # a held run settles once it is released and runs
     state = json.loads(run["state_json"])
     status = settle_mail(c, state)
     status = "failed" if run["status"] == "failed" else status   # the tick gave up on it: it stays failed
@@ -1684,6 +1765,10 @@ class Empty(Contract):
 
 class InboxSend(Contract):
     send: bool
+
+
+class HeldAction(Contract):
+    action: str = Field(pattern="^(release|drop)$")   # release: held runs are queued; drop: they are skipped
 
 
 class RunNow(Contract):
@@ -1931,6 +2016,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             row = deletable(c, who, aid)
+            _unhold(c, aid, who.actor, "drop", _via(who))
             c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
             for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
                                      "('queued','waiting')", (aid,)).fetchall():
@@ -1972,7 +2058,7 @@ def install(app, store, auth, mutate):
                 return {"run": None, "dropped": True}
             rid = queue(c, row, {**body.input, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
             if not rid:
-                raise Problem("paused", "The automation queued too many runs and was paused", 409)
+                raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
             return {"run": rid}
         done = mutate(request, body, work)
         if done.get("dropped"):
@@ -1981,6 +2067,20 @@ def install(app, store, auth, mutate):
         hub.drain()
         with store.read() as c:
             return {"run": run_view(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())}
+
+    @app.post("/api/v2/automations/{aid}/held")
+    def automations_held(request: Request, aid: str, body: HeldAction):
+        """End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. Whoever may
+        change the automation may do either."""
+        who = request.state.identity
+
+        def work(c):
+            row = found(c, who, aid, "release or drop its held runs")
+            n = _unhold(c, aid, who.actor, body.action, _via(who))
+            if n is None:
+                raise Problem("not_on_hold", "The automation is not on hold", 409)
+            return {**view(c, row, who, detail=True), "moved": n}   # released runs drain after the commit (_ring)
+        return mutate(request, body, work)
 
     @app.get("/api/v2/automations/{aid}/runs")
     def automations_runs(request: Request, aid: str, limit: int = 25, before: str = ""):

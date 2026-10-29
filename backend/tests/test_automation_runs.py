@@ -1,6 +1,6 @@
 """How a run lives in the hub (backend/automations.py): saved after each step that did something and resumed from
 there, each effect done once; a turn that ends before its run is saved still answers it; the chain carried through a
-bot's turn; the run guard; the spend cap holding turns not priced yet; schedules; the find
+bot's turn; the run guard's hold; the spend cap holding turns not priced yet; schedules; the find
 watermark."""
 import json
 from datetime import datetime, timedelta, timezone
@@ -138,8 +138,8 @@ def test_a_burst_of_distinct_external_events_is_a_backlog_not_a_loop(api):
     with api.app.state.store.transaction() as c:
         for n in range(70):   # an outage's backlog flushed: 70 distinct deliveries, none calls another
             automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70
-    assert get(api, f"automations/{aid}")["enabled"] is True
+    assert statuses(api, aid) == {"queued": 70}
+    assert "hold" not in get(api, f"automations/{aid}")
     assert sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,)) == []
 
 
@@ -149,54 +149,133 @@ def test_a_burst_straddling_the_ten_minute_boundary_is_not_sustained(api):
     backdate(api, aid, 65, seconds_ago=595)   # the flood window's edge: two minutes at most, never spread
     with api.app.state.store.transaction() as c:
         assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "after", {}, "")
-    assert get(api, f"automations/{aid}")["enabled"] is True
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 131
+    assert statuses(api, aid) == {"done": 130, "queued": 1}
+    assert "hold" not in get(api, f"automations/{aid}")
 
 
-def test_a_fresh_id_loop_spread_over_sixteen_minutes_is_paused_and_queues_nothing_more(api):
+def statuses(api, aid):
+    rows = sql(api, "SELECT status, count(*) AS n FROM automation_runs WHERE automation_id=? GROUP BY status", (aid,))
+    return {r["status"]: r["n"] for r in rows}
+
+
+def hold_tasks(api):
+    return sql(api, "SELECT id, status, owner FROM tasks WHERE title='Automation Test on hold' ORDER BY created")
+
+
+def slow_drain(api, aid, minutes=16, per=8, start=datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tag="d"):
+    """A catch-up the mail syncer or a webhook sender pushes in pages: `per` distinct deliveries a minute."""
+    for minute in range(minutes):
+        with time_machine.travel(start + timedelta(minutes=minute), tick=False):
+            with api.app.state.store.transaction() as c:
+                for n in range(per):
+                    assert automations.on_webhook(c, "trg_1", "Deploys", "custom", f"{tag}{minute}-{n}", {}, "")
+
+
+def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     aid = webhook_auto(api)
-    for minute in range(1, 17):   # 8 runs a minute for 16 minutes: a loop that keeps going
-        backdate(api, aid, 8, seconds_ago=minute * 60 + 30)
-    with api.app.state.store.transaction() as c:
-        assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "loop-next", {}, "") == []   # check before insert
-    assert get(api, f"automations/{aid}")["enabled"] is False
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 128
-    assert len(sql(api, "SELECT id FROM tasks WHERE body LIKE '%kept queuing runs for 20 minutes%'")) >= 1
+    slow_drain(api, aid)   # 128 deliveries over 16 minutes: no rate tells this from a loop
+    assert statuses(api, aid) == {"held": 128}   # every delivery has a run; the queued ones were held at the trip
+    shown = get(api, f"automations/{aid}")
+    assert shown["enabled"] is True and shown["hold"]["held"] == 128 and shown["hold"]["rule"] == "sustained"
     trip = sql(api, "SELECT detail_json FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
-    assert '"rule": "sustained"' in trip[0]["detail_json"]
+    assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail_json"]
+    assert [t["owner"] for t in hold_tasks(api)] == ["human:ana"]   # one task a hold, not one a run
+    assert hub(api).claim() is None                                  # the drain never takes a held run
+    out = post(api, f"automations/{aid}/held", {"action": "release"})
+    assert out["moved"] == 128 and "hold" not in out
+    assert sum(statuses(api, aid).get(s, 0) for s in ("queued", "running", "ok", "failed")) == 128
+    assert [t["status"] for t in hold_tasks(api)] == ["closed"]
+    assert sql(api, "SELECT id FROM events WHERE action='automation.hold_released' AND target=?", (aid,))
+    audit = sql(api, "SELECT after_json FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
+    assert json.loads(audit[0]["after_json"]) == {"hold": None, "release": 128}
 
 
-def test_seventy_comments_on_one_task_do_not_pause_the_automation(api):
+def test_a_second_hold_after_a_release_is_a_new_hold_with_its_own_task(api):
+    aid = webhook_auto(api)
+    slow_drain(api, aid)
+    with time_machine.travel(datetime(2030, 1, 1, 9, 16, 20, tzinfo=timezone.utc), tick=False):
+        post(api, f"automations/{aid}/held", {"action": "release"})
+    # Straight after the release the runs it let go are not counted again: the next delivery queues.
+    with time_machine.travel(datetime(2030, 1, 1, 9, 16, 30, tzinfo=timezone.utc), tick=False):
+        with api.app.state.store.transaction() as c:
+            automations.on_webhook(c, "trg_1", "Deploys", "custom", "after-release", {}, "")
+    assert "hold" not in get(api, f"automations/{aid}")
+    # The loop was not fixed: sixteen more minutes of it hold it again, with a new task.
+    slow_drain(api, aid, start=datetime(2030, 1, 1, 9, 17, 5, tzinfo=timezone.utc), tag="again")
+    assert get(api, f"automations/{aid}")["hold"]["held"] >= 120
+    assert [t["status"] for t in hold_tasks(api)] == ["closed", "open"]
+    assert len(sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,))) == 2
+
+
+def test_a_flood_past_the_ceiling_keeps_its_runs_held_and_counts_the_rest_dropped(api):
+    aid = webhook_auto(api)
+    with time_machine.travel(datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tick=False):
+        with api.app.state.store.transaction() as c:
+            for n in range(600):   # 600 distinct deliveries inside one minute
+                automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
+        assert statuses(api, aid) == {"held": automations.RUN_GUARD_BURST}
+        hold = get(api, f"automations/{aid}")["hold"]
+        assert hold["rule"] == "flood" and hold["held"] == 500 and hold["dropped"] == 100   # none vanishes unseen
+        assert sql(api, "SELECT dropped FROM automation_daily WHERE automation_id=?", (aid,))[0]["dropped"] == 100
+
+
+def test_dropping_held_runs_skips_them_clears_the_hold_and_closes_its_task(api):
+    aid = webhook_auto(api)
+    slow_drain(api, aid)
+    out = post(api, f"automations/{aid}/held", {"action": "drop"})
+    assert out["moved"] == 128 and "hold" not in out and out["enabled"] is True
+    assert statuses(api, aid) == {"skipped": 128}
+    assert [t["status"] for t in hold_tasks(api)] == ["closed"]
+    post(api, f"automations/{aid}/held", {"action": "drop"}, expected=409)   # nothing is held now
+
+
+def test_turning_it_off_while_held_skips_the_held_runs_and_clears_the_hold(api):
+    aid = webhook_auto(api)
+    slow_drain(api, aid)
+    off = patch(api, aid, {"enabled": False})
+    assert off["enabled"] is False and "hold" not in off
+    assert statuses(api, aid) == {"skipped": 128}
+    assert [t["status"] for t in hold_tasks(api)] == ["closed"]
+
+
+def test_a_manual_run_while_held_is_refused_and_queues_nothing(api):
+    aid = webhook_auto(api)
+    slow_drain(api, aid)
+    r = api.post(f"/api/v2/automations/{aid}/run", json={}, headers=headers())
+    assert r.status_code == 409 and "on hold" in r.text
+    assert statuses(api, aid) == {"held": 128}
+
+
+def test_only_someone_who_may_change_it_releases_or_drops_its_held_runs(api):
+    from backend.tests.test_automation_api import as_bot
+    aid = webhook_auto(api)
+    slow_drain(api, aid)
+    peer = as_bot(api, "finance")
+    for action in ("release", "drop"):
+        post(api, f"automations/{aid}/held", {"action": action}, peer, expected=403)
+    assert statuses(api, aid) == {"held": 128} and get(api, f"automations/{aid}")["hold"]["held"] == 128
+    post(api, f"automations/{aid}/held", {"action": "pause"}, expected=422)
+
+
+def test_seventy_comments_on_one_task_do_not_hold_the_automation(api):
     aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Comment"}}],
                trigger={"type": "event", "name": "task.commented"})
     with api.app.state.store.transaction() as c:
         for n in range(70):   # distinct comment events, one task: one ref, but distinct events
             automations.on_event(c, "task.commented", "task_1", lambda n=n: {"comment_id": f"c{n}"}, "human:ana")
-    assert get(api, f"automations/{aid}")["enabled"] is True
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70
+    assert statuses(api, aid) == {"queued": 70}
+    assert "hold" not in get(api, f"automations/{aid}")
 
 
-def test_a_hundred_thirty_manual_runs_do_not_pause_it_by_themselves(api):
+def test_a_hundred_thirty_manual_runs_do_not_hold_it_by_themselves(api):
     aid = webhook_auto(api)
     with api.app.state.store.transaction() as c:
         row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
         for _ in range(130):   # "Run now" clicked 130 times in a minute: no spread, under the flood ceiling
             automations.queue(c, row, {}, "manual", manual=True)
         assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "after-runs", {}, "")
-    assert get(api, f"automations/{aid}")["enabled"] is True
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 131
-
-
-def test_a_flood_of_distinct_external_events_past_the_ceiling_is_paused(api, monkeypatch):
-    monkeypatch.setattr(automations, "RUN_GUARD_BURST", 70)   # a webhook flood: distinct ids, one window
-    aid = webhook_auto(api)
-    with api.app.state.store.transaction() as c:
-        for n in range(80):
-            automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
-    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70
-    assert get(api, f"automations/{aid}")["enabled"] is False
-    trip = sql(api, "SELECT detail_json FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
-    assert '"rule": "flood"' in trip[0]["detail_json"]
+    assert statuses(api, aid) == {"queued": 131}
+    assert "hold" not in get(api, f"automations/{aid}")
 
 
 # ---------------------------------------------------------------------------------------------- the spend cap

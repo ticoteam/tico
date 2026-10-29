@@ -12,9 +12,9 @@ const AU_KINDS = ['message', 'task_received', 'schedule', 'webhook', 'listening'
 const AU_KIND_WORDS = {message: 'Message', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
   listening: 'Listening', event: 'Event', system: 'System job'};
 const AU_KIND_ICONS = {...AU_TRIGGER_ICONS, system: 'settings'};
-const AU_STATES = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
+const AU_STATES = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['hold', 'On hold', 'wait'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
 const AU_SORTS = [['last', 'Last run'], ['fail', 'Most failures'], ['runs', 'Most runs'], ['cost', 'Cost'], ['name', 'Name']];
-const AU_RUN_PILLS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'waiting', running: 'in-progress', queued: 'in-progress'};
+const AU_RUN_PILLS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'waiting', running: 'in-progress', queued: 'in-progress', held: 'waiting'};
 const AU_ALL_PAGE = 50;
 const AU_IDS_MAX = 200;   // ids sent with a Runs page; past this the page is narrowed on the client only
 
@@ -28,7 +28,7 @@ function auOverviewState() {
 
 // What each row is: its trigger as the filters group it, its state, its team and its trigger in plain words.
 const auKind = a => a.kind || a.trigger?.type || '';
-const auState = a => a.paused ? 'paused' : a.enabled === false ? 'off' : a.last_run?.status === 'failed' ? 'failing' : 'on';
+const auState = a => a.paused ? 'paused' : a.enabled === false ? 'off' : a.hold ? 'hold' : a.last_run?.status === 'failed' ? 'failing' : 'on';
 function auTeam(a) {
   const g = a.group || (String(a.owner || '').startsWith('group:') ? a.owner : '');
   if (g) return auGroupName(g);
@@ -154,7 +154,8 @@ function auWarn(a) {
 function auPill(a) {
   const st = auState(a);
   return (a.pending ? '<span class="pill">Pending</span>' : '')
-    + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>' : '');
+    + (st === 'paused' ? '<span class="pill waiting">Paused</span>' : st === 'off' ? '<span class="pill">Off</span>'
+      : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }
 const AU_DOTS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'wait'};
 // On a phone (auPhone, automations.js) the table's columns come in another order: redraw when the width crosses over.
