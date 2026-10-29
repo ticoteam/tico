@@ -7101,6 +7101,9 @@ def create_app(settings=None):
     install_granola(app)
     from .meeting_review import install_meeting_review
     install_meeting_review(app, store, auth, mutate)
+    # Before install_credentials: its POST /api/v2/credentials/{cid} would otherwise take `import` for an id.
+    from .credential_files import install_credential_imports
+    install_credential_imports(app, store)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)

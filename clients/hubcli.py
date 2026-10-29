@@ -462,6 +462,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub credential import <VAR> --from-bot <bot> [--name N] [--wait S]
                                            move one variable from that bot's own secrets file into Credentials, granted to
                                            that bot: its computer sends the value itself, it is never shown
+    hub credential import --format bitwarden|keepass FILE
+                                           import a Bitwarden/Vaultwarden JSON or KeePass/KeePassXC CSV export as logins
+                                           (a credential admin; encrypted exports are refused; duplicates are skipped)
     hub slack channel list                 the Slack channels bots may read and post in, who reads each
     hub slack channel add <channel> [--reader BOT ...] [--post|--no-post] [--note "..."] [--digest-hours N]
                                            list a channel (#name or id) or add readers to one already listed; an owner
@@ -2850,9 +2853,11 @@ def parser():
     s = cred.add_parser("delete", help="erase a Credential and all its grants (credential administrators)")
     s.add_argument("credential")
     s.set_defaults(fn="credential delete")
-    s = cred.add_parser("import", help="move one variable from a bot's own secrets file into Credentials, granted to that bot")
-    s.add_argument("env", metavar="VAR", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--from-bot", dest="from_bot", required=True, metavar="BOT")
+    s = cred.add_parser("import", help="import a password manager's export (--format), or move one variable from a bot's "
+                                       "own secrets file into Credentials, granted to that bot")
+    s.add_argument("env", nargs="?", metavar="VAR|FILE", help="the variable's name, like JIRA_BASIC_AUTH; with --format, the export file")
+    s.add_argument("--format", choices=["bitwarden", "keepass"], help="the export's format: Bitwarden or Vaultwarden JSON, KeePass or KeePassXC CSV")
+    s.add_argument("--from-bot", dest="from_bot", metavar="BOT", help="the bot whose secrets file has the variable")
     s.add_argument("--name", help="what to call it in Credentials; the variable's name by default")
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
     s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")

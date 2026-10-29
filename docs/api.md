@@ -76,7 +76,8 @@ Tico's own app uses more of the API than the spec lists. The line:
   `GET /api/v2/bots` where the web app uses `/api/employees`), runner and bot endpoints (`/api/v2/runners`,
   `/jobs`, `/attempts`, `/agents`), settings, access, credentials, tools, market, routines, `/mcp` and
   `/scim`. They change between releases without notice. A route you need that is not in the spec: open an issue to
-  have it added to the stable set.
+  have it added to the stable set. Credential routes stay internal, the import included (`POST /api/v2/credentials/import`,
+  [credential-vault.md](credential-vault.md#import-from-a-password-manager)).
 - **Inside answers.** Fields ending in `_json` (`refs_json`, `participants_json`, `acceptance_json`) are storage
   leftovers; read the parsed field beside them (`refs`, `participants`, `acceptance_criteria`). Unlisted fields may
   come and go; a client ignores what it does not know and never fails on an extra field.
