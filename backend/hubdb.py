@@ -1037,9 +1037,10 @@ def backfill_credential_uses(conn):
                         "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(ts) "
                         "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
                         "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot").fetchall()
-    conn.executemany("INSERT INTO credential_uses(credential_id,actor,bot,at) VALUES(?,?,?,?) "
-                     "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=MAX(at,excluded.at)",
-                     [(target, actor, bot or '', at) for target, actor, bot, at in rows
+    # The newest event row of a pair is both its newest use and the last one logged.
+    conn.executemany("INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) "
+                     "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=MAX(at,excluded.at),logged=MAX(logged,excluded.logged)",
+                     [(target, actor, bot or '', at, at) for target, actor, bot, at in rows
                       if at and target in known])
     conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 

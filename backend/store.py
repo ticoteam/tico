@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS credential_uses(
  credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', at TEXT NOT NULL,
+ logged TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(credential_id, actor, bot));
 CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, at);
 CREATE TABLE IF NOT EXISTS credentials(

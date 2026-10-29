@@ -536,28 +536,29 @@ class Vault:
 
 
 # A credential is used when a bot's run receives it or its computer is sent it; a person revealing it is not a use.
-# credential_uses keeps the newest use per (credential, actor, bot), so last_used is exact however many events are
-# written. Within USE_WINDOW of the pair's last use, a repeat (`windowed`) writes no event row: a run reads its
-# credentials once per attempt and a watcher re-sends them every few minutes. Each use moves the pair's `at`, so a
-# steady stream writes one row until it has been quiet for USE_WINDOW. Reveals by a person, reveals with no attempt,
-# and computer sends by model key always write one.
+# credential_uses has one row per (credential, actor, bot) with two times: `at`, the newest use (last_used reads it),
+# and `logged`, when an event row was last written for that pair. A repeat (`windowed`) writes no event while the pair's
+# `logged` is within USE_WINDOW, so a pair in use writes at least one row an hour (a run that reads its credentials once
+# per attempt, or a watcher re-sending every few minutes, does not write one row per read). Reveals by a person, reveals
+# with no attempt, and computer sends by model key always write one.
 USE_WINDOW=3600
 
 
 def record_use(c,actor,action,cid,detail,windowed):
-    """Record one use of a credential: its audit row, unless it repeats this actor's use of the same bot's credential
-    within USE_WINDOW (and `windowed`); then move that pair's newest-use time. A person's reveal is never a use."""
+    """Record one use of a credential: its audit row when the pair's last logged row is older than USE_WINDOW (or the
+    use is not `windowed`), and the pair's newest-use time. A person's reveal is never a use."""
     if actor.startswith('human:'):
         H.event(c,actor,action,cid,detail)
         return
     now=H.now()
     by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
-    last=c.execute('SELECT at FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
-    repeat=windowed and last is not None and (last['at'] or '')>=H.shift(now,seconds=-USE_WINDOW)
-    if not repeat:
+    last=c.execute('SELECT logged FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
+    write=(not windowed) or last is None or (last['logged'] or '')<H.shift(now,seconds=-USE_WINDOW)
+    if write:
         H.event(c,actor,action,cid,detail)
-    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at) VALUES(?,?,?,?) '
-              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at',(cid,actor,by,now))
+    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) '
+              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at,logged=excluded.logged',
+              (cid,actor,by,now,now if write else last['logged']))
 
 
 def last_used(c,cid):

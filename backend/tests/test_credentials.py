@@ -290,6 +290,24 @@ def test_repeats_by_the_same_actor_and_bot_within_the_hour_write_no_row_and_last
     assert (listed['last_used'],listed['last_used_by'])==('2026-10-29T11:30:00Z','finance')
 
 
+def test_a_pair_in_use_writes_one_row_an_hour_while_last_used_stays_exact(api, monkeypatch):
+    from backend import credentials as C
+    setup(api);cid=create(api)['id']
+    store=api.app.state.store
+    clock=_clock(monkeypatch,'2026-10-29T10:00:00Z')
+    minute=0
+    while minute<=150:     # a use every 5 minutes for 2.5 hours
+        clock['v']='2026-10-29T%02d:%02d:00Z'%(10+minute//60,minute%60)
+        with store.transaction() as c:
+            C.record_use(c,'bot:finance','credential.sent_to_computer',cid,{'bot':'finance','use':'watcher'},windowed=True)
+        minute+=5
+    with store.read() as c:
+        rows=[r[0] for r in c.execute("SELECT ts FROM events WHERE target=? AND action='credential.sent_to_computer' ORDER BY ts",(cid,))]
+        assert rows==['2026-10-29T10:00:00Z','2026-10-29T11:05:00Z','2026-10-29T12:10:00Z']
+        assert c.execute('SELECT at FROM credential_uses WHERE credential_id=?',(cid,)).fetchone()[0]=='2026-10-29T12:30:00Z'
+    assert get(api,'credentials')['credentials'][0]['last_used']=='2026-10-29T12:30:00Z'
+
+
 def test_a_person_reveal_and_a_reveal_with_no_attempt_always_write_a_row(api, monkeypatch):
     from backend import credentials as C
     setup(api);cid=create(api)['id']
