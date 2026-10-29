@@ -71,16 +71,16 @@ class ReadIndex:
 
     @cached_property
     def task_ids(self):
-        # Provenance validates task existence, even when no private task is denied.
-        # Reuse identifiers from this snapshot rather than thrash a per-row LRU.
-        # The primary key is already a covering index for this. A second id index would not change the plan.
-        return {row[0] for row in self.c.execute("SELECT id FROM tasks")}
+        # Provenance validates task existence, even when no private task is denied. Every SQL request and task list
+        # used to read the whole tasks table here (SELECT id FROM tasks, 207/h on TIDY). The set is shared between
+        # requests until a task is added or removed (backend/row_clock.py).
+        return row_clock.refs(self.c)[0]
 
     @cached_property
     def conversation_tasks(self):
-        # Message provenance needs only the task reference, never room content.
-        return dict(self.c.execute(
-            "SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
+        # Message provenance needs only the task reference, never room content. Shared like task_ids: the whole
+        # conversations read (156/h on TIDY, 76-121 ms each) ran once per privacy-checked request.
+        return row_clock.refs(self.c)[1]
 
     def known_task(self, tid):
         return tid in self.task_ids
