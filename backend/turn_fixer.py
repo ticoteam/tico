@@ -49,14 +49,18 @@ def _gone(c, row):
     return row['bot'] not in bots and not any(bot == row['bot'] for bot, _ in lanes)
 
 
+# INDEXED BY: the OR defeats the live-run index, and the plain plan scanned every attempt ever made (45-150 ms on
+# 92k attempts, inside the write transaction turn_fixer.free holds). The index holds only live runs, so this reads those.
+DEAD_SQL = ("SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') AND "
+            "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
+            "ORDER BY created,id")
+
+
 def dead(c, now=None):
     """[(attempt row, why)] for every proven-dead turn: 'stopped' or 'gone'."""
     now = now or H.now()
     out = []
-    # INDEXED BY: the OR below defeats the live-run index, and the plain plan scanned every attempt ever made (44-63 ms).
-    for row in c.execute("SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') AND "
-                         "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
-                         "ORDER BY created,id", (now,)).fetchall():
+    for row in c.execute(DEAD_SQL, (now,)).fetchall():
         if row['state'] == 'leased' and row['started'] is None and row['stop_requested']:
             out.append((row, 'stopped'))
         elif row['lease_until'] <= now and _gone(c, row):

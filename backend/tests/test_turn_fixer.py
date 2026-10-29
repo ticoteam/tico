@@ -258,13 +258,11 @@ def test_the_scheduler_builds_the_finding_outside_the_writer(api, monkeypatch):
 def test_dead_sweep_walks_live_runs_not_every_attempt():
     """The sweep's OR defeated attempts_live_lease, so SQLite scanned every attempt ever made (44-52 ms on TIDY and Tico
     Team, 91k attempts). Pinned to the partial index, it reads only the live runs."""
+    from backend import turn_fixer
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, state TEXT, lease_until TEXT, started TEXT, "
               "stop_requested TEXT, created TEXT)")
     c.execute("CREATE INDEX attempts_created ON attempts(created)")
     c.execute("CREATE INDEX attempts_live_lease ON attempts(lease_until,id) WHERE state IN ('leased','running')")
-    plan = " ".join(row[3] for row in c.execute(
-        "EXPLAIN QUERY PLAN SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') "
-        "AND (lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) ORDER BY created,id",
-        ("2026-01-01",)))
+    plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + turn_fixer.DEAD_SQL, ("2026-01-01",)))
     assert "USING INDEX attempts_live_lease" in plan
