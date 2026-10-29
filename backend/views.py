@@ -1649,8 +1649,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         + [tid for originals in merged.values() for tid in originals]
         + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
     from . import reconnects
-    reconnect_cards = {tid: card for tid, card in reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]]).items()
-                       if card["person"] == who.actor}
+    reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:

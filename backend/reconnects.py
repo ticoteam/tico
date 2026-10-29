@@ -23,7 +23,7 @@ keys:
   own: only they connect it.
 - `login:<computer>:<runtime>`: the provider refused the computer's sign-in or key (`auth_rejected` on a run,
   backend/execution.py); fixed when that computer reports the runtime signed in, or a run on it completes.
-- `secret:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
+- `secret:<bot>:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Cancelling its credential card ends the wait with a wake that
   says so (`dropped`).
@@ -50,6 +50,11 @@ WAKE_REF = "reconnected"
 CARD_REF = "reconnect"
 RECENT_S = 900          # a bot's task worked this recently is the one a connector failure stops
 OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','cancelled')"
+
+
+def secret_key(bot, env):
+    """A credential's card key: per bot, since the grant is the bot's (BotOps may ask for two bots' on one task)."""
+    return f"secret:{bot}:{env}"
 
 
 def _H():
@@ -125,8 +130,9 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         return None
     found = c.execute("SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL",
                       (task_id, key)).fetchone()
-    if found and found["owner"] == owner:
+    if found and found["owner"] == owner and not (message_id and found["message_id"] != message_id):
         return dict(found)
+    # A new credential card for the same key (another person asked to save it) replaces the old card.
     if found:
         _retire(c, dict(found), refresh=False)
     # A closed card on the same key is history: this failure is a new card (an owed line about the old fix is moot).
@@ -276,10 +282,12 @@ def _said(c, wait):
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
 
-def _claim_owed(c, task_id):
-    """The fixed or cancelled cards on the task whose wake is still owed, claimed for this one wake."""
+def _claim_owed(c, task_id, owner):
+    """The fixed or cancelled cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
+    card opened for another owner is that owner's news, never the task's next owner's."""
     H = _H()
-    owed = H._rows(c.execute(f"SELECT * FROM task_reconnects WHERE task_id=? AND {OWED} ORDER BY fixed_at, key", (task_id,)))
+    owed = H._rows(c.execute(f"SELECT * FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} ORDER BY fixed_at, key",
+                             (task_id, owner)))
     at = H.now()
     return [w for w in owed if c.execute(f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND key=? AND {OWED}",
                                          (at, task_id, w["key"])).rowcount == 1]
@@ -302,11 +310,12 @@ def deliver(c, task_id, why="", cleared=None):
         from . import task_holds
         task_holds.refresh(c, task_id)
         return False
-    if not c.execute(f"SELECT 1 FROM task_reconnects WHERE task_id=? AND {OWED} LIMIT 1", (task_id,)).fetchone():
+    if not c.execute(f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
+                     (task_id, row["owner"])).fetchone():
         return False
     if not H._actor_exists(c, row["owner"]) or not H.task_private_readable(c, row["owner"], row):
         return False
-    owed = _claim_owed(c, task_id)
+    owed = _claim_owed(c, task_id, row["owner"])
     if not owed:
         return False
     said = " ".join(_said(c, w) for w in owed)
@@ -336,7 +345,7 @@ def fold_into(c, task_row, body, refs):
     (H._wake). Returns (body, refs)."""
     if (refs or {}).get(WAKE_REF) or not _present(c) or pending(c, task_row["id"]):
         return body, refs
-    owed = _claim_owed(c, task_row["id"])
+    owed = _claim_owed(c, task_row["id"], task_row.get("owner"))
     if not owed:
         return body, refs
     return (f"{body}\n{' '.join(_said(c, w) for w in owed)}",
@@ -367,6 +376,9 @@ def moved(c, task_id, field, old, new):
     for wait in rows:
         if field == "status" or wait["owner"] != new:
             _retire(c, wait, refresh=False)
+    # A fix still owed as a wake is news for the owner it was opened for, on a task still going: not after that.
+    c.execute(f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND {OWED}"
+              + ("" if field == "status" else " AND owner<>?"), (H.now(), task_id) + (() if field == "status" else (new,)))
 
 
 def bot_gone(c, bot):
@@ -410,8 +422,9 @@ def hold(c, task_id):
             "on": card["person"], "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"]}
 
 
-def for_tasks(c, task_ids):
-    """{task id: its standing card} for the tasks among `task_ids` that have one: Needs you's cards in one read."""
+def for_tasks(c, task_ids, person):
+    """{task id: the oldest standing card `person` fixes on it} for the tasks among `task_ids` that have one: Needs
+    you's cards in one read. Per person: two people may each have a card on one task."""
     ids = [t for t in dict.fromkeys(task_ids) if t]
     if not ids or not _present(c):
         return {}
@@ -419,8 +432,8 @@ def for_tasks(c, task_ids):
     out = {}
     for part in _H().chunks(ids):
         marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id IN ({marks}) AND {live} "
-                             "ORDER BY r.created", (*part, *args)):
+        for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id IN ({marks}) AND r.person=? AND {live} "
+                             "ORDER BY r.created", (*part, person, *args)):
             out.setdefault(row["task_id"], view(dict(row)))
     return out
 
@@ -458,7 +471,7 @@ def waited_requests(c, bot, env):
         return set()
     live, args = _live()
     return {r[0] for r in c.execute(f"SELECT json_extract(r.fix_json,'$.request') FROM task_reconnects r "
-                                    f"WHERE r.bot=? AND r.key=? AND {live}", (bot, "secret:" + env, *args))}
+                                    f"WHERE r.bot=? AND r.key=? AND {live}", (bot, secret_key(bot, env), *args))}
 
 
 # ------------------------------------------------------------------------------------------------ the hooks
@@ -566,4 +579,4 @@ def secret_stored(c, bot, env):
     """The variable `env` now reaches `bot` (stored for it, or granted to it)."""
     if not env or not bot:
         return []
-    return fixed(c, "secret:" + env, bot=bot, why="credential")
+    return fixed(c, secret_key(bot, env), bot=bot, why="credential")

@@ -20,7 +20,7 @@ const comments = [
   {id: 'q1', conversation_id: 'r-quote', from_actor: 'bot:botops', kind: 'say', body: 'Drafting the quote now.', created: at(20)},
   card('q2', {key: 'google:ana@acme.example', service: 'google', label: 'Google (ana@acme.example)', person: 'human:ana',
     fix: {kind: 'google', account: 'ana@acme.example'}, line: "BotOps can't reach Google (ana@acme.example)."}, 9),
-  card('q3', {key: 'secret:ACME_CRM_TOKEN', service: 'secret', label: 'the Acme CRM token', person: 'human:ben',
+  card('q3', {key: 'secret:botops:ACME_CRM_TOKEN', service: 'secret', label: 'the Acme CRM token', person: 'human:ben',
     fix: {kind: 'secret', request: 'cr9'}, line: 'BotOps needs the Acme CRM token to go on.'}, 6),
   card('q4', {key: 'login:r1:codex', service: 'login', label: 'Codex on Acme Mac', person: 'human:ana', status: 'fixed',
     fix: {kind: 'login', runner: 'r1', runtime: 'codex', machine: 'Acme Mac'}, line: "BotOps can't sign in to Codex on Acme Mac."}, 3),
@@ -66,7 +66,7 @@ async function run(viewport, scheme, shot) {
     assert.match(await google.innerText(), /BotOps can't reach Google \(ana@acme\.example\)\./);
     assert.equal(await google.locator('button.primary[data-reconnect-google]').count(), 1, 'the fix is one primary button');
     // Someone else's to fix: whom it waits on, no button and no credential card for a reader who cannot save it.
-    const secret = thread.locator('.rc-card[data-reconnect="secret:ACME_CRM_TOKEN"]');
+    const secret = thread.locator('.rc-card[data-reconnect="secret:botops:ACME_CRM_TOKEN"]');
     assert.match(await secret.innerText(), /Waiting on/);
     assert.equal(await secret.locator('button, a.button, [data-credential-host]').count(), 0);
     // Fixed: Reconnected, nothing to press.

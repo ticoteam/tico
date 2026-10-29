@@ -331,9 +331,13 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("not_found", "Bot not found", 404)
             manager(c, person, target)
             url = clean_help_url(body.help_url)
-            key = "secret:" + body.env
+            key = reconnects.secret_key(target, body.env)
             again = reconnects.request_of(c, task["id"], key) if task else None
-            if again and (again["requester"], again["bot"]) == (person.actor, target):
+            if again and again["requester"] != person.actor:
+                # Someone else is to save it now: their card replaces the old one (reconnects.open retires it).
+                c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), again["id"]))
+                again = None
+            if again:
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
                 shown = view(c, again, person)
                 return {"id": again["id"], "status": "pending", "message_id": again["message_id"], "title": shown["title"],
