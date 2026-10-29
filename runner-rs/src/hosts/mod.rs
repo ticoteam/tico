@@ -688,8 +688,17 @@ impl Host {
         }
     }
 
-    /// The whole prompt of the turn about to start, when what it sends leaves parts out: a session that turns out to
-    /// be missing, so the harness starts a new one in its place (`restored`), is given this instead.
+    /// The size in tokens of `thread_id`'s context after its last turn here (its newest model request of the bot's
+    /// own, else the turn's usage), once; None when the host does not say.
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        match self {
+            Host::Claude(h) => h.context_tokens(thread_id),
+            _ => None,
+        }
+    }
+
+    /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
+    /// harness starts a new one in its place (`restored`): a new session's whole prompt.
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
         if let Host::Claude(h) = self {
             h.full_prompt(thread_id, text);

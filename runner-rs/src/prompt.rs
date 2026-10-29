@@ -62,7 +62,7 @@ pub enum Part {
 }
 
 /// Said in place of the standing lines to a resumed thread that already holds them, unchanged and not compacted away.
-pub const STANDING_SEEN: &str = "Your standing instructions from earlier in this session still apply; nothing in them or in AGENT.md changed. Read state.md for where things stand, then carry out the requested work in this turn.";
+pub const STANDING_SEEN: &str = "Your standing instructions are unchanged since your last turn, and they are in AGENT.md and state.md (re-read AGENT.md if your context was compacted); read state.md for where things stand, then carry out the requested work in this turn.";
 /// Task fields that change without changing the work: a task that differs only in these is the one the thread has.
 const TASK_CLOCK: &[&str] = &["updated", "updated_at", "checkpoint_state", "stale_asked_at"];
 /// Task fields the prompt does not show as the task: the checkpoint is its own line, the goal the goal's.

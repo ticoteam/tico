@@ -373,8 +373,10 @@ struct Inner {
     tools: HashMap<String, ToolCall>,
     /// Threads whose session Claude compacted (a `compact_boundary`) since the runner last asked.
     compacted: HashSet<String>,
-    /// The whole prompt of a thread's turn whose prompt leaves parts out, for a missing session restarted as new.
+    /// What a resumed thread's turn gives a missing session restarted as new, in place of its prompt.
     full_prompts: HashMap<String, String>,
+    /// Each thread's context size after its last turn (Host::context_tokens).
+    context: HashMap<String, i64>,
     /// Called each time a turn's pipe has just been published (ordering tests).
     #[cfg(test)]
     pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
@@ -548,6 +550,10 @@ impl ClaudeHost {
         self.inner().compacted.remove(thread_id)
     }
 
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        self.inner().context.remove(thread_id)
+    }
+
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
         let mut inner = self.inner();
         match text {
@@ -667,6 +673,7 @@ impl ClaudeHost {
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
+            inner.context.remove(thread_id);
             (child, stderr)
         };
         log(&format!("claude[{}]: turn started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
@@ -1309,7 +1316,16 @@ impl ClaudeHost {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            (inner.interrupted.contains(turn), inner.usage.remove(turn), reply, limited)
+            let usage = inner.usage.remove(turn);
+            if let Some(u) = usage.as_ref() {
+                // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
+                // is more than it, never less.
+                let last = u.requests.iter().rev().find(|(_, _, main)| *main).map_or(u.input + u.output, |(_, r, _)| r[0] + r[1] + r[2]);
+                if last > 0 {
+                    inner.context.insert(tid.into(), last);
+                }
+            }
+            (inner.interrupted.contains(turn), usage, reply, limited)
         };
         if let Some(u) = usage.as_ref().filter(|u| u.input + u.output > 0) {
             self.emit(event(
