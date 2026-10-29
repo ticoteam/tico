@@ -26,7 +26,7 @@ CONTEXT = {'application': 'tico-credentials'}
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
 # A website login (docs/credential-vault.md "Website logins"): its value is JSON {"password", "totp"}, it is never an
-# environment variable, and only the bot's own runner reads it (credential-runtime `logins`) to type it into a page.
+# environment variable, and only the bot's own runner reads it (runner-login-credentials) to type it into a page.
 LOGIN = 'login'
 MAX_SITES = 50
 _HOST = re.compile(r'^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$')
@@ -180,14 +180,15 @@ def can_open(c, who, admins):
 class CredentialWrite(Contract):
     # Password spaces are significant. SecretStr prevents repr/debug output from exposing it.
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
-    name: str = Field(min_length=1, max_length=150)
+    # Empty only for a login, which is then named for its first site.
+    name: str = Field(default='', max_length=150)
     username: str = Field(default='', max_length=250)
     kind: Literal['api_key', 'password', 'token', 'file', 'connection', 'login'] = 'api_key'
     env: str = Field(default='', max_length=100, pattern=r'^$|^[A-Z_][A-Z0-9_]*$')
     secret: SecretStr | None = Field(default=None, max_length=100_000)
     source: str = Field(default='', max_length=500)
-    # A login's: its password (`secret` is taken too), its 2FA setup key (a base32 key or an otpauth:// link; empty
-    # removes it, absent keeps it) and its sites. Ignored for every other kind.
+    # A login's: its password (`secret` is taken too; absent or empty keeps the stored one), its 2FA setup key (a base32
+    # key or an otpauth:// link; empty removes it, absent keeps it) and its sites. Ignored for every other kind.
     password: SecretStr | None = Field(default=None, max_length=4096)
     totp: SecretStr | None = Field(default=None, max_length=1000)
     sites: list[str] | None = Field(default=None, max_length=MAX_SITES * 2)
@@ -505,21 +506,20 @@ class Vault:
             raise Problem('kind', 'A login stays a login: add the key as a new credential instead', 422)
         if old and old['kind'] != LOGIN:
             raise Problem('kind', 'Add a login as a new credential', 422)
-        name = body.name.strip()
+        sites = clean_sites(body.sites) if body.sites is not None else (sites_of(old) if old else [])
+        name = body.name.strip() or (sites[0] if sites else '')
         if not name:
-            raise Problem('credential', 'Enter a credential name', 422)
+            raise Problem('credential', 'Enter a name or the website it is for', 422)
         if body.env:
             raise Problem('env', 'A login is typed into a website, never given as a variable: leave the variable empty', 422)
         given = body.password if body.password is not None else body.secret
-        password = given.get_secret_value() if given is not None else None
+        # An edit form sends the password box empty when the person leaves it alone: that keeps the stored one.
+        password = (given.get_secret_value() if given is not None else '') or None
         previous = self.open_login(c, old) if old and old['ciphertext'] is not None else None
         if password is None and previous is None:
             raise Problem('credential', 'Enter the password', 422)
-        if password is not None and not password:
-            raise Problem('credential', 'Enter a nonempty password', 422)
         password = previous['password'] if password is None else password
         totp = (previous or {}).get('totp') if body.totp is None else parse_totp(body.totp.get_secret_value())
-        sites = clean_sites(body.sites) if body.sites is not None else (sites_of(old) if old else [])
         changed = previous is None or password != previous['password'] or totp != previous.get('totp')
         cid, now = cid or H.new_id(), H.now()
         ciphertext, nonce = self.cipher.encrypt(c, cid, json.dumps({'password': password, 'totp': totp}))
@@ -532,6 +532,13 @@ class Vault:
                    int(member), json.dumps(sites), int(bool(totp))))
         H.event(c, who.actor, 'credential.updated' if old else 'credential.created', cid,
                 {'secret_changed': changed, 'kind': LOGIN, 'sites': sites, 'has_totp': bool(totp)})
+        if old:
+            # A bot that already holds it, waiting for a person on a site it now covers, goes on (`Vault.grant` for new ones).
+            from . import reconnects
+            for g in c.execute("SELECT DISTINCT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL "
+                               "AND subject LIKE 'bot:%'", (cid,)).fetchall():
+                if effective_grant(c, cid, g['subject']):
+                    reconnects.site_login_saved(c, H.actor_id(g['subject']), sites)
         return self.brief(self.row(c, cid))
 
     def manages_bot(self, c, who, subject):
@@ -636,9 +643,13 @@ class Vault:
         if row['ciphertext'] is None:
             raise Problem('not_connected','This connection has no stored password or key',409)
         if row['kind']==LOGIN:
-            # A login's password and 2FA key go only to the bot's own runner, which types them into the page.
-            raise Problem('login_not_revealed','A login is typed into the website by the bot\'s browser and never shown. '
-                          'Edit it to replace the password, or use Show code for its 2FA code',409)
+            # A login's password is shown to a person signed in themselves, never to a bot, a token or BotOps acting
+            # for them: a model must never read it (the runner takes it from runner-login-credentials). Its 2FA key is
+            # never shown to anyone; Show code gives the current code.
+            if who.role not in ('owner','human') or who.via or getattr(who,'via_token',None):
+                raise Problem('forbidden','Open the password in Tico yourself, signed in',403)
+            H.event(c,who.actor,'credential.revealed',cid,{'attempt':None,'kind':LOGIN})
+            return {'id':cid,'value':self.open_login(c,row)['password']}
         value=self.cipher.decrypt(c,row)
         H.event(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None})
         return {'id':cid,'value':value}
@@ -812,8 +823,9 @@ def install_credentials(app,store,delegate=None,propose=None):
                 added|=mine
                 item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 if row['kind']==LOGIN:
-                    # A login is never revealed (`Vault.reveal`); who could reveal it may see its current 2FA code.
-                    item|={'can_reveal':False,'can_code':revealable and bool(row['has_totp'])}
+                    # Its password is revealed, never its 2FA key: who could reveal it may see its current code instead.
+                    person=not who.via and not getattr(who,'via_token',None)
+                    item|={'can_reveal':revealable and person,'can_code':revealable and person and bool(row['has_totp'])}
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
@@ -906,21 +918,46 @@ def install_credentials(app,store,delegate=None,propose=None):
         if who.role!='bot':raise Problem('forbidden','An active bot run is required',403)
         with store.transaction() as c:
             validate_identity(c,who)
-            values,logins=[],[]
+            values=[]
             held=granted(c,who.actor)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
-                if row['ciphertext'] is None or row['id'] not in held:
-                    continue
-                if row['kind']==LOGIN:
-                    # Never an environment variable: the runner keeps it to type into a page (POST {TICO_BROWSER_URL}/fill)
-                    # and to take out of what the run records. A use, as a revealed credential is.
-                    logins.append({'id':row['id'],'name':row['name'],'username':row['username'],'sites':sites_of(row),
-                                   **vault.open_login(c,row)})
-                    H.event(c,who.actor,'credential.revealed',row['id'],{'attempt':who.attempt_id or None,'kind':LOGIN})
+                # Never a login: the turn's own commands hold this token, so a login goes to its runner alone
+                # (runner-login-credentials below), which types it into the page.
+                if row['ciphertext'] is None or row['id'] not in held or row['kind']==LOGIN:
                     continue
                 values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
-            return {'credentials':values,'logins':logins}
+            return {'credentials':values}
+
+    @app.get('/api/v2/runner-login-credentials')
+    def login_credentials(request:Request,attempt:str):
+        """The website logins granted to the bot of run `attempt`, to the computer running it and to nothing else. The
+        runner keeps them to type into the page (POST {TICO_BROWSER_URL}/fill) and to take out of what the run records;
+        the run itself, and so its model, never holds a password or a 2FA key."""
+        who=request.state.identity
+        if who.role!='runner' or who.via or getattr(who,'via_token',None):
+            raise Problem('forbidden','Only a registered computer may ask for this',403)
+        with store.transaction() as c:
+            if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
+                raise Problem('forbidden','Only a registered computer may ask for this',403)
+            run=c.execute('SELECT bot,runner_id,state FROM attempts WHERE id=?',(attempt,)).fetchone()
+            if not run or run['runner_id']!=who.runner_id:
+                raise Problem('forbidden','That run is not on this Computer',403)
+            if run['state'] not in ('leased','running'):
+                raise Problem('stale_lease','That run has ended',409)
+            if not c.execute("SELECT 1 FROM bots WHERE slug=? AND state='active'",(run['bot'],)).fetchone():
+                raise Problem('forbidden','That bot is not active',403)
+            logins=[]
+            held=granted(c,'bot:'+run['bot'])
+            for row in c.execute('SELECT * FROM credentials WHERE kind=? AND ciphertext IS NOT NULL ORDER BY id',(LOGIN,)):
+                if row['id'] not in held:
+                    continue
+                logins.append({'id':row['id'],'name':row['name'],'username':row['username'],'sites':sites_of(row),
+                               **vault.open_login(c,row)})
+                # A use, for Library > Tools "last used", as every credential sent to a computer is.
+                H.event(c,who.actor,'credential.sent_to_computer',row['id'],
+                        {'bot':run['bot'],'runner':who.runner_id,'attempt':attempt,'use':'browser'})
+            return {'logins':logins}
 
     @app.get('/api/v2/runner-gateway-credentials')
     def gateway_credentials(request:Request,attempt:str):

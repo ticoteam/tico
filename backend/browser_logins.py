@@ -27,6 +27,12 @@ class BrowserNeedsYou(Contract):
     task: str | None = Field(default=None, max_length=100)
 
 
+class ReconnectDoneBody(Contract):
+    # The card's task and key, which name it too: a client that has the card's refs but not its message sends these.
+    task: str | None = Field(default=None, max_length=100)
+    key: str | None = Field(default=None, max_length=400)
+
+
 def _task(c, ref):
     """The task `ref` names: its id, or the first 8 or more characters of one."""
     ref = str(ref or "").strip()
@@ -88,8 +94,9 @@ def install(app, store, auth):
                               "for this site: then try again. Do not ask for the password in words."}
 
     @app.post("/api/v2/reconnects/{card_id}/done")
-    def reconnect_done(request: Request, card_id: str):
-        """A person closes a website card: they did what the bot needed (logged in on the screen, passed a check)."""
+    def reconnect_done(request: Request, card_id: str, body: ReconnectDoneBody | None = None):
+        """A person closes a website card: they did what the bot needed (logged in on the screen, passed a check).
+        `card_id` is the card's id in its refs (its message); a body's task and key find it as well."""
         who = request.state.identity
         if who.role not in ("owner", "human"):
             raise Problem("forbidden", "A person presses Done", 403)
@@ -98,6 +105,8 @@ def install(app, store, auth):
             reconnects.ensure(c)
             row = c.execute("SELECT * FROM task_reconnects WHERE message_id=? ORDER BY fixed_at IS NULL DESC LIMIT 1",
                             (card_id,)).fetchone()
+            if not row and body and body.task and body.key:
+                row = c.execute("SELECT * FROM task_reconnects WHERE task_id=? AND key=?", (body.task, body.key)).fetchone()
             task = H.task(c, row["task_id"]) if row else None
             if not row or not task or not H.task_private_readable(c, who.actor, task):
                 raise Problem("not_found", "No such card", 404)
@@ -107,7 +116,7 @@ def install(app, store, auth):
             if who.actor != wait["person"] and not auth.bot_manager(c, who, wait["bot"]):
                 raise Problem("forbidden", "Only the person it asks, or someone who manages this bot, closes it", 403)
             if wait["fixed_at"]:
-                return {"id": card_id, "status": wait["ended"] or "fixed", "woken": []}
+                return {"id": wait["message_id"] or card_id, "status": wait["ended"] or "fixed", "woken": []}
             woken = reconnects.done(c, wait)
             H.event(c, who.actor, "reconnect.done", wait["task_id"], {"key": wait["key"], "bot": wait["bot"]})
-            return {"id": card_id, "status": "fixed", "woken": woken}
+            return {"id": wait["message_id"] or card_id, "status": "fixed", "woken": woken}

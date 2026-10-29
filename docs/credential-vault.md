@@ -183,17 +183,25 @@ sites it is for. Sites are lowercase hostnames (`app.acme.example`); a page on a
 matches. The password and the 2FA key are sealed together as one value (`{"password", "totp"}`); the username, the sites
 and whether it has 2FA are plain columns, so Credentials lists them (`sites`, `has_totp`) without opening the vault.
 
-A login is never an environment variable and never revealed: `POST /api/v2/credentials/{id}/reveal` refuses it, for a
-person as for a bot. Only the bot's own runner reads it, from `GET /api/v2/credential-runtime` (`logins`: id, name,
-username, sites, password and 2FA key, for the logins granted to that bot), to type it into the page with
-`hub browser fill` and to mask it in what the run records; the model asks for a field and never holds the value. A
-person who may open a login (a credential admin, or someone it is granted to) sees its current 2FA code with
-**Show code** (`GET /api/v2/credentials/{id}/code`: `code` and `expires_in` seconds); each view is recorded as
-`credential.code`, never with the code. A bot, an API token or BotOps acting for someone is refused.
+A login is never an environment variable, and a bot never holds its password or 2FA key: the turn's own commands
+can read whatever the turn holds, its hub token included. Only the bot's runner reads it, with its computer token, from
+`GET /api/v2/runner-login-credentials?attempt=<run id>` (`logins`: id, name, username, sites, password and 2FA key,
+for the logins granted to that run's bot, while the run is live on that computer), to type it into the page with
+`hub browser fill` and to mask it in what the run records; the model asks for a field and never sees the value. Each
+send is recorded as `credential.sent_to_computer` (`use: "browser"`), never with the value. A bot token, an API token,
+BotOps acting for someone and a person are refused there, and `GET /api/v2/credential-runtime` leaves logins out.
+
+A person who may open a login (a credential admin, or someone it is granted to), signed in themselves, may reveal its
+password (`POST /api/v2/credentials/{id}/reveal`, recorded as `credential.revealed`) and see its current 2FA code with
+**Show code** (`GET /api/v2/credentials/{id}/code`: `code` and `expires_in` seconds; recorded as `credential.code`,
+never with the code). The 2FA key itself is never returned by any route. A bot, an API token or BotOps acting for
+someone is refused both.
 
 Add a login in Tools > Credentials, or with `POST /api/v2/credentials` `{"kind": "login", "name", "username",
-"password", "totp", "sites"}` (credential admins; `secret` is taken for `password`). On a change, a field left out stays
-as it was, and `"totp": ""` takes the 2FA key off. A login stays a login: it has no variable to become.
+"password", "totp", "sites"}` (credential admins; `secret` is taken for `password`; a blank name is the first site). On a
+change (`POST /api/v2/credentials/{id}` with `expected_revision`), a field left out, or a blank password, stays as it
+was, and `"totp": ""` takes the 2FA key off. Saving a login whose sites cover a host a bot holding it waits on closes
+that wait. A login stays a login: it has no variable to become.
 
 A bot that needs a login asks for one on a card: `hub credential request --kind login --site app.acme.example
 [--username ana@acme.example] [--label "the Acme portal"]`. The card takes a username, a password and an optional 2FA
@@ -207,7 +215,7 @@ bot runs `hub browser needs-you <host> --reason "log in"` (`POST /api/v2/browser
 task waits on a website card in the task's thread and in the fixer's Needs you: "Ops Bot needs you on app.acme.example:
 log in". The card's `fix` names the `host`, the bot's `computer` (to open its screen and take over the browser), the
 `reason`, and a login card for the host (`request`). It closes when the person presses **Done**
-(`POST /api/v2/reconnects/{id}/done`, `id` being the card's message), or when a login covering that host is saved for
+(`POST /api/v2/reconnects/{id}/done`, `id` being the card's `id` in its refs, its message; or a body `{"task", "key"}`), or when a login covering that host is saved for
 or granted to the bot; either way every task of that bot waiting on the host is woken once.
 
 ## Credential files on the computer

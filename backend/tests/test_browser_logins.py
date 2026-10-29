@@ -74,7 +74,13 @@ def two_bots(api):
     return machine
 
 
-def test_a_login_reaches_only_its_granted_bots_runner_as_logins_never_as_a_variable_or_a_response(api):
+def logins_for(api, machine, attempt, expected=200):
+    """What the computer running `attempt` is handed to type into pages."""
+    got = get(api, f"runner-login-credentials?attempt={attempt['id']}", machine["token"], expected=expected)
+    return got["logins"] if expected == 200 else got
+
+
+def test_a_login_reaches_only_its_granted_bots_runner_never_the_bot_a_variable_or_a_response(api):
     machine = two_bots(api)
     row = add_login(api)
     assert row["kind"] == "login" and row["env"] == "" and row["sites"] == ["portal.acme.example"] and row["has_totp"]
@@ -83,30 +89,60 @@ def test_a_login_reaches_only_its_granted_bots_runner_as_logins_never_as_a_varia
     post(api, "chat/finance", {"text": "Check the Acme invoices"})
     task(api)
     ops = claim(api, machine, "ops")
-    runtime = get(api, "credential-runtime", ops["token"])
-    assert runtime["credentials"] == []
-    assert runtime["logins"] == [{"id": row["id"], "name": "Acme portal", "username": "ana@acme.example",
-                                  "sites": ["portal.acme.example"], "password": PASSWORD,
-                                  "totp": {"secret": KEY, "digits": 6, "period": 30, "algorithm": "SHA1"}}]
+    assert logins_for(api, machine, ops) == [{"id": row["id"], "name": "Acme portal", "username": "ana@acme.example",
+                                              "sites": ["portal.acme.example"], "password": PASSWORD,
+                                              "totp": {"secret": KEY, "digits": 6, "period": 30, "algorithm": "SHA1"}}]
     finance = claim(api, machine, "finance")
-    assert get(api, "credential-runtime", finance["token"])["logins"] == []
+    assert logins_for(api, machine, finance) == []
+    # Only that run's computer: never the bot's own token, a person, or another computer.
+    logins_for(api, {"token": ops["token"]}, ops, expected=403)
+    logins_for(api, {"token": "ana-test"}, ops, expected=403)
+    other = runner(api, label="Other Mac")
+    logins_for(api, other, ops, expected=403)
+    with api.app.state.store.read() as c:
+        sent = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.sent_to_computer' AND target=?",
+                         (row["id"],)).fetchall()
+    assert len(sent) == 1 and json.loads(sent[0]["detail_json"])["use"] == "browser"
+
+    # The bot's own token gets no password or 2FA key by any route.
+    runtime = get(api, "credential-runtime", ops["token"])
+    assert runtime == {"credentials": []} or (runtime["credentials"] == [] and "logins" not in runtime)
+    post(api, f"credentials/{row['id']}/reveal", {}, ops["token"], expected=403)
+    get(api, f"credentials/{row['id']}/code", ops["token"], expected=403)
+    for path in ("credentials", f"credentials/{row['id']}"):
+        r = api.get("/api/v2/" + path, headers=headers(ops["token"]))
+        assert PASSWORD not in r.text and KEY not in r.text
+    r = api.post("/api/v2/credential-requests", json={"kind": "login", "sites": ["portal.acme.example"]},
+                 headers=headers(ops["token"]))
+    assert PASSWORD not in r.text and KEY not in r.text
     get(api, "credential-runtime", "ana-test", expected=403)
-    # Never revealed, to a person or to the bot that holds it; never in a listing.
-    post(api, f"credentials/{row['id']}/reveal", {}, expected=409)
-    post(api, f"credentials/{row['id']}/reveal", {}, ops["token"], expected=409)
+
+    # A person signed in reveals the password, never the 2FA key; a personal token does not.
+    shown_pw = post(api, f"credentials/{row['id']}/reveal", {})
+    assert shown_pw == {"id": row["id"], "value": PASSWORD}
+    token = post(api, "me/tokens", {"label": "script"})["token"]
+    post(api, f"credentials/{row['id']}/reveal", {}, token, expected=403)
+    post(api, f"credentials/{row['id']}/reveal", {}, "cara-test", expected=403)
     [listed] = [c for c in get(api, "credentials")["credentials"] if c["id"] == row["id"]]
-    assert listed["can_reveal"] is False and listed["can_code"] is True and listed["has_totp"]
-    # A change keeps the password and 2FA key it leaves out; an empty key takes 2FA off.
-    renamed = post(api, f"credentials/{row['id']}", {"name": "Acme", "kind": "login", "username": "ana@acme.example",
-                                                     "sites": ["portal.acme.example", "acme.example"],
-                                                     "expected_revision": row["revision"]})
-    assert renamed["sites"] == ["portal.acme.example", "acme.example"] and renamed["has_totp"]
-    assert get(api, "credential-runtime", ops["token"])["logins"][0]["password"] == PASSWORD
+    assert listed["can_reveal"] is True and listed["can_code"] is True and listed["has_totp"]
+    assert KEY not in json.dumps(listed)
+    # A change keeps the password and 2FA key it leaves out or leaves blank; an empty key takes 2FA off.
+    renamed = post(api, f"credentials/{row['id']}", {"name": "", "kind": "login", "username": "ana@acme.example",
+                                                     "password": "", "sites": ["portal.acme.example", "acme.example"],
+                                                     "source": "manual", "expected_revision": row["revision"]})
+    assert renamed["name"] == "portal.acme.example" and renamed["sites"] == ["portal.acme.example", "acme.example"]
+    assert renamed["has_totp"] and logins_for(api, machine, ops)[0]["password"] == PASSWORD
     off = post(api, f"credentials/{row['id']}", {"name": "Acme", "kind": "login", "totp": "",
                                                  "expected_revision": renamed["revision"]})
-    assert not off["has_totp"] and get(api, "credential-runtime", ops["token"])["logins"][0]["totp"] is None
+    assert not off["has_totp"] and logins_for(api, machine, ops)[0]["totp"] is None
     post(api, f"credentials/{row['id']}", {"name": "Acme", "kind": "api_key", "expected_revision": off["revision"]},
          expected=422)                                                    # a login stays a login
+    add_login(api, name="", sites=[], expected=422)                       # no name and no site
+    assert add_login(api, name="", password="other-pass", sites=["crm.acme.example"])["name"] == "crm.acme.example"
+    with api.app.state.store.read() as c:
+        reveals = c.execute("SELECT detail_json FROM events WHERE action='credential.revealed' AND target=?",
+                            (row["id"],)).fetchall()
+    assert len(reveals) == 1
     assert leaks(api, PASSWORD, KEY) == []
 
 
@@ -163,7 +199,7 @@ def test_a_login_card_on_a_task_saves_a_login_granted_to_the_bot_and_wakes_the_t
     assert saved["status"] == "saved" and PASSWORD not in json.dumps(saved)
     assert [c["status"] for c in cards(api, t)] == ["fixed"]
     assert len(wakes(api, t)) == 1
-    [login] = get(api, "credential-runtime", attempt["token"])["logins"]
+    [login] = logins_for(api, machine, attempt)
     assert login["username"] == "ops@acme.example" and login["password"] == PASSWORD and login["totp"]["secret"] == KEY
     assert login["sites"] == ["portal.acme.example"]
     assert leaks(api, PASSWORD, KEY) == []
@@ -213,4 +249,16 @@ def test_a_website_card_waits_the_task_until_done_and_a_saved_login_for_the_host
     assert [c["status"] for c in cards(api, third)] == ["fixed"] and len(wakes(api, third)) == 1
     with api.app.state.store.read() as c:
         assert H.task(c, third["id"])["status"] != "waiting"
+    # Editing a login the bot holds to cover a host it waits on closes that card too.
+    fourth = task(api, "Check the Acme payroll")
+    ask(api, attempt, "browser/needs-you", {"host": "run.acmepay.example", "task": fourth["id"]})
+    post(api, f"credentials/{other['id']}", {"name": "Acme parent", "kind": "login", "sites": ["acme.example", "acmepay.example"],
+                                             "expected_revision": other["revision"]})
+    assert [c["status"] for c in cards(api, fourth)] == ["fixed"] and len(wakes(api, fourth)) == 1
+    # Done finds a card by its task and key as well as by its id.
+    fifth = task(api, "Close the Acme ticket")
+    opened = ask(api, attempt, "browser/needs-you", {"host": "help.example", "task": fifth["id"]})
+    post(api, "reconnects/unknown/done", {}, expected=404)
+    done = post(api, "reconnects/unknown/done", {"task": fifth["id"], "key": opened["key"]})
+    assert done["id"] == opened["id"] and done["status"] == "fixed" and len(wakes(api, fifth)) == 1
     assert leaks(api, PASSWORD, KEY) == []

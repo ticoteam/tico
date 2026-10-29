@@ -303,8 +303,8 @@ STABLE = [
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
     ("/api/v2/reconnects/{card_id}/done", "post", "Needs you", "finishWebsiteCard",
-     "Close a website card (`reconnect.service` site, `reconnect.id` its message): the person did what the bot's browser "
-     "needed on that site. Every task of that bot waiting on the same site goes on with one wake; the card's person or "
+     "Close a website card (`reconnect.service` site, `reconnect.id` its message; or an optional body `{task, key}` "
+     "naming it): the person did what the bot's browser needed on that site. Every task of that bot waiting on the same site goes on with one wake; the card's person or "
      "someone who manages the bot; repeating it answers the card's status. 409 for any other card, which closes by itself "
      "once the account works", "ReconnectDone"),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",

@@ -15504,7 +15504,7 @@
     },
     "/api/v2/reconnects/{card_id}/done": {
       "post": {
-        "summary": "Close a website card (`reconnect.service` site, `reconnect.id` its message): the person did what the bot's browser needed on that site. Every task of that bot waiting on the same site goes on with one wake; the card's person or someone who manages the bot; repeating it answers the card's status. 409 for any other card, which closes by itself once the account works",
+        "summary": "Close a website card (`reconnect.service` site, `reconnect.id` its message; or an optional body `{task, key}` naming it): the person did what the bot's browser needed on that site. Every task of that bot waiting on the same site goes on with one wake; the card's person or someone who manages the bot; repeating it answers the card's status. 409 for any other card, which closes by itself once the account works",
         "operationId": "finishWebsiteCard",
         "parameters": [
           {
@@ -15526,6 +15526,23 @@
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReconnectDoneBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -37322,6 +37339,37 @@
           "woken"
         ],
         "additionalProperties": true
+      },
+      "ReconnectDoneBody": {
+        "properties": {
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 400
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReconnectDoneBody"
       },
       "Refresh": {
         "properties": {
