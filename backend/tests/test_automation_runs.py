@@ -145,6 +145,53 @@ def test_a_trigger_ref_repeating_is_a_loop_and_the_run_guard_pauses_it(api):
     assert len(sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,))) == 1
 
 
+def backdate(api, aid, count, minutes_ago, ref=""):
+    """`count` runs that started `minutes_ago` minutes ago, as a window that has passed (no time travel needed)."""
+    started = H.shift(H.now(), minutes=-minutes_ago)
+    with api.app.state.store.transaction() as c:
+        version = c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()[0]
+        for _ in range(count):
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
+                      "VALUES(?,?,?,?,?,'done','{}','[]')", ("run_" + H.new_id(), aid, version, ref, started))
+
+
+def test_a_loop_with_fresh_ids_that_keeps_going_is_paused_in_its_second_window(api):
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
+               trigger={"type": "webhook", "id": "trg_1"})
+    backdate(api, aid, automations.RUN_GUARD, 15)   # the window before: a full RUN_GUARD
+    with api.app.state.store.transaction() as c:
+        for n in range(70):   # a webhook that calls itself back with a new delivery id each time
+            automations.on_webhook(c, "trg_1", "Deploys", "custom", f"loop{n}", {}, "")
+    assert get(api, f"automations/{aid}")["enabled"] is False
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 2 * automations.RUN_GUARD
+    assert len(sql(api, "SELECT id FROM tasks WHERE body LIKE '%kept queuing runs for 20 minutes%'")) >= 1
+    trip = sql(api, "SELECT detail_json FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
+    assert '"rule": "sustained"' in trip[0]["detail_json"]
+
+
+def test_a_burst_that_is_one_window_only_is_not_sustained(api):
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
+               trigger={"type": "webhook", "id": "trg_1"})
+    backdate(api, aid, automations.RUN_GUARD - 1, 15)   # the window before is under RUN_GUARD
+    with api.app.state.store.transaction() as c:
+        for n in range(70):
+            automations.on_webhook(c, "trg_1", "Deploys", "custom", f"burst{n}", {}, "")
+    assert get(api, f"automations/{aid}")["enabled"] is True
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70 + automations.RUN_GUARD - 1
+
+
+def test_sixty_manual_runs_do_not_pause_the_next_unrelated_trigger(api):
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
+               trigger={"type": "webhook", "id": "trg_1"})
+    with api.app.state.store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        for _ in range(automations.RUN_GUARD):   # "Run now" clicked 60 times: one ref, but not one event
+            automations.queue(c, row, {}, "manual", manual=True)
+        assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "after-runs", {}, "")
+    assert get(api, f"automations/{aid}")["enabled"] is True
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == automations.RUN_GUARD + 1
+
+
 def test_a_flood_of_distinct_external_events_past_the_ceiling_is_paused(api, monkeypatch):
     monkeypatch.setattr(automations, "RUN_GUARD_BURST", 70)   # a webhook whose call calls it back, with new ids each time
     aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
