@@ -399,3 +399,21 @@ def test_a_changed_role_or_a_refused_sign_in_ends_the_stream_and_is_never_rememb
     check()
     assert auth.calls == 2
 
+
+def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, monkeypatch):
+    """Task visibility and the bot lines of one read share the viewer's bot access, rather than each asking for it."""
+    auth, store = api.app.state.auth, api.app.state.store
+    with store.read() as c:
+        cursor = E.latest(c)
+    post(api, "tasks", {"owner": "ben", "title": "Count the asks", "body": "Please."})
+    with store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+    real, asked = auth.bot_accesses, []
+    monkeypatch.setattr(auth, "bot_accesses", lambda c, who, slugs=None: asked.append(slugs) or real(c, who, slugs))
+    who = Identity("human:ben", "human", "ben@acme.example")
+    with store.read() as c:
+        events, _, _, _ = E.read(c, auth, who, cursor, topics=("tasks", "bots"),
+                                 task_views=lambda rows, c, who, visible_sql="1": [], task_view=None)
+    assert [topic for _, topic, _ in events] == ["bots"]
+    assert len(asked) == 1
+

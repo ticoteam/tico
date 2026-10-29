@@ -793,7 +793,9 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     ids = list(last)
     if not ids:
         return out
-    visible_sql = view.auth.task_sql(c, who)
+    # The viewer's own bot access, read once for the whole read (task_sql would read it again): the same answer.
+    unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
+    visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
     found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
