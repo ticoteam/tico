@@ -104,6 +104,15 @@ and then tries the connection as the bot:
 The same three steps are the tools `hub_credential_import`, `hub_credential_grant` and `hub_credential_revoke`, and Tools → Credentials
 does the grant and revoke by hand. A grant to a person, or to every computer, still asks for the person's own click when it comes through BotOps.
 
+## Import from a password manager
+
+A credential administrator can bring logins over from Bitwarden or Vaultwarden (an unencrypted JSON export) or from KeePass
+or KeePassXC (a CSV export): Tools → Credentials → Import, or `hub credential import --format bitwarden|keepass FILE`.
+Each login keeps its name, username, password, authenticator key and the hostnames of its web addresses; an entry without a
+web address or a password is left out and the reply says why. A login already stored with the same name, username and
+hostnames is skipped. Imported logins are granted to no bot, so a bot gets one only when someone grants it. An encrypted
+Bitwarden export is refused; export again with the unencrypted format.
+
 ## The local credential key and backups
 
 Without `TICO_CREDENTIAL_KMS_KEY`, the data key is 32 random bytes in `/data/credential.key` (mode 0600) on the server's data

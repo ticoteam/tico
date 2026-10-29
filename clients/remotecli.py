@@ -162,6 +162,25 @@ def market_spend(client, args, tool):
     return tool(client, args)
 
 
+EXPORT_BYTES = 5_000_000
+
+
+def import_export(client, args):
+    """`hub credential import --format bitwarden|keepass FILE`: the file is read here and the server keeps each login
+    with no grants. The reply counts what was imported and skipped and says why an entry was not stored; it never
+    carries a value."""
+    if not args.env:
+        raise APIError("usage", f"Give the export file: hub credential import --format {args.format} FILE")
+    try:
+        if Path(args.env).stat().st_size > EXPORT_BYTES:
+            raise APIError("too_large", "The export is larger than 5 MB; split it and import each part")
+        content = Path(args.env).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        raise APIError("file", f"Could not read {args.env} as a text export") from None
+    return client.post("credentials/import", {"format": args.format, "content": content},
+                       key=os.environ.get("HUB_OPERATION_ID"))
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
@@ -184,6 +203,11 @@ def run(args, who=None):
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
+    if fn == "credential import" and getattr(args, "format", None):
+        return import_export(client, args)
+    if fn == "credential import" and not (args.env and args.from_bot):
+        raise APIError("usage", "Name the variable and the bot whose secrets file has it: hub credential import VAR --from-bot BOT, "
+                                "or an export: hub credential import --format bitwarden|keepass FILE")
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
         from runner.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
