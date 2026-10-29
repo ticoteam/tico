@@ -281,3 +281,15 @@ def test_sweep_events_drops_only_old_bookkeeping_rows_in_bounded_passes(tmp_path
         left = {r[0] for r in c.execute("SELECT id FROM events")}
     assert left == {f"{action}-{when}" for action in kept_old for when in (old, recent)} | \
         {f"{action}-{recent}" for action in EVENT_SWEEP_ACTIONS}
+
+
+def test_hub_connections_cap_the_wal_file_after_a_checkpoint(tmp_path):
+    from backend import hubdb
+    from backend.store import H
+    s = store(tmp_path)
+    assert s.connect().execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
+    conn = hubdb.connect(str(tmp_path / "hub-open.sqlite"))
+    try:
+        assert conn.execute("PRAGMA journal_size_limit").fetchone()[0] == H.WAL_SIZE_LIMIT == 64 * 1024 * 1024
+    finally:
+        conn.close()

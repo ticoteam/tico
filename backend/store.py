@@ -828,6 +828,8 @@ class Store:
         c.execute("PRAGMA cache_size=-16384")
         c.execute("PRAGMA temp_store=MEMORY")
         c.execute("PRAGMA mmap_size=268435456")
+        # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
+        c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):

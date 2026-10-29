@@ -991,6 +991,10 @@ def synchronous(default):
     return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
 
 
+# After a checkpoint the WAL file is cut back to this size, so a migration's peak is not kept on disk.
+WAL_SIZE_LIMIT = 64 * 1024 * 1024
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -1007,6 +1011,7 @@ def connect(path=None, adopt_legacy=False):
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
+    conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
     try:
         migrate(conn, adopt_legacy=adopt_legacy)
     except Exception:
