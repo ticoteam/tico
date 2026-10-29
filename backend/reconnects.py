@@ -143,8 +143,8 @@ def _wait(c, row, note):
     else:
         from . import task_holds
         task_holds.refresh(c, row["id"])
+    # The status event already carries the note; the card says it in the thread.
     c.execute("UPDATE tasks SET note=?,version=version+1,updated=? WHERE id=?", (note, H.now(), row["id"]))
-    H._task_event(c, row["id"], H.KEEPER, "note", row.get("note"), note, "")
     H._recount(c, row["owner"])
 
 
@@ -218,15 +218,14 @@ def pending(c, task_id):
 
 
 def tasks_for(c, person):
-    """The live tasks with an open card `person` fixes, oldest card first (hubdb.needs_you)."""
+    """The waiting tasks with an open card `person` fixes, oldest card first (hubdb.needs_you)."""
     if not _present(c):
         return []
     H = _H()
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     return H._rows(c.execute(
         "SELECT t.* FROM tasks t JOIN (SELECT task_id, min(created) AS created FROM task_reconnects "
         "WHERE person=? AND fixed_at IS NULL GROUP BY task_id) r ON r.task_id=t.id "
-        f"WHERE t.status IN ({marks}) ORDER BY r.created, t.id", (person, *H.ACTIVE_STATUSES)))
+        "WHERE t.status='waiting' ORDER BY r.created, t.id", (person,)))
 
 
 def hold(c, task_id):

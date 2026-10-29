@@ -30,6 +30,7 @@ async function run(viewport, scheme, shot) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block', colorScheme: scheme});
+    await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, scheme);
     const errors = [], connects = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
@@ -75,7 +76,7 @@ async function run(viewport, scheme, shot) {
     const wide = await page.evaluate(() => [...document.querySelectorAll('#task-modal .rc-card')]
       .some(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > innerWidth + 1));
     assert.equal(wide, false, 'cards fit the thread');
-    if (shot) { await page.waitForTimeout(400); await google.scrollIntoViewIfNeeded(); await page.screenshot({path: shot}); }
+    if (shot) { await page.waitForTimeout(400); await google.evaluate(el => el.closest('.tcomment').scrollIntoView({block: 'center'})); await page.screenshot({path: shot}); }
 
     // Reconnect Google starts the person's own Connect and goes to Google's page, nowhere else.
     await google.locator('[data-reconnect-google]').click();
