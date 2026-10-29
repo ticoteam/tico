@@ -235,8 +235,9 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHERE attempt_id={q(who.attempt_id)}) "
                          "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
     else:
-        shared = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden
-                  and rooms.shared_member(c, auth, who.actor, row["slug"])]
+        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
+        member = rooms.shared_member_bots(c, auth, who.actor, visible)
+        shared = [slug for slug in visible if slug in member]
         room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
                     "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
         first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
