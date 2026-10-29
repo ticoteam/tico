@@ -531,24 +531,38 @@ class Vault:
         if row['ciphertext'] is None:
             raise Problem('not_connected','This connection has no stored password or key',409)
         value=self.cipher.decrypt(c,row)
-        H.event(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None})
+        record_use(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None},windowed=bool(who.attempt_id))
         return {'id':cid,'value':value}
 
 
 # A credential is used when a bot's run receives it or its computer is sent it; a person revealing it is not a use.
-USES=('credential.revealed','credential.sent_to_computer')
+# The newest use lives on the credential row (use_at, use_actor, use_by), so last_used is exact however many events
+# are written. A run reads its credentials once per attempt and a watcher re-sends them every few minutes, so the same
+# actor's repeat use of the same bot's credential within USE_WINDOW writes no event row (the events log grew ~27k a day
+# on TIDY from this). Reveals by a person, reveals with no attempt, and computer sends by model key always write one.
+USE_WINDOW=3600
 
 
-def last_used(c,cid):
+def record_use(c,actor,action,cid,detail,windowed):
+    """Record one use of a credential: its audit row (unless it repeats the last use: same actor, same bot, within
+    USE_WINDOW, and `windowed`), and the newest-use fields on the credential row."""
+    if actor.startswith('human:'):
+        H.event(c,actor,action,cid,detail)
+        return
+    now=H.now()
+    by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
+    last=c.execute('SELECT use_at,use_actor,use_by FROM credentials WHERE id=?',(cid,)).fetchone()
+    repeat=(windowed and last is not None and last['use_actor']==actor and (last['use_by'] or '')==by
+            and (last['use_at'] or '')>=H.shift(now,seconds=-USE_WINDOW))
+    if not repeat:
+        H.event(c,actor,action,cid,detail)
+    c.execute('UPDATE credentials SET use_at=?,use_actor=?,use_by=? WHERE id=?',(now,actor,by,cid))
+
+
+def last_used(row):
     """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
-    key) for Library › Tools."""
-    row=c.execute(f"SELECT ts,actor,detail_json FROM events WHERE target=? AND action IN ({','.join('?'*len(USES))}) "
-                  "AND actor NOT LIKE 'human:%' ORDER BY ts DESC LIMIT 1",(cid,*USES)).fetchone()
-    if not row:
-        return {'last_used':None,'last_used_by':''}
-    detail=json.loads(row['detail_json'] or '{}') if str(row['detail_json'] or '').startswith('{') else {}
-    actor=row['actor'] or ''
-    return {'last_used':row['ts'],'last_used_by':detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')}
+    key) for Library › Tools: the newest use, as record_use keeps it on the row."""
+    return {'last_used':row['use_at'],'last_used_by':row['use_by'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -660,7 +674,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 revealable=permitted(c,who,row['id'],vault.admins)
                 if not (revealable or mine):continue
                 added|=mine
-                item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
+                item=vault.brief(row)|{'can_reveal':revealable}|last_used(row)
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
@@ -796,7 +810,7 @@ def install_credentials(app,store,delegate=None,propose=None):
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
                     values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
-                    H.event(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'})
+                    record_use(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'},windowed=True)
             return {'credentials':values}
 
     @app.get('/api/v2/runner-model-credentials')
@@ -823,5 +837,5 @@ def install_credentials(app,store,delegate=None,propose=None):
         with store.transaction() as c:
             reply,sent=chosen(c)
             for cid in sent:
-                H.event(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id})
+                record_use(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id},windowed=False)
             return reply

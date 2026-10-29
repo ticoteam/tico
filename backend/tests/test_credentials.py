@@ -253,3 +253,108 @@ def test_the_list_says_when_a_bot_last_used_a_credential_and_a_persons_reveal_is
     row=get(api,'credentials')['credentials'][0]
     assert row['last_used'] and row['last_used_by']=='finance'
     assert 'phx-synthetic' not in json.dumps(row)
+
+
+# ------------------------------------------------------------------ the use log: one row per run, newest kept on the row
+def _clock(monkeypatch, start):
+    from backend import hubdb as H
+    now = {'v': start}
+    monkeypatch.setattr(H, 'now', lambda: now['v'])
+    return now
+
+
+def test_repeat_uses_by_the_same_bot_within_the_hour_write_one_row_and_last_used_stays_the_newest(api, monkeypatch):
+    from backend import credentials as C
+    setup(api);cid=create(api)['id']
+    store=api.app.state.store
+    clock=_clock(monkeypatch,'2026-10-29T10:00:00Z')
+    with store.transaction() as c:
+        for stamp in ('2026-10-29T10:00:00Z','2026-10-29T10:05:00Z','2026-10-29T10:09:00Z'):   # three reveals in one run
+            clock['v']=stamp
+            C.record_use(c,'bot:finance','credential.revealed',cid,{'attempt':'att-1'},windowed=True)
+        clock['v']='2026-10-29T10:10:00Z'
+        C.record_use(c,'bot:cpo','credential.revealed',cid,{'attempt':'att-2'},windowed=True)     # another bot: its own row
+        clock['v']='2026-10-29T10:11:00Z'
+        C.record_use(c,'bot:cpo','credential.revealed',cid,{'attempt':'att-3'},windowed=True)     # repeat of cpo: none
+        clock['v']='2026-10-29T11:30:00Z'
+        C.record_use(c,'bot:cpo','credential.revealed',cid,{'attempt':'att-4'},windowed=True)     # an hour later: a row
+    with store.read() as c:
+        rows=c.execute("SELECT actor,ts FROM events WHERE target=? AND action='credential.revealed' ORDER BY ts",(cid,)).fetchall()
+        assert [(r['actor'],r['ts']) for r in rows]==[('bot:finance','2026-10-29T10:00:00Z'),('bot:cpo','2026-10-29T10:10:00Z'),
+                                                    ('bot:cpo','2026-10-29T11:30:00Z')]
+        assert c.execute('SELECT use_at,use_actor,use_by FROM credentials WHERE id=?',(cid,)).fetchone()['use_at']=='2026-10-29T11:30:00Z'
+    listed=get(api,'credentials')['credentials'][0]
+    assert (listed['last_used'],listed['last_used_by'])==('2026-10-29T11:30:00Z','cpo')
+
+
+def test_a_person_reveal_and_a_reveal_with_no_attempt_always_write_a_row(api, monkeypatch):
+    from backend import credentials as C
+    setup(api);cid=create(api)['id']
+    store=api.app.state.store
+    clock=_clock(monkeypatch,'2026-10-29T10:00:00Z')
+    with store.transaction() as c:
+        for stamp,actor in (('10:00','human:ana'),('10:01','human:ana'),('10:02','bot:finance'),('10:03','bot:finance')):
+            clock['v']='2026-10-29T'+stamp+':00Z'
+            C.record_use(c,actor,'credential.revealed',cid,{'attempt':None},windowed=False)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action='credential.revealed'",(cid,)).fetchone()[0]==4
+        # A person's reveal is not a use: the last use is the bot's, not the person's.
+        assert c.execute('SELECT use_actor FROM credentials WHERE id=?',(cid,)).fetchone()['use_actor']=='bot:finance'
+
+
+def test_the_repeat_sweep_keeps_the_earliest_row_of_each_attempt_and_leaves_the_rest(api):
+    import json
+    from backend import hubdb as H
+    from backend.store import sweep_credential_repeats
+    setup(api);cid=create(api)['id']
+    store=api.app.state.store
+    rows=[('2026-10-20T10:00:00Z','att-1'),('2026-10-20T10:02:00Z','att-1'),('2026-10-20T10:03:00Z','att-1'),
+          ('2026-10-20T10:04:00Z','att-2'),('2026-10-20T10:05:00Z',None),('2026-10-20T10:06:00Z',None)]
+    with store.transaction() as c:
+        c.execute("UPDATE credentials SET use_at='2026-10-20T10:06:00Z' WHERE id=?",(cid,))
+        for ts,attempt in rows:
+            c.execute('INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)',
+                      (H.new_id(),ts,'bot:finance','credential.revealed',cid,json.dumps({'attempt':attempt})))
+        c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(),'2026-10-20T10:07:00Z','bot:finance','credential.sent_to_computer',cid,'{}'))
+    assert sweep_credential_repeats(store,now='2026-10-29T12:00:00Z')==2
+    with store.read() as c:
+        kept=[(r['ts'],r['detail_json']) for r in c.execute(
+            "SELECT ts,detail_json FROM events WHERE target=? AND action='credential.revealed' ORDER BY ts",(cid,))]
+        assert [ts for ts,_ in kept]==['2026-10-20T10:00:00Z','2026-10-20T10:04:00Z','2026-10-20T10:05:00Z','2026-10-20T10:06:00Z']
+        assert c.execute("SELECT count(*) FROM events WHERE target=? AND action='credential.sent_to_computer'",(cid,)).fetchone()[0]==1
+    # A finished pass moved the mark, so the next one finds no credential used since and removes nothing.
+    assert sweep_credential_repeats(store,now='2026-10-29T12:01:00Z')==0
+
+
+def test_the_backfill_copies_each_credentials_newest_bot_use_once(api):
+    from backend import hubdb as H
+    setup(api);cid=create(api)['id']
+    store=api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE credentials SET use_at=NULL,use_actor=NULL,use_by=NULL WHERE id=?",(cid,))
+        c.execute("DELETE FROM registry_metadata WHERE key='credential-use-backfill'")
+        for ts,actor,action,detail in [('2026-10-20T10:00:00Z','bot:finance','credential.revealed','{"attempt": "a"}'),
+                                       ('2026-10-21T10:00:00Z','runner:r1','credential.sent_to_computer','{"bot": "ops", "use": "watcher"}'),
+                                       ('2026-10-22T10:00:00Z','human:ana','credential.revealed','{"attempt": null}')]:
+            c.execute('INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)',
+                      (H.new_id(),ts,actor,action,cid,detail))
+        H.backfill_credential_uses(c)
+    with store.read() as c:
+        row=c.execute('SELECT use_at,use_actor,use_by FROM credentials WHERE id=?',(cid,)).fetchone()
+        assert (row['use_at'],row['use_actor'],row['use_by'])==('2026-10-21T10:00:00Z','runner:r1','ops')
+
+
+def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
+    setup(api);cid=create(api)['id']
+    post(api,'credentials/%s/grants'%cid,{'subject':'bot:finance'})
+    machine=runner(api);assign(api,machine,'finance');ready(api,machine,['finance'])
+    post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
+    attempt=claim(api,machine)
+    for _ in range(3):     # a run's tool calls each read the credential again
+        assert get(api,'credential-runtime',attempt['token'])['credentials']
+    with api.app.state.store.read() as c:
+        rows=c.execute("SELECT count(*) FROM events WHERE target=? AND action='credential.revealed'",(cid,)).fetchone()[0]
+        assert rows==1
+    row=get(api,'credentials')['credentials'][0]
+    assert row['last_used'] and row['last_used_by']=='finance'

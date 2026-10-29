@@ -1025,6 +1025,24 @@ class UnknownDatabase(RuntimeError):
     """The file has Tico's tables but no version record: not a database this code made."""
 
 
+def backfill_credential_uses(conn):
+    """Once: copy each credential's newest use from the events log onto its row (the same rule record_use applies
+    from now on: a bot's run or a computer sent it, never a person's reveal)."""
+    if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
+        return
+    for (cid,) in conn.execute("SELECT id FROM credentials").fetchall():
+        row = conn.execute("SELECT ts,actor,detail_json FROM events WHERE target=? AND action IN "
+                           "('credential.revealed','credential.sent_to_computer') AND actor NOT LIKE 'human:%' "
+                           "ORDER BY ts DESC LIMIT 1", (cid,)).fetchone()
+        if not row:
+            continue
+        detail = json.loads(row[2]) if str(row[2] or "").startswith("{") else {}
+        actor = row[1] or ""
+        by = detail.get("bot") or (actor[4:] if actor.startswith("bot:") else "")
+        conn.execute("UPDATE credentials SET use_at=?,use_actor=?,use_by=? WHERE id=?", (row[0], actor, by, cid))
+    conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
+
+
 def add_column(conn, table, column, declaration):
     """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
     if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:

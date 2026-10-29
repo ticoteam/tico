@@ -540,8 +540,8 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
 # than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source), `credential.revealed` (credentials.last_used reads the
-# newest use of a credential, however old).
+# runtime of an old limited run that kept no limit_source). `credential.revealed` is not swept here either: the
+# repeat sweep (sweep_credential_repeats) trims its duplicates, and credentials.use_at keeps each last use.
 EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
                        "message.notice")
 EVENT_RETENTION_DAYS = 30
@@ -585,6 +585,56 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
     with store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
                   "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+    return deleted
+
+
+CREDENTIAL_REPEATS_KEY = "credential-repeats-mark"
+
+
+def sweep_credential_repeats(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
+    """Delete repeat `credential.revealed` rows: within one attempt (same credential, same detail.attempt) only the
+    earliest row is kept. record_use writes one row per attempt-or-hour already, so this mostly drains the rows that
+    were written before it; a repeat it finds later is removed the same way.
+
+    Only credentials used since the last complete pass are walked (use_at, which record_use sets on every use), and
+    each one's rows come through events_target_action. Each batch of deletes is its own short write; `most` rows a
+    pass. A pass cut short keeps its old mark and runs again, which is safe because it keeps the earliest row again.
+    Returns the count deleted."""
+    stamp = now or H.now()
+    with store.read() as c:
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (CREDENTIAL_REPEATS_KEY,)).fetchone()
+        mark = json.loads(saved[0]) if saved else ""
+        ids = [row[0] for row in c.execute("SELECT id FROM credentials WHERE use_at IS NOT NULL AND use_at>=? "
+                                           "ORDER BY id", (mark,))]
+    deleted, complete = 0, True
+    for cid in ids:
+        with store.read() as c:
+            rows = c.execute("SELECT rowid,detail_json FROM events WHERE target=? AND action='credential.revealed' "
+                             "ORDER BY ts,rowid", (cid,)).fetchall()
+        seen, drop = set(), []
+        for row in rows:
+            detail = json.loads(row["detail_json"]) if str(row["detail_json"] or "").startswith("{") else {}
+            attempt = detail.get("attempt")
+            if not attempt:
+                continue
+            if attempt in seen:
+                drop.append(row["rowid"])
+            else:
+                seen.add(attempt)
+        for start in range(0, len(drop), batch):
+            if deleted >= most:
+                complete = False
+                break
+            chunk = drop[start:start + batch]
+            with store.transaction() as c:
+                deleted += c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(chunk))})",
+                                     chunk).rowcount
+        if not complete:
+            break
+    if complete:
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                      (CREDENTIAL_REPEATS_KEY, json.dumps(stamp)))
     return deleted
 
 
@@ -949,6 +999,10 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # The newest use of each credential (credentials.last_used), kept on its row by credentials.record_use.
+            for column in ("use_at", "use_actor", "use_by"):
+                H.add_column(c, "credentials", column, "TEXT")
+            H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
