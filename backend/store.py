@@ -1706,6 +1706,10 @@ class Store:
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
                 StrategyBot.migrate(c)
+                # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
+                # (backend/assistant.py: one Assistant for everyone). Idempotent.
+                from . import assistant as Assistant
+                Assistant.migrate(c, self.settings)
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)

@@ -415,13 +415,11 @@ def instruction(c, who, ref):
     msg = H.message(c, message_id) if message_id else None
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
-    # The Strategy Bot's turn cites the owner's words in the Strategy Bot chat, an Assistant's its person's Assistant
-    # room.
-    key = rooms.STRATEGY_ROOM if who.task_actor == "bot:" + strategy_bot.SLUG else rooms.ASSISTANT_ROOM
+    # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
     if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != key
-            or (key == rooms.STRATEGY_ROOM and who.role != "owner") or room.get("closed_at")):
+            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
     if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
@@ -431,7 +429,7 @@ def instruction(c, who, ref):
 def require_on_task(c, auth, who, path):
     """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester or
     in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked to. The
-    owner's own chat (the Strategy Bot's) acts as the owner, who may act on any task. A task they may not read is a 404,
+    owner's Assistant acts as the owner, who may act on any task. A task they may not read is a 404,
     as the route answers it: the refusal never says it is there."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|links))?", normalize_path(path) or "")
     if not m or who.role == "owner":
@@ -908,7 +906,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
 
 # ------------------------------------------------------------------ the room
 def room_bot(settings, room):
-    """The bot that talks in this person's own room: the Strategy Bot in the Strategy Bot chat, else the Assistant."""
+    """The bot that talks in this person's own room: the Assistant, and the Strategy Bot in the owner's earlier
+    Strategy Bot chat (its old cards and their results)."""
     return strategy_bot.SLUG if (room or {}).get("room_key") == rooms.STRATEGY_ROOM else settings.assistant_bot
 
 
@@ -919,14 +918,12 @@ def find_room(c, actor):
 
 
 def own_room(c, who, conversation_id):
-    """Whether this conversation is the caller's own chat room: their Assistant room, or for the owner the Strategy Bot
-    chat (and the caller is a person)."""
+    """Whether this conversation is the caller's own Assistant room (and the caller is a person)."""
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
     return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
-                and room.get("room_key") == (rooms.STRATEGY_ROOM if strategy_seat(c, who) else rooms.ASSISTANT_ROOM)
-                and not room.get("closed_at"))
+                and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
 
 
 def ensure_room(c, actor, bot):
@@ -937,28 +934,24 @@ def ensure_room(c, actor, bot):
                                scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.ASSISTANT_ROOM)
 
 
-# ------------------------------------------------------------------ the owner's Strategy Bot (docs/strategy-bot.md)
-# The owner talks to the Strategy Bot (backend/strategy_bot.py) in place of an Assistant: the same page, rights, cards
-# and read-backs, in a room of its own (`rooms.STRATEGY_ROOM`) that belongs to the owner seat. A transfer of ownership
-# moves that room to the new owner (`move_strategy_room`), and the old owner talks to their Assistant again. Everyone
-# else, admins included, keeps the Assistant. The owner's own Assistant room stays theirs: the Strategy Bot tab shows
-# it, read-only, under "Earlier chats", and it goes back with them if they hand ownership on. Turns in the Strategy Bot
-# chat key a provider session of their own (`rooms.session_config`), apart from the bot's goals session.
+# ------------------------------------------------------------------ one Assistant for everyone (docs/assistant.md)
+# Every person, the owner included, has one chat: their Assistant. The Strategy Bot, the Librarian and BotOps are
+# helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Bot
+# (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
+# "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
+# (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
+HELPERS = ("botops", strategy_bot.SLUG, "librarian")
+
+
 def strategy_on(c):
     """Whether this install has its Strategy Bot (every install does once it is set up)."""
     row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] not in ("archived", "planned")
 
 
-def strategy_seat(c, who):
-    """Whether this person talks to the Strategy Bot rather than an Assistant: the owner, once the Strategy Bot is
-    there."""
-    return who.role == "owner" and H.is_human(who.actor) and strategy_on(c)
-
-
 def chat_bot(c, settings, who):
-    """The bot this person talks to in their own chat: the Strategy Bot for the owner, else the Assistant."""
-    return strategy_bot.SLUG if strategy_seat(c, who) else settings.assistant_bot
+    """The bot this person talks to in their own chat: the Assistant, for everyone."""
+    return settings.assistant_bot
 
 
 def chat_name(c, settings, bot):
@@ -966,7 +959,7 @@ def chat_name(c, settings, bot):
 
 
 def find_strategy_room(c, actor=None):
-    """The Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
+    """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
                     "ORDER BY created LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
@@ -974,9 +967,8 @@ def find_strategy_room(c, actor=None):
 
 
 def move_strategy_room(c, actor, to):
-    """The Strategy Bot chat goes with the owner seat to `to`, the new owner: its history and what it is in the middle
-    of. The cards it put in front of the old owner are withdrawn: they ran as that person, who is no longer the
-    owner."""
+    """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
+    is withdrawn: it ran as the old owner, who is no longer the owner."""
     room = find_strategy_room(c)
     if not room or room.get("owner_actor") == to:
         return room
@@ -989,34 +981,49 @@ def move_strategy_room(c, actor, to):
     return H.conversation(c, room["id"])
 
 
-def ensure_strategy_room(c, actor):
-    """The owner's Strategy Bot chat, moved to them if it still names an earlier owner, opened on first use."""
-    room = move_strategy_room(c, actor, actor)
-    if room:
-        return room
-    return H.open_conversation(c, actor, [actor, "bot:" + strategy_bot.SLUG], kind="chat", subject=strategy_bot.NAME,
-                               scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.STRATEGY_ROOM)
+def migrate(c, settings):
+    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Bot chat moves
+    to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
+    Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
+    earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
+    move none is left in that room."""
+    moved = 0
+    for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
+                         "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
+                         "AND a.owner=v.owner_actor ORDER BY a.created", (rooms.STRATEGY_ROOM,)).fetchall():
+        room = ensure_room(c, row["owner"], settings.assistant_bot)
+        c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
+        H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
+                         "say", {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
+        moved += 1
+    if moved:
+        H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
+    return moved
+
+
+def earlier_chat(c, settings, who):
+    """"Earlier chats" on the owner's Assistant page: their earlier Strategy Bot chat, read-only (GET
+    /api/v2/conversations/<id>/messages), once it has a message. None for anyone else."""
+    if who.role != "owner":
+        return None
+    old = find_strategy_room(c, who.actor)
+    if not old or not c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
+                                (old["id"],)).fetchone():
+        return None
+    return {"room_id": old["id"], "bot": strategy_bot.SLUG, "name": strategy_bot.name(c)}
 
 
 def chat_room(c, settings, who, create=True):
-    """This person's own chat, opened with `create`: the Strategy Bot chat for the owner, else their Assistant room. In
-    a transaction: the Strategy Bot chat moves to the owner here if it still names an earlier one."""
-    bot = chat_bot(c, settings, who)
-    if bot == strategy_bot.SLUG:
-        return ensure_strategy_room(c, who.actor) if create else move_strategy_room(c, who.actor, who.actor)
-    return ensure_room(c, who.actor, bot) if create else find_room(c, who.actor)
+    """This person's own Assistant room, opened with `create`."""
+    return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
 def availability(c, settings, who):
     slug = chat_bot(c, settings, who)
     bot = H.bot(c, slug)
     state = bot["state"] if bot else "missing"
-    is_strategy = slug == strategy_bot.SLUG
-    # The Strategy Bot is not turned on from here: it is always there, and its settings are Settings > Strategy Bot.
-    return {"available": state == "active", "state": state, "bot": slug, "strategy_bot": is_strategy,
-            "name": chat_name(c, settings, slug),
-            "can_turn_on": (not is_strategy and who.role == "owner" and state != "active"
-                            and state not in ("quarantined",))}
+    return {"available": state == "active", "state": state, "bot": slug, "name": chat_name(c, settings, slug),
+            "can_turn_on": who.role == "owner" and state != "active" and state not in ("quarantined",)}
 
 
 # A repository card stored before its route had a sentence: titled "PUT /api/v2/bots/x/repositories", its summary
@@ -1034,7 +1041,7 @@ def action_view(row, c=None):
             "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
             "result": result}
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
-        # A card the Strategy Bot put in the owner's chat says it is the Strategy Bot's, by its name.
+        # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
         if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
             view["by_name"] = strategy_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
@@ -1507,14 +1514,7 @@ def install(app, store, auth, mutate, onboarding):
         pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
         info = availability(c, settings, who)
-        earlier = None
-        if info["strategy_bot"]:
-            # "Earlier chats": the owner's own Assistant room, read-only in the Strategy Bot tab (GET .../messages on
-            # it).
-            old = find_room(c, who.actor)
-            if old and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
-                                 (old["id"],)).fetchone():
-                earlier = {"room_id": old["id"], "bot": settings.assistant_bot, "name": settings.assistant_name}
+        earlier = earlier_chat(c, settings, who)
         return {**info, "room_id": room["id"] if room else None,
                 "messages": snap["messages"], "has_more": snap["has_more"], "next_before": snap["next_before"],
                 "execution": snap["execution"], "actions": actions_for(c, who.actor, ids),
@@ -1522,18 +1522,14 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.get("/api/v2/assistant")
     def assistant(request: Request):
-        """The caller's own chat: the Strategy Bot chat for the owner, an Assistant room for everyone else."""
+        """The caller's own chat: their Assistant room, the owner's included."""
         who = own(request)
         # Every chat load: read first, and take the write lock only when a confirm is overdue or the room needs
-        # opening or moving to this owner.
+        # opening.
         with store.read() as c:
             create = availability(c, settings, who)["available"]
-            if chat_bot(c, settings, who) == strategy_bot.SLUG:
-                room = find_strategy_room(c)
-                ready = room.get("owner_actor") == who.actor if room else not create
-            else:
-                room = find_room(c, who.actor)
-                ready = bool(room) or not create
+            room = find_room(c, who.actor)
+            ready = bool(room) or not create
             if ready and not expiring(c):
                 return view(c, who, room)
         with store.transaction() as c:
@@ -1547,7 +1543,7 @@ def install(app, store, auth, mutate, onboarding):
         info = availability(c, settings, who)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        if files and info["bot"] != strategy_bot.SLUG:
+        if files:
             raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
         auth.require_write(c, who, info["bot"])
         return info["bot"]
@@ -1594,8 +1590,8 @@ def install(app, store, auth, mutate, onboarding):
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
 
-    # The owner's Strategy Bot chat takes pictures and files like any bot chat (a pasted screenshot attaches); an
-    # Assistant room stays text only. Files skip the quick answers, which read words only.
+    # An Assistant room is text only: this door refuses every upload (`text_only`) before a byte is stored, for a client
+    # that still offers to attach.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)

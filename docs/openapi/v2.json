@@ -26182,10 +26182,6 @@
           "pending": {
             "type": "array"
           },
-          "strategy_bot": {
-            "type": "boolean",
-            "description": "True for the owner, who talks to the Strategy Bot in place of an Assistant: `bot` is the Strategy Bot and `name` its name"
-          },
           "earlier": {
             "oneOf": [
               {
@@ -26212,7 +26208,7 @@
                 "type": "null"
               }
             ],
-            "description": "The owner's own earlier Assistant chats, read-only (GET /api/v2/conversations/{room_id}/messages); null for everyone else, or none"
+            "description": "The owner's earlier chat with the Strategy Bot, read-only (GET /api/v2/conversations/{room_id}/messages); null for everyone else, or none"
           },
           "actors": {
             "type": "object",
@@ -26235,8 +26231,7 @@
           "next_before",
           "pending",
           "room_id",
-          "state",
-          "strategy_bot"
+          "state"
         ],
         "additionalProperties": true
       },
@@ -31549,7 +31544,7 @@
           "changes"
         ],
         "title": "GoalReadBack",
-        "description": "Up to 20 changes the Strategy Bot reads back in the owner's chat (backend/goal_read_back.py): each one an object\nwith a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."
+        "description": "Up to 20 changes the owner's Assistant reads back in their chat (backend/goal_read_back.py): each one an object\nwith a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."
       },
       "GoalRefresh": {
         "properties": {

@@ -12,17 +12,18 @@ SHARED = "shared"
 # The one private room each person has with the Assistant (backend/assistant.py); distinct from the
 # room the person's tasks for the assistant bot land in, so its history is only what they said to it.
 ASSISTANT_ROOM = "assistant"
-# The owner's chat with the Strategy Bot (backend/strategy_bot.py), which the owner has in place of an Assistant room:
-# one per company, belonging to the owner seat, so a transfer of ownership moves it to the new owner
-# (backend/assistant.py). Its stored value stays "ceo": a runner one version behind marks this chat by that value
-# (runner-rs/src/prompt.rs), and the rows stored so far carry it.
+# The owner's earlier chat with the Strategy Bot (backend/strategy_bot.py), from when the owner had it in place of an
+# Assistant room: one per company, belonging to the owner seat, history now (read-only under "Earlier chats",
+# backend/assistant.py). No new message goes to it; a transfer of ownership still moves it to the new owner. Its stored
+# value stays "ceo": the rows stored so far carry it.
 STRATEGY_ROOM = "ceo"
 # The one private room each person has with the Librarian (backend/librarian.py): their Ask the Librarian questions.
 DOCS_ROOM = "docs"
 
 
 def session_config(conversation, bot, config):
-    """The config a turn is handed. In the owner's Strategy Bot chat it keys its session on that conversation
+    """The config a turn is handed. In the owner's earlier Strategy Bot chat (a turn queued there before it became
+    history) it keys its session on that conversation
     (clients/sessions.py, `session: task`), so the owner's chat is one session and the Strategy Bot's goals session (its
     regular checks and goal work) another, and neither shares the other's context. The bot's own `session` setting
     never applies here: `session: bot` would put the owner's chat on the thread its goals session and other bots'

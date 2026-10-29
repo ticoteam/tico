@@ -314,20 +314,20 @@ def may_chat(c, auth, who, bot):
     # The assistant is chatted with in one place only: each person's own Assistant room, through
     # /api/v2/assistant (backend/assistant.py). It has no chat with anyone else and no shared or
     # per-bot chat, so every other route that asks "may I chat with it" says no. The Strategy Bot the
-    # same: of people, only the owner talks to it, in the Strategy Bot chat /api/v2/assistant gives them;
-    # an earlier chat with it anyone had stays readable, read-only.
+    # same: no person chats with it, their Assistant hands it work; an earlier chat with it anyone had
+    # stays readable, read-only.
     return bot not in (auth.settings.assistant_bot, STRATEGY_BOT)
 
 
 def require_chat(c, auth, who, bot):
     """Write on the bot, and a bot that has a chat of its own (the Assistant has only the room
-    /api/v2/assistant gives each person, the Strategy Bot only the owner's Strategy Bot chat)."""
+    /api/v2/assistant gives each person, and no person chats with the Strategy Bot)."""
     auth.require_write(c, who, bot)
     if not may_chat(c, auth, who, bot):
         if bot == STRATEGY_BOT:
             from . import strategy_bot
-            raise Problem("forbidden", "Of people, only the company's owner talks to the " + strategy_bot.name(c)
-                          + ", in their own chat with it (/api/v2/assistant); talk to your Assistant", 403)
+            raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask your "
+                          + auth.settings.assistant_name + " (/api/v2/assistant), which hands it the work", 403)
         raise Problem("forbidden", auth.settings.assistant_name + " chats only in your own Assistant "
                       "(/api/v2/assistant); message one of your bots here", 403)
 

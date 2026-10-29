@@ -655,15 +655,9 @@ def writer_for(c, settings, store=None, vault=None):
 
 
 def drafter(c, settings, author, assistant):
-    """Whose draft a person's update is labelled: their Assistant's, and for the owner the Strategy Bot's, which is the
-    owner's Assistant (backend/assistant.py). The draft is written the same way for both."""
-    from . import access, strategy_bot
-    from .assistant import strategy_on
-    if not is_person(author) or not strategy_on(c):
-        return assistant
-    human = H.human(c, H.actor_id(author)) or {}
-    owner = access.load_owner(c, settings)["email"]
-    return strategy_bot.SLUG if owner and str(human.get("email") or "").strip().lower() == owner else assistant
+    """Whose draft a person's update is labelled: their Assistant's, the owner's included (backend/assistant.py: one
+    Assistant for everyone)."""
+    return assistant
 
 
 def write_draft(store, author, write, assistant):

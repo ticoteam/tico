@@ -699,10 +699,10 @@ def create_app(settings=None):
                     # A direct setting from the catalogue the person asked for runs on their words the same way.
                     setting = (not approves and request.state.identity.via == "assistant"
                                and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (the Strategy Bot's suggestion they said to make) runs the same way.
+                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
                     org = (not approves and request.state.identity.via == "assistant"
                            and assistant_mod.instructed_org(request.method, request.url.path, raw))
-                    # The owner's yes to a goal read-back in their Strategy Bot chat (backend/goal_read_back.py): the
+                    # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
@@ -728,7 +728,7 @@ def create_app(settings=None):
                                     record = assistant_instruction(c, request.state.identity, asked)
                                 except Problem as exc:
                                     raise goal_read_back.not_agreed(exc.detail.split(";")[0]) from None
-                                # Recorded on every save as the owner, via the Strategy Bot, citing their yes and the
+                                # Recorded on every save as the owner, via their Assistant, citing their yes and the
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
@@ -746,7 +746,7 @@ def create_app(settings=None):
                                                                     settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                                # The bot whose turn it is: the person's Assistant, or the owner's Strategy Bot.
+                                # The bot whose turn it is: the person's Assistant.
                                 acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
                                 record = {**record, "assistant": acting,
                                           **assistant_mod.approval_words(c, request.state.identity, record["cited"],
@@ -1314,7 +1314,6 @@ def create_app(settings=None):
                 raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
             if body.conversation_id and not assistant_room(c, who, body.conversation_id):
                 raise Problem("forbidden", "Use your own Assistant room", 403)
-            # The owner's is the Strategy Bot (backend/assistant.py).
             info = assistant_mod.availability(c, settings, who)
             if not info["available"]:
                 raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
@@ -1335,14 +1334,17 @@ def create_app(settings=None):
                                       "(/api/v2/assistant); message one of your bots here", 403)
                     in_assistant_room = True
                 elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
-                    # Of people, only the owner talks to the Strategy Bot, in the Strategy Bot chat (their menu tab).
-                    # Bots still message it; that is its goals session, never the owner's chat. The owner's post with no
-                    # room (the Goals page, `hub chat`) goes to that one chat.
-                    if not body.conversation_id and not who.via and assistant_mod.strategy_seat(c, who):
-                        body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-                    if not assistant_room(c, who, body.conversation_id) or not assistant_mod.strategy_seat(c, who):
-                        raise Problem("forbidden", "Only the company's owner talks to the " + strategy_bot.name(c)
-                                      + ", in their own chat with it; talk to your Assistant", 403)
+                    # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
+                    # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
+                    # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
+                    if body.conversation_id or who.via:
+                        raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask "
+                                      "your " + settings.assistant_name + ", which hands it the work", 403)
+                    info = assistant_mod.availability(c, settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    to = "bot:" + info["bot"]
+                    body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
         auth.require_bot_contact(c, who, to, body.conversation_id,
@@ -3602,11 +3604,14 @@ def create_app(settings=None):
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         asked_botops = None
         if request_id and who.via == "assistant":
-            # The Assistant handing BotOps what the person asked for in their own Assistant chat, citing that message
-            # (`--request-id turn`): BotOps then acts with the person's rights (delegated_identity, `assistant`).
-            # Only BotOps carries it, and only while the owner lets the Assistant act without asking.
-            if owner != "bot:" + BOTOPS:
-                raise Problem("request_id", "Only a task for BotOps carries the person's request", 422)
+            # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
+            # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
+            # owner lets the Assistant act without asking. BotOps then acts with the person's rights
+            # (delegated_identity, `assistant`); the Strategy Bot and the Librarian work it with their own rights, so
+            # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
+            if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
+                raise Problem("request_id", "Only a task for BotOps, the " + strategy_bot.name(c)
+                              + " or the Librarian carries the person's request", 422)
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
@@ -3767,7 +3772,12 @@ def create_app(settings=None):
             raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
         if asked_botops:
             request_id = asked_botops["cited"]
-            H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            # BotOps' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
+            # which helper, and lends nothing.
+            if owner == "bot:" + BOTOPS:
+                H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            else:
+                H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_botops, "helper": owner})
             words = (H.message(c, request_id) or {}).get("body") or ""
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             H._write_message(c, H.KEEPER, owner, f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "

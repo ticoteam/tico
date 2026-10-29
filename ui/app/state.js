@@ -67,12 +67,11 @@ const strategyBotName = () => {
 // The room_key the server stores the owner's Strategy Bot chat under (backend/rooms.py). The value stays "ceo" so a
 // runner one version behind still finds that chat by it; only the constant's name follows the bot.
 const STRATEGY_ROOM = 'ceo';
-// The owner talks to the Strategy Bot in place of an Assistant (backend/assistant.py): their menu tab and #/assistant
-// are the Strategy Bot, by its name. Everyone else, admins included, keeps their Assistant.
-const meStrategyBot = () => S.me?.role === 'owner'
-  && (S.emps || []).some(e => e.name === 'goal-manager' && !['archived', 'planned'].includes(e.status));
-const myChatBot = () => meStrategyBot() ? 'goal-manager' : assistantBot();
-const myChatName = () => meStrategyBot() ? strategyBotName() : assistantName();
+// Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
+// meStrategyBot is being removed with the surfaces that still call it; until then it is false for everyone.
+const meStrategyBot = () => false;
+const myChatBot = () => assistantBot();
+const myChatName = () => assistantName();
 const companyName = () => S.config.company_name || appName();
 // Tico's own wordmark, only while the app is called Tico; a team that named its app gets that name as text.
 const brandLogo = () => appName() === CONFIG_DEFAULTS.app_name

@@ -1069,16 +1069,13 @@ SCHEMAS = {
                       "actions": {"type": "object", "description": "{action id: proposal} for every card in `messages` "
                                   "(a message whose refs.action names one is a Confirm / Cancel card)"},
                       "pending": "a",
-                      "strategy_bot": {"type": "boolean", "description": "True for the owner, "
-                                                                         "who talks to the Strategy Bot "
-                                       "in place of an Assistant: `bot` is the Strategy Bot and `name` its name"},
                       "earlier": {"oneOf": [obj({"room_id": "s", "bot": "s", "name": "s"},
                                                 required=["room_id", "bot", "name"]), {"type": "null"}],
-                                  "description": "The owner's own earlier Assistant chats, read-only (GET "
+                                  "description": "The owner's earlier chat with the Strategy Bot, read-only (GET "
                                   "/api/v2/conversations/{room_id}/messages); null for everyone else, or none"}},
                      required=["available", "state", "bot", "name", "can_turn_on", "room_id", "messages",
-                               "has_more", "next_before", "execution", "actions", "pending", "strategy_bot",
-                               "earlier"], actors=ACTORS),
+                               "has_more", "next_before", "execution", "actions", "pending", "earlier"],
+                     actors=ACTORS),
     "Librarian": obj({"available": "b", "state": "s", "bot": "s", "name": "s", "can_turn_on": "b"},
                      required=["available", "state", "bot", "name", "can_turn_on"]),
     "DocsAsked": obj({"conversation_id": "s", "message_id": "s",
