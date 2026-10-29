@@ -875,6 +875,9 @@ class Store:
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
             H.add_column(c, "health_findings", "last_woke", "TEXT NOT NULL DEFAULT ''")
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
+            # The production checks' last answers and alert tasks (backend/invariants.py).
+            from . import invariants as _invariants
+            c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight

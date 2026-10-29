@@ -104,6 +104,9 @@ ACTIONS = {
     "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
+    "check_invariants": ("check production invariants (stuck runs and tasks, unreachable owners, refusal loops, "
+                         "provider sign-in, webhooks, automations, relays) and raise one task per failing check",
+                         ("health", "invariants", "production", "alert", "stuck")),
     "report_tasks": ("list each department's stalled, overdue and out-of-step tasks for the Task Manager",
                      ("tasks", "stalled", "overdue", "department", "report")),
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
@@ -213,6 +216,10 @@ JOBS = [
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
+    Job("invariant_checks", "Production checks",
+        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
+        "owner; the task is closed when the check passes.",
+        HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
     Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",

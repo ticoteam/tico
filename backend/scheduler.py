@@ -102,6 +102,17 @@ def run_engineering_exceptions(store, auth, at, failures=None):
         run.did(SR.words_of(woke, "manager woken", "No new exceptions"), quiet=not woke)
 
 
+def run_invariants(store, auth, at, failures=None):
+    # Plain SQL over the hub (backend/invariants.py): no model. One task per check that fires; none while it keeps firing.
+    with SR.recording(store, "invariant_checks", failures, "invariants") as run:
+        from . import invariants
+        with store.transaction() as c:
+            counts = invariants.sweep(c, auth, store.settings, at)
+        firing = [key for key, n in counts.items() if n]
+        run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass",
+                quiet=not firing)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions}
@@ -149,6 +160,7 @@ class Scheduler:
         self.billing_checked = None
         self.stale_checked = None
         self.hosted_checked = None
+        self.invariants_checked = None
         self.marks = {}             # a controlled job's last start in this process, if its record could not be written
 
     def due(self, key, at, cfgs, last):
@@ -435,6 +447,10 @@ class Scheduler:
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
+        # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
+        if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
+            self.invariants_checked = at
+            run_invariants(self.store, self.execution.auth, at, failures)
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.

@@ -2055,6 +2055,9 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    if full:
+        from . import invariants
+        checks.extend(invariants.health_checks(c))
     from . import run_diagnostics
     stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
     checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",
