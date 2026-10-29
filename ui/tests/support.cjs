@@ -44,7 +44,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, gate: null, refreshGate: null, refreshStarted: null};
+      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
       const out = t => ({...t, unread: unread(t)});
       const view = () => ({enabled, tickets: hq.tickets.map(out), unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
@@ -64,13 +64,18 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
         if (p.startsWith('/api/v2/support/')) {
           const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
+          if (rest === 'access' && req.method() === 'GET' && hq.accessGate) await hq.accessGate;
           if (rest === 'access' && req.method() === 'GET') return json(hq.access || {available: false, off_reason: 'TICO_SUPPORT_ACCESS', active: null, last: null, sessions: []});
           if (rest === 'access') {
             hq.access.active = hq.access.last = {id: 'sa_1', ticket_id: body.ticket_id, tier: body.tier, started_by: 'human:ana', seconds_left: body.hours * 3600 - 48 * 60};
             hq.access.sessions = [hq.access.active, ...(hq.access.sessions || [])];
             return json(hq.access.active);
           }
-          if (rest === 'access/sa_1/stop') { hq.access.active = null; return json({}); }
+          if (rest === 'access/sa_1/stop') {
+            const stopped = {...hq.access.active, seconds_left: 0, ended_at: new Date().toISOString(), end_reason: 'stopped'};
+            hq.access.active = null; hq.access.sessions = hq.access.sessions.map(x => x.id === stopped.id ? stopped : x);
+            return json(stopped);
+          }
           if (rest === 'access/sa_1/log') return json({log: [{ts: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
           if (rest === 'setup-snapshot') calls.push('asked from ' + new URL(req.url()).searchParams.get('asked_from'));
           if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\nSetup snapshot (asked from the setup wizard):\n- Steps done: 2 of 5; left: Add a computer, Sign in a model, First bot ready\n- Computer online: no\n- Model signed in: no\n- First bot ready: no\n- Bots in Needs setup: 3", kind: 'setup'});
@@ -538,6 +543,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
                      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: false}});
     await openSupport(v.page);
     const strip = v.page.locator('#support-pop [data-view] [data-access]');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Bots stopped');
+    assert.ok(v.calls.includes('POST tickets/refresh {"ticket":"sup_9"}'), 'the conversation in view is asked about first');
     await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
     assert.equal(await strip.innerText(), 'Let Tico support in');
     assert.ok(await strip.evaluate(el => el.getBoundingClientRect().top >= document.querySelector('#support-pop [data-thread]').getBoundingClientRect().bottom
@@ -567,10 +574,25 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.locator('#support-access-banner [data-access-left]').click();
     await v.page.waitForFunction(() => document.querySelector('#support-pop[open] [data-title]')?.textContent === 'Bots stopped');
     assert.equal(await strip.locator('.support-access-log li').count(), 1);
+    // Stop under the request shows it ended there and on the banner at once, before the next status read answers.
+    let releaseAccess;
+    v.hq.accessGate = new Promise(resolve => { releaseAccess = resolve; });
+    await strip.getByRole('button', {name: 'Stop'}).click();
+    await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
+    await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
+    assert.equal(await strip.locator('.support-access-on').count(), 0);
+    assert.ok(v.calls.includes('POST access/sa_1/stop {}'));
+    releaseAccess(); v.hq.accessGate = null;
+    // The banner's Stop does the same.
+    await strip.getByRole('button', {name: 'Let Tico support in'}).click();
+    await v.page.locator('dialog[aria-label="Let Tico support in"] [type=submit]').click();
+    await v.page.locator('#support-access-banner:not([hidden])').waitFor();
     await v.page.keyboard.press('Escape');
+    v.hq.accessGate = new Promise(resolve => { releaseAccess = resolve; });
     await v.page.locator('#support-access-banner [data-access-stop]').click();
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
-    assert.ok(v.calls.includes('POST access/sa_1/stop {}'));
+    assert.equal(v.calls.filter(c => c === 'POST access/sa_1/stop {}').length, 2);
+    releaseAccess(); v.hq.accessGate = null;
     assert.equal(await v.page.evaluate(() => window.__pwned), undefined);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

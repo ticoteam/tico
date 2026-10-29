@@ -210,7 +210,9 @@ the anonymous install rows only. The reference for HQ's routes is in [telemetry.
 
 Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
 into view, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
-and you have a ticket that is not closed (at most once every 30 seconds for any one ticket). It has no timer of its own.
+and you have a ticket that is not closed. It has no timer of its own. Each time, it asks about a ticket at most once every
+30 seconds when it was written on in the last hour or is the one you have open, every 5 minutes when it is open or
+answered but quiet, and every 6 hours when it is closed, the most recent first.
 
 ## How the project team works tickets
 

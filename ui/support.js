@@ -136,7 +136,9 @@
     busyRefresh = (async () => {
       const revision = stateRevision;
       try {
-        const data = await call('POST', '/support/tickets/refresh');
+        // The conversation in view is asked about every time; the server paces the rest by how recently each was written on.
+        const shown = isOpen() && view === 'chat' ? current()?.id : '';
+        const data = await call('POST', '/support/tickets/refresh', shown ? {ticket: shown} : undefined);
         // A refresh started before a send/read/delete settled can return an older ticket list. Keep the local change;
         // the next refresh will reconcile it with the server.
         if (revision === stateRevision) accept(data);
@@ -244,7 +246,7 @@
   // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; under an open request,
   // the button that starts one from it, for an owner or admin; and under each request, every request support made in
   // the sessions started from it.
-  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0;
+  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0, accessRevision = 0;
   const accessLogs = new Map();
   const TIERS = {app: 'App only', full: 'Full access'};
   // Why the backend says support access is off (backend/support_access.py off_reason).
@@ -306,7 +308,11 @@
   async function pollAccess() {
     clearTimeout(accessTimer);
     if (typeof S !== 'undefined' && S.me && !document.hidden) {
-      try { access = {...await call('GET', '/support/access'), at: Date.now()}; } catch (_) { /* the next poll asks again */ }
+      const revision = ++accessRevision;
+      try {
+        const data = await call('GET', '/support/access');
+        if (revision === accessRevision) access = {...data, at: Date.now()};    // an older answer never undoes a Stop
+      } catch (_) { /* the next poll asks again */ }
       renderBanner(); renderAccess();
     }
     // Every 30 s while support is in, for the time left; otherwise every 5 minutes (access is given from this app, and a
@@ -315,8 +321,14 @@
   }
   async function stopAccess() {
     if (!access.active) return;
-    try { await call('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {}); say('Tico support no longer has access.'); }
-    catch (e) { say(e.message, true); }
+    try {
+      const stopped = await call('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {});
+      // Show it ended at once, on the banner and under the request, whatever a poll still in flight answers.
+      accessRevision++;
+      access = {...access, active: null, sessions: (access.sessions || []).map(x => x.id === stopped?.id ? stopped : x)};
+      renderBanner(); renderAccess();
+      say('Tico support no longer has access.');
+    } catch (e) { say(e.message, true); }
     await pollAccess();
   }
   function openAccess(t) {
