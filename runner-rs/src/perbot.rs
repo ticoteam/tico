@@ -45,6 +45,11 @@ impl PerBot {
             }
             let mut tools = crate::declared_access::declared_tools(&access, &crate::env::process_environment(), &held);
             for (tool, declared_entry) in tools.iter_mut().zip(crate::declared_access::reported_entries(&access)) {
+                if text_of(&tool["service"]).trim().eq_ignore_ascii_case(crate::browser::SERVICE) {
+                    if let Some(problem) = crate::browser::problem(&bot) {
+                        tool["problem"] = Value::String(problem);
+                    }
+                }
                 if tool.get("mcp").is_some_and(|m| m.is_object()) {
                     let status = self.reach.status(&bot, tool, declared_entry);
                     tool["mcp"]["status"] = Value::String(status);

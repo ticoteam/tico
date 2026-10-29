@@ -487,6 +487,35 @@ after such a change. Usage reported by a turn that was already running during si
 can also refer to its earlier account; avoid replacing an active profile while turns
 are running. This is approximate monitoring, not a spending limit.
 
+## A bot's Chrome
+
+A bot whose `bot.yaml` lists `service: chrome` under `tools:` gets its own Google Chrome on its Linux computer
+([the chrome Tool](../integrations/chrome.md)). The runner installs Chrome (about 450 MB, checked against a pinned
+checksum) and `chrome-devtools-mcp` into runner-home the first time a bot on the computer needs them, not into the image,
+so an update keeps them. Chrome runs headful, as the bot's own user, with its profile in `browsers/<bot>` in that user's
+home, so sites stay signed in across runs, runner restarts and updates. All of a bot's runs share its Chrome; it restarts
+after a crash and stops when the bot or its Tool leaves the computer.
+
+Chrome draws on the computer's screen display. With the screen off, the runner keeps the display up for browsers
+alone, without VNC; turning the screen on shows the same windows, so a person can take over a login or a captcha
+from **Control** on a phone.
+
+Each run gets `TICO_BROWSER_URL`, a loopback address with a secret for that run that stops working when the run
+ends. It serves the Chrome DevTools Protocol (`/json/version`, for Playwright's `connect_over_cdp` and
+`chrome-devtools-mcp --browserUrl`), `/status`, and `/fill`, which types a granted website login's username, password
+or current authenticator code into the page after checking the page's host against the login's sites. The runner
+fetches the run's logins with its own token and keeps them in memory; they never reach the bot's environment or
+files, and their values are redacted from run output. Chrome talks to the runner over a pipe, never a debugging
+port, and the address refuses requests from web pages (any `Origin`) and other hosts, so other bots on the computer
+cannot reach it.
+
+On the runner, `TICO_BROWSER_LANG` sets Chrome's language (default `en-US`), `TICO_BROWSER_TZ` its time zone and
+`TICO_BROWSER_PROXY` its `--proxy-server`. The computer advertises `browser_v1` once Chrome can run there. On a Mac,
+or with no screen tools (Xvfb and a window manager), the bot's Tools card shows why the Tool is unavailable and its
+runs go on without a browser. Without Node.js 20.19 or later the chrome-devtools tools are left out and Playwright
+still works. In Docker, Chrome runs with `--no-sandbox` when the container cannot create user namespaces; the bot's
+own user and the per-run secret are then the boundary.
+
 ## Reference
 
 The rest of this page is for administrators and integrators: where readings come from, the API, and how a computer keeps its logins.

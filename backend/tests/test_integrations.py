@@ -19,7 +19,7 @@ PAGES = sorted(p for p in (ROOT / "integrations").glob("*.md") if p.name != "REA
 CATALOGS = sorted((ROOT / "integrations" / "queries").glob("*.yaml"))
 # Only outside services Tico has built-in support for ship; a company adds its own pages in its
 # config (<registry>/integrations or TICO_INTEGRATIONS_DIR), layered over these.
-SHIPPED = {"github", "slack", "mail", "aside", "close-crm", "postgres", "mysql", "mongodb", "sqlite"}
+SHIPPED = {"github", "slack", "mail", "aside", "chrome", "close-crm", "postgres", "mysql", "mongodb", "sqlite"}
 
 
 def test_the_release_ships_only_built_in_services_and_every_page_parses():

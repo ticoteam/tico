@@ -25,6 +25,7 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser;
 mod capture;
 mod client;
 mod commands;
@@ -454,6 +455,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
     service.run().await;
+    browser::shutdown().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {
         stop.notify_one();

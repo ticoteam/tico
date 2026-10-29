@@ -11,6 +11,9 @@
 //! while on) is one websocket to the hub, with the runner's own token, piped to the socket its `control` flag picks
 //! while that x11vnc is the one this runner started and still runs; the runner, not the browser, decides which. Bot turns get that `DISPLAY` while the
 //! display is up, so headed browsers and computer use draw where people can see them.
+//!
+//! A bot's Chrome (crate::browser) needs a display even with the screen off: while one wants it, the same Xvfb and
+//! window manager run without either x11vnc, so turning the screen on later shows the windows already there.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -159,6 +162,8 @@ struct Shared {
     bridging: Mutex<HashSet<String>>,
     wake: Notify,
     switch: watch::Sender<bool>,
+    /// A bot's Chrome wants the display, with or without the screen on.
+    browsers: AtomicBool,
 }
 
 fn shared() -> &'static Shared {
@@ -176,6 +181,7 @@ fn shared() -> &'static Shared {
         bridging: Mutex::new(HashSet::new()),
         wake: Notify::new(),
         switch: watch::channel(false).0,
+        browsers: AtomicBool::new(false),
     })
 }
 
@@ -196,6 +202,34 @@ pub fn display() -> Option<String> {
     let n = *s.display.lock().unwrap();
     n.filter(|_| s.up.load(Ordering::SeqCst)).map(|n| format!(":{n}"))
 }
+
+/// The display bots' browsers draw on, up while the screen is on or a browser wants it.
+pub fn browser_display() -> Option<String> {
+    display()
+}
+
+/// Whether some bot's Chrome needs the display; the supervisor starts or keeps one (without VNC) while it does.
+pub fn want_display(wanted: bool) {
+    let s = shared();
+    if s.browsers.swap(wanted, Ordering::SeqCst) != wanted && wanted {
+        BROWSER_WAKE.notify_one();
+    }
+}
+
+/// The programs a display alone (no VNC) needs that are not on PATH.
+pub fn missing_display_tools() -> Vec<&'static str> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut missing = vec![];
+    if crate::env::which("Xvfb", &path).is_none() {
+        missing.push("Xvfb");
+    }
+    if window_manager().is_none() {
+        missing.push("a window manager");
+    }
+    missing
+}
+
+static BROWSER_WAKE: Notify = Notify::const_new();
 
 /// The event stream said the hub opened a session: poll for it now.
 pub fn heard() {
@@ -437,9 +471,18 @@ pub fn start(config_path: PathBuf, client: Client) {
             if on != s.on.swap(on, Ordering::SeqCst) {
                 log(&format!("Tico runner: screen turned {} on this computer", if on { "on" } else { "off" }));
             }
+            let for_browsers = !usable && s.browsers.load(Ordering::SeqCst) && std::env::consts::OS == "linux" && missing_display_tools().is_empty();
             if usable {
                 said = false;
-                tick(&mut procs).await;
+                tick(&mut procs, true).await;
+            } else if for_browsers {
+                // The display stays; only what people would watch it through stops.
+                for p in procs.iter_mut().skip(2) {
+                    p.stop().await;
+                }
+                s.control_up.store(false, Ordering::SeqCst);
+                s.view_up.store(false, Ordering::SeqCst);
+                tick(&mut procs, false).await;
             } else {
                 if on && !said {
                     said = true;
@@ -448,9 +491,10 @@ pub fn start(config_path: PathBuf, client: Client) {
                 stop_all(&mut procs).await;
                 procs = children(); // the window manager is looked up again when next turned on
             }
-            s.switch.send_replace(s.up.load(Ordering::SeqCst));
+            s.switch.send_replace(s.up.load(Ordering::SeqCst) && usable);
             tokio::select! {
                 _ = tokio::time::sleep(LOCK_EVERY) => {}
+                _ = BROWSER_WAKE.notified() => {}
                 _ = STOP.notified() => break,
             }
         }
@@ -460,12 +504,12 @@ pub fn start(config_path: PathBuf, client: Client) {
     });
 }
 
-async fn tick(procs: &mut [Proc]) {
-    tick_in(procs, Path::new(X_ROOT), XVFB_WAIT).await
+async fn tick(procs: &mut [Proc], vnc: bool) {
+    tick_in(procs, Path::new(X_ROOT), XVFB_WAIT, vnc).await
 }
 
-/// One supervisor step, with X servers' files under `root`.
-async fn tick_in(procs: &mut [Proc], root: &Path, wait: Duration) {
+/// One supervisor step, with X servers' files under `root`; without `vnc`, only the display and window manager.
+async fn tick_in(procs: &mut [Proc], root: &Path, wait: Duration, vnc: bool) {
     let s = shared();
     let dir = s.dir.lock().unwrap().clone();
     let dir = match dir {
@@ -529,6 +573,7 @@ async fn tick_in(procs: &mut [Proc], root: &Path, wait: Duration) {
     *s.failure.lock().unwrap() = None;
     s.up.store(true, Ordering::SeqCst);
     let mut started = false;
+    let rest = if vnc { rest } else { &mut rest[..1] };
     for p in rest.iter_mut() {
         if !p.running() {
             p.start(&dir, &display);
@@ -536,6 +581,9 @@ async fn tick_in(procs: &mut [Proc], root: &Path, wait: Duration) {
         }
     }
     // A new x11vnc serves its socket within moments; until both do, no session opens and readiness says why.
+    if !vnc {
+        return;
+    }
     let deadline = Instant::now() + Duration::from_secs(if started { 5 } else { 0 });
     loop {
         let (control, view) = (rest[1].serving(&dir), rest[2].serving(&dir));
@@ -598,7 +646,7 @@ async fn sessions(client: Client) {
             _ = tokio::time::sleep(POLL_EVERY) => {}
             _ = s.wake.notified() => {}
         }
-        if !s.up.load(Ordering::SeqCst) || !s.hub.load(Ordering::SeqCst) {
+        if !s.on.load(Ordering::SeqCst) || !s.up.load(Ordering::SeqCst) || !s.hub.load(Ordering::SeqCst) {
             continue;
         }
         let rows = match client.get("runners/me/screen/sessions").await {
@@ -926,13 +974,13 @@ mod tests {
             let root = x_root();
             let mut procs = children();
             procs[0] = stalled_xvfb(&root, foreign);
-            tick_in(&mut procs, &root, Duration::from_millis(300)).await;
+            tick_in(&mut procs, &root, Duration::from_millis(300), true).await;
             let pid: i32 = std::fs::read_to_string(root.join("xvfb.pid")).unwrap().trim().parse().unwrap();
             assert!(procs[0].child.is_none(), "foreign={foreign}: the stalled Xvfb is still ours");
             assert!(!alive(pid), "foreign={foreign}: the stalled Xvfb (pid {pid}) was not stopped");
             assert_eq!(procs[0].failures, 1, "foreign={foreign}");
             // The next tick neither takes it as up nor starts anything on it.
-            tick_in(&mut procs, &root, Duration::from_millis(300)).await;
+            tick_in(&mut procs, &root, Duration::from_millis(300), true).await;
             assert_eq!(display(), None, "foreign={foreign}");
             assert!(!s.up.load(Ordering::SeqCst), "foreign={foreign}");
             assert!(!offers(readiness().as_ref()), "foreign={foreign}: {:?}", readiness());
@@ -968,7 +1016,7 @@ mod tests {
         s.hub.store(true, Ordering::SeqCst);
         s.on.store(true, Ordering::SeqCst);
         let mut procs = children();
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         let next = s.display.lock().unwrap().unwrap();
         assert!(next > taken, "{next} after {taken}");
         assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
@@ -980,7 +1028,7 @@ mod tests {
         // TICO_SCREEN_DISPLAY on the held display: the reason names it, and nothing starts.
         std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{taken}"));
         let mut procs = children();
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         let reason = text_of(&readiness().unwrap()["reason"]);
         assert!(reason.starts_with(&format!("Display :{taken} is in use by another X server (Xvfb, pid {})", other.0.id())), "{reason}");
         assert!(procs[0].child.is_none());
@@ -989,7 +1037,7 @@ mod tests {
         // And on a free one: Xvfb, the window manager, both x11vnc and bot turns use exactly it.
         let free = (taken + 2..LAST_DISPLAY).find(|n| holder(root, *n).is_none()).unwrap();
         std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{free}"));
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         std::env::remove_var("TICO_SCREEN_DISPLAY");
         assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
         assert_eq!(display(), Some(format!(":{free}")));

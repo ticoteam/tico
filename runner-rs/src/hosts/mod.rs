@@ -183,7 +183,8 @@ pub fn background_wait(config: &Value) -> Option<std::time::Duration> {
     (s > 0.0 && s.is_finite()).then(|| std::time::Duration::from_secs_f64(s))
 }
 
-const HUB_MCP_ENV: &[&str] = &["HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR"];
+/// TICO_BROWSER_URL: the hub tools `hub_browser_fill` and `hub_browser_status` call a chrome bot's browser.
+const HUB_MCP_ENV: &[&str] = &["HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR", crate::browser::URL_ENV];
 
 /// The hub as a stdio MCP server for one turn (`hub_mcp_server`), or None outside a turn.
 pub fn hub_mcp_server(env: &Env) -> Option<Value> {
@@ -198,6 +199,13 @@ pub fn hub_mcp_server(env: &Env) -> Option<Value> {
     }
     let script = crate::env::root().join("clients").join("hubmcp.py");
     Some(json!({"command": crate::env::python().display().to_string(), "args": [script.display().to_string()], "env": vars}))
+}
+
+/// chrome-devtools-mcp for a chrome bot's run (crate::browser), beside the hub's server.
+pub const BROWSER_MCP: &str = "chrome-devtools";
+
+pub fn browser_mcp_server(env: &Env) -> Option<Value> {
+    crate::browser::devtools_mcp_server(env)
 }
 
 /// An event dict: `kind`, `thread_id`, `turn_id`, then its own fields.

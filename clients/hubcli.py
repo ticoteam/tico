@@ -129,6 +129,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub doc ask "<question>" [--wait 120]  ask the Librarian about the team's docs: {answer, citations, covered}
     hub doc fetch <url> [--max-chars N]    read one public link (web page, Google Doc, Drive folder, GitHub repo,
                                            sitemap) as text; runs on this computer, public addresses only
+    hub browser fill <login> username|password|totp [--selector CSS] [--target ID]
+                                           type a granted website login into your Chrome's focused field (or the
+                                           selector's); you never see the value; runs on this computer
+    hub browser status                     your Chrome on this computer: running, version, display, profile
     hub meeting search ["<words>"] [--person P] [--since D] [--until D]
     hub meeting read <id> [--offset N]     a transcript
     hub meeting pending                    your Pending queue
@@ -2871,7 +2875,14 @@ def parser():
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
     s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
     s.set_defaults(fn="credential import")
-    browser = sub.add_parser("browser", help="your browser on this computer: ask a person to step in on a website").add_subparsers(dest="sub")
+    browser = sub.add_parser("browser", help="your Chrome on this computer: fill a login, its status, ask a person to step in").add_subparsers(dest="sub")
+    s = browser.add_parser("fill", help="type a granted login's username, password or 2FA code into the focused field")
+    s.add_argument("credential", help="the login's name or id")
+    s.add_argument("field", choices=["username", "password", "totp"])
+    s.add_argument("--selector", help="a CSS selector for the field to focus first")
+    s.add_argument("--target", dest="target_id", help="a CDP target id for the tab (the focused tab when left out)")
+    s.set_defaults(fn="browser fill")
+    browser.add_parser("status", help="running, version, display and profile of your Chrome").set_defaults(fn="browser status")
     s = browser.add_parser("needs-you", help="your task waits on a card for a person on a website: Done or a saved login wakes you")
     s.add_argument("host", help="the website's host, like app.acme.example")
     s.add_argument("--reason", help="what you need, in one short line: 'log in', 'solve the captcha'")
@@ -3124,6 +3135,11 @@ def main(argv):
             except doc_fetch.FetchError as e:
                 print(json.dumps({"error": e.code, "detail": e.message}, indent=2))
                 return 1
+        if args.fn in ("browser fill", "browser status"):   # the bot's own Chrome, on this computer
+            from clients import chrome
+            answer = chrome.fill(args.credential, args.field, args.selector, args.target_id) if args.fn == "browser fill" else chrome.status()
+            print(json.dumps(answer, indent=2))
+            return 0 if answer.get("ok", True) is not False and not (args.fn == "browser status" and answer.get("error")) else 1
         if not os.environ.get("HUB_API_URL"):
             local = args.fn in READ_OUTSIDE_A_TURN and not (args.fn == "tool list" and args.bot)
             credential = runner_credential(os.environ.get("HUB_RUNNER_CONFIG")) if local else None

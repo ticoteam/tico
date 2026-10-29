@@ -590,6 +590,9 @@ impl CodexHost {
         if let Some(hub) = hub_mcp_server(&settings.env) {
             servers.insert("hub".into(), hub);
         }
+        if let Some(chrome) = super::browser_mcp_server(&settings.env) {
+            servers.insert(super::BROWSER_MCP.into(), chrome);
+        }
         if !servers.is_empty() {
             cfg.insert("mcp_servers".into(), Value::Object(servers));
         }

@@ -777,6 +777,30 @@ impl Runner {
         e
     }
 
+    /// A chrome bot's run gets its browser's `TICO_BROWSER_URL`, and its redactor every login password and
+    /// authenticator secret granted to the bot (they never enter the environment). Without Chrome here the run goes
+    /// on without it; health says why.
+    async fn lend_browser(&self, bot: &str, config: &Value, aid: &str, env: &mut Env, vault: &mut Vault) {
+        let path = crate::sessions::local_path(&self.config, bot, config);
+        if !crate::manifest::read(&path).is_some_and(|m| crate::browser::declared(&m)) {
+            return;
+        }
+        match crate::browser::fetch_logins(&self.client, aid).await {
+            Ok(logins) => vault.values.extend(crate::browser::login_secrets(&logins)),
+            // An older server has no login credentials: the browser still works, with nothing to fill.
+            Err(e) if e.status == 404 => {}
+            Err(e) => log(&format!("Tico runner: {bot}: could not read its website logins ({}); the browser cannot fill them this turn", describe(&e))),
+        }
+        match crate::browser::lease(&self.config, &self.client, bot, aid).await {
+            Ok(lease) => {
+                env.insert(crate::browser::URL_ENV.into(), lease.url.clone());
+                vault.values.push(lease.secret.clone());
+                vault.browser = Some(lease);
+            }
+            Err(e) => log(&format!("Tico runner: {bot}: no browser this turn: {e}")),
+        }
+    }
+
     /// Release capacity only if preparation really blocks; subsequent preparation needs a fresh grant.
     async fn pre_start_lock<T>(&self, attempt: &Value, flags: &Flags,
         waiting: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
@@ -1331,6 +1355,7 @@ impl Runner {
                 drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
+            self.lend_browser(&bot, &config, &aid, &mut env, &mut vault).await;
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

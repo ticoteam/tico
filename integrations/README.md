@@ -7,7 +7,7 @@ people have already hit. The server serves them (`GET /api/v2/tools`, the
 **Integrations** page) and every bot reads them with `hub tool show <service>`.
 
 This folder ships only the outside services Tico has built-in support for: GitHub, Slack, Mail
-(Gmail and Google Calendar), the Aside browser, Close (the call importer), and the databases
+(Gmail and Google Calendar), the Aside browser, a bot's own Chrome, Close (the call importer), and the databases
 `hub db` reads (PostgreSQL, MySQL, MongoDB, SQLite). Every other service a company uses gets a
 page in its own config ("Your company's own pages", below). Tico's own features (the hub
 database, file storage, Credentials, decisions) are documented in `docs/`, not here.

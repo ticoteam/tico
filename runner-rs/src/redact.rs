@@ -482,6 +482,21 @@ pub fn release(aid: &str) {
     active().lock().unwrap().retain(|(a, _)| a != aid);
 }
 
+/// More values for a running turn's redactor: a login the browser fills with mid-turn (granted since the turn
+/// began, or rotated) is hidden from that turn's output like one it was handed at the start.
+pub fn add_to(aid: &str, secrets: &[String]) {
+    let found = active().lock().unwrap().iter().find(|(a, _)| a == aid).map(|(_, r)| r.clone());
+    match found {
+        Some(r) => r.add(secrets),
+        None => {
+            let r = Redactor::new(secrets);
+            if !r.is_empty() {
+                register(aid, Arc::new(r));
+            }
+        }
+    }
+}
+
 /// A log line with every running turn's secrets taken out.
 pub fn scrub_log(line: &str) -> String {
     let list: Vec<Arc<Redactor>> = active().lock().map(|l| l.iter().map(|(_, r)| r.clone()).collect()).unwrap_or_default();
