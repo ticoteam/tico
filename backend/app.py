@@ -2734,6 +2734,14 @@ def create_app(settings=None):
         """The authors whose updates `who` may read (backend/updates.py visible_authors)."""
         return updates.visible_authors(c, auth, who, mine, scope)
 
+    def update_spend(c, who, items):
+        """Each card's spend for a reader who may see usage (docs/usage.md "Who sees it": people only, the owner and
+        administrators every bot, anyone else the bots they run or own)."""
+        from . import usage
+        if who.role not in ("owner", "human"):
+            return items
+        return updates.add_spend(c, items, usage.own_bots(c, auth, who), auth.bot_admin(who))
+
     def update_scope(scope):
         if scope not in (None, "", "all", "direct"):
             raise Problem("scope", "scope is all or direct", 422)
@@ -2772,10 +2780,12 @@ def create_app(settings=None):
         if kind and kind not in updates.KINDS:
             raise Problem("kind", "kind is daily or weekly", 422)
         with store.read() as c:
-            return updates.listing(c, who.actor, update_visible(c, who, mine, update_scope(scope)), kind=kind, bot=bot, unread=unread,
-                                   before=before, limit=max(1, min(limit, 100)), archive=archive,
-                                   include_archive=include_archive, may_read=update_visible(c, who),
-                                   meetings=updates.meeting_reader(who))
+            found = updates.listing(c, who.actor, update_visible(c, who, mine, update_scope(scope)), kind=kind, bot=bot, unread=unread,
+                                    before=before, limit=max(1, min(limit, 100)), archive=archive,
+                                    include_archive=include_archive, may_read=update_visible(c, who),
+                                    meetings=updates.meeting_reader(who))
+            update_spend(c, who, found["updates"])
+            return found
 
     @app.get("/api/v2/updates/unread")
     def updates_unread(request: Request, mine: bool = False, scope: str | None = None):
@@ -2799,8 +2809,10 @@ def create_app(settings=None):
         if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
             raise Problem("day", "day is YYYY-MM-DD", 422)
         with store.read() as c:
-            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None,
-                                meetings=updates.meeting_reader(who))
+            found = updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None,
+                                 meetings=updates.meeting_reader(who))
+            update_spend(c, who, updates.tree_updates(found["roots"]))
+            return found
 
     @app.get("/api/v2/updates/{uid}")
     def update_show(request: Request, uid: str):
@@ -2825,6 +2837,7 @@ def create_app(settings=None):
                 return rooms_ok[cid]
             thread = [m for m in updates.thread(c, uid) if readable(m)]
             row = updates.with_inputs(c, row, update_visible(c, who), updates.meeting_reader(who))
+            update_spend(c, who, [row])
             return {"update": {**row, "read": bool(read), "archived": updates.archived(c, who.actor, uid)},
                     "thread": thread}
 
@@ -2916,7 +2929,7 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             may_edit_routines(c, who, bot)
-            return {"bot": bot, **updates.set_settings(c, bot, body.daily, body.weekly)}
+            return {"bot": bot, **updates.set_settings(c, bot, body.daily, body.weekly, body.writer)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/chat/{bot}/new")

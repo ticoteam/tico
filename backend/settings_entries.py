@@ -43,12 +43,14 @@ _RULE_NAMES = {
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "stall_triage": ("Quiet task triage", "direct", ""),
+    "updates_from_activity": ("Bots' updates are written from their activity", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
                "topic_fresh": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
-               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
-_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
+               "stall_triage": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
+               "updates_from_activity": (RULES + " > What Tico runs on its own", _card("system", "set-system-card"))}
+_ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "updates_from_activity")
 
 TEAM_RULES = [
     S("team.rules." + key, name, _RULE_WHERE.get(key, (PEOPLE + " > Team rules",))[0],

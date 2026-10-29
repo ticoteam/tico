@@ -4859,13 +4859,17 @@ def update_reply(api, args):
     return api.post("updates/" + args["update"] + "/reply", {"text": args["text"]}, key=_key(args))
 
 
-@tool("hub_update_settings", "Turn a bot's daily or weekly update on or off (the bot, its operator, "
-      "a manager or the owner).",
-      {"bot": _s("Bot slug"), "daily": {"type": "boolean"}, "weekly": {"type": "boolean"}}, required=("bot",), writes=True)
+@tool("hub_update_settings", "Turn a bot's daily or weekly update on or off, or choose who writes it: `team` (the "
+      "team's choice), `activity` (the server, from its activity) or `bot` (the bot, in a run). The bot, its operator, "
+      "a manager or the owner.",
+      {"bot": _s("Bot slug"), "daily": {"type": "boolean"}, "weekly": {"type": "boolean"},
+       "writer": {"type": "string", "enum": ["team", "activity", "bot"]}}, required=("bot",), writes=True)
 def update_settings(api, args):
     flag = lambda v: v if isinstance(v, bool) else str(v).lower() in ("on", "true", "1", "yes")
-    return api.post("bots/" + args["bot"] + "/updates",
-                    {k: flag(args[k]) for k in ("daily", "weekly") if args.get(k) is not None}, key=_key(args))
+    body = {k: flag(args[k]) for k in ("daily", "weekly") if args.get(k) is not None}
+    if args.get("writer"):
+        body["writer"] = args["writer"]
+    return api.post("bots/" + args["bot"] + "/updates", body, key=_key(args))
 
 
 @tool("hub_bot_status_list", "Every bot you may see with its live status.",

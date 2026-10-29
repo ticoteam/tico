@@ -2065,6 +2065,7 @@ class AccessRules(Contract):
     topic_fresh: bool | None = None
     stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
+    updates_from_activity: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
 
@@ -2694,8 +2695,11 @@ class UpdateReply(Contract):
 
 
 class UpdateSettings(Contract):
+    """A bot's update switches; `writer` is who writes it: `team` follows the team's choice (Settings > System),
+    `activity` is the server from its activity, `bot` the bot in a run of its own."""
     daily: bool | None = None
     weekly: bool | None = None
+    writer: Literal["team", "activity", "bot"] | None = None
 
 
 class PersonalTokenCreate(Contract):

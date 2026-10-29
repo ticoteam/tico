@@ -115,6 +115,7 @@
 .upd-field .muted{font-weight:400}
 .upd-edit .upd-field input,.upd-edit .upd-field textarea{display:block;width:100%;margin-top:4px;font:inherit;font-weight:400}
 .upd-from{font-size:var(--t-sm);margin-top:6px}
+.upd-spend{font-size:var(--t-sm);margin-top:4px;font-variant-numeric:tabular-nums}
 @media (max-width:760px){.upd-sub{--tree-x:14px;--tree-in:10px;--tree-elbow:30px}
   /* "Write your update" says there is none yet, and leaves the reports' count room on a phone */
   .upd-none:has(.upd-write)>.muted{display:none}}

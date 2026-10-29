@@ -338,7 +338,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
     hub update reply <id> "<text>"
-    hub update settings <bot> [--daily on|off] [--weekly on|off]
+    hub update settings <bot> [--daily on|off] [--weekly on|off] [--writer team|activity|bot]
     hub changelog list [--unread] [--since-version V] [--q TEXT] [--kind product|activity|all]
     hub changelog mark-read <entry-id> [entry-id ...]   acknowledge changes shown to you
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
@@ -2378,6 +2378,8 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--daily", choices=("on", "off"))
     s.add_argument("--weekly", choices=("on", "off"))
+    s.add_argument("--writer", choices=("team", "activity", "bot"),
+                   help="who writes its update: the team's choice, the server from its activity, or the bot in a run")
     s.set_defaults(fn="update settings")
     grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
     s = grok.add_parser("sync", help="sync Grok Bots from a JSON file: {\"bots\": [...], \"source\": ...}")

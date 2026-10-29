@@ -240,7 +240,8 @@ JOBS = [
     Job("market_watch", "Page monitors",
         "Reads each watched competitor page once a day and files an insight for the Librarian when one changed.",
         CHECKS, "Daily", 86400, then=("check_pages",)),
-    Job("updates", "Updates", "Asks people and bots for today's updates, one at a time.",
+    Job("updates", "Updates",
+        "Writes today's updates, one at a time: the bots' from their activity (or asks each bot) and people's drafts.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("ask_updates",)),
     Job("github_sync", "GitHub sync",
         "Catches up on pull requests, merges and releases whose notice from GitHub never arrived.",
@@ -747,6 +748,13 @@ def listing(c, settings, now=None, who=None, auth=None):
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
             item["note"] = None if task_manager_active(c) else "Opens no tasks while the Task Manager is paused (Settings > Bots)"
+        if job.key == "updates":
+            # Who writes the bots' updates (team rule `updates_from_activity`, backend/updates.py): the server from
+            # their activity, or each bot in a run of its own. A bot's own choice (`hub update settings --writer`) wins.
+            from . import team_rules
+            item["from_activity"] = team_rules.load(c)["updates_from_activity"]
+            item["can_change_writer"] = bool(who is not None and auth is not None and auth.bot_admin(who)
+                                             and getattr(who, "support", None) != "app")
         if job.key == "health_scan":
             # Its own switch only says whether it may run; it finds nothing while the Health Monitor itself is off.
             from .health_monitor import active

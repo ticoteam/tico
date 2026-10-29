@@ -366,6 +366,24 @@ def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None
                  "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
 
 
+def summarize(url, key, text, instructions="", max_words=120, headers=None, timeout=65, opener=None):
+    """Tico HQ's summarizer (`POST <base>/summarize`, the gateway key): (status, {model, summary, engine, usage: {cost_usd}}
+    or {}, error code). The text goes out as given, held to the Gateway's limits (instructions at most 2,000 characters,
+    20 to 400 words); the timeout outlasts the Gateway's own 60 s for both its engines. Only the fields the Gateway
+    documents come back."""
+    body = {"text": str(text)[:60000], "instructions": str(instructions or "")[:2000],
+            "max_words": max(20, min(400, int(max_words)))}
+    status, payload, code = _post(safe_base(url) + "/summarize", body, {"Authorization": "Bearer " + key, **(headers or {})},
+                                  timeout, opener)
+    if status != 200:
+        return status, {}, code
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return 200, {"model": str(payload.get("model") or "")[:100], "summary": str(payload.get("summary") or "")[:20000],
+                 "engine": str(payload.get("engine") or "")[:100],
+                 "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+
+
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
     """Tico HQ's page reader (`POST <base>/fetch`, the gateway key): (status, {url, title, content, usage: {cost_usd}} or {},
     error code). Only the fields the Gateway documents are kept; the content is another site's text."""

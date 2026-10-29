@@ -52,6 +52,14 @@ function systemRoutineControlHTML(j) {
     ${j.kind === 'task_rule' ? `<button type="button" class="ghost" data-task-rule-edit${busy ? ' disabled' : ''}>Edit</button>` : ''}
     ${j.controllable && !SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on ? ' disabled' : ''}${j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>` : ''}`;
 }
+// The Updates row also says who writes the bots' updates (team rule `updates_from_activity`): the server from their
+// activity, or each bot in a run of its own. An owner or admin picks it.
+function systemRoutineWriterHTML(j) {
+  if (j.from_activity == null) return '';
+  if (!j.can_change_writer) return `<span class="sysr-writer" data-sysr-writer-state>Bots' updates: ${j.from_activity ? 'from activity' : 'each bot writes its own'}</span>`;
+  return `<label class="sysr-writer">Bots' updates <select class="settings-inline-select" data-sysr-writer aria-label="Who writes the bots' updates"${SYSTEM_ROUTINE_BUSY.has(j.key) ? ' disabled' : ''}>
+    <option value="activity"${j.from_activity ? ' selected' : ''}>From activity</option><option value="bot"${j.from_activity ? '' : ' selected'}>The bot writes its own</option></select></label>`;
+}
 function systemRoutineRowHTML(j) {
   return `<div class="sysr-row" data-system-routine="${esc(j.key)}">
     <div class="sysr-name"><div class="sysr-title"><strong>${esc(j.name)}</strong><span class="pill sysr-dept" data-sysr-dept>${esc(j.department?.name || '')}</span></div>
@@ -59,7 +67,7 @@ function systemRoutineRowHTML(j) {
     <div class="sysr-schedule"><span class="sysr-label">Schedule</span>${systemRoutineScheduleHTML(j)}</div>
     <div class="sysr-last"><span class="sysr-label">Last run</span>${systemRoutineLastHTML(j)}</div>
     <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : `<span class="muted">${j.switch && !j.on ? 'Off' : '—'}</span>`}</div>
-    <div class="sysr-ctl">${systemRoutineControlHTML(j)}<p class="settings-cell-note" role="status" data-sysr-status></p></div>
+    <div class="sysr-ctl">${systemRoutineControlHTML(j)}${systemRoutineWriterHTML(j)}<p class="settings-cell-note" role="status" data-sysr-status></p></div>
   </div>`;
 }
 function systemRoutineRowsHTML(data) {
@@ -122,6 +130,10 @@ function systemRoutinesBind(el) {
     const key = row.dataset.systemRoutine, job = SYSTEM_ROUTINES.jobs.find(j => j.key === key);
     const path = (job?.kind === 'task_rule' ? '/v2/task-rules/' : '/v2/system-routines/') + encodeURIComponent(key);
     if (ev.target.matches('[data-sysr-on]')) void systemRoutineWrite(key, () => put(path, {on: ev.target.checked}));
+    else if (ev.target.matches('[data-sysr-writer]')) void systemRoutineWrite(key, async () => {
+      await put('/v2/access/rules', {updates_from_activity: ev.target.value === 'activity'});
+      return {job: (await get('/v2/system-routines')).jobs.find(j => j.key === key)};
+    });
     else if (ev.target.matches('[data-sysr-preset]')) {
       const body = {preset: ev.target.value};
       const job = SYSTEM_ROUTINES.jobs.find(j => j.key === key);
