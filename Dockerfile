@@ -224,6 +224,8 @@ ARG TICO_COMMIT
 WORKDIR /opt/tico
 ENV PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION}
+# Threaded Python on a small host: glibc's per-thread malloc arenas fragmented until a 3.8 GB host was OOM-killed.
+ENV MALLOC_ARENA_MAX=2
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
       org.opencontainers.image.revision=${TICO_COMMIT} \
       org.opencontainers.image.source=https://github.com/ticoteam/tico \
