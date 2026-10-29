@@ -127,11 +127,13 @@ async function navigation(browser) {
     assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general');
     assert.equal(await page.locator('#settings-denied').isVisible(), denied, `${restricted}: the admins-only line`);
   }
-  // History keeps Runs for everyone; Changes is the owner's. The old Runs page lands there.
-  await page.evaluate(() => { settingsShow('runs'); settingsHistoryShow('changes'); });
+  // History keeps the Log and Runs for everyone; Changes is the owner's. The old Runs page lands there.
+  await page.evaluate(() => settingsShow('runs'));
   assert.equal(await page.locator('#set-runs').isVisible(), true, 'runs opens History on Runs');
+  await page.evaluate(() => settingsHistoryShow('changes'));
   assert.equal(await page.locator('#set-history').isVisible(), false, 'Changes stays hidden without the owner role');
-  assert.equal(await page.locator('#settings-history-view').isVisible(), false);
+  assert.equal(await page.locator('#set-log').isVisible(), true, 'the Log instead');
+  assert.equal(await page.locator('[data-history-view=changes]').isVisible(), false);
   // Team, Assistant, Privacy and Storage are sections of General; the ones this person lost stay hidden there.
   for (const alias of ['team', 'assistant', 'privacy', 'storage']) {
     await page.evaluate(alias => settingsShow(alias), alias);
