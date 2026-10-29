@@ -90,7 +90,45 @@ def shared_member_ids(c, auth, bot):
 
 
 def shared_member(c, auth, actor, bot):
-    return str(actor).startswith("human:") and H.actor_id(actor) in shared_member_ids(c, auth, bot)
+    return bot in shared_member_bots(c, auth, actor, [bot])
+
+
+def shared_member_bots(c, auth, actor, slugs):
+    """The slugs in `slugs` whose shared room `actor` is a member of: `shared_member_ids` answered for
+    `actor` alone, for every bot at once. The roster and configs are read once (not per bot), the access rows
+    in one statement, and the read check runs only for `actor`, only where the bot's read is not open to everyone."""
+    slugs = list(dict.fromkeys(slugs))
+    if not slugs or not str(actor).startswith("human:"):
+        return set()
+    actor_id = H.actor_id(actor)
+    people, configs = roster(c), entries(c)
+    owner_email = auth.owner_email
+    owner = next((p["id"] for p in people["people"] if str(p.get("email") or "").lower() == owner_email), None)
+    stored = {}
+    for start in range(0, len(slugs), 500):
+        part = slugs[start:start + 500]
+        stored.update({row["bot"]: row["access_json"] for row in c.execute(
+            "SELECT bot,access_json FROM bot_config WHERE bot IN (" + ",".join("?" * len(part)) + ")", part)})
+    found, needs_read = set(), []
+    for slug in slugs:
+        if owner == actor_id:
+            found.add(slug)
+            continue
+        if actor_id not in {p["id"] for p in P.primary_users(slug, people, configs)}:
+            continue
+        if slug in stored and not A.document(stored[slug])["read"]["everyone"]:
+            needs_read.append(slug)
+        else:
+            found.add(slug)
+    if needs_read:
+        try:
+            who = auth.identity_for_actor(c, "human:" + actor_id)
+        except Problem:
+            who = None
+        if who is not None:
+            access = auth.bot_accesses(c, who, needs_read)
+            found.update(slug for slug in needs_read if access[slug]["read"])
+    return found
 
 
 def room_bot(conversation):

@@ -1008,3 +1008,59 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
     before = catalog_reads()
     add(200, 20)
     assert catalog_reads() == before
+
+
+def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(api):
+    """`sql.guarded` asks which shared rooms a person may join for every bot at once. It reads the roster, the configs
+    and the access rows once for the whole list (the per-bot check copied the whole roster and configs for each bot), and
+    answers exactly as the per-bot membership does: primary users, open and restricted reads, the owner, a bot actor."""
+    from backend import rooms
+    from backend import sql as S
+    from backend.auth import Identity
+    from backend.store import H, encode
+    from backend.tests.test_api import restrict
+
+    store, auth = api.app.state.store, api.app.state.auth
+    people = [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+              {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "ops"]},
+              {"id": "cara", "email": "cara@acme.example", "primary_for": [f"b{i}" for i in range(6)]}]
+    people += [{"id": f"p{i}", "email": f"p{i}@acme.example", "primary_for": [f"b{i}"] if i % 2 else []}
+               for i in range(37)]
+    fleet = [f"b{i}" for i in range(53)]
+    with store.transaction() as c:
+        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in fleet},
+                        {"people": people})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        for slug in fleet:
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)", (slug, "{}", "ana"))
+        for i, slug in enumerate(fleet):
+            if i % 3 == 0:
+                restrict(c, slug, people=[f"p{i % 37}"])
+            elif i % 3 == 1:
+                restrict(c, slug, see=["cara"], read=["cara"], write=["p1"])
+        slugs = [row[0] for row in c.execute("SELECT bot FROM bot_config ORDER BY bot")]
+    actors = ["human:ana", "human:ben", "human:cara", "human:p1", "human:p2", "human:nobody", "bot:ops"]
+
+    answers = {}
+    with store.read() as c:
+        for actor in actors:
+            expected = (set() if not actor.startswith("human:") else
+                        {slug for slug in slugs if H.actor_id(actor) in rooms.shared_member_ids(c, auth, slug)})
+            assert rooms.shared_member_bots(c, auth, actor, slugs) == expected, actor
+            answers[actor] = expected
+    # The mix is real: the owner joins every room, a plain member some but not all, a stranger none.
+    assert answers["human:ana"] == set(slugs)
+    assert answers["human:cara"] and answers["human:cara"] != set(slugs)
+    assert {"b1", "b2"} <= answers["human:cara"] and "b0" not in answers["human:cara"]
+    assert answers["human:nobody"] == set() and answers["bot:ops"] == set()
+
+    # One caller's connection reads the access rows in one statement, not once per bot.
+    who = Identity("human:cara", "human", email="cara@acme.example")
+    statements = []
+    with store.read() as c:
+        conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+        try:
+            access_reads = sum("access_json FROM bot_config" in text for text in statements)
+        finally:
+            conn.close()
+    assert access_reads <= 1, access_reads
