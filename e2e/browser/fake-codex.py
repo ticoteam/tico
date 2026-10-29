@@ -14,7 +14,7 @@ import sys
 FAKE = os.environ.get("JOURNEY_FAKE_CODEX", "/opt/e2e/journey-fake-codex.py")
 STEPS = os.environ.get("JOURNEY_BOT_STEPS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot-steps.mjs"))
 RUN = re.compile(r"journey-run (\S+) ([a-z0-9-]+)((?: [A-Za-z_]+=\S+)*)")
-ALLOWED = {"PRACTICE", "HOST", "OTHER", "CREDENTIAL", "LABEL"}
+ALLOWED = {"PRACTICE", "HOST", "OTHER", "CREDENTIAL", "LABEL", "EXPECT_TZ", "EXPECT_LANG", "PEER_PORT", "PEER_PROFILE"}
 
 spec = importlib.util.spec_from_file_location("journey_fake_codex", FAKE)
 fake = importlib.util.module_from_spec(spec)

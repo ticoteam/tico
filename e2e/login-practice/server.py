@@ -9,6 +9,8 @@ Pages:
   /settings/2fa             confirms a code and switches two-step sign-in on
   /me                       200 JSON when the request carries a live session, 401 otherwise
   /logout
+  /verify-phone, /verify-phone/code  a signed-in user adds a phone; the code is texted to it through the fake Inbox
+  /challenge, /challenge/pass        a press-and-hold check for a signed-in user; /challenge/state says whether it passed
 
 Test hooks, on /admin/* only when PRACTICE_ADMIN_TOKEN is set and sent as `Authorization: Bearer`:
   POST /admin/expire        ends every session
@@ -51,7 +53,10 @@ STATE = {
     "pre": {},        # token -> {user, expires}: a password that still needs its second step
     "ttl": int(os.environ.get("PRACTICE_SESSION_TTL", "1800")),
     "beacon": None,
+    "challenge": {},  # username -> time the press-and-hold check passed
+    "phones": {},     # phone number -> {user, code, expires}: a text code still waiting
 }
+HOLD_MS = 3000
 BEACON_SCRIPT = ("<script>fetch('/beacon',{method:'POST',headers:{'content-type':'application/json'},"
                  "body:JSON.stringify({webdriver:String(navigator.webdriver)})});</script>")
 
@@ -65,12 +70,12 @@ def same(a, b):
     return hmac.compare_digest(a.encode(), b.encode())
 
 
-def deliver(to, subject, text):
-    """Hand a message to the fake Inbox, which keeps it for the company's inbox to fetch."""
+def deliver(to, subject, text, kind="email"):
+    """Hand a message to the fake Inbox, which keeps it for the company's inbox to fetch. A text goes to a phone."""
     if not MAIL_URL:
         raise RuntimeError("PRACTICE_MAIL_URL is not set")
     body = json.dumps({"to": to, "from": "Practice Login <no-reply@login.practice.test>", "subject": subject,
-                       "text": text}).encode()
+                       "text": text, "kind": kind}).encode()
     request = urllib.request.Request(MAIL_URL + "/_deliver", data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=10) as reply:
@@ -138,7 +143,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         token = secrets.token_urlsafe(24)
         with LOCK:
             STATE["sessions"][token] = {"user": user, "expires": time.time() + (expires_in or STATE["ttl"])}
-        return f"sid={token}; Path=/; HttpOnly; SameSite=Lax"
+        # A lifetime on the cookie keeps the session across a browser restart, as a remembered sign-in does.
+        return f"sid={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={int(expires_in or STATE['ttl'])}"
 
     def admin_ok(self):
         return bool(ADMIN_TOKEN) and same(self.headers.get("Authorization") or "", "Bearer " + ADMIN_TOKEN)
@@ -166,8 +172,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not user:
                 return self.send(401, json.dumps({"error": "signed_out"}), "application/json")
             with LOCK:
-                two = bool(STATE["users"][user]["totp"])
-            return self.send(200, json.dumps({"user": user, "two_step": two}), "application/json")
+                record = STATE["users"][user]
+                two, phone = bool(record["totp"]), bool(record.get("phone"))
+            return self.send(200, json.dumps({"user": user, "two_step": two, "phone_verified": phone}),
+                             "application/json")
+        if path == "/verify-phone":
+            if not self.session_user():
+                return self.redirect("/login")
+            return self.send(200, page("Verify your phone", "<form method=post action=/verify-phone>"
+                                       + field("phone", "Phone number", "tel", "placeholder=+15550000000")
+                                       + "<button type=submit>Send code</button></form>"))
+        if path == "/challenge":
+            user = self.session_user()
+            if not user:
+                return self.redirect("/login")
+            with LOCK:
+                passed = user in STATE["challenge"]
+            body = ("<p>Verified.</p>" if passed else
+                    "<div id=hold style='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;"
+                    "background:#eef'>Press and hold anywhere for three seconds</div>"
+                    "<script>let t=0;const h=document.getElementById('hold');"
+                    "h.onpointerdown=()=>{t=Date.now()};"
+                    "h.onpointerup=()=>{const ms=t?Date.now()-t:0;t=0;if(ms>=3000)fetch('/challenge/pass',{method:'POST',"
+                    "headers:{'content-type':'application/json'},body:JSON.stringify({held_ms:ms}),credentials:'include'})"
+                    ".then(r=>{h.textContent=r.ok?'Verified':'Try again'})};</script>")
+            return self.send(200, page("Check", body))
+        if path == "/challenge/state":
+            user = self.session_user()
+            if not user:
+                return self.send(401, json.dumps({"error": "signed_out"}), "application/json")
+            with LOCK:
+                passed = user in STATE["challenge"]
+            return self.send(200, json.dumps({"passed": passed}), "application/json")
         if path == "/settings":
             return self.settings()
         if path == "/logout":
@@ -224,6 +260,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.login_2fa(form)
         if path == "/settings/2fa":
             return self.settings_2fa(form)
+        if path == "/verify-phone":
+            return self.verify_phone(form)
+        if path == "/verify-phone/code":
+            return self.verify_phone_code(form)
+        if path == "/challenge/pass":
+            return self.challenge_pass(form)
         if path == "/logout":
             with LOCK:
                 STATE["sessions"].pop(self.cookie("sid"), None)
@@ -301,6 +343,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
             STATE["pre"].pop(self.cookie("pre"), None)
         return self.redirect("/me", [("Set-Cookie", self.start_session(user)),
                                      ("Set-Cookie", "pre=; Path=/; Max-Age=0")])
+
+    def verify_phone(self, form):
+        user = self.session_user()
+        if not user:
+            return self.redirect("/login")
+        phone = form.get("phone", "").strip().replace(" ", "")
+        if not re.fullmatch(r"\+1555\d{7}", phone):
+            return self.send(422, page("Verify your phone", "<p>Use a US number from a company inbox.</p>"))
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        with LOCK:
+            STATE["phones"][phone] = {"user": user, "code": code, "expires": time.time() + CODE_TTL}
+        try:
+            deliver(phone, "", f"Your verification code is {code}. It expires in ten minutes.", kind="sms")
+        except (OSError, urllib.error.URLError, RuntimeError):
+            return self.send(502, page("Verify your phone", "<p>We could not send the text. Try again.</p>"))
+        return self.send(200, page("Enter the code", "<form method=post action=/verify-phone/code>"
+                                   + field("phone", "Phone number", "tel", f"value={phone}")
+                                   + field("code", "Code from the text", "text", "inputmode=numeric")
+                                   + "<button type=submit>Verify</button></form>"))
+
+    def verify_phone_code(self, form):
+        user = self.session_user()
+        if not user:
+            return self.redirect("/login")
+        phone, code = form.get("phone", "").strip(), form.get("code", "").strip()
+        with LOCK:
+            pending = STATE["phones"].get(phone)
+            if not pending or pending["user"] != user or pending["expires"] < time.time() or not same(code, pending["code"]):
+                return self.send(422, page("Enter the code", "<p>That code is wrong or has expired.</p>"))
+            STATE["users"][user]["phone"] = phone
+            del STATE["phones"][phone]
+        return self.send(200, page("Phone verified", "<p>Your phone is verified.</p>"))
+
+    def challenge_pass(self, form):
+        user = self.session_user()
+        if not user:
+            return self.send(401, json.dumps({"error": "signed_out"}), "application/json")
+        if int(form.get("held_ms") or 0) < HOLD_MS:
+            return self.send(422, json.dumps({"error": "too_short"}), "application/json")
+        with LOCK:
+            STATE["challenge"][user] = time.time()
+        return self.send(200, json.dumps({"passed": True}), "application/json")
 
     def settings_2fa(self, form):
         user = self.session_user()
