@@ -2,7 +2,7 @@
 
 No permission result survives a request. Writes invalidate even inside a transaction;
 ending a snapshot or returning a connection to the pool discards its inputs too. The whole
-roster tables alone are shared between snapshots, at an unchanged count (backend/roster_clock.py).
+roster tables and the task steps are shared between snapshots, at an unchanged count (backend/roster_clock.py).
 """
 
 from copy import deepcopy
@@ -26,13 +26,17 @@ def cache(c):
 def rows(c, statement, args=()):
     values = cache(c)
     key = (statement, tuple(args))
+    if not args and statement in roster_clock.STATEMENTS:
+        # Shared across snapshots, so a read outside a transaction (most request reads) shares them too.
+        if values is None:
+            return roster_clock.rows(c, statement)
+        if key not in values:
+            values[key] = roster_clock.rows(c, statement)
+        return values[key]
     if values is None:
         return tuple(c.execute(statement, args))
     if key not in values:
-        if not args and statement in roster_clock.STATEMENTS:
-            values[key] = roster_clock.rows(c, statement)
-        else:
-            values[key] = tuple(c.execute(statement, args))
+        values[key] = tuple(c.execute(statement, args))
     return values[key]
 
 

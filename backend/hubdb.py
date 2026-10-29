@@ -3390,8 +3390,10 @@ def _step_views(conn, steps):
 
 
 def type_list(conn):
+    from .read_cache import rows as shared_rows
     rows = _rows(conn.execute("SELECT * FROM task_types ORDER BY id<>?,name", (GENERAL_TYPE,)))
-    steps = _step_views(conn, _rows(conn.execute("SELECT * FROM task_steps ORDER BY position,id")))
+    # Shared between snapshots until a step changes (backend/roster_clock.py); copied, since views add keys to them.
+    steps = _step_views(conn, [dict(r) for r in shared_rows(conn, "SELECT * FROM task_steps ORDER BY position,id")])
     for row in rows:
         row["numbered"] = bool(row.get("numbered"))
         row["steps_only"] = bool(row.get("steps_only"))

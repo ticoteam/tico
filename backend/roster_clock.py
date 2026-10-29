@@ -1,4 +1,5 @@
-"""Share the roster's whole-table reads, every bot and every bot's settings, between requests until either changes.
+"""Share the roster's whole-table reads, every bot, every bot's settings and the task step definitions, between requests
+until one of them changes.
 
 Most requests read all of `bots` and `bot_config` once in their snapshot (backend/read_cache.py), and those rows change
 a few times an hour at most: on a busy server the two reads were a tenth of all SQL time. SQLite triggers count every
@@ -7,8 +8,9 @@ These are neutral stored rows, never a permission result.
 """
 import sqlite3
 
-TABLES = ("bots", "bot_config")
-STATEMENTS = frozenset({"SELECT * FROM bot_config", "SELECT * FROM bots ORDER BY slug"})
+TABLES = ("bots", "bot_config", "task_steps")
+STATEMENTS = frozenset({"SELECT * FROM bot_config", "SELECT * FROM bots ORDER BY slug",
+                        "SELECT * FROM task_steps ORDER BY position,id"})
 
 
 def ensure(c):
@@ -20,16 +22,20 @@ def ensure(c):
                       f"ON {table} BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END")
 
 
+def _clock(c):
+    return c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+
+
 def rows(c, statement):
-    """`statement`'s rows, one of STATEMENTS, in the caller's read transaction: the rows another connection read at
-    the same count when there are some."""
+    """`statement`'s rows, one of STATEMENTS. A miss reads the clock and the rows in one snapshot (the caller's read
+    transaction, or one opened here), so the rows stored under a count are exactly the rows at that count."""
     shared = getattr(c, "roster_rows", None)
     # A connection that has written may hold uncommitted roster changes, which can roll back to a count a later write
     # reuses: it reads its own rows and shares none (provenance_clock.cached).
     if shared is None or c.total_changes != getattr(c, "provenance_changes", None):
         return tuple(c.execute(statement))
     try:
-        clock = c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+        clock = _clock(c)
     except (sqlite3.OperationalError, TypeError):
         # Not made yet (a file opened before Store.initialize): read without sharing. Asking sqlite_master instead costs
         # a statement on every fresh connection.
@@ -37,7 +43,17 @@ def rows(c, statement):
     hit = shared.get(statement)
     if hit is not None and hit[0] == clock:
         return hit[1]
-    found = tuple(c.execute(statement))
+    if c.in_transaction:
+        found = tuple(c.execute(statement))
+    else:
+        c.execute("BEGIN")
+        try:
+            clock = _clock(c)
+            found = tuple(c.execute(statement))
+        except BaseException:
+            c.rollback()
+            raise
+        c.commit()
     if not getattr(c, "write_transaction", False):
         shared[statement] = (clock, found)
     return found
