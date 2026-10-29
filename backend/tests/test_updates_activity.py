@@ -62,6 +62,18 @@ def test_a_bots_facts_carry_its_shared_work_and_nothing_private_restricted_or_ap
         assert used == [mine["id"]], "a manager links only the reports' updates it was written from"
 
 
+def test_a_week_in_review_covers_the_week_not_the_last_daily_update(api):
+    chart(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        H.task_create(c, "bot:analyst", "Earlier in the week", "x", "bot:analyst")
+        c.execute("UPDATE tasks SET status='done' WHERE title='Earlier in the week'")
+        daily = updates.post(c, "analyst", "- Ran the daily", day=DAY)
+        c.execute("UPDATE updates SET created=? WHERE id=?", (H.shift(H.now(), days=1), daily["id"]))
+        facts, _ = updates.bot_facts(c, "analyst", "weekly", DAY)
+    assert "Earlier in the week" in facts, "a daily update posted later in the week cut the week in review short"
+
+
 def test_summarize_writes_the_update_and_the_model_then_the_bot_are_the_fallbacks(api):
     chart(api)
     store = api.app.state.store

@@ -664,15 +664,18 @@ def draft_facts(c, author, kind, day):
 
 
 def _window(c, bot, kind, day, redo):
-    """(since, until) a bot's update covers: since its last update (a day or a week back when it has none), or for a
-    redo of a past day, that day or that week."""
+    """(since, until) a bot's update covers: since its last update (a day back when it has none), a week back for a
+    week in review (whatever its last update was, so a daily update posted that week does not cut it short), or for
+    a redo of a past day, that day or that week."""
     week = kind == "weekly"
     if redo:
         start = datetime.combine(datetime.fromisoformat(day).date(), datetime.min.time(), ZONE)
         utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         return utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
+    if week:
+        return H.shift(H.now(), days=-7), "9999"
     last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
-    return last or H.shift(H.now(), days=-7 if week else -1), "9999"
+    return last or H.shift(H.now(), days=-1), "9999"
 
 
 def bot_facts(c, bot, kind, day, redo=False):
