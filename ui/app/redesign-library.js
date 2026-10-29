@@ -283,7 +283,7 @@ function lcCredHTML(cred, facts = false) {
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${login ? 'Edit' : cred.stored ? 'Rotate' : 'Set'}</button>` : '',
     `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
-    login && cred.has_totp && cred.can_reveal ? `<button class="linkish" type="button" data-vault-code="${esc(cred.id)}">Show code</button>` : '',
+    login && cred.can_code ? `<button class="linkish" type="button" data-vault-code="${esc(cred.id)}">Show code</button>` : '',
     cred.stored && cred.can_reveal ? `<button class="linkish" type="button" data-vault-reveal="${esc(cred.id)}">Reveal</button>` : '',
   ].filter(Boolean).join('');
   const sub = login && !facts ? [cred.username, lcSites(cred).join(', ')].filter(Boolean).join(' · ') : '';

@@ -55,7 +55,9 @@ async function vaultReveal(id) {
     dialog.querySelector('p').remove();
     // A login's stored value is its password and authenticator key: Reveal shows the password only.
     let shown = result.value;
-    if (row.kind === 'login') { try { shown = JSON.parse(result.value).password ?? ''; } catch { /* a plain password */ } }
+    if (row.kind === 'login') {
+      try { const v = JSON.parse(result.value); if (typeof v?.password === 'string') shown = v.password; } catch { /* the password itself */ }
+    }
     const label = document.createElement('label'); label.textContent = row.kind === 'login' ? 'Password' : 'Value';
     const value = document.createElement('textarea'); value.readOnly = true; value.value = shown; value.setAttribute('aria-label','Value'); label.appendChild(value);dialog.appendChild(label);
     const copy = document.createElement('button');copy.type='button';copy.className='primary';copy.textContent='Copy';
@@ -79,9 +81,9 @@ function vaultEdit(row) {
     : ['api_key','password','token','file','connection','login'];
   const attrs = 'autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore';
   const dialog = vaultDialog(editing ? 'Edit credential' : 'Add credential',`<form id="vault-form" class="bot-editor-grid">
+    <label>Type<select name="kind"${kinds.length === 1 ? ' disabled' : ''}>${kinds.map(kind=>`<option value="${kind}" ${row?.kind===kind?'selected':''}>${esc(kind.replace('_',' '))}</option>`).join('')}</select></label>
     <label>Name<input name="name" type="text" required maxlength="150" autocomplete="off" value="${esc(row?.name || '')}"></label>
     <label>Username (optional)<input name="username" type="text" maxlength="250" value="${esc(row?.username || '')}" autocomplete="off" spellcheck="false"></label>
-    <label>Type<select name="kind"${kinds.length === 1 ? ' disabled' : ''}>${kinds.map(kind=>`<option value="${kind}" ${row?.kind===kind?'selected':''}>${esc(kind.replace('_',' '))}</option>`).join('')}</select></label>
     <label data-vault-for="value">Bot variable name (optional)<input name="env" type="text" pattern="[A-Z_][A-Z0-9_]*" maxlength="100" autocomplete="off" spellcheck="false" placeholder="POSTHOG_API_KEY" value="${esc(row?.env || '')}"></label>
     <label class="bot-editor-wide" data-vault-for="value">${row?.stored ? 'New value (blank keeps it)' : 'Value'}<textarea name="secret" aria-label="New value" autocomplete="off" spellcheck="false"></textarea></label>
     <label data-vault-for="login">Sites<input name="sites" type="text" maxlength="1000" ${attrs} placeholder="acme.example" value="${esc((row?.sites || []).join(', '))}"></label>

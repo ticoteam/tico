@@ -619,16 +619,21 @@ function siteCardHTML(m, r, fix, status, mine) {
   const card = (act, below = '') => `<div class="rc-card rc-site" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}">${line}${act}${below}</div>`;
   if (status === 'fixed') return card('<span class="rc-done">Done</span>');
   if (status !== 'open') return card(`<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`);
-  if (!mine) return card(`<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`);
+  // Done is the person's, or a manager's of the bot (the route's rule); a manager who is not asked gets only Done.
+  const doneHTML = `<button type="button" class="ghost" data-site-done="${esc(siteDonePath(m, r))}" data-task="${esc(m.refs.task || '')}" data-key="${esc(r.key || '')}">Done</button>`;
+  if (!mine) {
+    const manages = typeof settingsCanManageBot === 'function' && settingsCanManageBot((S.emps || []).find(e => e.name === r.bot));
+    return card(`<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>${manages ? `<span class="rc-acts">${doneHTML}</span>` : ''}`);
+  }
   const computer = fix.computer || r.computer || '', machine = typeof screenMachine === 'function' ? screenMachine(computer) : null;
   const screen = machine && screenOn(machine) && screenMayOpen(machine);
-  const request = m.refs.credential_request || fix.request || '';
+  const request = fix.request || m.refs.credential_request || '';
   const open = TASK_SITE_LOGIN.has(r.key);
   // With no request behind the card, the login goes straight to the vault: only for someone who may open it.
   const enter = request || S.me?.credential_access;
   const acts = `<span class="rc-acts">${screen ? `<a class="button primary" href="${screenHref(computer)}" data-site-screen>Open screen</a>` : ''}
     ${enter ? `<button type="button" class="${screen ? 'ghost' : 'primary'}" data-site-login="${esc(r.key || '')}" aria-expanded="${open}">Enter login</button>` : ''}
-    <button type="button" class="ghost" data-site-done="${esc(siteDonePath(m, r))}" data-task="${esc(m.refs.task || '')}" data-key="${esc(r.key || '')}">Done</button></span>`;
+    ${doneHTML}</span>`;
   if (!open || !enter) return card(acts);
   const form = request
     ? `<div class="rc-form" data-credential-host="${esc(request)}"><div class="cc-done">Loading the card…</div></div>`

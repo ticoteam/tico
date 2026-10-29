@@ -113,7 +113,7 @@ async function open(browser, me, vault, viewport = {width: 1200, height: 900}) {
     // Website logins, at a computer's width and a phone's.
     for (const [tag, viewport] of [['desktop', {width: 1200, height: 900}], ['phone', {width: 390, height: 844}]]) {
       const login = {id: 'l1', name: 'Acme portal', username: 'ops@acme.example', kind: 'login', env: '', sites: ['portal.acme.example', 'sso.acme.example'],
-        has_totp: true, preview: '', source: 'import', revision: 3, stored: true, can_reveal: true, last_used: null, last_used_by: '', grants: []};
+        has_totp: true, can_code: true, preview: '', source: 'import', revision: 3, stored: true, can_reveal: true, last_used: null, last_used_by: '', grants: []};
       const {page, seen} = await open(browser, {id: 'ana', name: 'Ana', role: 'owner', cloud: true, credential_access: true}, {...vault, credentials: [login]}, viewport);
       await page.goto('https://tico-ui.test/#/library/tools/credentials/l1');
       await page.locator('#int-detail h1').filter({hasText: 'Acme portal'}).waitFor();
@@ -149,7 +149,8 @@ async function open(browser, me, vault, viewport = {width: 1200, height: 900}) {
       await form.locator('[name=sites]').fill('https://App.Acme.example/login, crm.acme.example:8443');
       await form.locator('[name=password]').fill(PASSWORD);
       await form.locator('[name=totp]').fill(TOTP);
-      await shot(page, `credentials-add-login-${tag}.png`);
+      assert.equal(await form.locator('label').first().innerText().then(t => t.trim().split('\n')[0]), 'Type', 'Type comes first');
+      await shot(page, `credentials-add-login-${tag}-v2.png`);
       await form.locator('[type=submit]').click();
       await page.locator('#credential-dialog[open]').waitFor({state: 'detached'}).catch(() => {});
       await page.waitForFunction(() => !document.querySelector('#credential-dialog')?.open);

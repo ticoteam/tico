@@ -128,8 +128,10 @@ async function run(viewport, scheme, shot) {
     // Screen off on its computer: no Open screen.
     const crm = thread.locator('.rc-card[data-reconnect="site:botops:crm.acme.example"]');
     assert.deepEqual(await crm.locator('a, button').allInnerTexts(), ['Enter login', 'Done']);
-    assert.match(await thread.locator('.rc-card[data-reconnect="site:botops:erp.acme.example"]').innerText(), /Waiting on/);
-    assert.equal(await thread.locator('.rc-card[data-reconnect="site:botops:erp.acme.example"] button, .rc-card[data-reconnect="site:botops:erp.acme.example"] a').count(), 0);
+    // Asked of someone else: whom it waits on; Done only for someone who manages the bot (here the owner).
+    const erp = thread.locator('.rc-card[data-reconnect="site:botops:erp.acme.example"]');
+    assert.match(await erp.innerText(), /Waiting on/);
+    assert.deepEqual(await erp.locator('a, button').allInnerTexts(), ['Done']);
     const old = thread.locator('.rc-card[data-reconnect="site:botops:old.acme.example"]');
     assert.match(await old.innerText(), /Done/);
     assert.equal(await old.locator('button, a').count(), 0);
@@ -139,9 +141,10 @@ async function run(viewport, scheme, shot) {
     const form = portal.locator('[data-credential-host="cr-site"] form[data-kind="login"]');
     await form.waitFor();
     assert.equal(await form.locator('[name=username]').inputValue(), 'ops@acme.example');
+    assert.deepEqual(await form.locator('input').evaluateAll(xs => xs.map(x => x.placeholder)), ['Username', 'Password', '2FA setup key (optional)']);
+    if (shot) { await page.waitForTimeout(300); await portal.scrollIntoViewIfNeeded(); await page.screenshot({path: shot.replace('.png', '-site-v2.png')}); }
     await form.locator('[name=password]').fill(PASSWORD);
     await form.locator('[name=totp]').fill(TOTP);
-    if (shot) { await page.waitForTimeout(300); await portal.scrollIntoViewIfNeeded(); await page.screenshot({path: shot.replace('.png', '-site.png')}); }
     const wideSite = await page.evaluate(() => [...document.querySelectorAll('#task-modal .rc-site')]
       .some(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > innerWidth + 1));
     assert.equal(wideSite, false, 'a site card and its form fit the thread');

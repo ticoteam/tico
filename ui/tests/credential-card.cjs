@@ -133,6 +133,8 @@ async function open(browser, viewport, view) {
       assert.equal(await form.locator('[name=username]').inputValue(), 'ana@acme.example');
       assert.equal(await form.locator('[name=password]').getAttribute('type'), 'password');
       assert.equal(await form.locator('[name=totp]').getAttribute('type'), 'password');
+      assert.deepEqual(await form.locator('input').evaluateAll(xs => xs.map(x => x.placeholder)), ['Username', 'Password', '2FA setup key (optional)']);
+      if (SHOTS) await page.screenshot({path: require('node:path').join(SHOTS, `login-card-${tag}-v2.png`)});
       await form.locator('button[type=submit]').click();
       assert.match(await page.locator('[data-cc-error]').innerText(), /password/i);
       assert.equal(seen.saves, 0, tag + ': no password, nothing sent');
@@ -144,7 +146,6 @@ async function open(browser, viewport, view) {
         for (const el of await form.locator('input, button').all()) assert.ok((await el.boundingBox()).height >= 44, 'phone: 44px inputs and buttons');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'phone: no sideways scroll');
       }
-      if (SHOTS) await page.screenshot({path: require('node:path').join(SHOTS, `login-card-${tag}.png`)});
       await form.locator('button[type=submit]').click();
       await page.getByText('Saved. the login for portal.acme.example is set for Jira Manager.').waitFor();
       const carrying = seen.requests.filter(r => r.body.includes(encodeURIComponent(PASSWORD)) || r.body.includes(PASSWORD.slice(0, 10)));
