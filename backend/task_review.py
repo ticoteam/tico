@@ -297,29 +297,33 @@ def answer_task(c, auth, who, task_id, body, wake):
             **H.comment_delivery(c, msg, since=mark)}
 
 
+# The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
+COVERS_SQL = (
+    "WITH visuals AS ("
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
+    "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
+    "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
+    "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
+    "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+    "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
+    "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
+    "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
+    "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
+    "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
+    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
+    "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
+    "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
+    "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
+    "SELECT * FROM ranked WHERE rank=1")
+
+
 def task_covers(c, task_ids):
     """Newest visual version per task, with one query for a bounded task page."""
     if not task_ids:
         return {}
     marks = ",".join("?" * len(task_ids))
-    rows = c.execute(
-        "WITH visuals AS ("
-        "SELECT f.task_id,f.id,v.version,v.mime,v.created,v.rowid AS position,"
-        "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
-        "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
-        "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
-        "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
-        "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
-        f"WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
-        "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created,b.rowid,"
-        "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
-        "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
-        f"WHERE a.task_id IN ({marks}) AND NOT EXISTS "
-        "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
-        "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
-        "ORDER BY created DESC,version DESC,position DESC) AS rank FROM visuals "
-        "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
-        "SELECT * FROM ranked WHERE rank=1", (*task_ids, *task_ids))
+    rows = c.execute(COVERS_SQL.format(marks=marks), (*task_ids, *task_ids))
     out = {}
     for row in rows:
         suffix = "/poster" if row["mime"].startswith("video/") else "/thumb" if row["thumb_blob_id"] else ""
