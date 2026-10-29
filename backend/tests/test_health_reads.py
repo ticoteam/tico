@@ -12,7 +12,7 @@ def counted(api, monkeypatch, path, token="ana-test", trace=None):
     store, seen = api.app.state.store, []
     if trace is not None:
         seen = trace
-    store.__dict__.pop("roster_rows", None)          # per-store caches start empty, so every count is the same count
+    store.roster_rows.clear()                        # per-store caches start empty, so every count is the same count
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
             def traced(opened=getattr(store, name)):
