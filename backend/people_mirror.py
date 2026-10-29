@@ -123,7 +123,7 @@ def send():
             return
     try:
         reply = push_now()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the push loop logs and waits for the next change, never dies
         log.warning("the sign-in list was not sent to the Tico account: %s", getattr(exc, "reason", type(exc).__name__))
         return
     if reply is None:
