@@ -1331,6 +1331,14 @@ impl Runner {
                 drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
+            // Sites this bot sends through an exit computer: the turn gets a proxy that sends only those there.
+            if let Err(why) = crate::exit_proxy::hand_to_turn(&attempt, &mut env, &mut vault, isolated).await {
+                let _ = self.state.append(&aid, "error", &json!({"error": why}));
+                drove.outcome = "failed".into();
+                drove.reply = why.clone();
+                drove.retryable = true;
+                return Err(Fail::runtime(why));
+            }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

@@ -113,6 +113,8 @@ pub struct Vault {
     file_vars: BTreeMap<String, usize>,
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
+    /// The turn's proxy for sites its bot sends through an exit computer (exit_proxy.rs), stopped with the vault.
+    pub exit: Option<crate::exit_proxy::Proxy>,
     pub turn_user: Option<crate::turn_users::Lease>,
 }
 
@@ -161,6 +163,7 @@ impl Drop for Vault {
     fn drop(&mut self) {
         // Revoke the connection before a cleaned UID can be lent to another turn.
         self.relay.take();
+        self.exit.take();
         self.remove_files();
         self.turn_user.take();
     }

@@ -1,5 +1,5 @@
 //! Keep the public origin unchanged without another proxy container.
-use super::{browser, runner, App};
+use super::{browser, exit, runner, App};
 use axum::{
     body::Body,
     extract::{ConnectInfo, Request, State},
@@ -186,6 +186,7 @@ pub(super) fn routes(app: App) -> Router {
     Router::new()
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route(exit::PATH, get(exit::link))
         .fallback(forward)
         .with_state(app)
 }

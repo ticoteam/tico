@@ -15,6 +15,7 @@ pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
     crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY,
     crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, "turns_at_once_v1",
+    crate::exit_link::CAPABILITY,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -114,7 +115,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
                 if CAPABILITIES.contains(&name.as_str()) { return Some(name.clone()); }
             }
         }
-        for name in ["turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
+        for name in [crate::exit_link::CAPABILITY, "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
                      crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
                      crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
                      crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",

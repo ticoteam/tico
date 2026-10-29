@@ -25,6 +25,8 @@ keys:
   (`auth_rejected` on a run, backend/execution.py; `_default` is the computer's own login, named apart from every
   profile); fixed when that computer reports that profile's login ready, or a run on that profile completes. A
   runtime-wide ready says nothing of a named profile, nor one profile's of another's.
+- `exit:<computer>`: the bot's turn needed its exit computer for a listed site and that computer's exit link was not
+  open (backend/exits.py); fixed when the link opens again. The person is the exit computer's operator.
 - `secret:<bot>:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Cancelling its credential card ends the wait with a wake that
@@ -116,6 +118,8 @@ def line(c, bot, service, label, fix=None):
         return f"{name} needs {label} to go on."
     if service == "login":
         return f"{name} can't sign in to {label}."
+    if service == "exit":
+        return f"{name} is waiting for exit computer {label}."
     return f"{name} can't reach {label}."
 
 
@@ -163,7 +167,8 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         record["message_id"] = sent["id"] if sent else None
     c.execute("INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix_json,message_id,created) "
               "VALUES(:task_id,:key,:bot,:owner,:service,:label,:person,:fix_json,:message_id,:created)", record)
-    _wait(c, row, f"Reconnect {label} so {_bot_name(c, bot)} can go on.")
+    _wait(c, row, f"Waiting for exit computer {label}" if service == "exit"
+          else f"Reconnect {label} so {_bot_name(c, bot)} can go on.")
     if key.startswith("login:"):
         _fold_hold(c, bot)
     H.event(c, H.KEEPER, "task.reconnect_wait", task_id, {"key": key, "bot": bot, "person": person})
@@ -327,6 +332,8 @@ def _said(c, wait):
     if wait["ended"] == "cancelled":
         from . import task_holds
         return f"{task_holds.name(c, wait['person'])} cancelled the card for {wait['label']}: it was not saved."
+    if wait["service"] == "exit":
+        return f"Exit computer {wait['label']} is back online."
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
 
@@ -476,6 +483,9 @@ def hold(c, task_id):
     card = pending(c, task_id)
     if not card:
         return None
+    if card["service"] == "exit":
+        return {"why": f"exit computer {card['label']} to be online", "on": card["person"],
+                "what": "turn on exit computer " + card["label"]}
     return {"why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
             "on": card["person"], "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"]}
 

@@ -596,7 +596,7 @@ function reconnectCardHTML(m) {
     return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
   }
   let act = '';
-  if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
+  if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : r.service === 'exit' ? 'Online' : 'Reconnected'}</span>`;
   else if (status !== 'open') act = `<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`;
   else if (!mine) act = `<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`;
   else if (r.service === 'google') act = '<button type="button" class="primary" data-reconnect-google>Reconnect Google</button>';

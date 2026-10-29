@@ -8,6 +8,9 @@ writes. No persistent session table or engine selection exists.
 
 - `/api/v2/runners/{rid}/screen/ws?ticket=...` (browser)
 - `/api/v2/runners/me/screen/{session_id}/ws` (runner)
+- `/api/v2/runners/me/exit/ws` (runner): Exit for bots. One socket per runner carries every stream between a bot's
+  computer and the exit computer (`relay-rs/src/exit.rs`); Python's `POST /_tico/exit/v1/authorize` names the computer,
+  allows each stream and receives the summed usage and offline refusals (`backend/exits.py`).
 
 The parent creates a fresh private key and allocates loopback API/control ports on every start.
 Public ingress blocks `/control/*` and `/_tico/*`; policy callbacks and versioned control requests

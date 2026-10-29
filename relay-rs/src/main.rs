@@ -1,4 +1,5 @@
 //! The computer-screen relay and same-origin HTTP gateway. Permission policy and audit writes remain in Python.
+mod exit;
 mod gateway;
 mod tls;
 use axum::{
@@ -161,6 +162,7 @@ struct App {
     http: reqwest::Client,
     proxy: reqwest::Client,
     trusted_proxies: Arc<Vec<gateway::Network>>,
+    exits: exit::Shared,
 }
 impl App {
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -711,6 +713,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let app = App {
         hub: Arc::new(Mutex::new(Hub::new())),
+        exits: Default::default(),
         key: Arc::new(key),
         python: Arc::new(python.trim_end_matches('/').into()),
         trusted_proxies: Arc::new(gateway::trusted_proxies(
@@ -740,6 +743,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             sweep.hub.lock().unwrap().sweep();
         }
     });
+    tokio::spawn(exit::keep(app.clone()));
     let routes = Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/control/v1/hello", get(hello))
@@ -747,6 +751,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/control/v1/command", post(command))
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route(exit::PATH, get(exit::link))
         .layer(DefaultBodyLimit::max(131072))
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;

@@ -446,6 +446,18 @@ function renderSettingsMachines() {
       } catch (error) { toast(error.message, true); perf.checked = !perf.checked; perf.disabled = false; }
       return;
     }
+    const exitBot = event.target.closest('[data-exit-bot]');
+    if (exitBot) {
+      const id = exitBot.dataset.exitBot, boxes = [...el.querySelectorAll(`[data-exit-bot="${CSS.escape(id)}"]`)];
+      const bots = boxes.filter(b => b.checked).map(b => b.value);
+      boxes.forEach(b => { b.disabled = true; });
+      try {
+        await post(`/v2/runners/${encodeURIComponent(id)}/exit`, {on: bots.length > 0, bots});
+        toast(bots.length ? 'Exit on' : 'Exit off');
+        await loadSettings();
+      } catch (error) { toast(error.message, true); exitBot.checked = !exitBot.checked; boxes.forEach(b => { b.disabled = false; }); }
+      return;
+    }
     const inbox = event.target.closest('[data-inbox-only]');
     if (inbox) {
       inbox.disabled = true;

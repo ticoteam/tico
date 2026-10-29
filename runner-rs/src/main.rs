@@ -37,6 +37,8 @@ mod events;
 mod drive;
 mod drain;
 mod execute;
+mod exit_link;
+mod exit_proxy;
 mod fallback;
 mod flight;
 mod follow;
@@ -453,6 +455,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    exit_link::init(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {

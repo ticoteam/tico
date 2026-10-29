@@ -274,7 +274,7 @@ async fn start_for_user(upstream: &str, key: String, bot: Option<String>, uid: O
 
 /// Match the client's reverse four-tuple, rather than the accepted (supervisor-owned) socket.
 /// Failure to read or match /proc denies access before any bearer token is consumed.
-fn peer_is(socket: &TcpStream, uid: u32) -> bool {
+pub(crate) fn peer_is(socket: &TcpStream, uid: u32) -> bool {
     let (Ok(local), Ok(peer)) = (socket.local_addr(), socket.peer_addr()) else { return false };
     let encode = |address: std::net::SocketAddr| -> Option<String> {
         let std::net::IpAddr::V4(ip) = address.ip() else { return None };

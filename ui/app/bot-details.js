@@ -14,7 +14,7 @@ async function botSettingsMount(slug) {
   const bot = S.emps.find(e => e.name === slug);
   if (!bot || !settingsCanManageBot(bot)) {
     host.innerHTML = '<p class="muted">You have read-only access to this bot. Its owner or an admin can change its settings.</p>';
-  } else settingsEditBot(slug, true);
+  } else { settingsEditBot(slug, true); botSitesPaint(slug); }
   botScreenSettingsPaint(slug);
 }
 function botInstructionsMount(slug) {
