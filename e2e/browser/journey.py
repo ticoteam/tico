@@ -78,9 +78,11 @@ def problem_text(error):
         return ""
     if not isinstance(data, dict):
         return ""
-    for key in ("message", "error"):
-        if isinstance(data.get(key), str):
-            return data[key][:160]
+    problem = data.get("error")
+    if isinstance(problem, dict):   # the install's refusals: a code and a sentence
+        return f"{problem.get('code', '')}: {str(problem.get('detail', ''))[:160]}"
+    if isinstance(data.get("message"), str):
+        return data["message"][:160]
     detail = data.get("detail")
     if isinstance(detail, str):
         return detail[:160]
@@ -228,11 +230,14 @@ def cmd_inbox_create(args):
 
 
 def cmd_report(args):
-    # One line per check, names only: the phase's own details are for the bot's log, not the run's.
+    # One line per check: its name, and for a failure the short reason the phase gave.
     data = json.loads(read(args.file))
     checks = data.get("checks") or []
     for item in checks:
-        check(str(item.get("name", "")), item.get("ok") is True)
+        ok = item.get("ok") is True
+        # A failed check says why in a few words; the detail is written by the phase and never holds a secret.
+        note = "" if ok or not item.get("detail") else f" ({item['detail']})"
+        check(str(item.get("name", "")) + note, ok)
     if not checks:
         print("FAIL the phase reported no checks")
         return 1
