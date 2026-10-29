@@ -36,8 +36,15 @@ def check(c, who, auth, settings):
                        "text": text, "fix": fix})
 
     from .agents import external_harness
-    for bot in c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
-                         "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug"):
+    from . import events, views
+    bots = c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
+                     "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
+    # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).
+    slugs = [bot["slug"] for bot in bots]
+    views.prime_machines(c, slugs)
+    events.prime_bot_rows(c, slugs)
+    usage_limits.prime_own(c, slugs)
+    for bot in bots:
         slug = bot["slug"]
         if not (seen.get(slug) or {}).get("see"):
             continue

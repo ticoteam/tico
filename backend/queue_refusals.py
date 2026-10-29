@@ -14,6 +14,18 @@ def state(c, bot):
     return H._json(row[0], {}) if row else {}
 
 
+def states(c, bots):
+    """{bot: its state} for these bots, read in one query per 500 bots (a bot with no state is left out)."""
+    out = {}
+    bots = sorted(set(bots))
+    for start in range(0, len(bots), 500):
+        part = bots[start:start + 500]
+        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key IN (%s)"
+                                    % ",".join("?" * len(part)), [KEY + bot for bot in part]):
+            out[key[len(KEY):]] = H._json(value, {})
+    return out
+
+
 def targets(c):
     # Include prior observations even after pause, unassignment, holding or cancellation, to clear them.
     return sorted({r[0] for r in c.execute("SELECT bot FROM assignments WHERE bot IN "
@@ -87,8 +99,10 @@ def observe(c, settings, at=None):
 
 def aged(c, settings):
     at = H.now()
-    for bot in targets(c):
-        previous = state(c, bot)
+    bots = targets(c)
+    previous_of = states(c, bots)           # one read for every bot, not one per queued bot
+    for bot in bots:
+        previous = previous_of.get(bot, {})
         if (not previous.get('since') or previous['since'] > H.shift(at, hours=-12)
                 or previous.get('observed_at', '') < H.shift(at, seconds=-MAX_GAP_SECONDS)):
             continue
