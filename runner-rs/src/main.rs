@@ -10,7 +10,6 @@
 #![allow(clippy::bool_assert_comparison)]
 #![allow(clippy::cloned_ref_to_slice_refs)]
 #![allow(clippy::collapsible_if)]
-#![allow(dead_code)]
 #![allow(clippy::manual_contains)]
 #![allow(clippy::manual_unwrap_or_default)]
 #![allow(clippy::nonminimal_bool)]
