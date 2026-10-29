@@ -333,7 +333,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             url = clean_help_url(body.help_url)
             key = "secret:" + body.env
             again = reconnects.request_of(c, task["id"], key) if task else None
-            if again:
+            if again and (again["requester"], again["bot"]) == (person.actor, target):
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
                 shown = view(c, again, person)
                 return {"id": again["id"], "status": "pending", "message_id": again["message_id"], "title": shown["title"],
