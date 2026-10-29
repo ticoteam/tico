@@ -232,6 +232,8 @@ async function pageRdOrg() {
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();
+  // Once the web font is in (or given up on), fit again: names in another face measure differently.
+  document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
   const groups = await get('/v2/groups').catch(() => null);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
@@ -258,8 +260,9 @@ function rdoWire(pane) {
     requestAnimationFrame(() => {
       queued = false;
       if (!pane.isConnected) { RDO.ro?.disconnect(); return; }
-      // The pane's own height follows the chart, so only its width counts; anything else would cut a zoom's easing short.
-      const cv = $('#rdo-cv'), w = pane.clientWidth, wider = width && w !== width;
+      // The pane's own height follows the chart, so only its width counts, and its outer width at that: a scrollbar
+      // coming or going is not a new frame, and refitting on it could see-saw. Anything else would cut a zoom's easing short.
+      const cv = $('#rdo-cv'), w = pane.offsetWidth, wider = width && w !== width;
       const moved = RDO.cvW != null && cv.offsetWidth !== RDO.cvW, taller = RDO.cvH != null && cv.offsetHeight !== RDO.cvH;
       width = w;
       if ((wider || moved) && !RDO.manual) rdoFit();
