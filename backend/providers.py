@@ -171,6 +171,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "muse-own", "label": "muse's own model", "runtime": "muse", "provider": "",
      "efforts": ("as-configured",),
      "default_effort": "as-configured"},
+    {"id": "qm-own", "label": "qm's own model", "runtime": "qm", "provider": "",
+     "efforts": ("as-configured",),
+     "default_effort": "as-configured"},
 ))
 
 

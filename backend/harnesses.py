@@ -28,6 +28,8 @@ HARNESS_CATALOG = (
     {"id": "grokbot", "label": "grok bot", "runtime": "grokbot", "external": True},
     {"id": "dots", "label": "dots", "runtime": "dots", "external": True},
     {"id": "muse", "label": "muse", "runtime": "muse", "external": True},
+    # QM (docs/qm.md): one always-on agent per person. Unlike the three above it takes tasks (external_sync.wake).
+    {"id": "qm", "label": "qm", "runtime": "qm", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
 # Each CLI's short name and capabilities come from its manifest (runner/harnesses/*.toml); an external agent has
