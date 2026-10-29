@@ -504,9 +504,21 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .owner-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:7px;margin:14px 0 18px}
 .owner-option{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid var(--line);border-radius:7px;cursor:pointer}
 .owner-option:hover{background:var(--surface2)}
-/* Settings > History: Runs | Changes beside the title. Runs is one dense line per run; on a phone, two. */
+/* Settings > History: Log | Runs | Changes beside the title. The Log and Runs are one dense line a row; on a phone, two. */
 #settings-history .card>header{display:flex;align-items:center;justify-content:space-between;gap:12px}
-#settings-history-view[hidden]{display:none}
+#settings-history-view[hidden],#settings-history-view button[hidden]{display:none}
+.log-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.log-filters select{max-width:220px}
+.log-csv{margin-left:auto;font-size:var(--t-sm)}
+.log-list{display:grid;grid-template-columns:auto minmax(90px,auto) auto minmax(0,2fr) minmax(0,1fr);column-gap:16px;font-size:var(--t-sm)}
+.log-row{display:contents}
+.log-row>*{display:flex;align-items:center;gap:6px;min-width:0;padding:7px 0;border-top:1px solid var(--line);white-space:nowrap}
+.log-head>*{border-top:0;padding-top:0;color:var(--muted);font-size:var(--t-xs);font-weight:600}
+.log-row .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.log-when,.log-kind,.log-result,.log-about{color:var(--muted)}
+.log-subject>span:last-child,.log-result{overflow:hidden;text-overflow:ellipsis}
+.log-about::after{content:' ·'}
+.log-list+button{margin-top:10px}
 .runs-list{display:grid;grid-template-columns:minmax(110px,1fr) auto minmax(0,1.6fr) auto auto auto auto;column-gap:18px;font-size:var(--t-sm)}
 .run-row{display:contents}
 .run-row>*{display:flex;align-items:center;gap:6px;min-width:0;padding:7px 0;border-top:1px solid var(--line);white-space:nowrap}
@@ -526,6 +538,13 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
   .run-bot{grid-area:bot}.run-when{grid-area:when}.run-log{grid-area:log}.run-result{grid-area:result}
   .run-model{grid-area:model}.run-took{grid-area:took}.run-cost{grid-area:cost}
   .run-when,.run-log{justify-content:flex-end}
+  .log-filters select{flex:1 1 140px;max-width:none}
+  .log-list{display:block}
+  .log-row.log-head{display:none}
+  .log-row{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"who when" "subject subject" "kind result";column-gap:10px;row-gap:2px;padding:8px 0;border-top:1px solid var(--line)}
+  .log-row>*{padding:0;border-top:0}
+  .log-who{grid-area:who}.log-when{grid-area:when;justify-content:flex-end}.log-subject{grid-area:subject}
+  .log-kind{grid-area:kind}.log-result{grid-area:result;justify-content:flex-end}
 }
 .settings-history-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
 .settings-history-row:last-child{border-bottom:0}.settings-history-row p{margin:2px 0 0;font-size:var(--t-sm);color:var(--muted)}

@@ -7049,6 +7049,8 @@ def create_app(settings=None):
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay
     install_replay(app, store, auth)
+    from . import history_log
+    history_log.install(app, store, auth)
     from .bot_hours import install as install_bot_hours
     install_bot_hours(app, store, auth)
     from .usage import install as install_usage

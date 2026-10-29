@@ -1,4 +1,4 @@
-/* ui/app/settings-history.js — Settings > History: Runs, and the owner's Changes
+/* ui/app/settings-history.js — Settings > History: the Log, Runs, and the owner's Changes
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -38,17 +38,120 @@ function settingsDefinitionChange(before, after) {
   if ((b.reports_to || '') !== (a.reports_to || '')) out.push(a.reports_to ? `Now reports to ${settingsBotName(a.reports_to)}` : 'Now at the top level');
   return out.join(' · ') || 'No visible change';
 }
+// ----------------------------------------------------------------- Log
+// The audit log (GET /api/v2/history, backend/history_log.py): what every teammate did, asked and was blocked from,
+// newest first. The reader sees only rows their own SQL would show them. The view and the filters ride in the address
+// (#/settings/history?kind=decision&bot=ops), so a filtered view can be shared.
+const HISTORY_KINDS = [['run', 'Runs'], ['task', 'Tasks'], ['approval.asked', 'Approvals asked'],
+  ['approval.granted', 'Approvals granted'], ['approval.denied', 'Approvals denied'], ['outbound.blocked', 'Outbound blocked'],
+  ['credential.revealed', 'Credential reveals'], ['permission.changed', 'Permission changes'], ['decision', 'Decisions']];
+const HISTORY_KIND_LABEL = {run: 'Run', task: 'Task', 'approval.asked': 'Approval asked', 'approval.granted': 'Approval granted',
+  'approval.denied': 'Approval denied', 'outbound.blocked': 'Outbound blocked', 'credential.revealed': 'Credential revealed',
+  'permission.changed': 'Permission change', decision: 'Decision'};
+let SETTINGS_HISTORY_VIEW = 'log';
+let SETTINGS_LOG = {scope: '', kind: ''};
+// The router hands over the query of #/settings/history?..; settingsAddress writes it back with settingsHistoryQuery.
+function settingsHistoryAddress(query) {
+  const q = new URLSearchParams(query || '');
+  SETTINGS_HISTORY_VIEW = ['runs', 'changes'].includes(q.get('view')) ? q.get('view') : 'log';
+  const scope = ['bot', 'person', 'team'].map(k => q.get(k) ? `${k === 'person' ? 'human' : k}:${q.get(k)}` : '').find(Boolean) || '';
+  const kind = HISTORY_KINDS.some(([k]) => k === q.get('kind')) ? q.get('kind') : '';
+  SETTINGS_LOG = {scope, kind};
+}
+// kind, and bot, person or team: the filters, as the API takes them.
+function settingsLogFilters() {
+  const q = new URLSearchParams();
+  if (SETTINGS_LOG.kind) q.set('kind', SETTINGS_LOG.kind);
+  if (SETTINGS_LOG.scope) { const [kind, id] = SETTINGS_LOG.scope.split(/:(.*)/); q.set(kind === 'human' ? 'person' : kind, id); }
+  return q;
+}
+function settingsHistoryQuery() {
+  const q = SETTINGS_HISTORY_VIEW === 'log' ? settingsLogFilters() : new URLSearchParams();
+  if (SETTINGS_HISTORY_VIEW !== 'log') q.set('view', SETTINGS_HISTORY_VIEW);
+  return q.toString() ? '?' + q : '';
+}
+function settingsLogWho(actor, names) {
+  const slug = actorSlug(actor);
+  return slug ? empChip(slug) : `<span class="chip">${esc(names[actor] || actorLabel(actor) || 'Tico')}</span>`;
+}
+function settingsLogRowsHTML(items, names) {
+  return items.map(item => {
+    const about = item.about && item.about !== item.actor ? `<span class="log-about">${esc(names[item.about] || actorLabel(item.about))}</span>` : '';
+    const link = item.link || '', away = link.startsWith('/');
+    const subject = link ? `<a href="${esc(link)}"${away ? ' target="_blank" rel="noopener"' : ''}>${esc(item.subject || 'Open')}</a>` : esc(item.subject);
+    return `<div class="log-row" data-log-id="${esc(item.id)}">
+      <span class="log-when tnum">${agoSpan(item.at)}</span>
+      <span class="log-who">${settingsLogWho(item.actor, names)}</span>
+      <span class="log-kind">${esc(HISTORY_KIND_LABEL[item.kind] || item.kind)}</span>
+      <span class="log-subject">${about}<span>${subject}</span></span>
+      <span class="log-result" title="${esc(item.result)}">${esc(item.result)}</span></div>`;
+  }).join('');
+}
+async function renderSettingsLog() {
+  const el = $('#set-log'); if (!el) return;
+  const filters = settingsLogFilters();
+  el.innerHTML = `<div class="log-filters">
+      <select id="log-who" aria-label="Who">${replayScopeOptions(SETTINGS_LOG.scope)}</select>
+      <select id="log-kind" aria-label="Kind"><option value="">Everything</option>${HISTORY_KINDS.map(([k, label]) =>
+        `<option value="${k}"${k === SETTINGS_LOG.kind ? ' selected' : ''}>${label}</option>`).join('')}</select>
+      ${settingsIsAdmin() ? `<button class="linkish log-csv" id="log-csv" type="button">Export CSV</button>` : ''}
+    </div><div id="log-rows">${skelRows(3, {card: true, dot: false})}</div>`;
+  const change = () => {
+    SETTINGS_LOG = {scope: $('#log-who').value, kind: $('#log-kind').value};
+    settingsAddress(); void renderSettingsLog();
+  };
+  $('#log-who').onchange = change; $('#log-kind').onchange = change;
+  const csv = $('#log-csv'); if (csv) csv.onclick = () => settingsLogCsv(csv, filters);
+  const rows = $('#log-rows'), drawn = el._logDrawn = {};
+  const draw = async (before, shown) => {
+    const q = new URLSearchParams(filters); if (before) q.set('before', before);
+    const page = await get(`/v2/history${q.toString() ? '?' + q : ''}`);
+    if (el._logDrawn !== drawn) return;   // a newer filter drew over this one
+    const items = [...shown.items, ...page.items], names = {...shown.names, ...page.names};
+    rows.innerHTML = items.length ? `<div class="log-list"><div class="log-row log-head"><span>When</span><span>Who</span><span>Kind</span><span>What</span><span>Result</span></div>${settingsLogRowsHTML(items, names)}</div>`
+      + (page.next ? '<button class="ghost" type="button" data-log-older>Show older</button>' : '')
+      : '<div class="empty">Nothing here yet.</div>';
+    const older = rows.querySelector('[data-log-older]');
+    if (older) older.onclick = async () => {
+      older.disabled = true;
+      try { await draw(page.next, {items, names}); } catch (error) { older.disabled = false; toast(error.message, true); }
+    };
+  };
+  try { await draw('', {items: [], names: {}}); } catch (e) { if (el._logDrawn === drawn) rows.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+// The Log's filters as one CSV. A page holds 5,000 rows and X-Next says where the next one starts, so every page is
+// fetched in turn and the file is saved whole; the header row is kept once.
+async function settingsLogCsv(button, filters) {
+  button.disabled = true;
+  try {
+    let text = '', before = '';
+    do {
+      const q = new URLSearchParams(filters); if (before) q.set('before', before);
+      const r = await fetch(`${API}/v2/history.csv?${q}`, {cache: 'no-store'}), body = await r.text();
+      if (!r.ok) { let j; try { j = JSON.parse(body); } catch { j = {}; } throw apiFailure(j, r); }
+      text = text ? text + body.slice(body.indexOf('\n') + 1) : body;
+      before = r.headers.get('X-Next') || '';
+    } while (before);
+    const url = URL.createObjectURL(new Blob([text], {type: 'text/csv'})), link = document.createElement('a');
+    link.href = url; link.download = 'tico-history.csv';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+}
 // ----------------------------------------------------------------- Runs
 // Every run this person may see (GET /runs), one line each: the bot's own Runs card keeps runsTable (ui/app/issues.js).
-let SETTINGS_HISTORY_VIEW = 'runs';
-// Changes is the owner's alone: anyone else always sees Runs, even on a page drawn before they lost the role.
+// Changes is the owner's alone: anyone else sees the Log or Runs, even on a page drawn before they lost the role.
 function settingsHistoryShow(view = SETTINGS_HISTORY_VIEW) {
-  const runs = $('#set-runs'), changes = $('#set-history'), owner = S.me?.role === 'owner'; if (!runs) return;
-  SETTINGS_HISTORY_VIEW = changes && owner && view === 'changes' ? 'changes' : 'runs';
-  const switcher = $('#settings-history-view'); if (switcher) switcher.hidden = !owner;
+  const log = $('#set-log'), runs = $('#set-runs'), changes = $('#set-history'), owner = S.me?.role === 'owner'; if (!runs) return;
+  SETTINGS_HISTORY_VIEW = view === 'runs' ? 'runs' : changes && owner && view === 'changes' ? 'changes' : 'log';
+  const own = $('[data-history-view=changes]'); if (own) own.hidden = !owner;
+  if (log) log.hidden = SETTINGS_HISTORY_VIEW !== 'log';
   runs.hidden = SETTINGS_HISTORY_VIEW !== 'runs';
   if (changes) changes.hidden = SETTINGS_HISTORY_VIEW !== 'changes';
   document.querySelectorAll('[data-history-view]').forEach(button => button.setAttribute('aria-checked', String(button.dataset.historyView === SETTINGS_HISTORY_VIEW)));
+  settingsAddress();
+  if (SETTINGS_HISTORY_VIEW === 'log') void renderSettingsLog();
   if (SETTINGS_HISTORY_VIEW === 'runs') void renderSettingsRuns();
 }
 // "18K out", so a run with no price fits its column on a phone; the exact count is in the CSV and the log.

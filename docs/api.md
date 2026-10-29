@@ -84,6 +84,22 @@ The spec describes answers with the fields a frontend relies on (`required`) and
 repository checks those against live responses, and another checks that `openapi/v2.json` is what the server
 generates; after a change to the API, `python -m backend.openapi_v2` rewrites it.
 
+## History
+
+`GET /api/v2/history` is the audit log behind Settings > History > Log, newest first. Each item has `id`, `at`,
+`kind`, `actor`, `about` (the teammate it concerns), `subject`, `result` and `link`; `names` gives display names, and
+`next` is the `before` that continues the list. Pages are at most `limit` rows (200 at most, 100 by default) and
+256 KB.
+
+- `kind`: a comma list of `run`, `task`, `approval.asked`, `approval.granted`, `approval.denied`, `outbound.blocked`,
+  `credential.revealed`, `permission.changed` and `decision`. An unknown kind is a 422.
+- One of `bot`, `person` or `team`: rows that teammate did or that are about them. A team includes its nested teams.
+- `from` and `to`: ISO times with a zone.
+
+`GET /api/v2/history.csv` takes the same filters and returns `time,actor,kind,subject,result,link`, up to 5,000 rows;
+`X-Next` holds the `before` for the rest (the Log's Export CSV in the UI fetches every page and saves one file). It is
+the owner's and the Admins' (403 for others). A cell that would start a spreadsheet formula starts with `'`. Both routes are internal for now ([Stable and internal](#stable-and-internal)).
+
 ## Three ways to call it
 
 | From | Credential | Guide |

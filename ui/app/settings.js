@@ -277,8 +277,9 @@ function pageSettings() {
     <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
-      ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
-      <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
+      <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
+      <div id="set-log"></div>
+      <div id="set-runs" hidden>${skelRows(3, {card: true, dot: false})}</div>
       ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
     ${settingsStrategyBotShown() ? `<div class="settings-pane" id="settings-strategy-bot" role="tabpanel" hidden><section class="card"><header><h2>${esc(strategyBotName())}</h2></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     <dialog class="tmodal" id="people-dialog" aria-label="People"></dialog>
@@ -412,11 +413,11 @@ function settingsShow(tab) {
   if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
   settingsRevealSoon(SETTINGS_REVEAL);
 }
-// While Settings is the page, the address bar names the tab shown: #/settings/<tab>. It replaces the entry: no
-// hashchange, no new history step.
+// While Settings is the page, the address bar names the tab shown: #/settings/<tab>, with History's view and filters.
+// It replaces the entry: no hashchange, no new history step.
 function settingsAddress() {
   if (S.route !== SETTINGS) return;
-  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}`;
+  SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
