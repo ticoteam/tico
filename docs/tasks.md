@@ -238,7 +238,9 @@ the step it held. One card per task and account; tasks waiting on the same accou
 another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
 stands only while its task is unfinished and keeps the owner it was opened for, and its bot is not archived; otherwise
 it says Not needed and asks nothing (a credential card's request is cancelled, so it can no longer be saved). The
-person is one who can read the task; on a private task nobody else gets the card.
+person is one who can read the task; on a private task nobody else gets the card. When a task is made private and a
+card's person cannot read it any more, a sign-in card moves to the operator or owner who can. Any other card says Not
+needed, and the task stops waiting on it.
 
 | What stopped | Who fixes it | Fix on the card | Fixed when |
 | --- | --- | --- | --- |

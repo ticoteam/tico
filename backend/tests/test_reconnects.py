@@ -410,6 +410,50 @@ def test_a_private_task_cards_a_fixer_who_can_read_it_and_never_one_who_cannot(a
         assert R.person_for(c, api.app.state.store.settings, "ops") == "human:cara"
 
 
+def make_private(api, t):
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "human:ben", t["id"], private=True)
+
+
+def test_a_task_made_private_retires_a_card_nobody_else_can_fix_and_stops_waiting_on_it(api):
+    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+    open_card(api, t, "google:cara@acme.example", "human:cara")              # only Cara connects her mailbox
+    assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
+    make_private(api, t)                                                     # Cara cannot read it now
+    assert [c["status"] for c in cards(api, t)] == ["retired"]
+    assert shown(api, t, "ben-test")["task"]["status"] in ("open", "doing")
+    assert not [i for i in needs(api, "cara-test") if i.get("reconnect")]
+
+
+def test_a_task_made_private_moves_a_login_card_to_a_fixer_who_can_read_it(api):
+    machine = codex_bot(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+    refused(api, machine, claim(api, machine))
+    [first] = cards(api, t)
+    assert first["person"] == "human:cara"
+    make_private(api, t)
+    assert sorted((c["person"], c["status"]) for c in cards(api, t)) == [("human:ana", "open"), ("human:cara", "retired")]
+    assert shown(api, t, "ben-test")["task"]["status"] == "waiting"
+    assert [i["reconnect"]["person"] for i in needs(api) if i["id"] == t["id"]] == ["human:ana"]
+    heartbeat(api, machine, True)                                             # the fix still reaches the task
+    assert len(wakes(api, t)) == 1
+
+
+def test_a_former_reader_cannot_load_or_save_the_credential_card_by_id(api):
+    machine = ops_machine(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+    asked = ask_secret(api, claim(api, machine))
+    get(api, f"credential-requests/{asked['id']}", "cara-test")
+    make_private(api, t)
+    assert request_status(api, asked["id"]) == "cancelled"
+    get(api, f"credential-requests/{asked['id']}", "cara-test", expected=404)
+    post(api, f"credential-requests/{asked['id']}/save", {"value": "crm-token-0123456789"}, "cara-test", expected=404)
+
+
 def test_asking_again_on_one_task_reuses_its_card_and_another_task_keeps_its_own(api):
     machine = ops_machine(api)
     first = task(api, "Reply to Acme")

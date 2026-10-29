@@ -5187,6 +5187,8 @@ def _made_private(conn, actor, task_id):
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
     _task_event(conn, task_id, actor, "private", 0, 1, "")
     _private_followups(conn, task_id)
+    from .reconnects import access_changed as reconnects_access_changed
+    reconnects_access_changed(conn, task_id)    # a reconnect card's person may not read it now
 
 
 def _private_followups(conn, task_id):
@@ -6485,6 +6487,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     args["updated"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
+    if args.get("private"):
+        # Made private: a reconnect card's person may not read it now (backend/reconnects.py).
+        from .reconnects import access_changed as reconnects_access_changed
+        reconnects_access_changed(conn, task_id)
     if person and status == "waiting":
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     after = task(conn, task_id) or {}

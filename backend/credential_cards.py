@@ -316,6 +316,10 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
         if not row or (row["requester"] != viewer.actor and not administrator(c, viewer, vault.admins)):
             raise Problem("not_found", "No such request", 404)
+        # A card in a task's thread is for someone who can read the task now: one made private since asks them nothing.
+        task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
+        if task_id and not H.task_private_readable(c, viewer.actor, H.task(c, task_id)):
+            raise Problem("not_found", "No such request", 404)
         return row
 
     @app.post("/api/v2/credential-requests")

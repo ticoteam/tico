@@ -75,7 +75,8 @@ def _present(c):
 
 def _live(alias="r"):
     """SQL for an open card that still stands, and its arguments: its task unfinished and still the owner's it was
-    opened for, its bot not archived."""
+    opened for, its bot not archived. Its person must also still read the task (`_reads`, in Python: privacy and
+    org-chart reach are not SQL)."""
     H = _H()
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     return (f"{alias}.fixed_at IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id={alias}.task_id "
@@ -88,6 +89,10 @@ def person_for(c, settings, bot, task=None):
     the first of them who can read it: the card is in its thread."""
     from . import usage_limits
     H, email = _H(), getattr(settings, "owner_email", "") or ""
+    if not email and settings is None:
+        # A hook from hubdb has no settings: the owner record the company keeps.
+        from .access import load_owner
+        email = load_owner(c, type("NoSettings", (), {"owner_email": ""})())["email"]
     people = [p for p in (usage_limits.recipients(c, bot, email), usage_limits.recipients(c, None, email)) if p]
     for actor in dict.fromkeys(H.human_actor(p["id"]) for p in people):
         if task is None or H.task_private_readable(c, actor, task):
@@ -200,6 +205,37 @@ def _wait(c, row, note):
     # The status event already carries the note; the card says it in the thread.
     c.execute("UPDATE tasks SET note=?,version=version+1,updated=? WHERE id=?", (note, H.now(), row["id"]))
     H._recount(c, row["owner"])
+
+
+def _reads(c, row):
+    """Whether the card's person can still read its task (a task made private, or a manager moved, may stop that)."""
+    return _H().task_private_readable(c, row["person"], {"id": row["task_id"]})
+
+
+def access_changed(c, task_id):
+    """The task was made private (hubdb): a card whose person cannot read it now is retired (a credential card's request
+    cancelled) and opened again for the first fixer who can (`person_for`). A credential card is the bot's to ask again
+    (a new request, through the API) and a Google card only its mailbox's person can fix, so those stay retired; the
+    task stops waiting on them, and its bot is told when nothing else holds it."""
+    if not _present(c):
+        return
+    H = _H()
+    row = H.task(c, task_id)
+    if not row:
+        return
+    live, args = _live()
+    gone = [w for w in H._rows(c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created",
+                                         (task_id, *args))) if not _reads(c, w)]
+    for wait in gone:
+        _retire(c, wait, refresh=False)
+        person = person_for(c, None, wait["bot"], row) if wait["service"] == "login" else None
+        if person:
+            open(c, task_id, wait["bot"], wait["key"], wait["service"], wait["label"], person,
+                 json.loads(wait["fix_json"] or "{}"), owner=wait["owner"])
+    if gone:
+        from . import task_holds
+        names = ", ".join(dict.fromkeys(task_holds.name(c, w["person"]) for w in gone))
+        task_holds.refresh(c, task_id, f"{names} cannot see this task now")
 
 
 def _close(c, wait, ended, at=None):
@@ -415,9 +451,11 @@ def pending(c, task_id):
     if not _present(c):
         return None
     live, args = _live()
-    row = c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created LIMIT 1",
-                    (task_id, *args)).fetchone()
-    return view(dict(row)) if row else None
+    for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created",
+                         (task_id, *args)).fetchall():
+        if _reads(c, row):
+            return view(dict(row))
+    return None
 
 
 def tasks_for(c, person):
@@ -426,10 +464,11 @@ def tasks_for(c, person):
         return []
     H = _H()
     live, args = _live()
-    return H._rows(c.execute(
-        "SELECT t.* FROM tasks t JOIN (SELECT r.task_id, min(r.created) AS created FROM task_reconnects r "
-        f"WHERE r.person=? AND {live} GROUP BY r.task_id) x ON x.task_id=t.id "
-        "WHERE t.status='waiting' ORDER BY x.created, t.id", (person, *args)))
+    found = sorted((r["created"], r["task_id"]) for r in c.execute(
+        f"SELECT r.task_id, min(r.created) AS created, r.person FROM task_reconnects r WHERE r.person=? AND {live} "
+        "GROUP BY r.task_id", (person, *args)).fetchall() if _reads(c, r))
+    rows = (H.task(c, task_id) for _, task_id in found)
+    return [t for t in rows if t and t["status"] == "waiting"]
 
 
 def hold(c, task_id):
@@ -452,8 +491,9 @@ def for_tasks(c, task_ids, person):
     for part in _H().chunks(ids):
         marks = ",".join("?" * len(part))
         for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id IN ({marks}) AND r.person=? AND {live} "
-                             "ORDER BY r.created", (*part, person, *args)):
-            out.setdefault(row["task_id"], view(dict(row)))
+                             "ORDER BY r.created", (*part, person, *args)).fetchall():
+            if row["task_id"] not in out and _reads(c, row):
+                out[row["task_id"]] = view(dict(row))
     return out
 
 
@@ -470,8 +510,9 @@ def bot_open(c, bot, prefix):
     if not _present(c):
         return False
     live, args = _live()
-    return c.execute(f"SELECT 1 FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? AND {live} LIMIT 1",
-                     (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args)).fetchone() is not None
+    return any(_reads(c, r) for r in c.execute(
+        f"SELECT r.task_id, r.person FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? AND {live}",
+        (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args)).fetchall())
 
 
 def request_of(c, task_id, key):
@@ -479,9 +520,14 @@ def request_of(c, task_id, key):
     if not _present(c) or not _H()._has_table(c, "credential_requests"):
         return None
     live, args = _live()
-    row = c.execute(f"SELECT q.* FROM task_reconnects r JOIN credential_requests q ON q.id=json_extract(r.fix_json,'$.request') "
-                    f"WHERE r.task_id=? AND r.key=? AND q.status='pending' AND {live}", (task_id, key, *args)).fetchone()
-    return dict(row) if row else None
+    row = c.execute(f"SELECT q.*, r.person AS card_person FROM task_reconnects r JOIN credential_requests q "
+                    f"ON q.id=json_extract(r.fix_json,'$.request') WHERE r.task_id=? AND r.key=? AND q.status='pending' "
+                    f"AND {live}", (task_id, key, *args)).fetchone()
+    if not row or not _reads(c, {"person": row["card_person"], "task_id": task_id}):
+        return None
+    found = dict(row)
+    found.pop("card_person")
+    return found
 
 
 def waited_requests(c, bot, env):
@@ -489,8 +535,9 @@ def waited_requests(c, bot, env):
     if not _present(c):
         return set()
     live, args = _live()
-    return {r[0] for r in c.execute(f"SELECT json_extract(r.fix_json,'$.request') FROM task_reconnects r "
-                                    f"WHERE r.bot=? AND r.key=? AND {live}", (bot, secret_key(bot, env), *args))}
+    return {r["request"] for r in c.execute(
+        f"SELECT json_extract(r.fix_json,'$.request') AS request, r.task_id, r.person FROM task_reconnects r "
+        f"WHERE r.bot=? AND r.key=? AND {live}", (bot, secret_key(bot, env), *args)).fetchall() if _reads(c, r)}
 
 
 # ------------------------------------------------------------------------------------------------ the hooks
