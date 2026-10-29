@@ -162,3 +162,8 @@ function syncStrategyBot() {
   el.querySelector('.sbot-close').onclick = () => el.classList.remove('open');
   void goalManagerMount(rail);
 }
+// The roster (S.emps, S.me) arrives after the first route on a fresh tab, so a rail a route drew before it said the
+// owner can turn the bot on. Once it arrives, a rail that is already up draws again.
+function strategyBotRosterLoaded() {
+  if (SBOT?.el.isConnected) void goalManagerMount(SBOT.rail);
+}

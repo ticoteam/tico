@@ -254,10 +254,10 @@ function stratPropBetName(id) {
   return n < 0 ? `a ${stratPropOne().toLowerCase()}` : `${stratPropOne()} ${n + 1}`;
 }
 // A wrong-if in plain text, as the Strategy page words it.
-function stratPropWrongText(w) {
+function stratPropWrongText(w, known) {
   if (!w) return '';
   const el = document.createElement('span');
-  el.innerHTML = strategyWrongIfHtml(w);
+  el.innerHTML = strategyWrongIfHtml(w, known);
   return el.textContent.trim();
 }
 // One changed thing on a strategy card: its name, then Now / Proposed (or only what is proposed without a draft to read).
@@ -289,7 +289,9 @@ function strategyDraftPropHtml(p) {
     if (changed.length) rows.push(stratPropRow(esc(title) + only, propNowProposedHtml(changed)));
   }
   const fields = [['statement', 'Statement'], ['why', 'Why'], ['rules_out', 'Rules out'], ['wrong_if', 'Wrong if'], ['cites', 'Cites']];
-  const value = (k, v) => k === 'wrong_if' ? stratPropWrongText(v) : k === 'cites' ? (v || []).join(', ') : v;
+  // The KPI names a Wrong if shows: the strategy's, and the proposal's own (backend/strategy.py wrong_kpis).
+  const known = {...(st?.wrong_kpis || {}), ...(p.wrong_kpis || {})};
+  const value = (k, v) => k === 'wrong_if' ? stratPropWrongText(v, known) : k === 'cites' ? (v || []).join(', ') : v;
   for (const b of pl.bets || []) {
     const was = b.id ? stratPropBets().find(x => x.id === b.id) : null;
     if (!b.id) {

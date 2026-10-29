@@ -128,12 +128,13 @@ function stratKpi(id) {
     for (const g of goals || []) { const hit = (g.kpis || []).find(x => x.id === id); if (hit) return hit; }
   return {id, name: id};
 }
-// A Wrong if in plain words. A sentence with no date to check it by is "Not yet measurable".
-function strategyWrongIfHtml(w) {
+// A Wrong if in plain words. A sentence with no date to check it by is "Not yet measurable". `known`: the KPIs the
+// data names (backend/strategy.py wrong_kpis), for a page that has not loaded the KPI list (the Goals page's cards).
+function strategyWrongIfHtml(w, known = {}) {
   const by = w?.check_by ? ` <span class="muted">· check by ${esc(stratDate(w.check_by))}</span>` : '';
   if (!stratWrongSet(w)) return '<span class="muted">Not yet measurable</span>';
   if (w.kind === 'kpi') {
-    const k = stratKpi(w.kpi_id), unit = k.unit === '%' ? '%' : k.unit ? ' ' + k.unit : '';
+    const k = {...stratKpi(w.kpi_id), ...known[w.kpi_id]}, unit = k.unit === '%' ? '%' : k.unit ? ' ' + k.unit : '';
     return `${esc(k.name || k.id)} ${w.direction === 'above' ? 'above' : 'below'} ${esc(String(w.threshold))}${esc(unit)}${by}`;
   }
   if (w.kind === 'thesis') return `${esc(w.market_id)} changes${by}`;

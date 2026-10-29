@@ -41,6 +41,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
       applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
     }
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    strategyBotRosterLoaded();         // a Strategy rail drawn before the roster (redesign.js)
     renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
