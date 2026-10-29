@@ -1,6 +1,7 @@
 // Strategy › Org (ui/app/redesign-org.js) against the fake hub in support/strategy-fake.cjs (the
 // Acme example): the chart top down with the owner on top, groups as outlines that fold (and stay folded), helpers off
-// it, pinch and the zoom buttons; a teammate's sheet with its group and Move to…; the owner, and a lead inside the
+// it, pinch, the zoom toolbar above the frame and a first look that fits the width (or centres the owner) with nothing
+// clipped at either end; a teammate's sheet with its group and Move to…; the owner, and a lead inside the
 // groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no Move to…; no proposals and no
 // approvals; the Strategy Bot's starters ask for org changes. A phone first, then a computer.
 const {chromium} = require('playwright');
@@ -9,7 +10,26 @@ const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strate
 
 const card = ref => `.rdo-card[data-rdo-ref="${ref}"]`;
 const inGroup = (page, ref, gid) => page.locator(`[data-rdo-group="${gid}"] ${card(ref)}`).count().then(n => n === 1);
-const zoomOf = page => page.locator('#rdo-cv').evaluate(el => Number(el.style.zoom) || 1);
+const zoomOf = page => page.evaluate(() => RDO.zoom);
+
+// The first look, fitted: every card inside the frame across, the owner over the middle of its row, the toolbar above the
+// frame and clear of it.
+async function fitted(page, tag) {
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const f = await page.evaluate(() => {
+    const box = el => el.getBoundingClientRect(), pane = document.querySelector('#rdo-pane'), p = box(pane);
+    const cards = [...document.querySelectorAll('#rdo-cv .rdo-card')].map(box);
+    const owner = box(document.querySelector('.rdo-card.top')), row = box(document.querySelector('.rdo-row'));
+    const bar = box(document.querySelector('.rdo-bar'));
+    return {left: Math.min(...cards.map(r => r.left)) - (p.left + pane.clientLeft), right: p.left + pane.clientLeft + pane.clientWidth - Math.max(...cards.map(r => r.right)),
+      off: Math.abs(owner.left + owner.width / 2 - (row.left + row.width / 2)), barOver: bar.bottom - p.top, barRight: p.right - bar.right,
+      wider: pane.scrollWidth > pane.clientWidth + 1};
+  });
+  assert.ok(f.left >= 0 && f.right >= 0, `${tag}: no card clipped across (${f.left}px spare on the left, ${f.right}px on the right)`);
+  assert.ok(f.off <= 2, `${tag}: the owner over the middle of the row (${f.off}px off)`);
+  assert.ok(f.barOver <= 0 && f.barRight < 2, `${tag}: the zoom toolbar sits above the frame on the right (${f.barOver}, ${f.barRight})`);
+  assert.ok(!f.wider, tag + ': fitted, nothing to pan across');
+}
 
 async function chart(page, tag) {
   await page.locator(card('bot:builder')).waitFor();
@@ -33,7 +53,7 @@ async function chart(page, tag) {
       // Opens readable (names 12px or more), centred on the owner, the frame down to the tab bar, the page still.
       const look = await page.evaluate(() => {
         const pane = document.querySelector('#rdo-pane'), cv = document.querySelector('#rdo-cv');
-        const name = parseFloat(getComputedStyle(cv.querySelector('.rdo-card b')).fontSize) * Number(cv.style.zoom);
+        const name = parseFloat(getComputedStyle(cv.querySelector('.rdo-card b')).fontSize) * RDO.zoom;
         const top = document.querySelector('.rdo-card.top').getBoundingClientRect(), box = pane.getBoundingClientRect();
         const bar = document.querySelector('#mobile-nav').getBoundingClientRect().top;
         return {name, off: Math.abs(top.left + top.width / 2 - (box.left + box.width / 2)), gap: bar - box.bottom,
@@ -54,11 +74,13 @@ async function chart(page, tag) {
       });
       assert.deepEqual(long, {cut: true, dots: 'ellipsis', lines: 1, same: true, title: 'Builder'}, tag + ': a long name ends in an ellipsis');
       assert.ok(look.still, tag + ': the page itself does not scroll');
+      await fitted(page, tag);
+      const first = await zoomOf(page);
       await shot(page, 'phone-org');
 
       // Fold Engineering: its teammates leave, the tab counts them, and it stays folded on the next visit.
       await page.locator('[data-rdo-fold="eng"]').click();
-      assert.equal(await page.locator(card('bot:builder')).isVisible(), false, tag + ': folded');
+      await page.locator(card('bot:builder')).waitFor({state: 'hidden'});
       assert.equal(await page.locator('[data-rdo-fold="eng"] .rdo-n').innerText(), '5', tag + ': the tab counts who is inside');
       assert.equal(await page.locator('[data-rdo-fold="eng"]').getAttribute('aria-expanded'), 'false');
       await shot(page, 'phone-org-folded');
@@ -81,6 +103,9 @@ async function chart(page, tag) {
       await page.locator('[data-rdo-zoom="out"]').click();
       assert.ok(await zoomOf(page) < pinched, tag + ': − zooms out');
       assert.equal(await sideways(page), false, tag + ': zoomed, the chart pans inside its pane');
+      // Fit goes back to the first look.
+      await page.locator('[data-rdo-zoom="fit"]').click();
+      assert.equal(await zoomOf(page), first, tag + ': Fit goes back to the first look');
 
       // The owner moves Builder into Web at once.
       await page.locator(card('bot:builder')).click();
@@ -156,6 +181,7 @@ async function chart(page, tag) {
       await chart(page, tag);
       const pane = await page.locator('#rdo-pane').boundingBox(), cv = await page.locator('#rdo-cv').boundingBox();
       assert.ok(cv.width <= pane.width + 1, tag + ': the whole chart fits the pane');
+      await fitted(page, tag);
       await page.locator(card('person:cara')).click();
       await page.locator('dialog[open] [data-rdo-home]').waitFor();
       assert.equal(await page.locator('dialog[open] [data-rdo-home]').innerText(), 'Engineering', tag + ': a person has a home group too');
@@ -168,6 +194,59 @@ async function chart(page, tag) {
       assert.deepEqual(await starters(), ['Suggest org changes', 'Who should lead each group?', 'Fix reporting lines'], tag + ': org starters');
       await page.evaluate(() => { location.hash = '#/strategy/goals'; });
       await page.waitForFunction(() => document.querySelector('#sbot [data-gm-starter]')?.textContent === 'Set a goal');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+
+    // A narrower computer and a bigger org (six more groups): too wide to fit readable, so it opens at 12px names with the
+    // owner in the middle of the frame, and either end pans into view whole. A new width fits it again until the person
+    // zooms or pans by hand.
+    {
+      const tag = 'narrow desktop, a big org';
+      const {page, errors} = await openStrategy(browser, {viewport: {width: 1075, height: 820}});
+      await chart(page, tag);
+      await fitted(page, tag);
+      await page.evaluate(() => {
+        for (let i = 1; i <= 6; i++) {
+          const id = 'x' + i, bots = [0, 1, 2].map(j => ({name: `${id}-b${j}`, display_name: `Group ${i} bot ${j + 1}`, role: 'Specialist', org_parent: j ? `b:${id}-b0` : '', team: id, status: 'active', can_chat: true}));
+          S.orgGroups.push({id, name: 'Group ' + i, parent: '', org_parent: '', order: 2 + i});
+          S.emps.push(...bots);
+          RDO.groups.push({id, name: 'Group ' + i, parent: '', lead: `bot:${id}-b0`, people: [], bots: bots.map(b => b.name), order: 2 + i});
+        }
+        rdoDraw({refit: true});
+      });
+      const ends = await page.evaluate(() => {
+        const pane = document.querySelector('#rdo-pane'), p = pane.getBoundingClientRect(), l = p.left + pane.clientLeft, r = l + pane.clientWidth;
+        const cards = () => [...document.querySelectorAll('#rdo-cv .rdo-card')].map(el => el.getBoundingClientRect());
+        const owner = document.querySelector('.rdo-card.top').getBoundingClientRect();
+        const name = parseFloat(getComputedStyle(document.querySelector('.rdo-card b')).fontSize) * RDO.zoom;
+        const out = {name, off: Math.abs(owner.left + owner.width / 2 - (l + pane.clientWidth / 2)), wider: pane.scrollWidth > pane.clientWidth};
+        pane.scrollLeft = 0; out.left = Math.min(...cards().map(c => c.left)) - l;
+        pane.scrollLeft = pane.scrollWidth; out.right = r - Math.max(...cards().map(c => c.right));
+        return out;
+      });
+      assert.ok(ends.wider && ends.name >= 12, `${tag}: readable (${ends.name}px names), panned across`);
+      assert.ok(ends.off <= 2, `${tag}: the owner in the middle of the frame (${ends.off}px off)`);
+      assert.ok(ends.left >= 0 && ends.right >= 0, `${tag}: either end pans into view whole (${ends.left}px, ${ends.right}px spare)`);
+      // A wider window fits it again (the owner back in the middle of the wider frame); after a zoom by hand a new width
+      // leaves it be.
+      const centred = () => page.evaluate(() => {
+        const pane = document.querySelector('#rdo-pane'), p = pane.getBoundingClientRect(), o = document.querySelector('.rdo-card.top').getBoundingClientRect();
+        return Math.abs(o.left + o.width / 2 - (p.left + pane.clientLeft + pane.clientWidth / 2)) <= 2;
+      });
+      await page.locator('#rdo-pane').evaluate(el => { el.scrollLeft = 0; });
+      assert.equal(await centred(), false, tag + ': panned to the left end');
+      await page.setViewportSize({width: 1440, height: 900});
+      await page.waitForFunction(() => {
+        const pane = document.querySelector('#rdo-pane'), p = pane.getBoundingClientRect(), o = document.querySelector('.rdo-card.top').getBoundingClientRect();
+        return Math.abs(o.left + o.width / 2 - (p.left + pane.clientLeft + pane.clientWidth / 2)) <= 2;
+      });
+      const z = await zoomOf(page);
+      await page.locator('[data-rdo-zoom="in"]').click();
+      assert.ok(Math.abs(await zoomOf(page) - z * 1.25) < 0.001, tag + ': + zooms in');
+      await page.setViewportSize({width: 1200, height: 900});
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+      assert.ok(Math.abs(await zoomOf(page) - z * 1.25) < 0.001, tag + ': a zoom by hand holds through a resize');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

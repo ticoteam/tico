@@ -4,15 +4,24 @@
 /* ---------------------------------------------------------------- Org: the chart */
 #main.rd-org-layout{display:flex;flex-direction:column}
 .rdo-wrap{position:relative;flex:none}
-.rdo-pane{position:relative;isolation:isolate;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 128px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
-.rdo-cv{width:max-content;margin:0 auto;padding:18px 14px 28px;--rdo-line:var(--g5)}
-.rdo-zoom{position:absolute;z-index:2;top:8px;right:8px;display:flex;gap:4px}
+.rdo-pane{position:relative;isolation:isolate;overflow:auto;scrollbar-gutter:stable;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+/* The sizer is the scaled chart's size (ui/app/redesign-org.js rdoLayout); the chart inside keeps its own layout box and
+   is scaled from its top left, so zooming moves only a transform. */
+.rdo-sz{position:relative;min-width:100%}
+.rdo-cv{position:absolute;top:0;left:0;width:max-content;padding:18px 14px 28px;transform-origin:0 0;transition:transform var(--dur) var(--ease);--rdo-line:var(--g5)}
 .rdo-pane.dragging{cursor:grabbing;user-select:none}
-.rdo-zoom button{width:32px;height:32px;padding:0;border-radius:8px;background:var(--surface2);font-size:var(--t-lg);line-height:var(--lh-none)}
+/* The zoom toolbar: a slim row above the frame, on the right, never over the chart. */
+.rdo-bar{display:flex;align-items:center;justify-content:flex-end;gap:2px;height:28px;margin-bottom:6px}
+.rdo-bar button{min-width:28px;height:28px;padding:0 6px;border-radius:7px;font-size:var(--t-md);line-height:var(--lh-none);color:var(--muted)}
+.rdo-bar button:hover{color:var(--ink);background:var(--hover)}
+.rdo-bar .rdo-fit{margin-left:4px;padding:0 10px;font-size:var(--t-sm);font-weight:500}
+.rdo-pct{min-width:40px;text-align:center;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 
 .rdo-card{display:flex;flex-direction:column;justify-content:space-between;gap:4px;width:118px;min-height:54px;padding:6px 8px 5px;border:1px solid var(--raised);border-radius:9px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.rdo-card:hover{border-color:var(--muted)}
-.rdo-card:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.rdo-card{transition:transform var(--dur-fast) var(--ease)}
+.rdo-card:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--muted) 60%,var(--ink))}
+/* The app's focus ring (forms.css), on the card's own corners. */
+.rdo-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:9px}
 .rdo-card b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--t-base);line-height:var(--lh-tight);font-weight:600}
 .rdo-card.lead{border-color:var(--muted)}
 .rdo-card.top{width:150px;min-height:48px;background:color-mix(in srgb,var(--accent) 14%,var(--surface));border-color:var(--accent)}
@@ -57,7 +66,6 @@
 
 @media (max-width:760px){
   .rdo-pane{max-height:none}
-  .rdo-zoom button{width:36px;height:36px}
   /* A phone: narrower cards, one-line names that end in "…", tighter indents and gaps, so a small team fits the
      frame; a bigger one still pans inside it. */
   .rdo-cv{padding:18px 6px 20px}
@@ -78,6 +86,21 @@
 }
 /* A long group name ends in "…" on its tab. */
 .rdo-tn{min-width:0;overflow:hidden;text-overflow:ellipsis}
+
+/* The owner over the middle of its row; a row narrower than the owner sits under its middle. */
+.rdo-row{justify-content:center}
+/* The lead's and owner's role reads a step under the name. */
+.rdo-card:is(.top,.lead) .rdo-rl{color:var(--muted);font-weight:400}
+/* The tab's chevron points down when the group is open, along when folded; the count shows only folded. */
+.rdo-cx{display:inline-block;font-size:12px;line-height:var(--lh-none);letter-spacing:0;transform:rotate(90deg);transition:transform var(--dur) var(--ease)}
+.rdo-tab[aria-expanded="false"] .rdo-cx{transform:none}
+.rdo-g:not(.folded)>.rdo-tab .rdo-n{display:none}
+@media (max-width:760px){
+  .rdo-bar{height:36px;margin-bottom:4px}
+  .rdo-bar button{min-width:36px;height:36px}
+  .rdo-pct{display:none}
+}
+@media (prefers-reduced-motion:reduce){.rdo-cv,.rdo-card,.rdo-cx{transition:none}.rdo-card:hover{transform:none}}
 
 /* ---------------------------------------------------------------- Market › Briefing: a front page */
 /* On a phone the Strategy tabs come first, the view switch under them. */
