@@ -198,9 +198,10 @@ to updates you may read, and `hub update show` lists them
 as `inputs`. **Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
 
 **A bot's update is written from its activity.** Tico does not spend a run on it. It gathers what the bot did since
-its last update, its open work, what it waits on and from whom, its goals, its decisions and comments on tasks, and for
-a manager its reports' updates. One call to the Tico AI Gateway's Summarize writes the update from that. Without the
-Gateway, the company's own model writes it, the same way your draft is written. If neither gives a usable update,
+its last update (a week in review: the last seven days), its open work, what it waits on and from whom, its goals,
+its decisions and comments on tasks, and for a manager its reports' updates. One call to the Tico AI Gateway's
+Summarize writes the update from that. Without the Gateway, the company's own model writes it, the same way your draft
+is written. If neither gives a usable update,
 the bot is asked to write it in a run, as before. The update posts as the bot's, labelled **Written from activity**,
 and Friday's is the week in review. The facts follow the same rules as your draft: nothing from private tasks,
 bots not everyone may read, or approvals. A bot that posted its own update that day keeps it. To have the bots write
