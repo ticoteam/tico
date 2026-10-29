@@ -550,6 +550,24 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
     return out
 
 
+def exact_message_check(number, to=(), cc=(), slug="", attachments=None, draft="", body=None):
+    """The only per-message yes for a bot whose switch says `per_message` (the CEO Bot), shaped like `approval_check`.
+
+    It is a Tico `send` approval that `_hub_approval_check` clears for this message: approved, unspent, the payload's
+    To and Cc exactly this message's outside addresses, its `body_sha256` this text, and, with files, this draft and
+    exactly its files. The owner's message telling the bot to send and a GitHub Issue bind neither the recipients and
+    the text nor a single use, so neither counts here."""
+    n = str(number or "").strip()
+    row = _hub_approval_check(n, to, cc, slug, attachments, draft, body) if HUB_ID.match(n) else None
+    if row:
+        return row
+    out = _blank_approval(n)
+    out["detail"] = (f"--approval-issue {number!r} is not a Tico send approval this employee may read; only a Tico "
+                     "send approval for this exact message (its outside To and Cc and its text) counts, not a GitHub "
+                     "Issue or the owner's message telling it to send")
+    return out
+
+
 def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     out = _blank_approval(n)
     r = RUN(["gh", "issue", "view", n, "-R", repo, "--json", "state,labels,title,body"],
@@ -780,6 +798,8 @@ def switch(slug, manifest=None):
     out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
     row = _server_row(slug)
     out["read"] = row is not None
+    # Set for the CEO Bot (backend/mail_settings.py): each outside message needs its own exact Tico send approval.
+    out["per_message"] = str((row or {}).get("per_message") or "")
     out["onboarding"] = bool((row or {}).get("onboarding"))
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
@@ -794,6 +814,13 @@ def switch(slug, manifest=None):
     who = str(row.get("updated_by") or "a person")
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
+    if out["per_message"]:
+        # The CEO Bot (backend/mail_settings.py): no forward targets, and the switch a person sets covers mail inside
+        # the company only (`internal_send`); `outbound_send` reads off for a connector from before that rule.
+        out["on"] = bool(row.get("internal_send")) and not out["onboarding"]
+        out["forward_to"] = []
+        out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico for mail inside the company, set by {who}; "
+                         + out["per_message"])
     return out
 
 
@@ -951,13 +978,24 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
 
     ext = externals(pol, to)
     ext_cc = externals(pol, cc)
+    # A bot whose switch says `per_message` (the CEO Bot) sends outside only under a Tico send approval for this exact
+    # message: no owner message, Issue, allowance, forward target or thread sender stands in for it.
+    exact = bool(sw.get("per_message") and (ext or ext_cc))
     # One read of the approval Issue for the whole chain. `full` means it names every external
     # address on this message, To and Cc: the owner's per-message yes.
-    appr = (approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug,
-                           attachments=bound or ([{}] if attachments else None), draft=draft,
-                           body=body)
-            if approval else None)
+    named_files = bound or ([{}] if attachments else None)
+    if not approval:
+        appr = None
+    elif exact:
+        appr = exact_message_check(approval, ext, ext_cc, slug, named_files, draft, body)
+    else:
+        appr = approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug, attachments=named_files,
+                              draft=draft, body=body)
     full = bool(appr and appr["full"])
+    if exact and not full:
+        return no("outbound_send", f"{slug} sends nothing outside the company without a Tico send approval for this "
+                                   f"exact message: {sw['per_message']}"
+                  + (f". {appr['detail']}" if appr and appr.get("detail") else ". No --approval-issue was given"))
 
     if not sw["on"]:
         if full:

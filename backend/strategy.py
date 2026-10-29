@@ -810,7 +810,9 @@ def settle_card(c, actor, proposal_id, note):
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.LIVE_STATUSES:
-        H.task_close(c, actor, task["id"], note=note, quiet=True)
+        from .ceo_acts import upkeep
+        with upkeep():
+            H.task_close(c, actor, task["id"], note=note, quiet=True)
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
 
 

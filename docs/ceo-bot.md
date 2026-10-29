@@ -171,12 +171,15 @@ reply on.
 At every level, these stay yours, and the server refuses the CEO Bot each one:
 - anything that raises cost: a new routine or a routine that runs more often, a bot's model, fallback or wake settings;
 - publishing to a public roadmap without your approval, and publishing a strategy version at all;
-- sending anything outside the company, such as a calendar invitation to someone outside it;
+- sending anything outside the company, such as a calendar invitation or an email to someone outside it. Its mail
+  sending covers people in the company only, so each email to anyone outside needs your send approval for that exact
+  message;
 - adding, removing or bringing back bots;
 - changing a goal, or a goal's KPI target;
 - writing the strategy draft or a bet (it proposes instead);
 - changing a bot's instructions or settings;
-- giving a task to a person.
+- giving a task to a person, or changing a person's task in any way: editing, moving, handing on, snoozing, filing
+  under another task, making it wait or closing it, even one the CEO Bot asked for.
 
 When it tries one, nothing changes. It becomes an item in your **Needs you** saying what it wanted, why, and that the
 change is yours to make. It also shows in the [CEO Bot log](#the-ceo-bot-log). It counts toward the 5 a day. When the 5

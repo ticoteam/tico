@@ -24,6 +24,7 @@ person above the bot on the org chart, as only a person decides one.
 import logging
 
 from .batch_work import isolated
+from . import ceo_acts as CA
 from . import ceo_bot
 from . import goals as G
 from . import kpis as K
@@ -304,8 +305,9 @@ def _reword(conn, task, item):
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
-        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
-                      private=True if item.get("private") else None, quiet=True)
+        with CA.upkeep():
+            H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
+                          private=True if item.get("private") else None, quiet=True)
 
 
 def _relist(conn, task, item):
@@ -313,7 +315,8 @@ def _relist(conn, task, item):
     body = _ask(item, ceo_bot.name(conn))[1]
     if task["body"] != body:
         with isolated(conn, "goal_ask_relist", task["id"]):
-            H.task_update(conn, G.AUTO_ACTOR, task["id"], body=body, quiet=True)
+            with CA.upkeep():
+                H.task_update(conn, G.AUTO_ACTOR, task["id"], body=body, quiet=True)
 
 
 def _resolved(conn, kind, ref):
@@ -397,7 +400,8 @@ def sync(conn, owner_id, at=None, reads=None):
                     note = f"Now asked of {H.actor_id(moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
-                H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True)
+                with CA.upkeep():
+                    H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True)
                 closed.append(task["id"])
             conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
             if again:
