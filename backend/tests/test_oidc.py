@@ -138,8 +138,10 @@ class Provider:
                 != entry["query"]["code_challenge"]):
             return {"error": "invalid_grant"}, 400
         now = int(time.time())
-        claims = {"iss": self.issuer, "aud": CLIENT, "sub": "subject-1", "iat": now, "exp": now + 300,
-                  "nonce": entry["query"]["nonce"], "email": "ben@acme.example", "email_verified": True}
+        email = entry["claims"].get("email", "ben@acme.example")
+        # One account per address, as a real issuer has: a sign-in on a new address is a new account unless a test says so.
+        claims = {"iss": self.issuer, "aud": CLIENT, "sub": "acct-" + email, "iat": now, "exp": now + 300,
+                  "nonce": entry["query"]["nonce"], "email": email, "email_verified": True}
         claims.update(entry["claims"])
         claims = {k: v for k, v in claims.items() if v is not None}
         kid, key = self.keys[0]
