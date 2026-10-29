@@ -882,6 +882,12 @@ def task_question(api, args):
     return api.post("task-questions", body, key=_key(args))
 
 
+# hub_task_update and hub_task_done: the note stays on the task and chat hears only the title and status (the API's
+# `quiet`). `quiet` is still accepted as the older name.
+BRIEF = {"type": "boolean", "description": "Keep the note on the task; chat receives only its title and status"}
+BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
+
+
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
       "To reopen your done task, set doing or open; open requires a note and holds automatic starts for 60 minutes "
@@ -899,7 +905,7 @@ def task_question(api, args):
        "step_rank": {"type": "number", "description": "Its place within its step, lower first"},
        "number": {"type": "integer", "minimum": 1, "description": "Movers: the number of a task that has none"},
        "note": _s("What changed, or the result"),
-       "quiet": {"type": "boolean", "description": "Keep detailed notes on the task; chat receives only its title and status"},
+       "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
@@ -924,7 +930,7 @@ def task_update(api, args):
     current = api.get("tasks/" + args["id"])["task"]
     body = {"version": current["version"], "note": args.get("note"), "status": args.get("status"),
             "owner": args.get("owner"), "due": args.get("due"), "goal_id": args.get("goal_id")}
-    if args.get("quiet"):
+    if args.get("brief") or args.get("quiet"):       # `quiet`: brief's older name
         body["quiet"] = True
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
@@ -949,7 +955,7 @@ def task_update(api, args):
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
-       "quiet": {"type": "boolean", "description": "Keep detailed notes on the task; chat receives only its title and status"},
+       "brief": BRIEF, "quiet": BRIEF_OLD,
        "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_done(api, args):
@@ -2638,7 +2644,9 @@ def docs_links(api, args):
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
       "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
-       "quiet": {"type": "boolean", "description": "Close without waking a bot"}, "on_behalf_of": ASKED},
+       "wake": {"type": "boolean", "default": True,
+                "description": "false: its bots read the close on their next run instead of being woken for it"},
+       "quiet": {"type": "boolean", "description": "Older name for wake: false"}, "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_close(api, args):
     current = None
@@ -2654,7 +2662,8 @@ def task_close(api, args):
                 raise
             # Fleet work has no human request; BotOps keeps its own task-closing rights.
     current = current or api.get("tasks/" + args["id"])["task"]
-    body = {"version": current["version"], "note": args.get("note"), "close": True, "quiet": bool(args.get("quiet"))}
+    body = {"version": current["version"], "note": args.get("note"), "close": True,
+            "quiet": args.get("wake") is False or bool(args.get("quiet"))}
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 
@@ -3177,7 +3186,7 @@ def inbox_send(api, args):
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
        "update_subscriptions": {"type": "array", "items": {"type": "string", "enum": ["templates", "tico"]},
-                                "description": "Subscribe to updates, as quiet notes for its next run: templates "
+                                "description": "Subscribe to updates, as deferred messages for its next run: templates "
                                                "(its template's changes), tico (Tico releases); [] for none"},
        "status": {"type": "string", "enum": ["active", "paused", "planned"]},
        "app_delivery": _s("A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
@@ -4600,7 +4609,7 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-@tool("hub_stall_triage", "Stalled task check: before a stall check stays silent on a quiet task nothing has changed on, Tico "
+@tool("hub_stall_triage", "Stalled task check: before a stall check stays silent on a stalled task nothing has changed on, Tico "
       "Decide reads its last six messages and sets the wait they name, closes the task if it is finished, or lets one wake "
       "through if it is stuck. On by default; the owner or an admin switches it. Omit `on` to read the switch.",
       {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
