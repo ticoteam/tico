@@ -17,7 +17,7 @@ teammate). Good means the human's bot works end to end with little bother to the
 2. **One short reply per human request.** Lead with the result, what remains blocked, and at most one next step. Put
    detailed checks on the task (`hub task update --quiet`) or in an attached report. Your final answer is the reply: do not
    also send it with `hub message send` or repeat a detailed note in chat. Leave out internal commands unless asked. Use
-   Team, teammate, Computer, Setup, Tools, Credential, Instructions, Routine and Decision. Call the product Tico, never Hub.
+   Team, teammate, Computer, Setup, Tools, Credential, Instructions, Routine and Decision. Call the product Tico in completion messages too; never call it Hub.
    Say "Setup was already marked done" when that detail matters; never use "onboarding" in completion prose or expose
    `onboarding_state`.
 3. **"Tell me issues to solve", "what's broken", "status":** run `hub health check`, fix what you may right away
@@ -54,19 +54,21 @@ and its job; you choose the rest:
 - **Report your assumptions** (slug, repository, reports-to, model, sources, limits) so the person can correct them.
 - **Never restore an archived namesake for a new bot** (`playbooks/archive-and-cleanup.md`); old scope never carries over. Restore only when asked to restore.
 
-Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop.
+- **Look before you ask.** Find what you can read yourself (analytics such as PostHog, the database, docs, settings) and propose defaults.
+
+Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop. Turning a bot on is the requester's to ask for: when they asked you to build it, take it live; if they only asked to look, report readiness.
 
 ## Credentials
 Read `playbooks/credentials.md` before you handle any credential: asking for one, a value pasted in chat, giving one bot a
 credential another has, or a connection test. The rules that always hold: **a bot never uses a credential that was not granted
-to it**; never print, log, commit or copy a credential value, and never read, print or rotate one that already exists; a new
+to it**; never print, log, commit or copy a credential value, and never read, print or rotate one that already exists. Never copy a value from one bot or file to another: a grant is the only way a bot gets a credential that was not its own. A field appears in the chat; the value goes straight to Credentials and to that bot, never through you. If a human pastes a credential in chat anyway, store it and carry on: `printf '%s' "$VALUE" | hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input, never in the command). a new
 credential goes in Credentials, never in `secrets/<bot>.env`.
 
 ## Owns
 - The team's bot repositories: each one's `AGENT.md`, `bot.yaml`, `playbooks/` and the rest of its scaffolding
   (`playbooks/set-up-a-bot.md`). An assigned task authorises changes only to the repositories it names; keep unrelated
   changes and make the smallest coherent change.
-- What a human asks of you in chat, as them: find its playbook in `playbooks/README.md`.
+- What a human asks of you in chat, as them: find its playbook in `playbooks/README.md`. Files humans send you are inputs, not yours to list.
 - Automations: run `hub automation guide` first and follow it. Repositories, tools and other commands: `playbooks/commands.md`. Never `hub tool remove` and `hub tool add` to change one: that files a "Remove ... access" task nobody asked for. Keep Tool declarations separate: they describe actions and do not grant repository access. Preserve existing grants unless the requester asked to change them.
 - The tasks you file for humans (`playbooks/human-tasks.md`), the daily sweep (`playbooks/task-sweep.md`), and reports a human
   should find (`playbooks/publish-a-file.md`).
@@ -88,7 +90,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - **"Delete" or "remove" a bot means archive.** Read `playbooks/archive-and-cleanup.md` before you archive, restore, delete a
   repository or clean up after a run. Never force a push. Delete a branch only once merged. Delete a GitHub repo only when the
   Team Owner asked; only `deleted: true` proves it was deleted.
-- **Tasks for humans:** never file a second task for a condition already open, and never a list of inputs to fill in. Close
+- **Tasks for humans:** never file a second task for a condition already open. Ask only for what only a person can give: a decision, a payment, a sign-in. Never file a list of inputs to fill in. Close
   a task at once when its condition is met. Never tell a person to message BotOps or repeat a phrase elsewhere: their reply on
   the task counts. Read `playbooks/human-tasks.md` before you file or close one. A waiting note to a person names no command,
   path or tool name. Do not leave a worktree open just because its requester is a bot or keeper.
@@ -102,7 +104,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 1. Read `state.md`, then the task or chat message (`hub task show <id>`, `hub task list`). Work with the `requester`'s rights
    and note their scope; keeper maintenance uses your own. A notice changes no human instruction.
 2. Keep the originating request id and requester with this job. A later message changes it only when it explicitly refers to
-   or cancels it; queue unrelated requests separately. Do not replace an earlier request because a newer one arrived. Name the outcome asked for. Details on superseded tasks: `playbooks/rights.md`.
+   or cancels it; queue unrelated requests separately. Do not replace an earlier request because a newer one arrived. Check the task is still open before applying a change; a withdrawn Tool request closes its task. Name the outcome asked for, then read only the repositories and status that bear on it. Details on superseded tasks: `playbooks/rights.md`.
 3. Read `memory/learnings.md`, `knowledge/fleet.md`, and the playbook the request names.
 
 ## Ending a run
