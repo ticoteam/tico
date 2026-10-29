@@ -622,18 +622,21 @@ def test_a_task_read_rebuilds_pending_checks_from_github(api, monkeypatch):
     assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
 
 
+# The suites are made when the test runs: a "queued 2 minutes ago" made at collection is stuck by the time a long suite
+# reaches it (github.STUCK_SUITE_MINUTES).
 @pytest.mark.parametrize("suites,runs", [
     # GitHub has just queued the suite; its runs may still come.
-    ([_suite_row(STUCK, "tico-team-bots", "queued", minutes_ago=2)], GREEN_RUNS),
+    (lambda: [_suite_row(STUCK, "tico-team-bots", "queued", minutes_ago=2)], GREEN_RUNS),
     # A suite with runs is going until GitHub says it finished.
-    ([_suite_row(STUCK, "tico-team-bots", "in_progress", runs=1)], GREEN_RUNS),
+    (lambda: [_suite_row(STUCK, "tico-team-bots", "in_progress", runs=1)], GREEN_RUNS),
     # A run still going.
-    ([], GREEN_RUNS + [{"name": "e2e", "status": "in_progress", "conclusion": None}]),
-])
+    (lambda: [], GREEN_RUNS + [{"name": "e2e", "status": "in_progress", "conclusion": None}]),
+], ids=["queued", "in_progress", "run_going"])
 def test_checks_still_going_on_github_stay_pending_and_wake_nobody(api, monkeypatch, suites, runs):
     from backend import github as G
     task = _passed_at_head_behind_a_stuck_suite(api)
-    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2), *suites], runs)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2), *suites()],
+                         runs)
     _quiet(api, task)
     assert G.refresh_pending_checks(service) == []
     assert _link(api, task)["checks"] == "pending"
