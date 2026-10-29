@@ -236,7 +236,7 @@ def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api)
     assert len(page["transitions"]) == 4 and page["transitions_truncated"] is False
 
 
-def test_snoozed_notes_in_the_board_are_previews_and_the_task_keeps_its_note(api):
+def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     store = api.app.state.store
     task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
     note = "🔔" * 500                                   # 500 characters, 2,000 bytes each
@@ -248,6 +248,6 @@ def test_snoozed_notes_in_the_board_are_previews_and_the_task_keeps_its_note(api
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
     assert len(rows) == 500
-    assert all(r["snoozed_note"] == "🔔" * 79 + "…" for r in rows), "a list row carries the note's preview only"
+    assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"
