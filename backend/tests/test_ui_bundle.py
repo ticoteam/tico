@@ -1,6 +1,7 @@
 """The UI is served as one script and one stylesheet (backend/ui_bundle.py), in the order index.html lists them."""
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,16 @@ def test_standalone_scripts_are_compressed_and_still_revalidate_privately(api):
     assert zipped.headers["cache-control"] == "private, no-cache"
     assert api.get(path, headers={**AUTH, "If-None-Match": zipped.headers["etag"]}).status_code == 304
     assert api.get(path, headers={"Accept-Encoding": "gzip"}).status_code == 401
+
+
+def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
+    # Inter's font-display is optional: a font the browser must revalidate first can miss the first paint.
+    url = re.search(r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+                    (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text()).group(1)
+    kept = api.get(url, headers=AUTH)
+    assert kept.status_code == 200 and kept.headers["content-type"] == "font/woff2"
+    assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE
+    assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
 
 
 def test_a_change_to_a_listed_file_changes_the_url(tmp_path):

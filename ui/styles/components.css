@@ -3,7 +3,7 @@
 /* dense single-line rows: Today and Live now on the Notes page */
 .card.dense{padding:var(--s3) var(--s4) var(--s1)}
 .card.dense>header{margin-bottom:var(--s1)}
-.ln{display:flex;align-items:center;gap:var(--s2);padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);min-width:0;line-height:1.3}
+.ln{display:flex;align-items:center;gap:var(--s2);padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);min-width:0;line-height:var(--lh-tight)}
 .ln:last-child{border-bottom:0}
 .ln .who{color:var(--ink);font-weight:600;white-space:nowrap;flex:none;max-width:150px;overflow:hidden;text-overflow:ellipsis}
 .ln .ref{flex:none}
@@ -13,18 +13,18 @@
 details.card,section.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);margin-bottom:var(--s4)}
 details.card summary{cursor:pointer}
 section.card>header{display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s3)}
-section.card>header h2,details.card>summary{font-size:var(--t-base);font-weight:600;color:var(--ink);letter-spacing:.01em}
+section.card>header h2,details.card>summary{font-size:var(--t-base);font-weight:600;color:var(--ink);letter-spacing:var(--track-normal)}
 section.card>header .sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;margin-left:auto;text-align:right}
 table{border-collapse:collapse;width:100%;font-size:var(--t-base)}
 th{text-align:left;font-weight:600;color:var(--muted);font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);padding:0 var(--s3) var(--s2) 0;border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:var(--s2) var(--s3) var(--s2) 0;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.45}
+td{padding:var(--s2) var(--s3) var(--s2) 0;border-bottom:1px solid var(--line);vertical-align:top;line-height:var(--lh)}
 tr:last-child td{border-bottom:0}
 .scroll{min-width:0;max-width:100%;overflow-x:auto}
 td.tnum,td:last-child a.muted{white-space:nowrap}
 .acc-summary{display:flex;flex-direction:column;gap:4px;font-size:var(--t-base);margin-bottom:12px}
 .acc-summary .k{display:inline-block;width:76px;font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600}
 td.tags .pill{margin-right:2px}
-.pill{display:inline-block;font-size:var(--t-xs);padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:.01em}
+.pill{display:inline-block;font-size:var(--t-xs);padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:var(--track-normal)}
 .pill.ready,.pill.in-progress{background:var(--run-bg);color:var(--run)}
 .pill.waiting,.pill.needs{background:var(--wait-bg);color:var(--wait-ink)}
 .pill.blocked,.pill.fail{background:var(--fail-bg);color:var(--fail)}
@@ -32,7 +32,7 @@ td.tags .pill{margin-right:2px}
 .pill.p0,.pill.p1{background:var(--fail-bg);color:var(--fail)}
 /* Beta: a feature on the server's Beta list (backend/beta.py); sits beside a nav item, a heading or a menu entry */
 .pill.beta,.pill.unreleased{margin-left:6px;vertical-align:1px;background:color-mix(in srgb,var(--accent) 13%,var(--surface));color:var(--accent);font-weight:600}
-.empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:1.5}
+.empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:var(--lh)}
 /* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
    sets left and top to the thread's foot). */
 .stick-pill{position:absolute;z-index:3;transform:translate(-50%,-100%);padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-sm) var(--sans);box-shadow:0 2px 8px rgba(0,0,0,.12);cursor:pointer;white-space:nowrap}

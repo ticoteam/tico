@@ -12,7 +12,7 @@
 .use-seg button[aria-selected=true],.use-tabs button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .use-total{font-size:var(--t-xl);margin-bottom:var(--s4)}
 .use-total strong{font-weight:600}
-.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:.02em}
+.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:var(--track-normal)}
 .use-sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;white-space:nowrap}
 .use-total .use-sub{display:block;margin-top:2px}
 .use-total .use-low{white-space:normal}
@@ -24,7 +24,7 @@
 .use-who{display:flex;align-items:center;gap:var(--s2);min-width:0}
 .use-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .use-runs,.use-tok{color:var(--muted);font-size:var(--t-base)}
-.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:1.25}
+.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:var(--lh-tight)}
 .use-est{font-weight:600}
 .use-share{display:block;height:6px;border-radius:3px;background:var(--surface2)}
 .use-row:hover .use-share,.use-line[aria-expanded=true] .use-share{background:var(--line)}

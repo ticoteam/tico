@@ -8,10 +8,10 @@
 .gs-field input:not([type=checkbox]):not([type=radio]),.gs-field textarea{width:100%}
 .gs-card-actions{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s2)}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.gs-org-hint{margin:6px 10px 2px;font-size:var(--t-sm);line-height:1.45;color:var(--muted)}
+.gs-org-hint{margin:6px 10px 2px;font-size:var(--t-sm);line-height:var(--lh);color:var(--muted)}
 .gs-org-hint a{color:var(--ink);font-weight:600}
 .hl-page{max-width:760px}
-.hl-page h2{font-size:var(--t-lg);margin:var(--s5) 0 var(--s2)}
+.hl-page h2{font-size:var(--t-lg);margin:var(--s5) 0 var(--s2);letter-spacing:var(--track-tight)}
 .hl-list,.hl-computers,.hl-bots,.hl-models,.hl-notes{list-style:none;margin:0;padding:0}
 .hl-notes li{padding:3px 0;font-size:var(--t-base)}
 .hl-check{display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--line)}

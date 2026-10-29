@@ -606,7 +606,7 @@ function mountGraph(canvas, rows, edges) {
       ctx.fillStyle = color(node, near);
       ctx.fill();
     }
-    ctx.font = '12px system-ui, sans-serif';
+    ctx.font = '12px Inter, system-ui, sans-serif';
     ctx.textBaseline = 'middle';
     // A small graph names every node; a big one its core, the focus and its neighbours. Each label sits on a halo of
     // the background so a line under it never runs through the words.

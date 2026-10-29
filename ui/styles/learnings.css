@@ -7,7 +7,7 @@
 .lrn-n.on{background:var(--surface2)}
 .lrn-n .c{font-variant-numeric:tabular-nums;color:var(--muted)}
 .lrn-night{padding:18px 28px 48px;max-width:920px;min-width:0}
-.lrn-head h2{font-size:var(--t-lg);margin:0;font-weight:600}
+.lrn-head h2{font-size:var(--t-lg);margin:0;font-weight:600;letter-spacing:var(--track-tight)}
 .lrn-head p{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .lrn-grp{margin-top:24px}
 .lrn-grp>h3{display:flex;align-items:center;gap:7px;margin:0 0 4px}
@@ -35,7 +35,7 @@
 .lrn-entry .src a,.lrn-entry .src span{color:var(--g7);display:inline-flex;align-items:center;gap:4px}
 .lrn-entry .src .nav-icon{font-size:14px;color:var(--muted)}
 .lrn-entry q{color:var(--muted);font-style:italic}
-.lrn-diff{margin:6px 0 0;padding:6px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface);font:var(--t-sm)/1.55 var(--mono);overflow:auto}
+.lrn-diff{margin:6px 0 0;padding:6px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface);font:var(--t-sm)/var(--lh-read) var(--mono);overflow:auto}
 .lrn-diff>span{display:block;padding:0 12px;white-space:pre}
 .lrn-diff .add{background:var(--ok-bg);color:var(--ok)}
 .lrn-diff .del{background:var(--fail-bg);color:var(--fail)}
