@@ -1427,6 +1427,8 @@ def migrate(conn, adopt_legacy=False):
     # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
     # however long ago they started.
     conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished)")
+    # Each bot's last finished run, for the bot list (views.employee_rows): one seek per bot, not a sort of all runs.
+    conn.execute("CREATE INDEX IF NOT EXISTS turns_bot_finished ON turns(bot, finished, id) WHERE finished IS NOT NULL")
     conn.execute("CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
                  "value_json TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
