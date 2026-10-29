@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS invariant_state(
 CREATE INDEX IF NOT EXISTS invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running');
 CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated) WHERE status='doing';
 CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created) WHERE decision IS NULL;
-CREATE INDEX IF NOT EXISTS invariants_refusals_ts ON refusals(ts);
 """
 
 LIMIT = 500                  # rows read per check; a count at this many is "500 or more"
@@ -130,12 +129,15 @@ def owner_unreachable(c, ctx):
 
 
 def refused_again(c, ctx):
-    """`actor rule` for each bot a rule refused more than REFUSALS_PER_DAY times in the last 24 hours."""
-    rows = c.execute("SELECT actor, rule, count(*) AS n FROM refusals INDEXED BY invariants_refusals_ts "
-                     "WHERE ts>=? AND actor LIKE 'bot:%' "
-                     "GROUP BY actor, rule HAVING n>? ORDER BY n DESC LIMIT ?",
-                     (_ago(ctx, hours=24), REFUSALS_PER_DAY, LIMIT)).fetchall()
-    return [f"{row['actor']} {row['rule']} ({row['n']}x)" for row in rows]
+    """`actor rule` for each bot a rule refused more than REFUSALS_PER_DAY times in the last 24 hours. One range read
+    per bot on refusals_actor_ts (actor, ts), so the cost follows the bots, not the refusal log's size."""
+    since = _ago(ctx, hours=24)
+    found = []
+    for (slug,) in c.execute("SELECT slug FROM bots ORDER BY slug LIMIT ?", (LIMIT,)).fetchall():
+        for row in c.execute("SELECT rule, count(*) AS n FROM refusals WHERE actor=? AND ts>=? "
+                             "GROUP BY rule HAVING n>?", (f"bot:{slug}", since, REFUSALS_PER_DAY)).fetchall():
+            found.append((row["n"], f"bot:{slug} {row['rule']} ({row['n']}x)"))
+    return [text for _, text in sorted(found, reverse=True)][:LIMIT]
 
 
 def sign_in_held(c, ctx):
@@ -340,17 +342,37 @@ def _apply(c, auth, check, hits, now):
               (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since, task_id))
 
 
-def sweep(c, auth, settings, at):
-    """Reads every check, raises or clears each one's alert. Answers {check id: count} for the checks run, or {} on a
+def _changed(row, hits):
+    """Whether a sweep must write this check's row or alert: a new firing episode, a firing check whose alert is
+    missing, a count or example list that moved, or a check that stopped firing. A check that passes and passed
+    before writes nothing."""
+    was = bool(row and row["firing"])
+    if not hits:
+        return was
+    if not was or not row["task_id"]:
+        return True
+    return row["count"] != len(hits) or row["examples_json"] != json.dumps(hits[:EXAMPLES])
+
+
+def sweep(store, auth, settings, at, record=None):
+    """Reads every check in one read snapshot (no write lock), then, only if a check's state changed, opens ONE write
+    transaction that raises or clears its alert and writes its row. `record(c, counts)`, when given, runs inside that
+    transaction and only then (the run record goes there). Answers {check id: count} for the checks run, or {} on a
     rehearsal or demo copy."""
     if settings.rehearsal or settings.demo:
         return {}
     ctx = Ctx(now=at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z", at=at)
-    counts = {}
-    for check in CHECKS:
-        hits = check.read(c, ctx)
-        _apply(c, auth, check, hits, ctx.now)
-        counts[check.id] = len(hits)
+    with store.read_transaction() as c:
+        state = {row["check_id"]: row for row in c.execute("SELECT * FROM invariant_state")}
+        found = {check.id: check.read(c, ctx) for check in CHECKS}
+    counts = {check.id: len(found[check.id]) for check in CHECKS}
+    changed = [check for check in CHECKS if _changed(state.get(check.id), found[check.id])]
+    if changed:
+        with store.transaction() as c:
+            for check in changed:
+                _apply(c, auth, check, found[check.id], ctx.now)
+            if record is not None:
+                record(c, counts)
     return counts
 
 

@@ -103,14 +103,23 @@ def run_engineering_exceptions(store, auth, at, failures=None):
 
 
 def run_invariants(store, auth, at, failures=None):
-    # Plain SQL over the hub (backend/invariants.py): no model. One task per check that fires; none while it keeps firing.
-    with SR.recording(store, "invariant_checks", failures, "invariants") as run:
-        from . import invariants
-        with store.transaction() as c:
-            counts = invariants.sweep(c, auth, store.settings, at)
+    # Plain SQL over the hub (backend/invariants.py): no model. Reads take no write lock; a run is recorded only when a
+    # check changed, inside the one write transaction that changes it. A quiet sweep writes nothing.
+    from . import invariants
+    run = SR.Run("invariant_checks")
+
+    def record(c, counts):
         firing = [key for key, n in counts.items() if n]
-        run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass",
-                quiet=not firing)
+        SR.keep(c, run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass"))
+
+    try:
+        invariants.sweep(store, auth, store.settings, at, record=record)
+    except Exception as exc:
+        run.error = SR.failure_words(exc)
+        if failures is None:
+            raise
+        failures.append({"invariants": type(exc).__name__})
+        SR.write(store, run)
 
 
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,

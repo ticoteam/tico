@@ -26,8 +26,7 @@ def ago(**delta):
 
 def sweep(api, at=NOW):
     store = api.app.state.store
-    with store.transaction() as c:
-        return I.sweep(c, api.app.state.execution.auth, store.settings, at)
+    return I.sweep(store, api.app.state.execution.auth, store.settings, at)
 
 
 def examples(api, check):
@@ -228,9 +227,39 @@ def test_a_rehearsal_or_demo_copy_checks_nothing_and_raises_nothing(api):
         for n in range(I.REFUSALS_PER_DAY + 1):
             c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-copy-{n}", ago(minutes=1), "bot:ops", "lint"))
-        assert I.sweep(c, api.app.state.execution.auth, SimpleNamespace(rehearsal=True, demo=False), NOW) == {}
-        assert I.sweep(c, api.app.state.execution.auth, SimpleNamespace(rehearsal=False, demo=True), NOW) == {}
+    auth = api.app.state.execution.auth
+    assert I.sweep(store, auth, SimpleNamespace(rehearsal=True, demo=False), NOW) == {}
+    assert I.sweep(store, auth, SimpleNamespace(rehearsal=False, demo=True), NOW) == {}
+    with store.read() as c:
         assert c.execute("SELECT count(*) FROM invariant_state").fetchone()[0] == 0
+
+
+def test_a_sweep_with_nothing_changed_opens_no_write_transaction_and_a_change_opens_exactly_one(api, monkeypatch):
+    _, _, attempt = setup_attempt(api)
+    store = api.app.state.store
+    auth = api.app.state.execution.auth
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET state='running', lease_until=? WHERE id=?", (ago(minutes=30), attempt["id"]))
+    opened = []
+    real = store.transaction
+
+    def counting(*args, **kwargs):
+        opened.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "transaction", counting)
+    I.sweep(store, auth, store.settings, NOW)
+    assert len(opened) == 1, "a new firing episode is one change: one transaction for its alert and row"
+    I.sweep(store, auth, store.settings, NOW + timedelta(minutes=15))
+    assert len(opened) == 1, "still firing and unchanged: no write transaction"
+    I.sweep(store, auth, store.settings, NOW + timedelta(minutes=30))
+    assert len(opened) == 1
+    with real() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id=?", (attempt["id"],))
+    I.sweep(store, auth, store.settings, NOW + timedelta(minutes=45))
+    assert len(opened) == 2, "clearing is a change: exactly one more transaction"
+    I.sweep(store, auth, store.settings, NOW + timedelta(minutes=60))
+    assert len(opened) == 2, "passing and passed before: no write"
 
 
 def test_one_alert_task_per_episode_and_it_closes_when_the_check_passes(api):
@@ -283,30 +312,45 @@ def test_health_lists_the_firing_check_for_an_owner_and_hides_it_from_a_member(a
     assert "invariant:lease_overdue" not in member
 
 
-def test_the_scheduler_runs_the_checks_every_fifteen_minutes_and_records_the_run(api):
+def run_rows(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM system_runs WHERE job='invariant_checks'").fetchone()[0]
+
+
+def test_the_scheduler_runs_the_checks_every_fifteen_minutes_and_records_a_change_once(api):
+    # A refusal loop: the scheduler's own sweeps repair a lapsed lease before the check reads it, so use a check
+    # nothing else in the scheduler touches.
     store = api.app.state.store
+    with store.transaction() as c:
+        for n in range(I.REFUSALS_PER_DAY + 1):
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+                      (f"ref-tick-{n}", ago(minutes=1), "bot:ops", "lint"))
     scheduler = Scheduler(store, api.app.state.execution)
     scheduler.tick(NOW)
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='invariant_checks'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM invariant_state").fetchone()[0] == len(I.CHECKS)
+    assert run_rows(api) == 1, "the sweep found a change, so its run is recorded"
     scheduler.tick(NOW + timedelta(minutes=5))
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='invariant_checks'").fetchone()[0] == 1, \
-            "not again before fifteen minutes"
+    assert run_rows(api) == 1, "not again before fifteen minutes"
+
+
+def test_a_quiet_sweep_writes_no_run_record(api):
+    Scheduler(api.app.state.store, api.app.state.execution).tick(NOW)
+    assert run_rows(api) == 0, "nothing firing and nothing changed: the sweep records nothing"
 
 
 def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
-    """EXPLAIN QUERY PLAN for each statement a sweep runs: no full scan of a table that grows with use. A scan of
-    messages_open_ask_to is allowed: it is a partial index holding only the open questions."""
+    """EXPLAIN QUERY PLAN for each statement the checks run: no full scan of a table that grows with use. A scan of
+    messages_open_ask_to is allowed: it is a partial index holding only the open questions. The refusal log is read
+    only through refusals_actor_ts, one bot at a time."""
     store = api.app.state.store
+    ctx = I.Ctx(now=stamp(NOW), at=NOW)
     big = {"attempts", "tasks", "messages", "jobs", "approvals", "refusals", "automations", "webhook_sends",
            "conversations", "flight_events", "flight_requests", "flight_process"}
     bounded = {"messages_open_ask_to"}
     statements = []
-    with store.transaction() as c:
+    with store.read() as c:
         c.set_trace_callback(lambda sql: statements.append(sql) if sql.lstrip().upper().startswith("SELECT") else None)
-        I.sweep(c, api.app.state.execution.auth, store.settings, NOW)
+        for check in I.CHECKS:
+            check.read(c, ctx)
         c.set_trace_callback(None)
         plans = []
         for sql in dict.fromkeys(statements):
@@ -315,3 +359,5 @@ def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
     scans = [(sql, detail) for sql, detail in plans
              if detail.startswith("SCAN ") and detail.split()[1] in big and detail.split()[-1] not in bounded]
     assert not scans, scans
+    refusals = [detail for _, detail in plans if detail.split()[:2] == ["SEARCH", "refusals"]]
+    assert refusals and all("refusals_actor_ts" in detail for detail in refusals), refusals
