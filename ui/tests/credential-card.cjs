@@ -8,6 +8,8 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
+const PASSWORD = 'portal pass 7788!', TOTP = 'otpauth://totp/Acme:ana?secret=JBSWY3DPEHPK3PXP&issuer=Acme';
+const SHOTS = process.env.TICO_UI_SHOTS || '';
 const now = new Date().toISOString();
 
 const card = (over = {}) => ({id: 'cr1', status: 'pending', env: 'JIRA_BASIC_AUTH', bot: 'jira-manager', bot_name: 'Jira Manager',
@@ -117,6 +119,40 @@ async function open(browser, viewport, view) {
       await page.getByText('Only an admin can store this. Ask one to open it.').waitFor();
       assert.equal(await page.locator('[data-credential-host] input').count(), 0);
       assert.equal(await page.locator('[data-credential-host] button').count(), 0);
+      assert.deepEqual(seen.errors, []);
+      await page.close();
+    }
+
+    // A website login: username (kept from the request), password and an optional 2FA setup key, saved together; a
+    // password may hold spaces and is sent as typed; nothing typed stays on the page.
+    for (const [tag, viewport] of [['desktop', {width: 1200, height: 800}], ['phone', {width: 390, height: 800}]]) {
+      const {page, seen} = await open(browser, viewport, card({kind: 'login', env: '', label: '', sites: ['portal.acme.example'], username: 'ana@acme.example',
+        title: 'Jira Manager needs a login for portal.acme.example', format: '', help_url: ''}));
+      const form = page.locator('[data-credential-host] form[data-kind="login"]');
+      await form.waitFor();
+      assert.equal(await form.locator('[name=username]').inputValue(), 'ana@acme.example');
+      assert.equal(await form.locator('[name=password]').getAttribute('type'), 'password');
+      assert.equal(await form.locator('[name=totp]').getAttribute('type'), 'password');
+      assert.deepEqual(await form.locator('input').evaluateAll(xs => xs.map(x => x.placeholder)), ['Username', 'Password', '2FA setup key (optional)']);
+      if (SHOTS) await page.screenshot({path: require('node:path').join(SHOTS, `login-card-${tag}-v2.png`)});
+      await form.locator('button[type=submit]').click();
+      assert.match(await page.locator('[data-cc-error]').innerText(), /password/i);
+      assert.equal(seen.saves, 0, tag + ': no password, nothing sent');
+      await form.locator('[name=password]').fill(PASSWORD);
+      await form.locator('[name=totp]').fill(TOTP);
+      if (tag === 'phone') {
+        const box = await page.locator('[data-credential-host] .cc-card').boundingBox();
+        assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, 'phone: the login card fits the screen');
+        for (const el of await form.locator('input, button').all()) assert.ok((await el.boundingBox()).height >= 44, 'phone: 44px inputs and buttons');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'phone: no sideways scroll');
+      }
+      await form.locator('button[type=submit]').click();
+      await page.getByText('Saved. the login for portal.acme.example is set for Jira Manager.').waitFor();
+      const carrying = seen.requests.filter(r => r.body.includes(encodeURIComponent(PASSWORD)) || r.body.includes(PASSWORD.slice(0, 10)));
+      assert.ok(carrying.length === 1 && carrying[0].url.endsWith('/api/v2/credential-requests/cr1/save'), tag + ': the login goes only to the save route');
+      assert.deepEqual(JSON.parse(carrying[0].body), {username: 'ana@acme.example', password: PASSWORD, totp: TOTP});
+      const content = await page.content();
+      assert.ok(!content.includes(PASSWORD) && !content.includes('JBSWY3DPEHPK3PXP'), 'neither the password nor the key is in the page');
       assert.deepEqual(seen.errors, []);
       await page.close();
     }
