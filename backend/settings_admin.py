@@ -25,6 +25,7 @@ from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, re
 from .readiness import absolute, can_run
 from .statuses import PARKED_SQL
 from . import fast_json
+from . import gateway_tiers
 from . import names as actor_names
 from . import read_cache
 from . import report_managers
@@ -301,7 +302,6 @@ class SettingsAdmin:
         so a Gateway bot with no model of its own starts on that level; {} when it names none."""
         from pathlib import Path
         import yaml
-        from . import gateway_tiers
         if not template:
             return {}
         try:
@@ -419,7 +419,8 @@ class SettingsAdmin:
         if manager:
             body = body.model_copy(update={"reports_to": manager})
         default = providers.load(c, self.settings) if not body.model else {}
-        choice = self.models.get(body.model or default.get("model"))
+        # No model named and no Team default: the Gateway's default (General, Medium), so a bot is never refused for it.
+        choice = self.models.get(body.model or default.get("model") or gateway_tiers.default_model())
         if not choice:
             raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
