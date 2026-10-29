@@ -17,6 +17,7 @@
   .tabs.settings-tabs .settings-more[open]{flex-basis:auto}
   .tabs.settings-tabs .settings-more summary{display:inline-flex;align-items:center;min-height:40px;padding:0 11px;list-style:none;vertical-align:top}
   .tabs.settings-tabs .settings-more summary::-webkit-details-marker{display:none}
+  .tabs.settings-tabs .settings-more summary::before{display:none}   /* a phone scrolls the tabs; its › says more */
   .tabs.settings-tabs .settings-more summary::after{content:"›";margin-left:5px}
   .tabs.settings-tabs .settings-more[open] summary::after{content:"‹"}
   .tabs.settings-tabs .settings-more>div{display:inline-flex;flex-wrap:nowrap;gap:0;vertical-align:top}
@@ -276,7 +277,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo-list{display:none;position:absolute;z-index:8;left:0;right:0;max-height:220px;overflow:auto;margin:2px 0 0;padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--bg);box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .settings-combo.open .settings-combo-list{display:block}
 .settings-combo-list button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 8px;border-radius:4px;font-size:var(--t-sm);color:var(--ink);cursor:pointer}
-.settings-combo-list button[aria-selected=true],.settings-combo-list button:hover{background:var(--surface)}
+.settings-combo-list button[aria-selected=true],.settings-combo-list button:hover{background:var(--surface2)}
 .settings-combo-empty{padding:8px;color:var(--muted);font-size:var(--t-sm)}
 .settings-choice{min-width:0}
 .settings-model-choice{display:grid;gap:6px;min-width:0}
@@ -342,7 +343,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-facts{display:block}
 /* Settings > Computers (ui/app/computer-detail.js): one compact row per computer, a chip per AI connection. */
 .settings-machines tbody tr{cursor:pointer}.settings-machines tbody tr:hover{background:var(--surface2)}
-.machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--accent)}.machine-name:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--accent)}.machine-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .machine-chips{display:flex;flex-wrap:wrap;gap:4px}
 .machine-chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);line-height:20px;white-space:nowrap;cursor:pointer}
 .machine-chip.waiting{color:var(--muted);cursor:default;border-style:dashed}
@@ -417,7 +418,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-tools-2{grid-template-columns:minmax(0,1fr) max-content}
 .machine-tool{display:contents}
 .machine-tool>[role=cell],.machine-tool>[role=columnheader]{padding:5px 0;border-top:1px solid var(--line);min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;gap:3px 4px}
-.machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps)}
+.machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label);font-weight:600}
 .machine-tool-name{font-weight:600}
 .machine-account{overflow-wrap:anywhere;min-width:0}
 .machine-tool-version{display:block!important;max-width:18ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -578,7 +579,7 @@ input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px
 .repo-seg span{padding:3px 10px;border-radius:5px;font-size:var(--t-sm);font-weight:600;color:var(--muted);white-space:nowrap}
 .repo-seg label:hover span{color:var(--ink)}
 .repo-seg input:checked+span{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
-.repo-seg input:focus-visible+span{outline:2px solid var(--accent);outline-offset:1px}
+.repo-seg input:focus-visible+span{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .repo-seg input:disabled+span{cursor:default}
 .repo-seg label:has(input:disabled){cursor:default}
 .repo-seg label:has(input:disabled):hover span{color:var(--muted)}
@@ -751,7 +752,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-fallback{flex-basis:100%;color:var(--wait-ink)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
 /* Webhook dialogs' small section heads (ui/app/settings-webhooks.js) */
-.wr-sub{margin:8px 0 2px;font-size:var(--t-xs);letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.wr-sub{margin:8px 0 2px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 /* A swappable field (input or step list) sits in the grid as its label would. */
 /* Releases and Task Manager cards (ui/app/settings-release.js) */
 .rel-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}

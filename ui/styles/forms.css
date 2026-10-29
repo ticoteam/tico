@@ -43,7 +43,7 @@ button.ghost{background:transparent;border:1px solid var(--line);border-radius:v
 /* the small size: 28px (regular is 32px), for a row's own actions and a toolbar's secondary ones */
 :is(button,a).primary.small,:is(button,a).ghost.small{padding-top:3px;padding-bottom:3px}
 /* a link that only says ghost (Open chat, Bot settings, Fix) is a ghost button; links with their own class keep their look */
-:where(a[class="ghost"]){display:inline-block;background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;color:var(--ink);text-decoration:none}
+a[class="ghost"]{display:inline-block;background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;color:var(--ink);text-decoration:none}
 :is(button.ghost,a[class="ghost"]):hover:not(:disabled){background:var(--surface2);text-decoration:none}
 button.primary:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 88%,var(--ink))}
 button:disabled{opacity:.5;cursor:default}
