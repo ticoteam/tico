@@ -23,6 +23,7 @@ use crate::hosts::{self, antigravity::AntigravityHost, claude::ClaudeHost, codex
 use crate::redact::{self, Redactor};
 use crate::runner::{describe, Runner};
 use crate::util::{log, mark, text_of, truthy};
+use crate::wire::{decode, StartPlaceAnswer};
 
 pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
@@ -676,18 +677,19 @@ impl Runner {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
-            let answer = match self.client.post(&format!("attempts/{aid}/start-place"), &json!({}), None).await {
+            let place = self.client.post(&format!("attempts/{aid}/start-place"), &json!({}), None).await;
+            let answer = match place.and_then(decode::<StartPlaceAnswer>) {
                 Ok(answer) => answer,
                 Err(e) => {
                     self.places.lock().unwrap().remove(&aid);
                     return Err(e.into());
                 },
             };
-            if truthy(answer.get("stop")) {
+            if answer.stop == Some(true) {
                 self.places.lock().unwrap().remove(&aid);
                 return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
             }
-            if truthy(answer.get("reserved")) {
+            if answer.reserved {
                 self.places.lock().unwrap().insert(aid.clone());
                 return Ok(());
             }

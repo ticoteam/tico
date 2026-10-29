@@ -78,6 +78,7 @@ mod subscription_refresh;
 mod watchers;
 mod util;
 mod warm;
+mod wire;
 
 use std::path::PathBuf;
 use std::sync::Arc;
