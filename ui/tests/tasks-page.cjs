@@ -914,6 +914,44 @@ async function snoozing(browser) {
   console.log('snoozing: ok');
   await page.close();
 }
+async function wakeNotes(browser) {
+  // A snooze's note and a wait's note follow the chip's text, escaped, with the full note in the title; no note, no change.
+  const base = fixtures().find(x => x.id === 't-digest');
+  const wait = note => ({kind: 'pr_merged', target: 'acme/app#943', label: 'PR #943', url: 'https://github.com/acme/app/pull/943', met: false,
+    sentence: 'waits for PR #943 to merge', ...(note ? {note} : {})});
+  const long = 'Check the deploy finished on <b>staging</b> and the migration ran, then ask Sam to QA the checkout flow';
+  const {page, errors} = await open(browser, {extraTasks: [
+    {...base, id: 't-noted', title: 'Noted snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', snoozed_note: long,
+      milestone_waits: [wait('Check the migration')]},
+    {...base, id: 't-bare', title: 'Bare snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', milestone_waits: [wait()]}]});
+  await page.locator('#task-view [data-view="snoozed"]').click();
+  const chips = async (key, title) => {
+    await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
+    await peekTitle(page, title);
+    const snooze = page.locator('#task-peek [data-task-unsnooze]'), milestone = page.locator('#task-peek .tlink.milestone');
+    return {snooze: (await snooze.textContent()).trim(), snoozeTitle: await snooze.getAttribute('title'), milestone: (await milestone.textContent()).trim(),
+      milestoneTitle: await milestone.getAttribute('title'), notes: await page.locator('#task-peek .tchip-note').count(),
+      bold: await page.locator('#task-peek .tmodal-head b').count()};
+  };
+  const day = await page.evaluate(at => snoozeDay({snoozed_until: at}), inDays(3));
+  const noted = await chips('tt-noted', 'Noted snooze');
+  assert.equal(noted.snooze, `Snoozed to ${day} · ${long}`);
+  assert.match(noted.snoozeTitle, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));
+  assert.equal(noted.milestone, 'PR #943 to merge · Check the migration');
+  assert.equal(noted.milestoneTitle, 'waits for PR #943 to merge · Check the migration');
+  assert.equal(noted.notes, 2);
+  assert.equal(noted.bold, 0, 'the note is text, not markup');
+  const clipped = await page.locator('#task-peek [data-task-unsnooze] .tchip-note').evaluate(el => el.scrollWidth > el.clientWidth);
+  assert.ok(clipped, 'a long note is clipped with an ellipsis');
+  await shot(page, 'wake-notes');
+  const bare = await chips('tt-bare', 'Bare snooze');
+  assert.deepEqual(bare, {snooze: `Snoozed to ${day}`, snoozeTitle: bare.snoozeTitle, milestone: 'PR #943 to merge',
+    milestoneTitle: 'waits for PR #943 to merge', notes: 0, bold: 0});
+  assert.doesNotMatch(bare.snoozeTitle, / · /);
+  assert.deepEqual(errors, []);
+  console.log('wake notes: ok');
+  await page.close();
+}
 async function deferredWork(browser) {
   // Dev 257: a deferred task says where it stands: held until something (and by which run), eligible for the bot's
   // next run, or queued with a run of its own. An ordinary task says nothing. `quiet` is the field's older name.
@@ -1394,7 +1432,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

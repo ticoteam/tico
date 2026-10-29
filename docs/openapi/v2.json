@@ -40794,6 +40794,13 @@
             ],
             "description": "Who snoozed it"
           },
+          "snoozed_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to check when the snooze ends (sent in the owner's wake)"
+          },
           "roles": {
             "type": "object",
             "description": "Who is on the task, by role: each role a short name the team chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task update and create take the same shape to replace a role's people ([] clears one)",
@@ -42606,6 +42613,18 @@
             "maxLength": 40,
             "minLength": 10,
             "title": "Until"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           }
         },
         "additionalProperties": false,

@@ -2975,6 +2975,7 @@ export type Task = {
   roles?: Record<string, Array<string>>;
   size?: number | null;
   snoozed_by?: string | null;
+  snoozed_note?: string | null;
   snoozed_until?: string | null;
   status: string;
   step?: TaskStep | null;
@@ -3285,6 +3286,7 @@ export type TaskRunModelResult = {
 };
 
 export type TaskSnooze = {
+  note?: string | null;
   until: string;
 };
 

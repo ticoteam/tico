@@ -75,9 +75,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
                                            blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
-    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
                                            wait on a task, a PR merging or a release; one wake when it happens
-    hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
+    hub task snooze <id> --until DATE [--note "..."]
+                                           set it aside until DATE: off the lists and quiet until then
     hub task later <id> --after ID|--at DATE|--next-run|--handled
                                            a deferred task this run carried and will not do now: when to pick it up
                                            (`hub task defer` is the old name)
@@ -1317,6 +1318,7 @@ def parser():
     s.add_argument("--on", dest="wait_on", required=True,
                    help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
                         "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--note", help="what to check when the pr: or release: wait fires, in the wake; one or two sentences")
     s.add_argument("--remove", action="store_true", help="take the wait off instead")
     s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
@@ -1406,6 +1408,8 @@ def parser():
     s.add_argument("id")
     s.add_argument("--until", required=True,
                    help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
+    s.add_argument("--note", help="what to check when the snooze ends, in the owner's wake: what you are waiting for and "
+                                  "where to look (at most 500 characters)")
     s.set_defaults(fn="task snooze")
     # `defer` is its older name: a date makes it a snooze-like hold, not a delivery (backend/delivery.py).
     s = task.add_parser("later", aliases=["defer"],

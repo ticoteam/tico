@@ -48,6 +48,9 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
   `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
   instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
   requested, or a release ships it, whichever comes first. The wake changes nothing on the task; you decide.
+- Waiting on something Tico cannot see (a reply by mail, a date, an outside system): `hub task snooze <task-id> --until <time>
+  --note "<what to check when you wake>"` and end the turn. On a pull request or release wait, add the same `--note` to
+  `hub task wait`. The note comes back in your wake, so you check that and not the whole thread.
 - Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat.
 
