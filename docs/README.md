@@ -50,7 +50,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - Advanced operations: [Cloud provisioning](install-advanced.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),
-  [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
+  [Runner wire contract](runner-wire-contract.md), [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
 - Staff only: [Manage a company's billing](staff-billing.md) (credit, minimum balance, grace, enforcement, reversals) and
   [Review the Hosting waitlist](staff-waitlist.md).
 
