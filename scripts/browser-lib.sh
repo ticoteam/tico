@@ -333,6 +333,8 @@ make_bot() {
   revision="$(japi GET /api/v2/bots | pick "[b for b in d if b[\"slug\"] == \"$slug\"][0][\"revision\"]")" || return 1
   send POST "/api/v2/bots/$slug/definition" "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
   retry 300 bot_ready "$slug" || { say "the bot $slug never became ready on the computer"; return 1; }
+  # The owner marks onboarding complete, as the UI does for a new bot; until then the bot takes no tasks.
+  send POST "/api/v2/bots/$slug/onboarded" '{}' >/dev/null || { say "onboarding of $slug was not marked complete"; return 1; }
   attach_chrome_tool "$slug" || { say "the chrome tool could not be added to $slug"; return 1; }
 }
 
