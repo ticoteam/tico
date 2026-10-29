@@ -22,7 +22,8 @@ def parser() -> argparse.ArgumentParser:
                         "destroy: remove what setup created on AWS; backup-storage: from a laptop with AWS credentials, create the "
                         "backup bucket and its key for a server that has none (then install with --backup existing); support: "
                         "what scripts/install.sh runs when it fails, to offer sending the error to Tico support; owner-link: on a "
-                        "server Tico hosts, a new owner sign-in link in place of the old one (--sign-out also ends the owner's sessions)")
+                        "server Tico hosts, a new owner sign-in link in place of the old one (--sign-out also ends the owner's sessions). "
+                        "`cell ...`: many companies on one shared host (python3 -m setup cell --help; docs/cell.md)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
     p.add_argument("--non-interactive", action="store_true", help="never prompt; missing values are errors")
     p.add_argument("--yes", "-y", action="store_true", help="do not ask for confirmation")
@@ -131,6 +132,11 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
 
 
 def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["cell"]:
+        # Many companies on one shared host (docs/cell.md): its own machine interface, one JSON object per command.
+        from . import cell
+        return cell.main(argv[1:])
     args = parser().parse_args(argv)
     if args.cloud:
         args.target = args.cloud
