@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, cloud_access, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import claim_holds, cloud_access, exits, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -2354,6 +2354,8 @@ class Execution:
                 "performance": bool(restart) and restart["performance"] != "off",
                 # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
                 "turns_at_once": restart["turns_at_once"] if restart else None,
+                # Whether the runner keeps its exit link open: Exit for bots is on for a bot (backend/exits.py).
+                "exit": exits.serving(c, who.runner_id),
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
                 **({"restart": True} if restart and restart["restart_requested"] else {})}
 

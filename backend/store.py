@@ -949,6 +949,9 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Bots' site lists and exit history (backend/exits.py).
+            from . import exits as _exits
+            c.executescript(_exits.SCHEMA)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -965,6 +968,9 @@ class Store:
                 # 1 on a computer enrolled since Screen got a first-offer default, until its first screen offer or a
                 # person's choice; computers that existed before keep what they had.
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
+                # Exit for bots: NULL is off, {"bots": [...]} on for those bots (backend/exits.py).
+                H.add_column(c, "runners", "exit_json", "TEXT")
+                _exits.end_open_sessions(c)
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
                 # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once

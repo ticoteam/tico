@@ -15,7 +15,8 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
-    "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it."
+    "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
+    "heartbeat.request.capabilities[]=\"exit_v1\"": "dropped for ten minutes on the 422 that names it (runner-rs/src/lanes.rs refused_field)"
   },
   "$defs": {
     "ErrorEnvelope": {
@@ -48,6 +49,7 @@
         "worktree_actions_skipped": {"type": "integer", "minimum": 1},
         "performance": {"type": "boolean"},
         "turns_at_once": {"type": ["integer", "null"], "minimum": 1},
+        "exit": {"type": "boolean", "x-note": "True while this computer is an exit for bots: keep the exit link open (backend/exits.py)."},
         "restart": {"const": true},
         "assignments": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
       }

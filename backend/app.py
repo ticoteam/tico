@@ -73,6 +73,7 @@ from .readiness import absolute as absolute_link, can_run
 from . import fleet_check as fleet_check_module
 from .getting_started import _online_runners
 from .screen import listing as screen_listing
+from .exits import listing as exits_listing
 from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
@@ -547,14 +548,18 @@ def create_app(settings=None):
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
             if request.url.path.startswith("/visuals/") and request.method in ("GET", "HEAD"):
                 return await call_next(request)
-            if request.url.path == "/_tico/screen/v1/authorize":
+            if request.url.path in ("/_tico/screen/v1/authorize", "/_tico/exit/v1/authorize"):
+                # The relay's private loopback questions: its key is the credential. An exit report batches up to
+                # ~1,300 small rows (backend/exits.py record), so it gets a larger cap than a screen question.
                 from .screen_relay import private_request
-                if not private_request(request, settings):
+                from .exits import PRIVATE_PATH as exit_path, REPORT_BYTES, private_request as exit_private
+                exit_question = request.url.path == exit_path
+                if not (exit_private if exit_question else private_request)(request, settings):
                     raise Problem("forbidden", "Private relay key required", 403)
                 chunks, total = [], 0
                 async for chunk in request.stream():
                     total += len(chunk)
-                    if total > 16384:
+                    if total > (REPORT_BYTES if exit_question else 16384):
                         raise Problem("too_large", "Relay authorization exceeds its limit", 413)
                     chunks.append(chunk)
                 request._body = b"".join(chunks)
@@ -6199,7 +6204,7 @@ def create_app(settings=None):
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
                          "turns_at_once": r["turns_at_once"], "turn_limit": start_places.turn_limit(r),
-                         **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
+                         **screen_listing(r), **performance_listing(r), **exits_listing(r), **views.computer_details(c, r, who, auth),
                          **load_status(c, r["id"]), **turns})
         return rows
 
@@ -7235,6 +7240,9 @@ def create_app(settings=None):
     screen_sessions = install_screen(app, store, auth, mutate, execution, settings)
     from .performance import install as install_performance
     install_performance(app, store, auth, mutate, execution)
+    # Bots' browser traffic through a person's own computer (backend/exits.py); its websockets are the relay's.
+    from .exits import install as install_exits
+    install_exits(app, store, auth, mutate, execution, settings)
     from .route_renames import install as install_route_renames
     install_route_renames(app)           # after every route: the new spellings canonical, the old ones deprecated
 

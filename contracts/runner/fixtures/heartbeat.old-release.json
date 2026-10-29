@@ -24,6 +24,7 @@
     "updated_by": "human:ana"
    }
   ],
+  "exit": false,
   "performance": true,
   "runtime_credential_source": true,
   "server_time": "2026-01-01T00:00:00.000000Z",

@@ -2286,7 +2286,7 @@ def install_views(app, store, auth, mutate, task_view):
             # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
             login_names = display_names(c)
             runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
+                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,exit_json,"
                                       "restart_since,"
                                       "readiness_at FROM runners ORDER BY created"))
             from . import usage_limits
@@ -2316,8 +2316,11 @@ def install_views(app, store, auth, mutate, task_view):
                 value["restarting"] = value.pop("restart_since")
                 from .screen import listing as screen_listing
                 from .performance import listing as performance_listing
+                from .exits import listing as exits_listing
                 value.update(screen_listing(value))
                 value.update(performance_listing(value))
+                value.update(exits_listing(value))
+                value.pop("exit_json")
                 value.pop("capabilities_json")
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
                 value["repositories"] = repo_status.get(row["id"], "unknown")
