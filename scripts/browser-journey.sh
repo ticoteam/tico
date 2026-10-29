@@ -166,13 +166,20 @@ print("    browser_v1 advertised:", "browser_v1" in json.dumps(caps) or "browser
 }
 
 bot_phase() {  # the phase's name, then extra KEY=value pairs; one line per check, nonzero when any check fails
+  # PHASE_ON=task runs the phase as a turn on a new task of the bot's (what waits on a person needs a task); else chat.
   local name=$1 nonce out text
   shift
   nonce="$name-$RANDOM$RANDOM"
   out="$WORK/phase-$nonce.json"
   text="journey-run $nonce $name PRACTICE=$PRACTICE HOST=$HOST_NAME OTHER=$OTHER CREDENTIAL=$CREDENTIAL LABEL=$LABEL $*"
-  python3 -c 'import json,sys; sys.stdout.write(json.dumps({"text": sys.argv[1]}))' "$text" > "$WORK/body.json"
-  japi POST "/api/v2/chat/$BOT" --body-file "$WORK/body.json" >/dev/null || { say "the chat with $BOT did not take the message"; return 1; }
+  if [ "${PHASE_ON:-chat}" = task ]; then
+    BOT="$BOT" python3 -c 'import json,os,sys; sys.stdout.write(json.dumps({"owner": "bot:" + os.environ["BOT"],
+        "title": "Practice site sign-in", "body": sys.argv[1]}))' "$text" > "$WORK/body.json"
+    japi POST /api/v2/tasks --body-file "$WORK/body.json" >/dev/null || { say "$BOT did not take the task"; return 1; }
+  else
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"text": sys.argv[1]}))' "$text" > "$WORK/body.json"
+    japi POST "/api/v2/chat/$BOT" --body-file "$WORK/body.json" >/dev/null || { say "the chat with $BOT did not take the message"; return 1; }
+  fi
   retry "$PHASE_WAIT" docker exec "$RUNNER" test -s "$RESULTS_DIR/$nonce.json" ||
     { say "the bot did not finish $name in $PHASE_WAIT seconds"; return 1; }
   docker exec "$RUNNER" cat "$RESULTS_DIR/$nonce.json" > "$out" || return 1
@@ -364,7 +371,7 @@ step_relogin() { browser_phase relogin; }
 
 step_needs_you() {
   local card id task key
-  bot_phase needs-you || return 1
+  PHASE_ON=task bot_phase needs-you || return 1
   card="$(python3 "$J" reconnect-id "$HOST_NAME")" || return 1
   [ -n "$card" ] || { say "no open site reconnect for $HOST_NAME in Needs you"; return 1; }
   id="$(printf '%s' "$card" | pick 'd["id"] or "-"')"

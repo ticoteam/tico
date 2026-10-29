@@ -584,11 +584,18 @@ struct Launched {
 }
 
 /// Run as the bot: clear the lock a Chrome of another container left (it names that host) and the crash flag that
-/// would offer to restore pages, then exec Chrome.
+/// would offer to restore pages, set "continue where you left off" (restore_on_startup 1: Chrome then keeps session
+/// cookies, so a sign-in without "remember me" survives a runner restart), then exec Chrome.
 const START: &str = r#"p="$1"; shift
 rm -f "$p/SingletonLock" "$p/SingletonSocket" "$p/SingletonCookie"
 f="$p/Default/Preferences"
-if [ -f "$f" ] && [ ! -L "$f" ]; then sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/' "$f"; fi
+if [ ! -e "$f" ] && [ ! -L "$f" ]; then mkdir -p "$p/Default" && printf '{"session":{"restore_on_startup":1}}' > "$f"
+elif [ -f "$f" ] && [ ! -L "$f" ]; then
+  sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/; s/"restore_on_startup":[0-9]*/"restore_on_startup":1/; s/"session":{}/"session":{"restore_on_startup":1}/' "$f"
+  if ! grep -q '"restore_on_startup"' "$f"; then
+    if grep -q '"session":{' "$f"; then sed -i 's/"session":{/"session":{"restore_on_startup":1,/' "$f"; else sed -i 's/^{/{"session":{"restore_on_startup":1},/' "$f"; fi
+  fi
+fi
 exec "$@""#;
 
 fn lang() -> String {
