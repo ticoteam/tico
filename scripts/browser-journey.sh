@@ -321,6 +321,10 @@ step_bot() {
   fi
   revision="$(japi GET /api/v2/bots | pick "[b for b in d if b[\"slug\"] == \"$BOT\"][0][\"revision\"]")" || return 1
   send POST "/api/v2/bots/$BOT/definition" "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
+  # A starter bot begins in onboarding, which takes chat but no tasks; the owner marks it complete, as the app's button does.
+  if [ "$(japi GET "/api/v2/bots/$BOT" | pick 'd.get("stage", "")')" = onboarding ]; then
+    send POST "/api/v2/bots/$BOT/onboarded" '{}' >/dev/null || { say "the owner could not mark onboarding complete"; return 1; }
+  fi
   retry 300 bot_ready || { say "the bot never became ready on the computer"; return 1; }
   attach_chrome_tool || { say "the chrome tool could not be added to the bot"; return 1; }
   verdict "bot: $BOT is active on the computer with the chrome tool" 0
@@ -359,10 +363,32 @@ step_enable() { browser_phase enable-2fa; }
 
 step_login2fa() { browser_phase login-2fa; }
 
+profile_facts() {  # the bot's Chrome profile as the restart left it: its exit and restore prefs, its cookies' names
+  docker exec -i -e BOT="$BOT" "$RUNNER" python3 -I - <<'PY' 2>&1 | sed 's/^/    /'
+import glob, os, re, sqlite3
+p = os.path.join("/home/runner/browsers", os.environ["BOT"], "profile", "Default")
+try:
+    text = open(os.path.join(p, "Preferences")).read()
+    print("prefs:", " ".join(re.findall(r'"(?:restore_on_startup|exit_type|exited_cleanly)":(?:"[A-Za-z]*"|[0-9a-z]+)', text)) or "none of them")
+except OSError as e:
+    print("prefs:", e)
+for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
+    try:
+        c = sqlite3.connect("file:%s?mode=ro&immutable=1" % db, uri=True)
+        print("cookies:", db[len(p):], c.execute("SELECT group_concat(host_key || ' ' || name || ' persistent=' || is_persistent, '; ') FROM cookies").fetchone()[0])
+    except sqlite3.Error as e:
+        print("cookies:", db[len(p):], e)
+PY
+}
+
 step_restart() {
   docker restart "$RUNNER" >/dev/null || return 1
   retry 180 runner_online || { say "the runner did not come back after the restart"; return 1; }
-  browser_phase restart-check
+  browser_phase restart-check && return 0
+  say "diagnosis: the profile after the restart, and the runner's browser lines around it"
+  profile_facts
+  docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|shut|stopp|signal' | tail -n 20 | sed 's/^/    /'
+  return 1
 }
 
 step_expire_bot() { expire_sessions; }
