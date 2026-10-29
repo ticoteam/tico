@@ -3258,6 +3258,9 @@ def create_app(settings=None):
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
+                        # A snooze's note is cut to a preview in a list row; the task's own view keeps it whole.
+                        if len(row.get("snoozed_note") or "") > 80:
+                            row["snoozed_note"] = row["snoozed_note"][:79] + "…"
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
                 ids = reads.around(c, found[0]) if found else []
