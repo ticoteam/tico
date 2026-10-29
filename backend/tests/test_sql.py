@@ -977,3 +977,34 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
         finally:
             conn.close()
     assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403
+
+
+def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task(api):
+    """Visibility per private task reads no table-existence probe again: a member's sqlite_master reads stay flat as
+    private tasks grow (they were one per private task, 184 for 184 tasks on a 6k-task hub)."""
+    from backend import sql as S
+    from backend.auth import Identity
+    store, auth = api.app.state.store, api.app.state.auth
+    who = Identity("human:ben", "human")
+
+    def catalog_reads():
+        seen = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=seen.append)
+            try:
+                S.run(conn, "SELECT id FROM tasks ORDER BY id", [], 5000, 20)
+            finally:
+                conn.close()
+        return sum("sqlite_master" in text for text in seen)
+
+    def add(count, start):
+        with store.transaction() as c:
+            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+                          "VALUES(?,?,?,?,?,?,?,?)",
+                          [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
+                           for i in range(start, start + count)])
+
+    add(20, 0)
+    before = catalog_reads()
+    add(200, 20)
+    assert catalog_reads() == before

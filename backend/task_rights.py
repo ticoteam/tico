@@ -9,10 +9,12 @@ from . import people as P, read_cache
 def subjects(c, actor):
     """The caller and everyone below them, using the same parents as people.manages."""
     from . import hubdb as H, views
-    if not (H.is_bot(actor) or H.is_human(actor)) or not H._has_table(c, "bot_config"):
-        return {actor}
 
     def build():
+        # The table check is inside the cached build: a SQL request asks once per private task, and each
+        # ask was a sqlite_master read (184 per member request on a 6k-task test hub).
+        if not (H.is_bot(actor) or H.is_human(actor)) or not H._has_table(c, "bot_config"):
+            return {actor}
         roster, entries = views.roster(c), views.entries(c)
         archived = {r['slug'] for r in H.bots(c) if r.get('state') == 'archived'}
         nodes = {**{'b:' + slug: ('bot', slug) for slug in entries if slug not in archived},
