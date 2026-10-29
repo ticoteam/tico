@@ -648,7 +648,7 @@ def run(args, who=None):
             for field in ("verdict", "verdict_head"):
                 if getattr(args, field, None) is not None:
                     body[field] = getattr(args, field)
-            if getattr(args, "quiet", False):
+            if getattr(args, "brief", False):
                 body["quiet"] = True
             if sub == "close":
                 body["close"] = True

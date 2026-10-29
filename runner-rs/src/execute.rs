@@ -654,48 +654,53 @@ const CLAUDE_COLD_START_HOLD_S: u64 = 45;
 impl Runner {
     /// A delivery lease keeps waiting work alive; only a short server reservation permits a new start.
     async fn wait_start_place(&self, attempt: &Value, flags: &Flags) -> Result<(), Fail> {
-        if attempt.get("start_reservation_seconds").is_none() {
-            return Ok(()); // an older server still owns its original capacity gate
-        }
-        let aid = text_of(&attempt["id"]);
-        loop {
-            unstopped(flags)?;
-            if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap()
-                || self.stop.load(Ordering::SeqCst) {
-                return Err(Fail::runtime("Lease expired before the turn started"));
-            }
-            let local_free = {
-                let mut places = self.places.lock().unwrap();
-                if places.contains(&aid) || places.len() < self.turn_limit.load(Ordering::SeqCst) {
-                    places.insert(aid.clone());
-                    true
-                } else {
-                    false
-                }
-            };
-            if !local_free {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-            let place = self.client.post(&format!("attempts/{aid}/start-place"), &json!({}), None).await;
-            let answer = match place.and_then(decode::<StartPlaceAnswer>) {
-                Ok(answer) => answer,
-                Err(e) => {
-                    self.places.lock().unwrap().remove(&aid);
-                    return Err(e.into());
-                },
-            };
-            if answer.stop == Some(true) {
-                self.places.lock().unwrap().remove(&aid);
-                return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
-            }
-            if answer.reserved {
-                self.places.lock().unwrap().insert(aid.clone());
-                return Ok(());
-            }
-            self.places.lock().unwrap().remove(&aid);
+        while !self.try_start_place(attempt, flags).await? {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+        Ok(())
+    }
+
+    /// One ask for a computer place: false while this computer is full or the server says wait.
+    async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
+        if attempt.get("start_reservation_seconds").is_none() {
+            return Ok(true); // an older server still owns its original capacity gate
+        }
+        let aid = text_of(&attempt["id"]);
+        unstopped(flags)?;
+        if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap()
+            || self.stop.load(Ordering::SeqCst) {
+            return Err(Fail::runtime("Lease expired before the turn started"));
+        }
+        let local_free = {
+            let mut places = self.places.lock().unwrap();
+            if places.contains(&aid) || places.len() < self.turn_limit.load(Ordering::SeqCst) {
+                places.insert(aid.clone());
+                true
+            } else {
+                false
+            }
+        };
+        if !local_free {
+            return Ok(false);
+        }
+        let place = self.client.post(&format!("attempts/{aid}/start-place"), &json!({}), None).await;
+        let answer = match place.and_then(decode::<StartPlaceAnswer>) {
+            Ok(answer) => answer,
+            Err(e) => {
+                self.places.lock().unwrap().remove(&aid);
+                return Err(e.into());
+            },
+        };
+        if answer.stop == Some(true) {
+            self.places.lock().unwrap().remove(&aid);
+            return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
+        }
+        if answer.reserved {
+            self.places.lock().unwrap().insert(aid.clone());
+            return Ok(true);
+        }
+        self.places.lock().unwrap().remove(&aid);
+        Ok(false)
     }
 
     async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
@@ -786,9 +791,9 @@ impl Runner {
             self.wait_before_start(attempt, "shared login").await?;
             let lock = claude_cold_start().lock();
             tokio::pin!(lock);
-            loop {
+            let guard = loop {
                 tokio::select! {
-                    guard = &mut lock => { drop(guard); break; },
+                    guard = &mut lock => break guard,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {
                         unstopped(flags)?;
                         if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() || self.stopping() {
@@ -796,8 +801,16 @@ impl Runner {
                         }
                     }
                 }
+            };
+            // Kept while asking once for a place: tokio's Mutex hands a dropped lock straight to the next waiter, so
+            // dropping it here and asking again with try_lock lost it to the queue every time, and the turns waiting
+            // passed it round without one starting (Steven's runner, Oct 29: 13 start-place asks a second).
+            if self.try_start_place(attempt, flags).await? {
+                return Ok(guard);
             }
             // Never hold the shared sign-in lock while waiting for computer capacity.
+            drop(guard);
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
@@ -2653,6 +2666,66 @@ mod tests {
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert!(seen[0].starts_with("POST /api/v2/attempts/a3/start-place"), "{}", seen[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn turns_waiting_for_a_cold_sign_in_each_take_it_without_spinning() {
+        // Steven (coldsats), Oct 29: two server-gated turns and older ungated ones (claimed before the first heartbeat
+        // reply) queued behind a cold sign-in. tokio's Mutex hands a dropped lock straight to the next waiter, so
+        // taking it, dropping it and asking with try_lock failed forever: the gated two asked for a place 13 times
+        // a second and none started.
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"reserved":true}"#); 40]).await;
+        let (runner, dir) = lease_runner(&url, "cold-queue");
+        runner.turn_limit.store(4, Ordering::SeqCst);
+        let flags = lease_flags();
+        let signing_in = claude_cold_start().lock().await;
+        let gated = |id: &str| json!({"id": id, "start_reservation_seconds": 180});
+        let (a1, a2, b1, b2) = (gated("a1"), gated("a2"), json!({"id": "b1"}), json!({"id": "b2"}));
+        let turn = |t: &'static str, attempt: Value| {
+            let (runner, flags) = (&runner, &flags);
+            async move {
+                let _one = runner.wait_cold_start(&attempt, flags).await.map_err(|e| e.text)?;
+                tokio::time::sleep(Duration::from_millis(10)).await; // the sign-in this turn triggers
+                Ok::<_, String>(t)
+            }
+        };
+        let release = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(runner.places.lock().unwrap().is_empty(), "a turn waiting for the sign-in held a computer place");
+            drop(signing_in);
+        };
+        let all = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(turn("a1", a1), turn("a2", a2), turn("b1", b1), turn("b2", b2), release)
+        }).await.expect("turns queued for the sign-in never started");
+        // Each gated turn: a place, given back to wait for the sign-in, and one more ask once it holds it.
+        let places = seen.lock().unwrap().iter().filter(|r| r.contains("/start-place")).count();
+        assert_eq!((all.0, all.1, all.2, all.3, places), (Ok("a1"), Ok("a2"), Ok("b1"), Ok("b2"), 6));
+        std::fs::remove_dir_all(dir).unwrap();
+
+        // Given the sign-in but refused a place, a turn lets the sign-in go and pauses before it asks again.
+        // (Here, not in a test of its own: the sign-in lock is the process's.)
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":false,"waiting":"computer busy"}"#),
+            (200, r#"{"reserved":true}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "cold-busy");
+        let flags = lease_flags();
+        let signing_in = claude_cold_start().lock().await;
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let waiting = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(signing_in);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // Refused a place while holding the sign-in: it is free for others during the wait that follows.
+            assert!(claude_cold_start().try_lock().is_ok(), "the sign-in was held while waiting for a place");
+            assert_eq!(seen.lock().unwrap().len(), 3, "a refused turn asked again before its pause");
+        };
+        let (got, ()) = tokio::join!(runner.wait_cold_start(&turn, &flags), waiting);
+        drop(got.unwrap());
+        assert_eq!(seen.lock().unwrap().len(), 4);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -539,6 +539,16 @@ def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_priv
     assert counts[100, "human:cara"] <= counts[10, "human:cara"] + 5, counts
 
 
+def test_tag_attach_events_are_read_from_a_covering_partial_index(api):
+    """The tag list reads every tag's attach events with one IN(...) over events. Those rows are a sliver of a table
+    that holds millions of events, so the statement must seek a small covering index (target, detail_json) for
+    action='tag.attach', not the general target/action index that fetches each event row from the big table."""
+    with api.app.state.store.read() as c:
+        plan = " ".join(row[3] for row in c.execute(
+            "EXPLAIN QUERY PLAN " + task_privacy.TAG_ATTACHES_SQL.format(marks="?,?"), ("a", "b")))
+    assert "events_tag_attach" in plan and "COVERING" in plan, plan
+
+
 def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_run(api):
     """GET /api/employees reads each bot's computer, open tasks, declared settings and last finished run for every
     bot at once, so 40 more bots add no statements (each open task still has its own start checks); the last run is found by an index seek per bot, not a sort of

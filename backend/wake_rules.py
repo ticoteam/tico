@@ -77,7 +77,7 @@ AWAITED = (
     ("subtask", "a subtask moved or finished"),
     ("worktree", "the worktree it waited for is ready"),
     ("watcher", "something the bot watches moved or ended"),
-    ("resume", "a quiet task's stored resume condition came true (backend/quiet_work.py)"),
+    ("resume", "a deferred task's stored resume condition came true (backend/quiet_work.py)"),
     ("milestone", "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)"),
     ("reconnected", "the account or credential its reconnect card waited for works again (backend/reconnects.py)"),
 )

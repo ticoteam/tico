@@ -31,6 +31,7 @@ from . import outcome_stats
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import login_holds
+from . import cloud_access
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -144,6 +145,7 @@ def create_app(settings=None):
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
+        cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
@@ -614,6 +616,8 @@ def create_app(settings=None):
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
                 app.state.sleep_idle.seen(who, request.url.path)
+                # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
+                cloud_access.gate(store, who, request.url.path)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -1035,10 +1039,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
-        if c is not None and (quiet := quiet_work.view(c, row)):
-            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
-            value["quiet"] = quiet
-        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        if c is not None and (deferred := quiet_work.view(c, row)):
+            # Deferred work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            # `quiet` is its older name, kept one more release for callers that read it.
+            value["deferred"] = value["quiet"] = deferred
+        # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
@@ -1189,7 +1194,7 @@ def create_app(settings=None):
             legacy_owner = H.human_actor(H.default_human(c))
         pipelines = H.type_list(c)
         summaries = H.children_summaries(c, ids, visible_sql)
-        # The rows each row's from_person and quiet state read, read for the whole page first; each row is still
+        # The rows each row's from_person and deferred state read, read for the whole page first; each row is still
         # decided one at a time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
@@ -1210,8 +1215,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
-                if quiet := quiet_work.view(c, row, history=False):
-                    value["quiet"] = quiet
+                if deferred := quiet_work.view(c, row, history=False):
+                    value["deferred"] = value["quiet"] = deferred     # `quiet`: the older name, one more release
             if row["id"] in step_since:
                 value["step_since"] = step_since[row["id"]]
             if row["id"] in routines_by_task:
@@ -1717,8 +1722,18 @@ def create_app(settings=None):
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
-        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ."""
-        return company_billing.read(*billing_key(request.state.identity), month)
+        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
+        Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
+        answer = company_billing.read(*billing_key(request.state.identity), month)
+        cloud_access.from_billing(store, answer)
+        return answer
+
+    @app.get("/api/v2/cloud-access")
+    def cloud_access_view(request: Request):
+        """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
+        cloud. Open to every signed-in person, also while locked."""
+        views.human_only(request.state.identity)
+        return {"cloud": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):

@@ -613,6 +613,15 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             def read_cache(self):
                 return conn.read_cache
 
+            # The store's shared row cache (row_clock.parties and access rows). This connection only reads and never
+            # publishes, so it shares rows at the clock its own snapshot reads, like a pooled read connection does.
+            row_cache = getattr(c, "row_cache", None)
+            write_transaction = False
+
+            @property
+            def provenance_changes(self):
+                return conn.total_changes
+
             @property
             def in_transaction(self):
                 return conn.in_transaction

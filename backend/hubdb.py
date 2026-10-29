@@ -1452,10 +1452,16 @@ def migrate(conn, adopt_legacy=False):
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_target_action ON events(target,action)")
+    # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
+    # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
+    conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail_json) WHERE action='tag.attach'")
     conn.execute("CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_links_task ON task_links(task_id)")
+    # A computer's worktrees (worktrees.inventory, on every heartbeat): a seek to its rows, not a scan of every
+    # worktree link ever kept. Partial, so it holds worktree rows only.
+    conn.execute("CREATE INDEX IF NOT EXISTS task_links_worktree_computer ON task_links(computer_id) WHERE kind='worktree'")
     # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
     # however long ago they started.
     conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished)")

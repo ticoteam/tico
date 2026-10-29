@@ -979,6 +979,33 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403
 
 
+def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api):
+    """Every /api/v2/sql call reads the private-task parties through the store's shared row cache: two calls at one
+    clock build them once (they were rebuilt on every call, about 4.6% of TIDY's CPU)."""
+    from backend import row_clock
+    from backend import sql as S
+    from backend.auth import Identity
+    store, auth = api.app.state.store, api.app.state.auth
+    who = Identity("human:ben", "human")
+    with store.transaction() as c:
+        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+                  "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
+    builds = []
+    original = row_clock._rows
+    row_clock._rows = lambda c, statement: builds.append(statement) or original(c, statement)
+    try:
+        for _ in range(2):
+            with store.read() as c:
+                conn = S.connect(store.settings.db_path, c, auth, who)
+                try:
+                    S.run(conn, "SELECT count(*) FROM tasks", [], 5000, 20)
+                finally:
+                    conn.close()
+    finally:
+        row_clock._rows = original
+    assert sum(row_clock.PARTIES in s for s in builds) == 1, builds
+
+
 def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task(api):
     """Visibility per private task reads no table-existence probe again: a member's sqlite_master reads stay flat as
     private tasks grow (they were one per private task, 184 for 184 tasks on a 6k-task hub)."""

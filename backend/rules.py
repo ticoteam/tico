@@ -106,7 +106,7 @@ AWAITED_EVENTS = {
     "subtask": ("subtask_finished", "a subtask moved or finished"),
     "worktree": ("worktree", "the worktree the task waited for is ready"),
     "watcher": ("watcher", "something the bot watches moved or ended"),
-    "resume": ("resume", "a quiet task's stored resume condition came true"),
+    "resume": ("resume", "a deferred task's stored resume condition came true"),
     "milestone": ("milestone", "a pull request it waits for merged or a release it waits for was published"),
     "reconnected": ("reconnected", "the account or credential its reconnect card waited for works again"),
 }

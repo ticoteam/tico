@@ -18,6 +18,7 @@ async function refresh(force) {
       seatsDue ? get('/v2/seats') : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
+    cloudAccessFromStatus();
     if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
       S.emps = namedRoster(emps.value);
       setPeople(people.value);

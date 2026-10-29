@@ -1291,3 +1291,4 @@ model CLIs are not in the image; the runner installs them (see [harnesses](harne
 Everything above is the one way to install: Docker is the only supported way to run the server. Driving the wizard from a
 laptop, pasting cloud-init by hand, and putting your own load balancer or Cloudflare Access in front are in
 [install-advanced.md](install-advanced.md).
+Many companies' servers on one shared host (how Tico runs its cloud companies) are in [cell.md](cell.md).

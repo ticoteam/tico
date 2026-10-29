@@ -158,6 +158,7 @@ function applyConfig(config) {
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
   document.documentElement.classList.toggle('demo', strip);
+  document.documentElement.classList.toggle('strip', strip || document.documentElement.classList.contains('cloud-frozen'));
   $('#demo-banner').hidden = !strip;
   if (S.config.rehearsal && !S.config.demo) $('#demo-banner').innerHTML = '<strong>Rehearsal: nothing runs or leaves this server</strong>';
   renderOnboardingNav();
