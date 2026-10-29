@@ -1172,7 +1172,8 @@ def turn_done(c, attempt, outcome, text):
     ref = refs.get("task") if refs.get("automation_step") else msg["id"]
     priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
-    if run["status"] == "running":
+    if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
+        # Still being worked (a run dropped mid-step is too, until its step is saved): the save takes the answer.
         c.execute("INSERT OR REPLACE INTO automation_turn_answers(run_id,ref,text,cost,ok,at) VALUES(?,?,?,?,?,?)",
                   (rid, ref, text or "", cost, int(ok), H.now()))
         return
@@ -1559,8 +1560,9 @@ class Hub:
             c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
             settle_mail(c, state)   # in the same write as the save, so a result reported meanwhile is not lost
             if c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "skipped":
-                # Dropped (or its automation turned off or deleted) during the step: what the step did is saved, the
-                # run stays skipped, and nothing it queued is sent.
+                # Dropped (or its automation turned off or deleted) during the step: what the step did is saved (with
+                # the answers and costs of turns that ended meanwhile, taken above), the run stays skipped, and
+                # nothing it queued is sent.
                 state["status"] = "skipped"
                 _cancel_mail(c, rid, state)
                 c.execute("UPDATE automation_runs SET cost=?,state_json=?,claimed_at=NULL WHERE id=?",
