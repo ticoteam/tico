@@ -1,8 +1,11 @@
 """`python3 -m setup cell`: the multi-company host, run with a fake System (no Docker, no network, no root)."""
+import fcntl
 import io
 import json
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,7 +29,8 @@ class FakeSystem:
         self.images = set()
         self.health = {}                   # host -> status; default 200 while its container runs
         self.busy_ports, self.fail = set(), {}
-        self.imds = True
+        self.imds = True                   # the metadata block is DOCKER-USER's first rule
+        self.docker_user = None            # or the chain's rules as `iptables -S` prints them
         self.release = "v1.2.3"
 
     def run(self, argv, *, input=None, timeout=900):
@@ -35,8 +39,13 @@ class FakeSystem:
         for key, res in self.fail.items():
             if key in joined:
                 return res
-        if argv[:2] == ["iptables", "-C"]:
-            return Result(0 if self.imds else 1)
+        if argv[:2] == ["iptables", "-S"]:
+            rules = self.docker_user if self.docker_user is not None else \
+                ([cell.IMDS_LINE] if self.imds else []) + ["-A DOCKER-USER -j RETURN"]
+            return Result(0, "-N DOCKER-USER\n" + "".join(r + "\n" for r in rules))
+        if argv[:2] == ["docker", "pull"]:
+            self.images.add(argv[-1])
+            return Result(0)
         if argv[:2] == ["docker", "ps"]:
             flt = argv[argv.index("--filter") + 1]
             want = flt.split("=", 2)[2] if flt.count("=") == 2 else ""
@@ -50,10 +59,7 @@ class FakeSystem:
             slug = proj[len(cell.PROJECT_PREFIX):]
             if proj == cell.EDGE_PROJECT:
                 return Result(0)
-            if "pull" in argv:
-                env = envfile.parse(Path(argv[argv.index("--env-file") + 1]).read_text())
-                self.images.add(f"{cell.SERVER_IMAGE}:{env['TICO_TAG']}")
-            elif "up" in argv:
+            if "up" in argv:
                 self.ps[slug] = ("running", "Up 2 seconds (healthy)")
             elif "stop" in argv:
                 self.ps[slug] = ("exited", "Exited (0) 1 second ago")
@@ -238,7 +244,8 @@ def test_secrets_never_reach_argv_or_stdout_and_live_only_in_0600_files(tmp_path
     system.fail["logs"] = Result(0, f"server: TICO_OIDC_CLIENT_SECRET={SECRET} leaked by a bad log line\n")
     call("update", "--company", "boatyard", "--version", "v1.2.5", "--timeout", "1")
     printed, argv = out.getvalue(), system.argv_text()
-    assert "update_failed" in printed and "********" in printed
+    # Both releases stay unhealthy here, so the rollback says so too: two error paths with log lines.
+    assert "rollback_failed" in printed and "did not come up" in printed and "********" in printed
     for secret in (SECRET, INVITE, BACKUP_SECRET, TOKEN):
         assert secret not in printed and secret not in argv
     env = root / "companies" / "boatyard" / ".env"
@@ -298,12 +305,16 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     # No front door, updater or profile of its own: the cell's router and tunnel are the front door.
     for key in ("COMPOSE_PROFILES", "TICO_UPDATER_URL", "CLOUDFLARE_TUNNEL_TOKEN"):
         assert key not in env
+    # Tico runs its updates (`cell update`): the app shows no Update now (backend/releases.py managed()).
+    assert env["TICO_UPDATES"] == "tico"
     override = (d / "compose.cell.yaml").read_text()
+    assert "    environment:\n      TICO_UPDATES:\n" in override     # passed to the server from .env
     assert "mem_limit: 2g" in override and "memswap_limit: 2g" in override and f"{d / 'data'}:/data" in override
     assert "subnet: 10.208.0.0/24" in override and f"{cell.LABEL}: boatyard" in override
     assert (str(d / "data"), 10001, 10001) in ready.system.chowns
     calls = ready.system.argv_text()
-    assert "--project-name tico-boatyard" in calls and "pull --quiet server" in calls and "up -d" in calls
+    assert "--project-name tico-boatyard" in calls and "up -d" in calls
+    assert f"docker pull --quiet {cell.SERVER_IMAGE}:v1.2.3" in calls
     assert "caddy reload" in calls
     assert "http://boatyard.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000" in (ready.root / "router" / "Caddyfile").read_text()
 
@@ -594,3 +605,242 @@ def test_updating_a_stopped_company_keeps_it_stopped(ready):
     assert answer["ok"] and answer["version"] == "v1.4.0" and answer["ready_ms"] == 0
     assert ready("status", "--company", "boatyard")["state"] == "stopped"
     assert ready("start", "--company", "boatyard")["version"] == "v1.4.0"
+
+
+# --- review fixes: remove, the metadata block, updates and locks ---------------------------------------------------
+
+def held(root, name):
+    """Whether some command holds the lock `name` now (another open file's flock conflicts, in this process too)."""
+    fd = os.open(root / "locks" / f"{name}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def record(host, slug="boatyard"):
+    return json.loads((host.root / "companies" / slug / "company.json").read_text())
+
+
+def test_remove_frees_the_slot_only_after_the_router_dropped_the_route(ready):
+    ready(*add_args(ready, "alpha"))
+    seen, real = [], ready.system.run
+
+    def watch(argv, **kw):
+        if "reload" in argv and "caddy" in argv:
+            seen.append((held(ready.root, "cell"), (ready.root / "companies" / "alpha").exists()))
+        return real(argv, **kw)
+    ready.system.run = watch
+    assert ready("remove", "--company", "alpha")["removed"] is True
+    assert seen == [(True, True)]           # reloaded under the cell lock, while alpha still held its port
+
+
+def test_a_router_that_refuses_the_removal_keeps_the_slot_taken(ready):
+    ready(*add_args(ready, "alpha"))
+    ready.system.fail["caddy reload"] = Result(1, "", "Error: adapting config")
+    assert ready("remove", "--company", "alpha")["error"] == "router_failed"
+    assert record(ready, "alpha")["state"] == "removed"
+    ready.system.fail.clear()
+    # alpha's route may still be live, so its port goes to no one else until the removal finishes.
+    assert ready(*add_args(ready, "bravo"))["port"] == 20001
+    assert ready("remove", "--company", "alpha")["removed"] is True
+    assert not (ready.root / "companies" / "alpha").exists()
+    assert "alpha" not in (ready.root / "router" / "Caddyfile").read_text()
+    assert ready(*add_args(ready, "charlie"))["port"] == 20000
+
+
+def test_the_metadata_block_must_be_the_first_rule(ready):
+    ready.system.docker_user = ["-A DOCKER-USER -s 10.0.0.0/8 -j ACCEPT", cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"]
+    assert ready(*add_args(ready))["error"] == "not_initialized"
+    assert ready("init", "--json")["error"] == "firewall_failed"
+    ready.system.docker_user = [cell.IMDS_LINE, "-A DOCKER-USER -s 10.0.0.0/8 -j ACCEPT"]
+    assert ready(*add_args(ready))["ok"]
+
+
+IPTABLES_STUB = """
+import json, os, sys
+path, a = os.environ["RULES"], sys.argv[1:]
+rules = json.load(open(path))
+if a[0] == "-N":
+    sys.exit(1)                                       # the chain exists
+if a[:2] == ["-S", "DOCKER-USER"]:
+    print("-N DOCKER-USER")
+    print("".join(r + "\\n" for r in rules), end="")
+    sys.exit(0)
+if a[:3] == ["-I", "DOCKER-USER", "1"]:
+    json.dump(["-A DOCKER-USER " + " ".join(a[3:])] + rules, open(path, "w"))
+    sys.exit(0)
+sys.exit(2)
+"""
+
+
+@pytest.mark.parametrize("rules,inserted", [
+    (["-A DOCKER-USER -s 10.0.0.0/8 -j ACCEPT", cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], True),
+    ([], True), ([cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], False)])
+def test_the_firewall_script_puts_the_block_first(ready, tmp_path, rules, inserted):
+    bindir, state = tmp_path / "bin", tmp_path / "rules.json"
+    bindir.mkdir()
+    (bindir / "iptables").write_text(f"#!{sys.executable}\n" + IPTABLES_STUB)
+    os.chmod(bindir / "iptables", 0o755)
+    state.write_text(json.dumps(rules))
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "RULES": str(state)}
+    for _ in range(2):                  # the second run (Docker started again) finds it first and adds nothing
+        subprocess.run(["sh", str(ready.etc / cell.FIREWALL_SCRIPT)], env=env, check=True)
+    after = json.loads(state.read_text())
+    assert after[0] == cell.IMDS_LINE and len(after) == len(rules) + inserted
+
+
+def migrate_then_fail(host, bad="v2.0.0"):
+    """`bad` migrates the database and never answers /healthz; any other release is healthy."""
+    d = host.root / "companies" / "boatyard"
+    host.system.health["boatyard.tico.team"] = 503
+    real = host.system.run
+
+    def run(argv, **kw):
+        if "up" in argv and "--project-name" in argv:
+            if envfile.parse((d / ".env").read_text())["TICO_TAG"] == bad:
+                (d / "data" / "hub.sqlite").write_text("db v2")
+                host.system.health["boatyard.tico.team"] = 503
+            else:
+                host.system.health.clear()
+        return real(argv, **kw)
+    host.system.run = run
+    return d
+
+
+@pytest.mark.parametrize("how", ["start", "add"])
+def test_updating_a_stopped_company_is_guarded_when_it_next_starts(ready, how):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    ready("stop", "--company", "boatyard")
+    assert ready("update", "--company", "boatyard", "--version", "v2.0.0")["ok"]
+    assert [p.name.endswith("-v1.2.3") for p in (d / "snapshots").iterdir()] == [True]
+    assert record(ready)["pending"]["from"] == "v1.2.3"
+    migrate_then_fail(ready)
+    args = add_args(ready)
+    del args[args.index("--version"):args.index("--version") + 2]
+    answer = ready("start", "--company", "boatyard", "--timeout", "1") if how == "start" else \
+        ready(*args[:-1], "--timeout", "1", "--json")
+    assert answer["error"] == "update_failed" and answer["version"] == "v1.2.3"
+    assert (d / "data" / "hub.sqlite").read_text() == "db v1"
+    assert envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.2.3" and "pending" not in record(ready)
+    assert ready("status", "--company", "boatyard")["state"] == "running"
+
+
+def test_a_good_release_after_a_stopped_update_ends_the_pending_update(ready):
+    ready(*add_args(ready))
+    ready("stop", "--company", "boatyard")
+    ready("update", "--company", "boatyard", "--version", "v1.4.0")
+    assert ready("start", "--company", "boatyard")["version"] == "v1.4.0"
+    assert "pending" not in record(ready)
+
+
+def test_going_back_while_an_update_is_pending_restores_the_database(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    ready("stop", "--company", "boatyard")
+    ready("update", "--company", "boatyard", "--version", "v2.0.0")
+    ready("update", "--company", "boatyard", "--version", "v2.1.0")     # still pending: the same snapshot
+    assert len(list((d / "snapshots").iterdir())) == 1 and record(ready)["pending"]["from"] == "v1.2.3"
+    answer = ready("update", "--company", "boatyard", "--version", "v1.2.3")
+    assert answer["ok"] and answer["version"] == "v1.2.3" and "pending" not in record(ready)
+    assert ready("status", "--company", "boatyard")["state"] == "stopped"
+
+
+@pytest.mark.parametrize("stop", ["fails", "ignored"])
+def test_a_rollback_never_replaces_the_database_under_a_running_server(ready, stop):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    migrate_then_fail(ready)
+    inner = ready.system.run
+
+    def run(argv, **kw):
+        new_up = any(c[-3:] == ["up", "-d", "--remove-orphans"] for c in ready.system.calls[-30:]) and \
+            envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v2.0.0"
+        if "stop" in argv and new_up:
+            ready.system.calls.append(list(argv))
+            return Result(1, "", "cannot stop") if stop == "fails" else Result(0)   # "ignored": still running
+        return inner(argv, **kw)
+    ready.system.run = run
+    answer = ready("update", "--company", "boatyard", "--version", "v2.0.0", "--timeout", "1")
+    assert answer["error"] == "rollback_failed" and "left as it is" in answer["detail"]
+    assert answer["version"] == "v2.0.0"
+    assert (d / "data" / "hub.sqlite").read_text() == "db v2"           # untouched while it may still run
+
+
+@pytest.mark.parametrize("old_up", ["fails", "unhealthy"])
+def test_a_rollback_says_when_the_old_release_does_not_come_back(ready, old_up):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    ready.system.health["boatyard.tico.team"] = 503        # neither release answers
+    inner = ready.system.run
+
+    def run(argv, **kw):
+        if old_up == "fails" and "up" in argv and "--project-name" in argv \
+                and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.2.3":
+            return Result(1, "", "no space left on device")
+        return inner(argv, **kw)
+    ready.system.run = run
+    answer = ready("update", "--company", "boatyard", "--version", "v2.0.0", "--timeout", "1")
+    assert answer["error"] == "rollback_failed" and answer["version"] == "v1.2.3"
+    assert ("starting it failed: no space left" if old_up == "fails" else "does not answer") in answer["detail"]
+    assert (d / "data" / "hub.sqlite").read_text() == "db v1"
+
+
+def test_add_with_another_release_points_to_update(ready):
+    ready(*add_args(ready))
+    n = len(ready.system.calls)
+    args = add_args(ready)
+    args[args.index("--version") + 1] = "v1.3.0"
+    answer = ready(*args)
+    assert answer["error"] == "use_update" and "cell update --company boatyard --version v1.3.0" in answer["detail"]
+    assert envfile.parse((ready.root / "companies" / "boatyard" / ".env").read_text())["TICO_TAG"] == "v1.2.3"
+    assert not any("up" in c for c in ready.system.calls[n:])
+
+
+@pytest.mark.parametrize("step", ["stop", "snapshot"])
+def test_a_failed_stop_or_snapshot_leaves_the_old_release_running(ready, monkeypatch, step):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    env_before = (d / ".env").read_text()
+    if step == "stop":
+        ready.system.fail["stop server"] = Result(1, "", "daemon busy")
+    else:
+        def full(*a, **k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(cell.shutil, "copy2", full)
+    answer = ready("update", "--company", "boatyard", "--version", "v2.0.0")
+    assert answer["error"] == f"{step}_failed" and "still on v1.2.3" in answer["detail"]
+    assert answer["version"] == "v1.2.3" and (d / ".env").read_text() == env_before
+    assert record(ready)["version"] == "v1.2.3" and "pending" not in record(ready)
+    assert ready.system.calls[-1][-3:] == ["up", "-d", "--remove-orphans"]
+    assert not (d / "snapshots").exists() or not any((d / "snapshots").iterdir())
+
+
+@pytest.mark.parametrize("argv", [["stop"], ["start"], ["update", "--version", "v1.3.0"]])
+def test_commands_read_the_record_once_they_hold_its_lock(ready, argv):
+    ready(*add_args(ready))
+    fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    real = ready.system.sleep
+
+    def sleep(seconds):                 # while it waits for the lock, another command removes the company
+        nonlocal fd
+        if fd is not None:
+            path = ready.root / "companies" / "boatyard" / "company.json"
+            path.write_text(json.dumps({**json.loads(path.read_text()), "state": "removed"}))
+            os.close(fd)
+            fd = None
+        real(seconds)
+    ready.system.sleep = sleep
+    answer = ready(argv[0], "--company", "boatyard", *argv[1:])
+    assert answer["error"] == "not_found" and record(ready)["state"] == "removed"

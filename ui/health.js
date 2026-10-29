@@ -64,8 +64,9 @@ function hlCheckHtml(check) {
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
   // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  // None when Tico runs this server's updates (`managed`).
   const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
-  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+  const update = owner && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
     ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
   const result = (owner && HL_CHECK_MSG
     ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')

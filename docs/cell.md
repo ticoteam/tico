@@ -5,7 +5,8 @@ companies (`<slug>.tico.team`); Tico HQ drives it over AWS SSM. Each company get
 [hosted install](install-advanced.md) gets: the stock `ghcr.io/ticoteam/tico` image at a pinned release, the stock
 entrypoint and `compose.yaml`, its own data folder, `.env` and Compose project, sign-in through its own OpenID
 Connect client, the owner sign-in link kept as break-glass, and the recommended setup. It does not get its own Caddy,
-cloudflared, updater or EC2 instance. Every company shares one router and one Cloudflare Tunnel. The host runs only Tico
+cloudflared, updater or EC2 instance: its `.env` has `TICO_UPDATES=tico`, so the app shows no Update now and says
+Tico updates the server (HQ runs `update`). Every company shares one router and one Cloudflare Tunnel. The host runs only Tico
 servers. It never runs bots or a runner.
 
 The reference implementation is `setup/cell.py`.
@@ -32,9 +33,11 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 2. Adds log rotation and `live-restore` to `/etc/docker/daemon.json`. With `live-restore`, restarting Docker leaves
    every company running. Settings already in that file are kept.
 3. Adds a firewall rule so containers cannot reach the EC2 metadata service at `169.254.169.254`. The rule is a
-   `DOCKER-USER` REJECT, set by `/usr/local/sbin/tico-cell-firewall`. That script runs before Docker starts, from
-   `tico-cell-firewall.service`, and again after every Docker start, from a drop-in. `add` refuses to start a company
-   when the rule is missing.
+   `DOCKER-USER` REJECT, set by `/usr/local/sbin/tico-cell-firewall`. It must be the chain's first rule, so no rule
+   above it can accept the traffic first; the script inserts it at position 1 whenever it is not first. That script
+   runs before Docker starts, from `tico-cell-firewall.service`, and again after every Docker start, from a drop-in.
+   `init` checks it is first (`iptables -S DOCKER-USER`), and `add` refuses to start a company when it is missing or
+   not first.
 4. Starts the router and the tunnel in Compose project `tico-cell` (`/srv/tico-cell/edge.yaml`). The router is Caddy,
    serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port, and
    answers anything else with a 404. The tunnel sends `*.<domain>` to the router. Both containers use the host's
@@ -74,16 +77,20 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `domain_taken` | Another company has this domain |
 | `secret_file` | A secret file is missing, empty, readable by others or has the wrong content |
 | `company_file` | The company file is not a valid company YAML |
-| `not_initialized` | `init` has not run, or the metadata firewall rule is missing |
+| `not_initialized` | `init` has not run, or the metadata firewall rule is missing or not first |
 | `not_found` | No such company, or it was removed |
 | `busy` | Another command holds the lock too long |
 | `full` | All 4,000 slots are in use |
+| `use_update` | `add --version` names another release than the company runs; use `update` |
 | `pull_failed` | The image could not be pulled |
+| `stop_failed` | The server could not be stopped, or Docker still says it runs. From `update`: nothing changed and the old release runs again |
+| `snapshot_failed` | `update` could not copy the database; nothing changed and the old release runs again |
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
 | `firewall_failed` | The metadata firewall rule could not be set |
 | `unhealthy` | `/healthz` did not answer through the router in time (the detail has the last log lines) |
-| `update_failed` | The new release did not come up and the company is back on the old one (`version` says which) |
+| `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
+| `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
 | `unsupported_host` | `init` was run somewhere other than the Linux host |
 | `internal` | A bug. The detail has the cause, with secrets masked |
 
@@ -113,7 +120,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
 - **Every command is idempotent.** Running `add` again with the same settings changes nothing and gives the same answer
   (`changed: false`). Running it with new settings, such as a rotated client secret, applies them. An optional input
   that is left out keeps its saved value: the release, memory, Gateway invite, backup settings and company file. A
-  failed `add` leaves the company in place, so the same `add` resumes it.
+  failed `add` leaves the company in place, so the same `add` resumes it. `add` never changes a company's release:
+  `--version` with another release is refused (`use_update`), since a new release migrates the database.
 - **Reserved names:** hub, admin, accounts, updates, preview, runner, www, api, app, mail, status, docs, help,
   support, hq, gateway, hooks, cloud, tico, team.
 - **The backup key file** is either `KEY=VALUE` lines (`LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`,
@@ -123,14 +131,21 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   (`20000 + i`), its default network (the `i`-th /24 of `10.208.0.0/12`) and its edge network (the `i`-th /28 of
   `10.224.0.0/16`). The slot is saved in `company.json`, so it survives restarts. It is freed only by `remove`
   without `--keep-data`.
-- **Updates.** `update` pulls the new image first: if the pull fails, nothing changes. It then stops the server,
-  copies its database to `snapshots/` (the last two are kept) and starts the new release. If the new release does
-  not come up, the database copy and the old release are put back. A stopped company stays stopped; `start` runs the
-  new release.
+- **Updates.** `update` pulls the new image first: if the pull fails, nothing changes. It then stops the server and
+  waits until Docker says it is stopped, copies its database to `snapshots/` (the last two are kept), and only then
+  points `.env` at the new release, with the update marked pending in `company.json`. If the stop or the copy fails,
+  nothing changes and the old release is started again. A running company starts the new release at once. A stopped
+  company stays stopped, and its next `start` (or `add`) starts the new release. Either way, while the update is
+  pending, a release that does not answer `/healthz` is rolled back: the server is stopped (Docker must say so before
+  the database files are touched), the database copy and the old release are put back, and the old release must
+  answer `/healthz`. `update` back to the old release while an update is still pending is that same rollback.
 - **Remove.** `remove` deletes the containers, volumes, route and folder. With `--keep-data`, it deletes only the
   containers and the route. The folder (data, `.env`) and the slot stay, and a later `add` brings the company back.
-- **Locks.** Commands on different companies run in parallel. Only allocating a slot and rewriting the router config
-  share a lock.
+  The slot is freed only after the router has reloaded without the company's route, under the cell lock, so its port
+  never reaches another company while the old domain still points at it. If the router refuses the new config, the
+  company stays marked `removed` with its slot, and running `remove` again finishes.
+- **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
+  router config share a lock. A command reads a company's record only once it holds that company's lock.
 
 ## Layout
 
@@ -141,8 +156,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes, and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
-| `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data`, the default network and the `tico.cell.company` label |
-| `.../company.json` | The slot, port, release, memory and state. No secrets |
+| `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data`, `TICO_UPDATES`, the default network and the `tico.cell.company` label |
+| `.../company.json` | The slot, port, release, memory, state, and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../owner-link.txt` | The owner's break-glass sign-in link (0600). It is never printed |
 | `.../snapshots/` | Database copies taken before each update |

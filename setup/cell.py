@@ -22,7 +22,9 @@ the owner link as break-glass, the recommended preset), minus its own Caddy, clo
 A company's index (the smallest free one, kept until `remove` without --keep-data) gives it its loopback port
 (20000 + index) and its two private networks, so no two companies ever share one, across restarts too. The router maps
 the Host header to that port; cloudflared sends `*.<domain>` to the router. Containers cannot reach the EC2 metadata
-service (a DOCKER-USER rule `init` installs and `add` checks), so no company can use the host's AWS role.
+service (a DOCKER-USER rule, first in its chain, that `init` installs and `add` checks), so no company can use the
+host's AWS role. `update` snapshots the database before a new release first starts, and puts it back if that release
+does not come up. The app is told Tico runs its updates (TICO_UPDATES=tico), so it has no Update now of its own.
 
 All Docker and system calls go through one `System`, so the tests run every command with a fake.
 """
@@ -78,6 +80,7 @@ EDGE_NETS = ipaddress.ip_network("10.224.0.0/16")
 
 # The rule that keeps containers from the instance's role. IMDSv2 with hop limit 1 is the second lock (docs/cell.md).
 IMDS_RULE = ["DOCKER-USER", "-d", "169.254.169.254/32", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"]
+IMDS_LINE = "-A " + " ".join(IMDS_RULE)     # how `iptables -S DOCKER-USER` prints it
 FIREWALL_SCRIPT = "usr/local/sbin/tico-cell-firewall"
 FIREWALL_UNIT = "etc/systemd/system/tico-cell-firewall.service"
 DOCKER_DROPIN = "etc/systemd/system/docker.service.d/tico-cell.conf"
@@ -86,6 +89,10 @@ DAEMON_SETTINGS = {"log-driver": "json-file", "log-opts": {"max-size": "10m", "m
 
 HEALTH_TIMEOUT = 300
 SNAPSHOTS_KEPT = 2
+DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
+STOPPED = ("", "exited", "created", "dead")    # container states in which nothing has the database open
+# TICO_UPDATES: Tico runs this server's updates (`cell update`), so the app has no Update now (backend/releases.py).
+UPDATES_BY = "tico"
 
 
 class CellError(Exception):
@@ -356,7 +363,8 @@ def company_override(c: dict, data_dir: Path) -> str:
         "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
         "# shared host. Its own data folder, a memory limit, its own two networks (so none collide), a label for `list`.",
         "services:", "  server:", f"    mem_limit: {c['memory']}", f"    memswap_limit: {c['memory']}",
-        "    labels:", f"      {LABEL}: {c['slug']}", "    volumes:", f"      - {data_dir}:/data",
+        "    environment:", "      TICO_UPDATES:", "    labels:", f"      {LABEL}: {c['slug']}",
+        "    volumes:", f"      - {data_dir}:/data",
         "networks:", "  default:", "    ipam:", "      config:", f"        - subnet: {n['default_subnet']}",
         f"          gateway: {n['default_gateway']}"]) + "\n"
 
@@ -472,7 +480,12 @@ class Cell:
         return {"healthy": "running", "unhealthy": "unhealthy"}.get(row["health"], "starting")
 
     def imds_blocked(self) -> bool:
-        return self.system.run(["iptables", "-C", *IMDS_RULE]).returncode == 0
+        """The metadata REJECT is the first rule of DOCKER-USER. Present further down is not enough: an earlier rule
+        that accepts would let a container through before it is reached. `iptables -S` lists rules in the order they
+        apply."""
+        r = self.system.run(["iptables", "-S", "DOCKER-USER"])
+        rules = [line.strip() for line in r.stdout.splitlines() if line.startswith("-A DOCKER-USER ")]
+        return r.returncode == 0 and bool(rules) and rules[0] == IMDS_LINE
 
     def wait_healthy(self, c: dict, started: float, timeout: int) -> int:
         """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router; the wait
@@ -511,10 +524,59 @@ class Cell:
     def image_present(self, version: str) -> bool:
         return self.system.run(["docker", "image", "inspect", "--format", "{{.Id}}", f"{SERVER_IMAGE}:{version}"]).returncode == 0
 
-    def up(self, slug: str, version: str) -> None:
+    def pull(self, version: str) -> None:
+        """The release's image, without touching any .env (compose.yaml's image is SERVER_IMAGE:TICO_TAG)."""
         if not self.image_present(version):
-            self.run(self.compose(slug, "pull", "--quiet", "server"), "pull_failed", f"pulling {SERVER_IMAGE}:{version}")
+            self.run(["docker", "pull", "--quiet", f"{SERVER_IMAGE}:{version}"], "pull_failed",
+                     f"pulling {SERVER_IMAGE}:{version}")
+
+    def up(self, slug: str, version: str) -> None:
+        self.pull(version)
         self.run(self.compose(slug, "up", "-d", "--remove-orphans"), "docker_failed", "docker compose up")
+
+    def ensure_stopped(self, slug: str) -> None:
+        """Stop the server, then make sure Docker says it is not running: nothing touches its database before that."""
+        self.run(self.compose(slug, "stop", "server"), "stop_failed", "docker compose stop")
+        state = self.containers(slug).get(slug, {}).get("state", "")
+        if state not in STOPPED:
+            raise CellError("stop_failed", f"the server is still {state} after docker compose stop")
+
+    def launch(self, c: dict, started: float, timeout: int, between=None) -> int:
+        """Run c's release (`between` runs once it is up, before the wait) and wait for /healthz. While an update is
+        pending (`c["pending"]`: the release before it and its database snapshot, see `update`), a release that does
+        not come up is rolled back; one that does ends the pending update."""
+        try:
+            self.up(c["slug"], c["version"])
+        except CellError as e:
+            self.undo_update(c, e, timeout)
+            raise
+        if between:
+            between()
+        try:
+            ready = self.wait_healthy(c, started, timeout)
+        except CellError as e:
+            self.undo_update(c, e, timeout)
+            raise
+        if c.pop("pending", None) is not None:
+            self.save(c)
+        return ready
+
+    def undo_update(self, c: dict, err: CellError, timeout: int) -> None:
+        """After `err` from a pending update's release: the release and database from before it, then update_failed.
+        Without a pending update it returns, and the caller raises `err` as it is."""
+        pending = c.get("pending")
+        if not pending:
+            return
+        new = c["version"]
+        try:
+            self.rollback(c, timeout)
+        except CellError as r:
+            r.detail = f"{new} did not come up ({err.detail}); {r.detail}"
+            raise r from None
+        failed = CellError("update_failed", f"{new} did not come up ({err.detail}); back on {c['version']}"
+                           + (" with the database from before the update" if pending.get("snapshot") else ""))
+        failed.extra = {"version": c["version"]}
+        raise failed from None
 
     def answer(self, c: dict, ready_ms: int, changed: bool) -> dict:
         return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "port": c["port"], "ready_ms": ready_ms,
@@ -555,7 +617,8 @@ class Cell:
             changed.append("firewall")
         self.run([str(self.host / FIREWALL_SCRIPT)], "firewall_failed", "blocking the metadata service from containers")
         if not self.imds_blocked():
-            raise CellError("firewall_failed", "the DOCKER-USER rule that blocks 169.254.169.254 is not in place")
+            raise CellError("firewall_failed", "the DOCKER-USER rule that blocks 169.254.169.254 is not the chain's "
+                                               "first rule")
 
         for d in ("companies", "router", "tunnel", "locks"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
@@ -609,8 +672,10 @@ class Cell:
             "#!/bin/sh",
             "# Written by `python3 -m setup cell init`: containers on this host never reach the EC2 metadata service,",
             "# so no company can use the host's AWS role. Run before Docker starts and again after (docs/cell.md).",
+            "# The rule must be the chain's first: a rule above it that accepts would be reached first.",
             "set -eu", "iptables -N DOCKER-USER 2>/dev/null || true",
-            f"iptables -C DOCKER-USER {rule} 2>/dev/null || iptables -I DOCKER-USER 1 {rule}"]) + "\n"
+            "first=$(iptables -S DOCKER-USER | grep -m1 '^-A DOCKER-USER ' || true)",
+            f"[ \"$first\" = \"{IMDS_LINE}\" ] || iptables -I DOCKER-USER 1 {rule}"]) + "\n"
         unit = "\n".join([
             "[Unit]", "Description=Tico cell: containers cannot reach the EC2 metadata service", "Before=docker.service",
             "After=network-pre.target", "", "[Service]", "Type=oneshot", "RemainAfterExit=yes",
@@ -682,9 +747,14 @@ class Cell:
         with self.lock("company-" + slug):
             with self.lock("cell"):
                 if not self.imds_blocked():
-                    raise CellError("not_initialized", "containers on this host can reach the EC2 metadata service; "
-                                                       "run `python3 -m setup cell init`")
+                    raise CellError("not_initialized", "containers on this host can reach the EC2 metadata service "
+                                                       "(the DOCKER-USER block is missing or not first); run "
+                                                       "`python3 -m setup cell init`")
                 old = self.load(slug)
+                if old and args.version and args.version != old["version"]:
+                    # A new release migrates the database: that is `update`, with its snapshot and rollback.
+                    raise CellError("use_update", f"{slug} runs {old['version']}; change its release with `python3 -m "
+                                                  f"setup cell update --company {slug} --version {args.version}`")
                 for other in self.companies():
                     if other["slug"] != slug and other["domain"] == domain and other.get("state") != "removed":
                         raise CellError("domain_taken", f"{domain} belongs to {other['slug']}")
@@ -697,6 +767,8 @@ class Cell:
                      "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
                      "created": (old or {}).get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                      "state": "running"}
+                if (old or {}).get("pending"):  # an update not yet seen healthy: this start is still guarded by it
+                    c["pending"] = old["pending"]
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
                     data = (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).read_text().strip()
                     plan = (data, old_env.get("TICO_TEAM_NAME", ""))
@@ -730,15 +802,18 @@ class Cell:
                 except MissingInput as e:
                     raise CellError("bad_args", self.scrub(str(e))) from None
                 env.update(TICO_PORT=str(c["port"]), COMPOSE_PROFILES="", COMPOSE_PROJECT_NAME=project(slug),
-                           TICO_UPDATER_URL="", TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR))
+                           TICO_UPDATER_URL="", TICO_UPDATES=UPDATES_BY,
+                           TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR))
                 changed = self.write_company(c, envfile.render(env), s.company_file_data)
                 self.save(c)
             before = self.containers(slug).get(slug, {})
-            self.up(slug, c["version"])
-            with self.lock("cell"):
-                changed = self.write_router() or changed
-            ready = self.wait_healthy(c, started, args.timeout)
-            changed = changed or before.get("state") != "running" or before.get("health") != "healthy"
+            routed = []
+
+            def route():
+                with self.lock("cell"):
+                    routed.append(self.write_router())
+            ready = self.launch(c, started, args.timeout, route)
+            changed = changed or any(routed) or before.get("state") != "running" or before.get("health") != "healthy"
             return self.answer(c, ready, changed)
 
     def allocate(self) -> int:
@@ -796,103 +871,160 @@ class Cell:
                 "memory": c["memory"], "state": state, "healthy": healthy,
                 "container": ps.get(c["slug"], {"state": "", "health": ""})}
 
-    def stop(self, args) -> dict:
-        c = self.company(args.company)
+    def live(self, slug: str) -> dict:
+        """The company's record, read under its lock (so another command cannot have changed it since); not_found when
+        there is none or it was removed."""
+        c = self.company(slug)
         if c.get("state") == "removed":
             raise CellError("not_found", f"{c['slug']} was removed; add it again first")
-        with self.lock("company-" + c["slug"]):
-            was = self.containers(c["slug"]).get(c["slug"], {}).get("state")
-            self.run(self.compose(c["slug"], "stop"), "docker_failed", "docker compose stop")
+        return c
+
+    def stop(self, args) -> dict:
+        slug = check_slug(args.company)
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            was = self.containers(slug).get(slug, {}).get("state")
+            self.ensure_stopped(slug)
             c["state"] = "stopped"
             self.save(c)
-        return {"ok": True, "company": c["slug"], "state": "stopped", "changed": was == "running"}
+        return {"ok": True, "company": slug, "state": "stopped", "changed": was == "running"}
 
     def start(self, args) -> dict:
         started = self.system.monotonic()
-        c = self.company(args.company)
-        if c.get("state") == "removed":
-            raise CellError("not_found", f"{c['slug']} was removed; add it again first")
-        with self.lock("company-" + c["slug"]):
-            before = self.containers(c["slug"]).get(c["slug"], {})
-            self.up(c["slug"], c["version"])
+        slug = check_slug(args.company)
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            before = self.containers(slug).get(slug, {})
             c["state"] = "running"
             self.save(c)
-            ready = self.wait_healthy(c, started, args.timeout)
+            ready = self.launch(c, started, args.timeout)
         return self.answer(c, ready, before.get("state") != "running")
 
     def update(self, args) -> dict:
+        """Another release, with the database safe first. The image is pulled before anything changes (a release that
+        cannot be pulled leaves the company as it was). Then the server is stopped (Docker must say so), its database
+        copied to snapshots/, and only then do .env and company.json name the new release, with `pending` = the release
+        before and the snapshot. A running company starts the new release at once; a stopped one stays stopped and
+        `start` (or `add`) starts it. Either way the first start is guarded by `launch`: no /healthz, and the old
+        release and database come back. `pending` is saved, so a command that dies half-way is still rolled back by the
+        next start. A stop or snapshot that fails changes nothing and the old release is started again."""
         started = self.system.monotonic()
         if not VERSION_RE.fullmatch(args.version or ""):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
-        c = self.company(args.company)
-        if c.get("state") == "removed":
-            raise CellError("not_found", f"{c['slug']} was removed; add it again first")
-        slug, d = c["slug"], self.dir(c["slug"])
+        slug = check_slug(args.company)
         with self.lock("company-" + slug):
+            c = self.live(slug)
+            d = self.dir(slug)
             env_text = _read(d / ".env")
             self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
+            running = c.get("state") != "stopped"
+            pending = c.get("pending")
             if c["version"] == args.version:
-                ready = self.wait_healthy(c, started, args.timeout) if c.get("state") != "stopped" else 0
+                if running and pending:
+                    ready = self.launch(c, started, args.timeout)
+                else:
+                    ready = self.wait_healthy(c, started, args.timeout) if running else 0
                 return self.answer(c, ready, False)
-            old = c["version"]
-            new_env = _with_tag(env_text, args.version)
-            # The new image first: a release that cannot be pulled leaves the company running as it was.
-            c["version"] = args.version
-            _write_atomic(d / ".env", new_env, 0o600)
+            self.pull(args.version)
             try:
-                if not self.image_present(args.version):
-                    self.run(self.compose(slug, "pull", "--quiet", "server"), "pull_failed", f"pulling {SERVER_IMAGE}:{args.version}")
-            except CellError:
-                _write_atomic(d / ".env", env_text, 0o600)
-                raise
-            if c.get("state") == "stopped":     # it stays stopped; `start` runs the new release
-                self.save(c)
-                return self.answer(c, 0, True)
-            self.run(self.compose(slug, "stop", "server"), "docker_failed", "docker compose stop")
-            snapshot = self.snapshot(slug, old)
-            try:
-                self.run(self.compose(slug, "up", "-d", "--remove-orphans"), "docker_failed", "docker compose up")
-                c["state"] = "running"
-                ready = self.wait_healthy(c, started, args.timeout)
+                self.ensure_stopped(slug)
+                # An update still pending keeps its release and snapshot: the database has not moved on since.
+                snap = pending or {"from": c["version"], "snapshot": self.snapshot(slug, c["version"])}
             except CellError as e:
-                self.rollback(c, old, env_text, snapshot)
-                err = CellError("update_failed", f"{args.version} did not come up ({e.detail}); back on {old}"
-                                + (" with the database from before the update" if snapshot else ""))
-                err.extra = {"version": old}
-                raise err from None
+                raise self.restarted(c, e, running) from None
+            if pending and pending["from"] == args.version:
+                # Back to the release its database still belongs to: the pending update's own rollback.
+                self.rollback(c, args.timeout, restart=running)
+                return self.answer(c, self.wait_healthy(c, started, args.timeout) if running else 0, True)
+            try:
+                _write_atomic(d / ".env", _with_tag(env_text, args.version), 0o600)
+            except OSError as e:
+                raise self.restarted(c, CellError("internal", f"writing .env: {e}"), running) from None
+            c["version"], c["pending"] = args.version, snap
             self.save(c)
-            return self.answer(c, ready, True)
+            if not running:
+                return self.answer(c, 0, True)
+            return self.answer(c, self.launch(c, started, args.timeout), True)
 
-    def snapshot(self, slug: str, version: str) -> Path | None:
-        """The stopped server's database, before a new release migrates it; the last SNAPSHOTS_KEPT are kept."""
+    def restarted(self, c: dict, err: CellError, running: bool) -> CellError:
+        """`err` from before an update changed anything, after starting the old release again if it ran."""
+        if running:
+            r = self.system.run(self.compose(c["slug"], "up", "-d", "--remove-orphans"))
+            err.detail += (f"; still on {c['version']}" if not r.returncode else
+                           f"; starting {c['version']} again failed too: " + (r.stderr or r.stdout).strip()[-300:])
+        err.extra = {"version": c["version"]}
+        return err
+
+    def snapshot(self, slug: str, version: str) -> str:
+        """The stopped server's database, before a new release migrates it, in snapshots/<name>; the name, or "" when
+        there is no database yet. The last SNAPSHOTS_KEPT are kept."""
         data, snaps = self.dir(slug) / "data", self.dir(slug) / "snapshots"
         if not (data / "hub.sqlite").exists():
-            return None
+            return ""
         target = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
-        target.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for name in ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"):
-            if (data / name).exists():
-                shutil.copy2(data / name, target / name)
+        try:
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for name in DB_FILES:
+                if (data / name).exists():
+                    shutil.copy2(data / name, target / name)
+        except OSError as e:
+            shutil.rmtree(target, ignore_errors=True)
+            raise CellError("snapshot_failed", f"copying the database to {target}: {e.strerror or e}") from None
         for old in sorted(p for p in snaps.iterdir() if p.is_dir())[:-SNAPSHOTS_KEPT]:
             shutil.rmtree(old, ignore_errors=True)
-        return target
+        return target.name
 
-    def rollback(self, c: dict, version: str, env_text: str, snapshot: Path | None) -> None:
-        slug, data = c["slug"], self.dir(c["slug"]) / "data"
-        self.system.run(self.compose(slug, "stop", "server"))
-        if snapshot:
-            for name in ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"):
-                with contextlib.suppress(FileNotFoundError):
-                    (data / name).unlink()
-                if (snapshot / name).exists():
-                    shutil.copy2(snapshot / name, data / name)
-                    self.system.chown(data / name, SERVER_UID, SERVER_UID)
-        _write_atomic(self.dir(slug) / ".env", env_text, 0o600)
-        c["version"] = version
+    def rollback(self, c: dict, timeout: int, *, restart: bool = True) -> None:
+        """Back to the release and database from before c's pending update. The database files are replaced only once
+        Docker says the server is stopped; then the old release must answer /healthz. Raises rollback_failed, saying
+        what state the company was left in."""
+        slug, pending = c["slug"], c["pending"]
+        old, data = pending["from"], self.dir(slug) / "data"
+
+        def failed(detail: str) -> CellError:
+            e = CellError("rollback_failed", self.scrub(detail))
+            e.extra = {"version": c["version"]}
+            return e
+
+        try:
+            self.ensure_stopped(slug)
+        except CellError as e:
+            raise failed(f"could not stop {c['version']} to put {old} back, so its database was left as it is: "
+                         f"{e.detail}") from None
+        if pending.get("snapshot"):
+            snapshot = self.dir(slug) / "snapshots" / pending["snapshot"]
+            try:
+                if not (snapshot / "hub.sqlite").is_file():
+                    raise FileNotFoundError(f"{snapshot} has no hub.sqlite")
+                for name in DB_FILES:
+                    with contextlib.suppress(FileNotFoundError):
+                        (data / name).unlink()
+                    if (snapshot / name).exists():
+                        shutil.copy2(snapshot / name, data / name)
+                        self.system.chown(data / name, SERVER_UID, SERVER_UID)
+            except OSError as e:
+                raise failed(f"could not put the database from {old} back ({e}); the server is stopped on "
+                             f"{c['version']}") from None
+        env = self.dir(slug) / ".env"
+        _write_atomic(env, _with_tag(_read(env), old), 0o600)
+        c["version"] = old
+        c.pop("pending", None)
         self.save(c)
-        self.system.run(self.compose(slug, "up", "-d", "--remove-orphans"))
+        if not restart:
+            return
+        r = self.system.run(self.compose(slug, "up", "-d", "--remove-orphans"))
+        if r.returncode:
+            raise failed(f"{old} and its database are back, but starting it failed: "
+                         + (r.stderr or r.stdout).strip()[-300:])
+        try:
+            self.wait_healthy(c, self.system.monotonic(), timeout)
+        except CellError as e:
+            raise failed(f"{old} and its database are back, but it does not answer: {e.detail}") from None
 
     def remove(self, args) -> dict:
+        """The company's slot (its index, so its port) stays taken until the router no longer sends its domain there:
+        the record is marked removed and the router reloaded under the cell lock, and only then is the folder deleted.
+        A router that refuses the new config leaves the record (and the slot) in place; running remove again finishes."""
         slug = check_slug(args.company)
         with self.lock("company-" + slug):
             c = self.load(slug)
@@ -902,13 +1034,13 @@ class Cell:
             if (d / ".env").exists() and (d / "compose.cell.yaml").exists():
                 down = ["down", "--remove-orphans"] + ([] if args.keep_data else ["--volumes"])
                 self.run(self.compose(slug, *down), "docker_failed", "docker compose down")
-            if args.keep_data and c:
-                c["state"] = "removed"
-                self.save(c)
-            elif not args.keep_data:
-                shutil.rmtree(d)
             with self.lock("cell"):
+                if c and c.get("state") != "removed":
+                    c["state"] = "removed"
+                    self.save(c)
                 self.write_router()
+                if not args.keep_data:
+                    shutil.rmtree(d)
         return {"ok": True, "company": slug, "removed": True, "kept_data": bool(args.keep_data)}
 
 
