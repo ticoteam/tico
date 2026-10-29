@@ -7,6 +7,7 @@ Slow: it builds the release binary once per session (cargo) and starts runner pr
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -1178,7 +1179,7 @@ def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, li
         from runner.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))
-        assert "Tico runner 0" in machine.output.read_text() and "(rust) started" in machine.output.read_text()
+        assert re.search(r"Tico runner \S+ \(rust\) started", machine.output.read_text())
     finally:
         machine.stop()
 
