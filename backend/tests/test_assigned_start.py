@@ -578,3 +578,32 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
     assert wanted['id'] in {r['id'] for r in get(api, 'needs-you')['items']}
     check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'assigned_not_started')
     assert [r['task'] for r in check['items']] == [wanted['id']]
+
+
+def traced_overdue(api):
+    """The rows `overdue` yields, and every statement it ran (expanded values, as sqlite reports them)."""
+    seen = []
+    with api.app.state.store.read() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            found = list(A.overdue(c))
+        finally:
+            c.set_trace_callback(None)
+    return found, seen
+
+
+@pytest.mark.parametrize('n', [3, 30])
+def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
+    task_bot(api, lanes=True)
+    tasks = [new_task(api, f'Lost {i}') for i in range(n)]
+    cancel(api)
+    advance(api, clock, 1)
+    assert sorted(sweep(api)) == sorted(t['id'] for t in tasks)
+    advance(api, clock, 2)
+    found, seen = traced_overdue(api)
+    assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
+    # The page's assignment and ledger rows come in one statement each, not one per task.
+    assert [s for s in seen if s.startswith('SELECT id,ts FROM task_events WHERE task_id=')] == []
+    assert [s for s in seen if s.startswith('SELECT detail_json FROM events WHERE target=')] == []
+    # A short page is the last one: no second, empty page query.
+    assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1

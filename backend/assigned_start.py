@@ -15,7 +15,25 @@ SCAN_LIMIT = 200
 CURSOR_KEY = "assignment-recovery-cursor"
 
 
-def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None, attempts=None, on_error=None):
+def page_ledger(c, rows):
+    """Each row's current assignment (its ledger key and time) and the ledger entries of its task, read for the whole
+    page in two statements. Per row these were two lookups each, which `candidates` now reads from here."""
+    owners, ledger = {}, {}
+    for part in H.chunks(row['id'] for row in rows):
+        marks = ','.join('?' * len(part))
+        for task_id, event_id, ts in c.execute(
+                f"SELECT task_id,id,ts FROM task_events WHERE field='owner' AND task_id IN ({marks}) "
+                "ORDER BY task_id,ts DESC,rowid DESC", part):
+            owners.setdefault(task_id, (event_id, ts))
+        for target, detail in c.execute(
+                f"SELECT target,detail_json FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
+                (EVENT, *part)):
+            ledger.setdefault(target, []).append(H._json(detail, {}))
+    return owners, ledger
+
+
+def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None,
+               attempts=None, on_error=None, page=None):
     if task_ids is not None and not task_ids:
         return
     at = at or H.now()
@@ -47,19 +65,19 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
                                  "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created<=? "
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
                                  (*params, SCAN_LIMIT)))
+    if page is not None:
+        page[:] = [len(rows)]
+    owners, ledger = page_ledger(c, rows)
     earliest = min((row['created'] for row in rows), default=cutoff)
     for row in rows:
         if scanned is not None:
             scanned[:] = [row['id']]
         try:
-            assignment = c.execute("SELECT id,ts FROM task_events WHERE task_id=? AND field='owner' "
-                                   "ORDER BY ts DESC,rowid DESC LIMIT 1", (row['id'],)).fetchone()
-            key, since = (assignment['id'], assignment['ts']) if assignment else (row['owner'] + ':' + row['created'], row['created'])
+            owned = owners.get(row['id'])
+            key, since = (owned[0], owned[1]) if owned else (row['owner'] + ':' + row['created'], row['created'])
             if since > cutoff:
                 continue
-            saved = next((H._json(r['detail_json'], {}) for r in c.execute(
-                "SELECT detail_json FROM events WHERE target=? AND action=? ORDER BY ts DESC",
-                (row['id'], EVENT)) if H._json(r['detail_json'], {}).get('assignment') == key), None)
+            saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
             # Most reads need only one side of the ledger. Skip the other before wait/provenance checks.
             if recorded is False and saved:
                 continue
@@ -150,15 +168,16 @@ def overdue(c, at=None, *, visible="1", manager_actor=None, limit=200):
     at = at or H.now()
     after, count, attempts = "", 0, {}
     while count < limit:
-        scanned = [""]
+        scanned, page = [""], []
         for row, _, since, saved in candidates(c, at, recorded=True, visible=visible,
                                                manager_actor=manager_actor, after=after,
-                                               scanned=scanned, attempts=attempts):
+                                               scanned=scanned, attempts=attempts, page=page):
             yield {**row, 'assigned_at': since, 'rewoken_at': saved['rewoken_at'], 'rewake_refusal': saved.get('refusal')}
             count += 1
             if count >= limit:
                 return
-        if not scanned[0]:
+        # A short page is the last: the page after it, from its last id, would be empty and is not run.
+        if not scanned[0] or page[0] < SCAN_LIMIT:
             return
         after = scanned[0]
 
