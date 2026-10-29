@@ -204,7 +204,7 @@ fn validate_and_tag(
             "--run is only for recovery of an interrupted dispatch",
         )?;
         let id = id.parse().map_err(|_| "Invalid run id")?;
-        verify_run(&state, candidate, id, false)?;
+        verify_run(state, candidate, id, false)?;
         state.run = Some(id);
         state.save(path)?;
     }
@@ -262,7 +262,7 @@ fn validate_and_tag(
     let id = state
         .run
         .ok_or("Dispatch not visible yet; inspect Actions and resume with --run")?;
-    verify_run(&state, candidate, id, false)?;
+    verify_run(state, candidate, id, false)?;
     // Release Manager runs this in the background; the durable record resumes the same run after interruption.
     let status = Command::new("gh")
         .args([
@@ -281,7 +281,7 @@ fn validate_and_tag(
         status.success(),
         "Release validation failed or watch was interrupted; no tag pushed",
     )?;
-    verify_run(&state, candidate, id, true)?;
+    verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
     git(&[
         "push",

@@ -4,6 +4,23 @@
 
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
 #![allow(clippy::result_large_err, clippy::type_complexity)]
+// baseline, remove as fixed
+#![allow(clippy::await_holding_lock)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::cloned_ref_to_slice_refs)]
+#![allow(clippy::collapsible_if)]
+#![allow(dead_code)]
+#![allow(clippy::manual_contains)]
+#![allow(clippy::manual_unwrap_or_default)]
+#![allow(clippy::nonminimal_bool)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::single_match)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::unnecessary_lazy_evaluations)]
+#![allow(clippy::useless_conversion)]
+#![allow(clippy::useless_format)]
 
 mod accounts;
 mod afterwatch;
