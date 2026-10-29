@@ -1171,11 +1171,11 @@ impl ClaudeHost {
             }
             "system" if msg["subtype"] == "compact_boundary" => {
                 // Claude summarised the session, manually or on its own: what earlier turns said may be gone. A turn
-                // whose prompt left out what the session already held is given it again at once, while it runs.
+                // whose prompt left out what the session already held is given it again at once, after each compaction.
                 let mut inner = self.inner();
                 inner.compacted.insert(tid.into());
                 let running = inner.turn.as_ref().is_some_and(|(t, u)| t == tid && u == turn);
-                if let Some(text) = inner.refresh.remove(tid).filter(|_| running) {
+                if let Some(text) = inner.refresh.get(tid).cloned().filter(|_| running) {
                     if let Some(p) = inner.pipe.as_mut().filter(|p| p.open && p.limit_at.is_none()) {
                         p.follow_up(&text);
                     }

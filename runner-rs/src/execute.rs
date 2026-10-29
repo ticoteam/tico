@@ -1603,10 +1603,9 @@ impl Runner {
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
             let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
-            if !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
+            if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
-                built.text = built.full.clone();
-                built.restore.clear();
+                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
@@ -1631,7 +1630,7 @@ impl Runner {
                 replacing["_side_ran"] = json!(false);
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
             }));
-            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| !r.is_empty()));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
             let t = if let Some(_one) = cold_guard {
@@ -1664,7 +1663,10 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
-            if kept && !digest.is_empty() {
+            // The session holds the rules if it held them already or this turn's prompt carried them; a command's
+            // prompt and a goal action carry none.
+            let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
+            if kept && !digest.is_empty() && (held || (built.rules && !truthy(refs.get("goal_action")))) {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             if kept && prompt_turn {
@@ -3448,7 +3450,10 @@ for line in sys.stdin:
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         for n in compacting {
-            std::fs::write(dir.join(format!("compacts-{n}")), "").unwrap();
+            // A process listed twice compacts twice.
+            let mut marks = std::fs::read_to_string(dir.join(format!("compacts-{n}"))).unwrap_or_default();
+            marks.push_str("x ");
+            std::fs::write(dir.join(format!("compacts-{n}")), marks).unwrap();
         }
         for n in missing {
             std::fs::write(dir.join(format!("missing-{n}")), "").unwrap();
@@ -3464,7 +3469,7 @@ for line in sys.stdin:
              id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
              if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
-             if [ -e '{d}/compacts-'$n ]; then echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; fi\n\
+             for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -3483,12 +3488,14 @@ for line in sys.stdin:
         let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
         for (n, turn) in turns.iter().enumerate() {
             let mut config = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot"});
-            config.as_object_mut().unwrap().extend(turn.as_object().cloned().unwrap_or_default());
+            config.as_object_mut().unwrap().extend(turn.as_object().cloned().unwrap_or_default().into_iter().filter(|(k, _)| k != "attempt"));
             let mut attempt = json!({"id": format!("a-claude-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c1", "kind": "chat"},
                                  "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
                                  "history": [], "config": config});
             attempt.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            // A turn's own `attempt` fields go over the attempt itself (a command's message).
+            attempt.as_object_mut().unwrap().extend(turn["attempt"].as_object().cloned().unwrap_or_default());
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
         }
         server.abort();
@@ -3617,6 +3624,44 @@ for line in sys.stdin:
         for (n, given) in [(0, true), (1, false), (2, true), (3, false), (4, false), (5, true)] {
             assert_eq!(prompts[n].contains(rule), given, "turn {n}: {}", prompts[n]);
         }
+    }
+
+    #[tokio::test]
+    async fn a_compaction_during_a_turn_gives_back_the_repo_rules_it_left_out_after_each_boundary() {
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(projects.join("acme-app/AGENTS.md"), "Run make check before every push.").unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let rule = "Repo rules for acme/app";
+        // Turn 1 is shortened and compacts twice: each boundary gives back the standing lines and the unchanged rules.
+        let (_, prompts, _, injected) = claude_rig(&[json!({}), json!({})], &[1, 1], &[], &[], extra.clone(), rules).await;
+        assert!(prompts[1].contains(crate::prompt::STANDING_SEEN) && !prompts[1].contains(rule), "{}", prompts[1]);
+        assert_eq!(injected[1].matches(crate::prompt::RESTORED).count(), 2, "{}", injected[1]);
+        assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
+        assert!(injected[1].contains("Use the hub CLI"), "{}", injected[1]);
+        // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
+        let tight = json!({"compact_at": 2_000});
+        let (_, prompts, _, injected) = claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
+        assert!(prompts[1].contains("Use the hub CLI") && !prompts[1].contains(rule), "{}", prompts[1]);
+        assert!(injected[1].contains(crate::prompt::RESTORED) && injected[1].contains(rule) && !injected[1].contains("Use the hub CLI"), "{}", injected[1]);
+    }
+
+    #[tokio::test]
+    async fn a_command_turn_does_not_count_as_giving_the_session_its_repo_rules() {
+        // Turn 1 fails, so the rules go again; turn 2 is a command, whose prompt is only its text; turn 3 gets them.
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(projects.join("acme-app/AGENTS.md"), "Run make check before every push.").unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let command = json!({"attempt": {"message": {"id": "m2", "from_actor": "human:ana@acme.example", "body": "/context", "refs": {"command": "context"}}}});
+        let (threads, prompts, _, _) = claude_rig(&[json!({}), json!({}), command, json!({})], &[], &[], &[1], extra, rules).await;
+        assert_eq!(prompts.len(), 4, "{prompts:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        let rule = "Repo rules for acme/app";
+        assert!(prompts[2].contains("/context") && !prompts[2].contains(rule), "{}", prompts[2]);
+        assert!(prompts[3].contains(rule), "{}", prompts[3]);
     }
 
     #[test]

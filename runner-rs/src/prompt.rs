@@ -78,7 +78,8 @@ pub struct Seen {
 
 /// A turn's prompt: `text` is what is sent, `full` the whole prompt (the same unless `Seen` let parts out), and the
 /// digests of its standing and task parts, for the next turn's `Seen`. `restore` is what `text` left out, under
-/// RESTORED, for a compaction during the turn to give back; empty when nothing was left out.
+/// RESTORED, for a compaction during the turn to give back (the repo rules a resumed thread already holds included);
+/// empty when nothing was left out. `rules` is whether `text` carries the repo rules.
 #[derive(Default, Clone, Debug)]
 pub struct Built {
     pub text: String,
@@ -86,6 +87,7 @@ pub struct Built {
     pub standing: String,
     pub task: String,
     pub restore: String,
+    pub rules: bool,
 }
 
 /// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
@@ -134,14 +136,15 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
     let full = lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n\n");
     let short_standing = !seen.standing.is_empty() && seen.standing == standing;
     let short_task = !seen.task.is_empty() && seen.task == task_digest;
-    let restore = if short_standing || short_task {
-        let left: Vec<&str> = lines.iter()
-            .filter(|(p, _)| (*p == Part::Standing && short_standing) || (*p == Part::Task && short_task))
-            .map(|(_, l)| l.as_str()).collect();
-        format!("{RESTORED}\n\n{}", left.join("\n\n"))
-    } else {
-        String::new()
-    };
+    let repo_rules = s(&attempt["_repo_rules"]);
+    let rules = !repo_rules.is_empty() && lines.iter().any(|(_, l)| *l == repo_rules);
+    let mut left: Vec<&str> = lines.iter()
+        .filter(|(p, _)| (*p == Part::Standing && short_standing) || (*p == Part::Task && short_task))
+        .map(|(_, l)| l.as_str()).collect();
+    if !repo_rules.is_empty() && !rules {
+        left.push(&repo_rules);
+    }
+    let restore = if left.is_empty() { String::new() } else { format!("{RESTORED}\n\n{}", left.join("\n\n")) };
     let text = if short_standing || short_task {
         let mut out: Vec<String> = vec![];
         let (mut said_standing, mut said_task) = (false, false);
@@ -167,7 +170,7 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
     } else {
         full.clone()
     };
-    Built { text, full, standing, task: task_digest, restore }
+    Built { text, full, standing, task: task_digest, restore, rules }
 }
 
 /// Every line of the prompt in order, each marked with what it is, and the run id it names.
