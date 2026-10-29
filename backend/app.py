@@ -31,6 +31,7 @@ from . import outcome_stats
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import login_holds
+from . import cloud_access
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -144,6 +145,7 @@ def create_app(settings=None):
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
+        cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
@@ -614,6 +616,8 @@ def create_app(settings=None):
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
                 app.state.sleep_idle.seen(who, request.url.path)
+                # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
+                cloud_access.gate(store, who, request.url.path)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -1718,8 +1722,18 @@ def create_app(settings=None):
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
-        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ."""
-        return company_billing.read(*billing_key(request.state.identity), month)
+        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
+        Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
+        answer = company_billing.read(*billing_key(request.state.identity), month)
+        cloud_access.from_billing(store, answer)
+        return answer
+
+    @app.get("/api/v2/cloud-access")
+    def cloud_access_view(request: Request):
+        """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
+        cloud. Open to every signed-in person, also while locked."""
+        views.human_only(request.state.identity)
+        return {"cloud": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):

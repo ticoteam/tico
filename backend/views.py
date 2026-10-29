@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from clients import gateway, sessions
 
 from . import access as Access
-from . import start_places
+from . import cloud_access, start_places
 from . import lifecycle
 from . import bot_access as A
 from . import models as M
@@ -2395,7 +2395,9 @@ def install_views(app, store, auth, mutate, task_view):
             return {"cloud": True, "last_tick": tick, "active": active, "queued": queued,
                     "recent_runs": [], "keeper_alive": age is not None and age < 60,
                     "dispatcher_alive": False, "tick_age_s": age, "server_time": H.now(),
-                    "health_issues": operation_issues(c, who, auth)}
+                    "health_issues": operation_issues(c, who, auth),
+                    # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
+                    "cloud_access": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/runs")
     def runs(request: Request):

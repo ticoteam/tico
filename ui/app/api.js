@@ -30,9 +30,14 @@ const apiError = (j, r) => {
 // task a duplicate feature request already has (`backend/store.py`, Problem.extra).
 /** @param {FailureBody} j @param {Response} r @returns {Error & {body: FailureBody, status: number}} */
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
-// Signed out, by any sign-in (session.js): the built-in login page, or the banner.
+// Signed out, by any sign-in (session.js): the built-in login page, or the banner. A locked Tico Cloud company's 402
+// `locked` shows Pay to continue at once (cloud-access.js).
 /** @param {Response} r @param {FailureBody} j */
-const signInRedirect = (r, j) => r.status === 401 && sessionCheck(r, j);
+const signInRedirect = (r, j) => {
+  const error = /** @type {any} */ (j?.error);
+  if (r.status === 402 && error?.code === 'locked') cloudAccessLocked(error.cloud);
+  return r.status === 401 && sessionCheck(r, j);
+};
 // A list the server tags (tasks, labels, routines) is asked for again with its tag: unchanged, the answer is a 304
 // with no body and the copy kept here is read again, so the server neither loads nor sends it. A few dozen at most.
 /** @type {Map<string, {tag: string, text: string}>} */

@@ -44,7 +44,7 @@ from . import report_managers
 from . import task_models
 from . import task_run_models
 from .models import Contract
-from . import audit_log
+from . import audit_log, cloud_access
 from .store import H, Problem
 
 log = logging.getLogger(__name__)
@@ -1563,7 +1563,9 @@ def tick(store, at=None):
                 continue
             if row["next_due"] > now:
                 continue
-            if why := _bot_away(c, row) or _no_input(c, row, getattr(store, "settings", None), at, zone):
+            # A Tico Cloud company out of credit or locked passes its schedules over (backend/cloud_access.py).
+            if why := (cloud_access.routines_paused(c) or _bot_away(c, row)
+                       or _no_input(c, row, getattr(store, "settings", None), at, zone)):
                 # A converted built-in routine with nothing to work on is passed over, as the routine was.
                 _count(c, row["id"], "dropped")
                 H.event(c, H.KEEPER, "automation.skipped", row["id"], {"at": row["next_due"], "reason": why})

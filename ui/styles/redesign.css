@@ -45,7 +45,7 @@ body.in-setup .rd-lib{display:none}
 
 /* The Strategy Bot: a rail on the right of every Strategy tab on a desktop; a sheet behind a button on a phone. */
 .sbot{position:fixed;top:0;right:0;bottom:0;z-index:40;width:var(--sbot-w);display:flex;flex-direction:column;background:var(--surface);border-left:1px solid var(--line)}
-html.demo .sbot{top:var(--demo-h)}
+html.strip .sbot{top:var(--demo-h)}
 .sbot-head{display:flex;align-items:center;gap:8px;min-height:48px;padding:6px 8px 6px 14px;border-bottom:1px solid var(--line)}
 .sbot-head .nav-icon{font-size:18px;color:var(--accent)}
 .sbot-head h2{flex:1;margin:0;font-size:var(--t-base);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
