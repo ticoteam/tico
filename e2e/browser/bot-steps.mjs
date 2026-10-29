@@ -14,8 +14,9 @@ const env = process.env;
 const practice = env.PRACTICE || '';                   // e.g. http://login.practice.test:8080
 const host = env.HOST || 'login.practice.test';
 const other = env.OTHER || '';                         // another page on another host, for the refused fill
-const credential = env.CREDENTIAL || 'PRACTICE_LOGIN';
-const label = env.LABEL || 'Practice login';
+const label = env.LABEL || 'Practice-login';
+// A login saved from a card is named after the card's label, so the bot fills it by that name.
+const credential = label;
 const checks = [];
 const data = {};
 const check = (name, ok, detail = '') => {
@@ -24,22 +25,34 @@ const check = (name, ok, detail = '') => {
 };
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
-// hub: the CLI's own JSON, whatever its exit code (a refusal prints its reason on stdout).
+// hub: the CLI's own JSON, whatever its exit code (a refusal prints its reason on stdout). `err` is the end of stderr
+// (a usage error, say), which never holds a value the CLI typed.
 function hub(args) {
   try {
     return {ok: true, json: JSON.parse(execFileSync('hub', args, {env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 150000}))};
   } catch (error) {
     let json = null;
     try { json = JSON.parse(String(error.stdout || '')); } catch { /* not JSON: keep the exit status only */ }
-    return {ok: false, json};
+    return {ok: false, json, err: String(error.stderr || '').trim().split('\n').slice(-2).join(' ')};
   }
 }
+const why = r => (r.json && (r.json.error || r.json.problem)) || r.err || '';
 
 // The DevTools endpoint the runner serves for this bot's Chrome (TICO_BROWSER_URL = http://127.0.0.1:<port>/<secret>).
 class Browser {
   async open() {
     const base = (env.TICO_BROWSER_URL || '').replace(/\/$/, '');
-    const version = await (await fetch(base + '/json/version')).json();
+    if (!base) throw new Error('TICO_BROWSER_URL is not set in this turn');
+    // A first start includes Chrome's install, which can outlast one json/version wait (503 until it is up).
+    const end = Date.now() + 300000;
+    let version = null;
+    for (;;) {
+      const reply = await fetch(base + '/json/version');
+      version = await reply.json().catch(() => ({}));
+      if (reply.ok) break;
+      if (reply.status !== 503 || Date.now() > end) throw new Error(`json/version ${reply.status}: ${version.problem || version.error || ''}`);
+      await sleep(5000);
+    }
     this.ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((ok, fail) => { this.ws.onopen = ok; this.ws.onerror = () => fail(new Error('no DevTools socket')); });
     this.id = 0;
@@ -106,19 +119,22 @@ class Tab {
 
 // A secret goes from Tico to the page through the runner's `hub browser fill`, never through this script.
 const fill = (tab, field, selector) => {
-  const args = ['browser', 'fill', '--credential', credential, '--field', field, '--target-id', tab.targetId];
+  const args = ['browser', 'fill', credential, field, '--target', tab.targetId];
   if (selector) args.push('--selector', selector);
-  return hub(args).json || {};
+  const r = hub(args);
+  return r.json || {ok: false, error: r.err};
 };
+
+const filled = (name, r) => check(name, r.ok === true, r.error || '');
 
 async function logIn(tab) {
   await tab.go(practice + '/login');
-  check('login: username filled from Tico', fill(tab, 'username', 'input[name=username]').ok === true);
-  check('login: password filled from Tico', fill(tab, 'password', 'input[name=password]').ok === true);
+  filled('login: username filled from Tico', fill(tab, 'username', 'input[name=username]'));
+  filled('login: password filled from Tico', fill(tab, 'password', 'input[name=password]'));
   await tab.click('button[type=submit]');
   await tab.waitFor('["/login/2fa", "/me"].includes(location.pathname) || document.body.innerText.includes("Wrong")');
   if ((await tab.path()) === '/login/2fa') {
-    check('login: authenticator code filled from Tico', fill(tab, 'totp', 'input[name=code]').ok === true);
+    filled('login: authenticator code filled from Tico', fill(tab, 'totp', 'input[name=code]'));
     await tab.click('button[type=submit]');
     await tab.waitFor('location.pathname === "/me" || document.body.innerText.includes("That code is wrong")');
   }
@@ -127,17 +143,21 @@ async function logIn(tab) {
 
 async function status(browser) {
   const r = hub(['browser', 'status']);
-  check('chrome is running for this bot', r.json && r.json.running === true, JSON.stringify(r.json && {running: r.json.running}));
+  check('chrome is running for this bot', r.json && r.json.running === true,
+    JSON.stringify(r.json ? {running: r.json.running, version: r.json.version, problem: r.json.problem, error: r.json.error} : r.err));
 }
+
+// Phases that only call the hub: they run whether or not the bot's Chrome answers.
+const NO_BROWSER = new Set(['request-card', 'needs-you']);
 
 const phases = {
   async status(browser) { await status(browser); },
 
   // The bot asks the person for the practice login: a card in the chat, saved by the person (the journey, here).
   async 'request-card'(browser, data) {
-    const r = hub(['credential', 'request', credential, '--kind', 'login', '--sites', host, '--label', label]);
+    const r = hub(['credential', 'request', '--kind', 'login', '--site', host, '--label', label]);
     data.card = (r.json && r.json.id) || '';
-    check('login card requested', Boolean(data.card));
+    check('login card requested', Boolean(data.card), why(r));
   },
 
   // The bot signs up on the practice site: its own inbox takes the emailed code, which the bot reads and types.
@@ -150,8 +170,8 @@ const phases = {
     const tab = await browser.newTab();
     await tab.go(practice + '/signup');
     await tab.type('input[name=email]', address);
-    check('signup: username filled from Tico', fill(tab, 'username', 'input[name=username]').ok === true);
-    check('signup: password filled from Tico', fill(tab, 'password', 'input[name=password]').ok === true);
+    filled('signup: username filled from Tico', fill(tab, 'username', 'input[name=username]'));
+    filled('signup: password filled from Tico', fill(tab, 'password', 'input[name=password]'));
     if (other) {
       const elsewhere = await browser.newTab();
       await elsewhere.go(other + '/signup');
@@ -179,7 +199,7 @@ const phases = {
     const tab = await browser.newTab();
     check('signed in before two-step is on', await logIn(tab));
     await tab.go(practice + '/settings');
-    check('settings: authenticator code filled from Tico', fill(tab, 'totp', 'input[name=code]').ok === true);
+    filled('settings: authenticator code filled from Tico', fill(tab, 'totp', 'input[name=code]'));
     await tab.click('button[type=submit]');
     check('two-step sign-in is on', await tab.waitFor('document.body.innerText.includes("Two-step sign-in is on")'));
   },
@@ -207,9 +227,9 @@ const phases = {
   },
 
   async 'needs-you'(browser, data) {
-    const r = hub(['browser', 'needs-you', '--host', host, '--reason', 'The practice site wants a person to confirm a sign-in']);
+    const r = hub(['browser', 'needs-you', host, '--reason', 'The practice site wants a person to confirm a sign-in']);
     data.needs = (r.json && r.json.id) || '';
-    check('the site needs a person is raised', r.ok === true);
+    check('the site needs a person is raised', r.ok === true, why(r));
   },
 };
 
@@ -220,7 +240,7 @@ async function main() {
   } else {
     let browser = null;
     try {
-      browser = await new Browser().open();
+      if (!NO_BROWSER.has(phase)) browser = await new Browser().open();
       await phases[phase](browser, data);
     } catch (error) {
       check('phase finished', false, error.message);
