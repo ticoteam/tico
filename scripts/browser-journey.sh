@@ -44,10 +44,11 @@ PRACTICE=http://login.practice.test:8080
 OTHER=http://other.practice.test:8080
 CREDENTIAL=PRACTICE_LOGIN
 LABEL=Practice-login
-# The install's Assistant by default: it is built from its template at enrollment, so it has the repository that
-# activation needs. A bot created here has none (only BotOps builds one for it), and activation refuses.
-BOT="${TICO_JOURNEY_BOT:-coo}"
+# An ordinary bot from a starter template, added the way the UI adds one from Templates: the computer builds a starter's
+# repository itself, so no BotOps turn is needed. TICO_JOURNEY_BOT names another bot to use instead.
+BOT="${TICO_JOURNEY_BOT:-browser-bot}"
 BOT_NAME="Browser bot"
+BOT_TEMPLATE=learning
 RESULTS_DIR=/home/runner/journey-threads/results
 J="$REPO/e2e/browser/journey.py"
 RESULTS=()
@@ -280,7 +281,7 @@ step_bot() {
   local rid assignment assigned generation revision
   rid="$(runner_id)" || return 1
   if ! japi GET "/api/v2/bots/$BOT" >/dev/null 2>&1; then
-    send POST /api/v2/bots "{\"slug\": \"$BOT\", \"display_name\": \"$BOT_NAME\", \"status\": \"planned\"}" >/dev/null || return 1
+    send POST /api/v2/bots/register "{\"slug\": \"$BOT\", \"display_name\": \"$BOT_NAME\", \"template\": \"$BOT_TEMPLATE\", \"build\": true}" >/dev/null || return 1
   fi
   assignment="$(japi GET "/api/v2/bots/$BOT")" || return 1
   assigned="$(printf '%s' "$assignment" | pick '(d.get("assignment") or {}).get("runner_id", "")')"
@@ -367,7 +368,7 @@ step_code_refused() {
   local status
   status="$(python3 "$J" code-refused "Journey import two")" || return 1
   printf '%s' "$status" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["status"] == 403 else 1)'
-  verdict "code: the owner's API token cannot read a 2FA code (a person opens it signed in)" $?
+  verdict "code: a personal API token cannot read a 2FA code (a person opens it signed in)" $?
 }
 
 step_screen() {
@@ -432,7 +433,7 @@ run_step "practice: /admin/expire ends the bot's sessions" main step_expire_bot
 run_step "bot signs in again with no person" "chrome, creds" step_relogin
 run_step "bot raises a site reconnect; Done closes it" "creds: reconnects, hub browser needs-you" step_needs_you
 run_step "owner imports a password manager export; importing it again adds none" "creds: import" step_import
-run_step "a 2FA code is refused to an API token" "creds: code" step_code_refused
+run_step "a 2FA code is refused to a personal API token" "creds: code" step_code_refused
 run_step "computer screen opens at 390x844 and fits the width" "main, screen on computer" step_screen
 run_step "practice page script saw navigator.webdriver false" "chrome" step_beacon
 run_step "leak check: database, events, runner logs, run output, practice log" "main" step_leaks

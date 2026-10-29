@@ -23,8 +23,8 @@ output is ids, counts and PASS or FAIL lines.
                                                 ('' when none)
   import-file OUT                               a Bitwarden export with two logins (one with 2FA), into OUT (mode 0600)
   import-logins FILE                            imports FILE as the owner; prints the counts (never the values)
-  code-refused NAME                             the owner's API token asks for the 2FA code of credential NAME: prints
-                                                the HTTP status (403 when a person must open it, signed in)
+  code-refused NAME                             a personal API token of the owner asks for the 2FA code of credential
+                                                NAME: prints the HTTP status (403 when a person must open it, signed in)
   needles --secret-file S... --password-file P... --start EPOCH --mail FILE [--import-file F] --out OUT
                                                 the values the leak check looks for
   leakscan --needles FILE --source LABEL=PATH [...]
@@ -253,17 +253,21 @@ def cmd_import_logins(args):
 
 
 def cmd_code_refused(args):
+    # A personal API token of the owner (not the install's local token, which is the owner signed in): the token is
+    # minted here, used once, revoked, and never printed.
     listed = install("GET", "/api/v2/credentials")
     found = [item["id"] for item in listed.get("credentials", []) if item.get("name") == args.name]
     if not found:
         raise SystemExit(f"journey: no credential named {args.name}")
+    minted = install("POST", "/api/v2/me/tokens", {"label": "journey code check", "expires_in_days": 1})
     request = urllib.request.Request(f"http://127.0.0.1:{os.environ['TICO_PORT']}/api/v2/credentials/{found[0]}/code",
-                                     headers={"Authorization": "Bearer " + read(os.environ["TOKEN_FILE"])})
+                                     headers={"Authorization": "Bearer " + minted["token"]})
     try:
         with urllib.request.urlopen(request, timeout=30) as reply:
             status = reply.status
     except urllib.error.HTTPError as error:
         status = error.code
+    install("POST", f"/api/v2/me/tokens/{minted['id']}/revoke", {})
     print(json.dumps({"status": status}))
 
 
