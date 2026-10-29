@@ -530,7 +530,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     hosted = [r[0] for r in c.execute("SELECT 'bot:' || bot FROM assignments WHERE runner_id=?", (who.runner_id,))]
     waits.serve(c, hosted, default_org)
     if not capable:
-        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
+        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed' AND state<>'unknown'", (who.runner_id,))
         return []
     # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
     # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.

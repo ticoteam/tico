@@ -94,6 +94,11 @@ def _changed(*columns):
     return " OR ".join(f"OLD.{column} IS NOT NEW.{column}" for column in columns)
 
 
+# A WHEN that is true when any column of its table changed. ensure() fills it in from PRAGMA table_info, so a
+# column added later is covered without a change here, and the trigger is rebuilt because its SQL changed.
+_ANY_COLUMN = "__any_column_changed__"
+
+
 FAN_CAP = 100      # more tasks than this in one change: one `bulk` row, and lists read in full
 
 
@@ -135,7 +140,9 @@ TRIGGERS = [
     ("changes_tasks_delete", "DELETE", "tasks", None,
      _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
     ("changes_task_links_insert", "INSERT", "task_links", None, _row("tasks", "link", "NEW.task_id")),
-    ("changes_task_links_update", "UPDATE", "task_links", None, _row("tasks", "link", "NEW.task_id")),
+    # Only a write that changes a column: a rewrite with the same values wakes no stream (a worktree heartbeat did this
+    # every few minutes per closed task).
+    ("changes_task_links_update", "UPDATE", "task_links", _ANY_COLUMN, _row("tasks", "link", "NEW.task_id")),
     ("changes_task_links_delete", "DELETE", "task_links", None, _row("tasks", "link", "OLD.task_id")),
     # A relation (parent, blocks, related, duplicate, follow-up) changes how both ends show.
     ("changes_task_relations_insert", "INSERT", "task_relations", None,
@@ -334,7 +341,7 @@ RUNNER_TRIGGERS = [
     ("changes_runner_task_links_insert", "INSERT", "task_links", _WORKTREE_LINK.format(row="NEW"),
      _tell("worktrees", _TASK_COMPUTERS.format(task="NEW.task_id"))),
     ("changes_runner_task_links_update", "UPDATE", "task_links",
-     _WORKTREE_LINK.format(row="NEW") + " OR " + _WORKTREE_LINK.format(row="OLD"),
+     f"({_WORKTREE_LINK.format(row='NEW')} OR {_WORKTREE_LINK.format(row='OLD')}) AND {_ANY_COLUMN}",
      _tell("worktrees", _TASK_COMPUTERS.format(task="NEW.task_id") + " UNION SELECT OLD.computer_id")),
     ("changes_runner_task_links_delete", "DELETE", "task_links", _WORKTREE_LINK.format(row="OLD"),
      _tell("worktrees", _TASK_COMPUTERS.format(task="OLD.task_id") + " UNION SELECT OLD.computer_id")),
@@ -397,13 +404,16 @@ def ensure(c):
                                                    "AND name LIKE 'changes\\_%' ESCAPE '\\'")}
     columns = {}
 
+    def table_columns(table):
+        if table not in columns:
+            columns[table] = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+        return columns[table]
+
     def has(need):
         table, _, column = need.partition(".")
         if table not in tables:
             return False
-        if column and table not in columns:
-            columns[table] = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
-        return not column or column in columns[table]
+        return not column or column in table_columns(table)
     # What the triggers look tasks up by: a next-run task by the attempt carrying it, a cover by its blob.
     for need, index in (("tasks.carried_by", "tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL"),
                         ("task_assets", "task_assets_blob ON task_assets(blob_id)"),
@@ -417,6 +427,8 @@ def ensure(c):
         if table not in tables or not all(has(need) for need in NEEDS.get(name, ())):
             continue
         wanted.add(name)
+        if when and _ANY_COLUMN in when:
+            when = when.replace(_ANY_COLUMN, _changed(*sorted(table_columns(table))))
         sql = _trigger_sql(name, event, table, when, body)
         if installed.get(name) == sql:
             continue

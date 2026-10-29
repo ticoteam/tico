@@ -323,6 +323,38 @@ def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monk
     assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger'").fetchone()[0] == 0
 
 
+def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to_any_column_logs_once(api):
+    """The link triggers fire on a real change to any column (read from the table), never on a rewrite with the same values:
+    a worktree heartbeat rewrote closed tasks' links every few minutes, and each write rebuilt every open board."""
+    store = api.app.state.store
+    setup_attempt(api)
+    task = post(api, "tasks", {"owner": "ben", "title": "Review the links", "body": "Please."})
+    with store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,computer_id,created) "
+                  "VALUES('wt1',?,'worktree','u','present','rc1',?)", (task["id"], H.now()))
+
+    def logged(sql):
+        with store.transaction() as c:
+            before = E.latest(c)
+            c.execute(sql)
+            return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
+    with store.read() as c:
+        columns = [row[1] for row in c.execute("PRAGMA table_info(task_links)")]
+    assert {"repo", "detail_json", "computer_id", "pr_merged_at"} <= set(columns)
+    for column in columns:
+        assert logged(f"UPDATE task_links SET {column}={column} WHERE id='wt1'") == set(), column
+    assert logged("UPDATE task_links SET state='unknown' WHERE id='wt1'") == {("tasks", "link"), ("runner", "worktrees")}
+    for column in columns:
+        if column in ("id", "task_id"):
+            continue
+        assert ("tasks", "link") in logged(f"UPDATE task_links SET {column}='x{column}' WHERE id='wt1'"), column
+    # A pull request link is no worktree: the task still hears of it, the computers do not.
+    with store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,created) VALUES('pr1',?,'pr','https://github.com/acme/app/pull/9',?)",
+                  (task["id"], H.now()))
+    assert logged("UPDATE task_links SET title='Renamed' WHERE id='pr1'") == {("tasks", "link")}
+
+
 def test_a_ring_after_a_quiet_window_is_read_at_once_and_a_burst_still_once_a_window(monkeypatch):
     monkeypatch.setattr(E.time, "monotonic", lambda: 100.0)
     assert E.gathered(0.25, read_at=0.0) == E.LEAD_SECONDS          # quiet: read almost at once
