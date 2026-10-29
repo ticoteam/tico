@@ -55,7 +55,8 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in their conversation, raise a notice, and put the number of unread replies on the `?`. Opening a
+Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask, on **Tico support**
+under its **+** and on the request's name at the top of the chat; Ask's button carries no count. Opening a
 conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
 Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
 refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its

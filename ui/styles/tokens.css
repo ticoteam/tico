@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:200;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=33c472c80ec5) format("woff2")}
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:200;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=95d5a76f3a2a) format("woff2")}
 /* Type. System UI only (SF Pro on a Mac): the UI loads nothing from the network. Dense: 13px text, 16px page titles.
    Every font-size in styles/ is one of these; icon glyphs keep px (12-32), and a phone's text fields a literal 16px. */
 :root{

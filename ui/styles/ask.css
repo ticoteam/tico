@@ -7,9 +7,6 @@
 .ask-fab .nav-icon{font-size:22px;font-variation-settings:"FILL" 1}
 .ask-fab:hover{filter:brightness(1.08)}
 .ask-fab[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
-#ask-fab[data-support-count]::after,#ask-support[data-support-count]::after{content:attr(data-support-count);min-width:18px;height:18px;
-  padding:0 4px;box-sizing:border-box;border-radius:9px;background:var(--ink);color:var(--bg);font:700 11px/18px var(--sans);text-align:center}
-#ask-fab[data-support-count]::after{position:absolute;top:-4px;right:-4px}
 .ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));
   height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:1.45}
@@ -36,7 +33,8 @@
 .ask-menu button:hover,.ask-menu button:focus-visible{background:var(--surface2)}
 .ask-menu button span{color:var(--muted);font-size:var(--t-sm)}
 .ask-menu button span::before{content:"· "}
-#ask-support[data-support-count]::after{margin-left:auto}
+#ask-support[data-support-count]::after{content:attr(data-support-count);margin-left:auto;min-width:18px;height:18px;padding:0 4px;
+  box-sizing:border-box;border-radius:9px;background:var(--ink);color:var(--bg);font:700 11px/18px var(--sans);text-align:center}
 .ask-members{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--line);font-size:var(--t-sm)}
 .ask-members[hidden]{display:none}
 .ask-member{border:0;background:transparent;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;padding:2px 4px;border-radius:6px}
@@ -74,12 +72,14 @@
 @media (max-width:760px){
   .ask-fab{display:none}
   .mobile-ask{display:flex}
-  .mobile-ask-mark{width:34px;height:34px;margin-top:-10px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:flex;
-    align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.3)}
-  .mobile-ask-mark .mobile-nav-icon{font-size:20px;font-variation-settings:"FILL" 1,"wght" 400}
-  .mobile-ask[aria-expanded="true"] .mobile-ask-mark{background:var(--surface2);color:var(--ink)}
-  .mobile-ask{position:relative}
-  .mobile-ask [data-support-badge]{position:absolute;top:0;right:calc(50% - 22px)}
+  /* The primary action: an accent circle with no word under it, filling its column. Its centre sits 2px above the other
+     tabs' icons, so the row reads as one line and the circle as raised; a close mark replaces the glyph while open. */
+  .mobile-ask{justify-content:flex-start;padding-top:0}
+  .mobile-ask-mark{flex:none;width:44px;height:44px;margin-top:-5px;border-radius:50%;background:var(--accent);color:var(--accent-ink);
+    display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.18);
+    transition:transform var(--dur-fast) var(--ease)}
+  .mobile-ask-mark .mobile-nav-icon{width:24px;height:24px;font-size:24px}
+  .mobile-ask:active .mobile-ask-mark{transform:scale(.96)}
   .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}
   body.mobile-composer-focus .ask-panel{bottom:0}   /* typing: the tab bar makes way for the keyboard (layout.css) */

@@ -79,7 +79,9 @@ async function open(browser, viewport, state) {
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps, Assistant or ? in the rail');
     const fab = page.locator('#ask-fab'), panel = page.locator('#ask-panel');
     await fab.waitFor();
-    await page.waitForFunction(() => document.querySelector('#ask-fab')?.getAttribute('data-support-unread') === '1');
+    // The unread reply is counted inside the panel only: on Tico support in the + menu, not on the button.
+    await page.waitForFunction(() => document.querySelector('#ask-support')?.getAttribute('data-support-count') === '1');
+    assert.equal(await fab.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on the button');
     await fab.click();
     await panel.waitFor();
     assert.equal(await fab.getAttribute('aria-expanded'), 'true');
@@ -160,17 +162,20 @@ async function open(browser, viewport, state) {
     state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: []};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
-    assert.equal(await page.locator('#mobile-nav .mobile-nav-label').nth(2).innerText(), 'Ask');
+    // The Ask tab is an icon, no word: Ask's mark, a close mark while open, and its name says which.
+    const glyph = () => tab.locator('.mobile-nav-icon').innerText();
+    assert.equal(await tab.locator('.mobile-nav-label').count(), 0);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'auto_awesome']);
     await tab.click();
     await page.locator('#ask-panel').waitFor();
     await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a sheet above the tab bar (${JSON.stringify([sheet, bar])})`);
-    assert.equal(await tab.locator('.mobile-nav-label').innerText(), 'Close');
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
-    assert.equal(await tab.locator('.mobile-nav-label').innerText(), 'Ask');
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'auto_awesome']);
     assert.deepEqual(errors, []);
     await page.close();
   } finally {

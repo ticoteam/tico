@@ -102,19 +102,16 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
-  // Ask's button (and the phone's Ask tab) and Tico support in its + menu carry the number of unread replies
-  // (ui/app/ask-panel.js, which hears `tico:support` to show an open request as in its chat).
+  // The number of unread replies shows only inside Ask's panel: on Tico support in its + menu here, and on the
+  // support chip (ui/app/ask-panel.js, which hears `tico:support` to show an open request as in its chat). Ask's
+  // button and the phone's Ask tab carry no count.
   function mark() {
-    const n = state.unread;
-    for (const id of ['ask-fab', 'mobile-ask', 'ask-support']) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      if (n) { el.setAttribute('data-support-unread', n); el.setAttribute('data-support-count', n > 9 ? '9+' : String(n)); }
-      else { el.removeAttribute('data-support-unread'); el.removeAttribute('data-support-count'); }
+    const n = state.unread, item = document.getElementById('ask-support');
+    if (item) {
+      if (n) item.setAttribute('data-support-count', n > 9 ? '9+' : String(n));
+      else item.removeAttribute('data-support-count');
+      item.setAttribute('aria-label', n ? `Tico support, ${n} new ${n === 1 ? 'reply' : 'replies'}` : 'Tico support');
     }
-    document.getElementById('ask-support')?.setAttribute('aria-label', n ? `Tico support, ${n} new ${n === 1 ? 'reply' : 'replies'}` : 'Tico support');
-    const badge = document.querySelector('#mobile-ask [data-support-badge]');
-    if (badge) { badge.hidden = !n; badge.textContent = n > 9 ? '9+' : String(n); }
     document.dispatchEvent(new CustomEvent('tico:support'));
   }
   function accept(data) {

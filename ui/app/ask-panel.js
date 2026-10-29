@@ -37,12 +37,16 @@ function askSync() {
   fab.hidden = away;
   panel.hidden = !open;
   document.body.classList.toggle('ask-open', open);
-  for (const el of [fab, tab].filter(Boolean)) {
-    el.setAttribute('aria-expanded', String(open));
-    el.setAttribute('aria-label', open ? 'Close ' + name : name);
-  }
+  fab.setAttribute('aria-expanded', String(open));
+  fab.setAttribute('aria-label', open ? 'Close ' + name : name);
   fab.title = name + ' (⌘J)';
-  const label = tab?.querySelector('.mobile-nav-label'); if (label) label.textContent = open ? 'Close' : 'Ask';
+  // The phone's tab is a glyph with no word under it: Ask's mark, or a close mark while the sheet is open.
+  if (tab) {
+    const icon = open ? 'close' : 'auto_awesome';
+    tab.setAttribute('aria-expanded', String(open));
+    tab.setAttribute('aria-label', open ? 'Close' : 'Ask');
+    tab.querySelector('.mobile-nav-icon').textContent = icon;
+  }
   panel.setAttribute('aria-label', name);
   panel.querySelector('#ask-title').textContent = name;
   if (!open) return;
