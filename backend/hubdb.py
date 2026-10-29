@@ -1289,6 +1289,10 @@ def migrate(conn, adopt_legacy=False):
             # columns, and the predicate matches its query word for word, so the scan never opens a body.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
                          "id, requester, owner, guest, private) WHERE private IS NOT 0")
+            # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads
+            # beyond the parties: each private row was a body-page read before this.
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
+                         "id, requester, owner, guest, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
             # answered from an index alone: the table's pages hold every body, and these reads need none of them.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("

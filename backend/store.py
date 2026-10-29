@@ -1619,6 +1619,8 @@ class Store:
                                    # but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_parties",
                                     "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   ("tasks_private_status",
+                                    "tasks(id, requester, owner, guest, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
                                    ("tasks_queue_cover", "tasks(rank, created, id, owner, requester, private, guest)"),
                                    ("tasks_owner_status_cover",

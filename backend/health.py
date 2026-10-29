@@ -1410,6 +1410,16 @@ def storage_view(c, settings):
             "copy": {key: detail.get(key, 0) for key in ("done", "total", "failed")}}
 
 
+def review_children_sql(visible):
+    """The review subtasks of a PR's task that the viewer may see (`visible`, from Auth.task_sql). It starts from the
+    parent's children (task_relations_to), not a scan of every task: a parent has a handful, and the scan read
+    every task's row, bodies' pages included, on each waiting PR's check."""
+    return ("SELECT tasks.owner FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
+            "WHERE r.kind='parent' AND r.to_task=? AND tasks.status IN ('open','doing','waiting','review','ready') "
+            "AND tasks.title LIKE 'Review %' "
+            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created LIMIT 3")
+
+
 def _aged_pr_checks(c, who, auth, full, kind):
     """Name visible bot PRs waiting over twelve hours, without contacting GitHub."""
     if not full and kind != "bot":
@@ -1436,12 +1446,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
         actor = link["owner"] if reason == "conflict" else "reviewer (not assigned)"
         if reason == "review":
             # Review subtasks, like task roles, say whose move it is. Never expose a hidden child's owner.
-            reviewers = c.execute(
-                "SELECT tasks.owner FROM tasks WHERE tasks.status IN ('open','doing','waiting','review','ready') "
-                "AND tasks.title LIKE 'Review %' "
-                "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.kind='parent' AND r.from_task=tasks.id AND r.to_task=?) "
-                f"AND coalesce(tasks.private,1)=0 AND ({auth.task_sql(c, who)}) ORDER BY tasks.created LIMIT 3",
-                (link["task_id"],)).fetchall()
+            reviewers = c.execute(review_children_sql(auth.task_sql(c, who)), (link["task_id"],)).fetchall()
             role = auth.settings.github_review_role or "reviewer"
             roles = c.execute("SELECT actor FROM task_roles WHERE task_id=? AND role=? ORDER BY actor LIMIT 3",
                               (link["task_id"], role)).fetchall()
