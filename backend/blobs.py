@@ -6,6 +6,7 @@ import contextlib
 import io
 import errno
 import json
+import logging
 import time
 import hashlib
 import os
@@ -18,8 +19,12 @@ from .store import H, Problem
 from . import blob_s3
 
 
+log = logging.getLogger("tico.storage")
+
 # How long an unreachable earlier place is skipped (Blobs._open_earlier).
 EARLIER_RETRY = 300
+# A refused upload starts a fresh write check when the last one began longer ago than this (Blobs._heal).
+HEAL_AFTER = 60
 # The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
 Target = collections.namedtuple("Target", "generation settings sources s3")
 
@@ -49,6 +54,8 @@ class Blobs:
         self._health_lock = threading.RLock()
         self._probe_lock = threading.Lock()
         self._probe_task = None
+        # When the last write check began (monotonic), and whether a refused upload's re-check is running (`_heal`).
+        self._checked, self._healing = None, False
         self._s3_failed = set()
         self.copy_status = {"done": 0, "total": 0, "running": False, "error": "", "failed": 0}
         # The server's own storage; `configure` may put a company bucket in its place.
@@ -60,7 +67,7 @@ class Blobs:
         self._earlier_down = {}
         # Bumped by `configure`, so a copy or probe begun for one target never records against another.
         self._generation = 0
-        self._loop = None
+        self._loop = self._store = None
         # Whether this disk's files are copied to a new place on their own, and why an upload is refused when the
         # place can't take it (`configure`).
         self._copy_disk, self._paused = True, ""
@@ -268,6 +275,7 @@ class Blobs:
                 raise Problem("storage_changed", "Where new files go changed; the file was not copied", 409)
             if self._write_failed or self._sources.selected is None:
                 detail = self._write_error or "S3 storage write check is still pending"
+                self._heal()
                 raise Problem("blob_storage", detail + "; retry without discarding your file", 503, True)
             s3, kind, sources = self._s3, self._sources.kind, self._sources
             settings, bucket = self.settings, self.bucket
@@ -473,13 +481,41 @@ class Blobs:
         except OSError as exc:
             raise Problem("blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True) from exc
 
-    def storage_loop(self, store, stop, retry_interval=30 * 60):
-        # `configure` starts a fresh loop for a new target; this one ends when the target changes.
-        self._loop = stop
-        generation = self._generation
-        self.copy_local(store, stop)
-        while self._write_failed and not stop.wait(retry_interval) and generation == self._generation:
-            self.copy_local(store, stop)
+    def storage_loop(self, store, stop, retry_interval=30 * 60, first_retry=30):
+        # `configure` starts a fresh loop for a new target; this one ends when the target changes. While writes fail,
+        # or a pass ends on an error, it checks again after `first_retry` seconds, twice as long each time after,
+        # up to `retry_interval`. An error never ends it: uploads stay refused until a check passes.
+        self._loop, self._store = stop, store
+        generation, wait = self._generation, first_retry
+        while True:
+            failed = False
+            try:
+                self.copy_local(store, stop)
+            except Exception:
+                failed = True
+                log.exception("File storage check or copy failed; trying again in %s s", wait)
+            if not (failed or self._write_failed) or stop.wait(wait) or generation != self._generation:
+                return
+            wait = min(wait * 2, retry_interval)
+
+    def _heal(self):
+        """Start one write check in the background for an upload refused because the last one failed, unless one is
+        running or began within HEAL_AFTER seconds: a server heals on its next upload, not the storage loop's next try."""
+        store, stop = self._store, self._loop
+        if store is None or stop is None or stop.is_set():
+            return
+        with self._probe_lock:
+            if self._healing or (self._checked is not None and time.monotonic() - self._checked < HEAL_AFTER):
+                return
+            self._healing, self._checked = True, time.monotonic()
+        def heal():
+            try:
+                self.check_write(store, stop)
+            except Exception:
+                log.exception("File storage write check failed")
+            finally:
+                self._healing = False
+        threading.Thread(target=heal, name="tico-storage-heal", daemon=True).start()
 
     def copy_local(self, store, stop, interval=0.25):
         if not self.bucket or self.rehearsal or stop.is_set() or not self._copy_disk:
@@ -537,6 +573,7 @@ class Blobs:
                     self._probe_task[2].set()
                 done, errors, cancel = threading.Event(), [], threading.Event()
                 self._probe_task = done, errors, cancel, self._generation
+                self._checked = time.monotonic()
                 class ProbeStop:
                     def is_set(self):
                         return cancel.is_set() or (stop is not None and stop.is_set())
@@ -610,8 +647,9 @@ class Blobs:
                 key = self.s3_key(hashlib.sha256(b"Tico storage write check").hexdigest(), settings)
                 result = client.create_multipart_upload(Bucket=bucket, Key=key, ServerSideEncryption="AES256")
                 pending = {"bucket": bucket, "key": key, "upload_id": result["UploadId"]}
-                self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
-                if stop is not None and stop.is_set():
+                # Recorded so a later check can abort it if this one stops here; unrecorded, it is aborted now.
+                recorded = self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
+                if recorded and stop is not None and stop.is_set():
                     return
                 client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=pending["upload_id"])
                 pending = {}
@@ -638,11 +676,18 @@ class Blobs:
         self._write_health(store, pending, error, location, sources)
 
     def _write_health(self, store, pending, error, location=None, sources=None):
+        """Record the write check's state; whether it was recorded. Best effort: a busy database must neither count as
+        an S3 failure nor stop the check, whose result lives in memory (`_write_failed`) either way."""
         detail = {**pending, "location": location or self.location, "error": error, "credentials": (sources or self._sources).kind}
-        with self._health_lock, store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
-                      ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        try:
+            with self._health_lock, store.transaction() as c:
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
+                          "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                          ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        except Exception as exc:
+            log.warning("File storage check result not recorded: %s", type(exc).__name__)
+            return False
+        return True
 
     def _copy_health(self, store):
         with store.transaction() as c:
