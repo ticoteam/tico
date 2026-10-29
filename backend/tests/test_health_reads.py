@@ -109,3 +109,21 @@ def test_health_queue_checks_read_the_suspect_tasks_once_for_all_aged_bots(api, 
     body, total = counted(api, monkeypatch, "/api/v2/health")
     assert any(row["id"] == "waiting" for row in body["checks"])
     assert total < 1550, total
+
+
+def test_review_children_seek_the_parent_instead_of_scanning_every_task(api):
+    """A waiting PR's review check looks for the children of one task. Starting from every task (a scan that read each
+    row's pages) took 26 ms a check on Tico Team's 8k tasks; the parent's children are a seek on task_relations_to."""
+    from backend import hubdb as H
+    from backend.health import review_children_sql
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "Task", "Done.", "human:ana", "bot:ops", "done", H.now(), H.now(), 0)
+                       for _ in range(2000)])
+        c.execute("ANALYZE")
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + review_children_sql("1"), ("x",))]
+    assert any(line.startswith("SEARCH r USING") and "task_relations_to" in line for line in plan), plan
+    assert not [line for line in plan if line.startswith("SCAN tasks")], plan
