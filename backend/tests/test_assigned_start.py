@@ -678,3 +678,33 @@ def test_recovery_selection_primes_each_bots_attempt_provenance_in_fixed_stateme
                'SELECT detail_json FROM events WHERE action IN')
     assert [s for s in seen if s.startswith(per_run)] == []
     assert any(s.startswith('SELECT a.id AS primed_attempt') for s in seen)
+
+
+def traced_due(store, at):
+    """The unstarted tasks `due` picks, and every statement it ran (expanded values, as sqlite reports them)."""
+    seen = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            found = A.due(c, at, limit=500, cursor=[""])
+        finally:
+            c.set_trace_callback(None)
+    return found, seen
+
+
+def test_repeated_selection_stops_reading_attempts_once_each_assignment_is_settled(api):
+    """The scheduler's tick calls `due` forever. Once every picked task has its ledger entry (what sweep writes) and
+    each attempted task is remembered, a later tick reads no attempts for the bots: the work is per new event, not per tick."""
+    store = api.app.state.store
+    fleet(store, 3, 200, 900)
+    at = H.now()
+    found, _ = traced_due(store, at)
+    assert found
+    with store.transaction() as c:
+        A.sweep(c, at, found)
+    found, second = traced_due(store, at)
+    assert found == []
+    attempt_reads = [s for s in second if 'FROM attempts WHERE bot' in s or s.startswith('SELECT a.id AS primed_attempt')]
+    assert attempt_reads == []
+    # Only the page's own reads remain (its rows, ledger, owners and waits): 12 statements, 41 before this change.
+    assert len(second) <= 15
