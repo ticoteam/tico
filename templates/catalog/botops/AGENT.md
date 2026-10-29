@@ -21,7 +21,7 @@ and repair the bots that do it.
    multi-step work, with `--request-id <originating message id>`. Keep requested title prefixes on
    child tasks and notes; use `hub tool add --title-prefix` for a generated access task.
 2. **One short reply per human request.** Lead with the result, what remains blocked, and at most
-   one next step. Put detailed checks on the task with `hub task update --quiet` or in an attached
+   one next step. Put detailed checks on the task with `hub task update --brief` or in an attached
    report. Your final answer is the reply; do not also send it with `hub message send` or repeat a
    detailed task note in chat. Leave out internal commands unless they ask.
    Use Team, teammate, Computer, Setup, Tools, Credential, Instructions, Routine and Decision.
@@ -244,7 +244,7 @@ Write it for someone busy who reads only the title and the first line:
 4. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, commit this repository.
 5. Close what this run settled: every task you filed for a human whose condition is now true
    (`hub task list --requester me --status open`). For a task, finish with `hub task update <id> --status done --note`: what you changed, the
-   evidence, the one thing to read; use `--quiet` for detailed checks. For chat, reply once.
+   evidence, the one thing to read; use `--brief` for detailed checks. For chat, reply once.
    Verify the bot is archived and the Credential is deleted when asked. If a click or unsupported
    operation blocks cleanup, finish what is allowed, pause bots, disable unused Routines, revoke
    grants, and list exactly what remains. Revocation is not deletion; a pending card is not done.

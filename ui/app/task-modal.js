@@ -959,14 +959,15 @@ function taskPeekPos(id) {
   const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
   return i < 0 ? '' : `${i + 1} / ${keys.length}`;
 }
-// Quiet work (a next-run task, backend/quiet_work.py): delivered into a run (deferred until something), eligible for the
-// bot's next run, or queued with a run of its own; which run, and when it was handed over.
-function taskQuietHTML(t) {
-  const q = t.quiet;
+// A deferred task (backend/quiet_work.py): delivered into a run (held until something), eligible for the bot's next
+// run, or queued with a run of its own; which run, and when it was handed over. `quiet` is the field's older name.
+function taskDeferredHTML(t) {
+  const q = t.deferred || t.quiet;
   if (!q || taskFinished(t)) return '';
-  const label = {queued: 'Queued', eligible: 'Eligible', delivered: q.resume ? 'Deferred' : 'Delivered'}[q.state] || q.state;
+  const state = q.state === 'delivered' && q.resume ? 'held' : q.state;
+  const label = {queued: 'Queued', eligible: 'Eligible', delivered: 'Delivered', held: 'Held'}[state] || state;
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
-  return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
+  return `<p class="task-wait task-deferred" data-task-deferred="${esc(state)}"><span class="lbl">Deferred: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
 // A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
 // plain ask's place once it lands.
@@ -1023,7 +1024,7 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
-      ${taskQuietHTML(t)}
+      ${taskDeferredHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
         : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
       ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
