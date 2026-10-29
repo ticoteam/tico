@@ -41,7 +41,10 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 4. Starts the router and the tunnel in Compose project `tico-cell` (`/srv/tico-cell/edge.yaml`). The router is Caddy,
    serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port, and
    answers anything else with a 404. The tunnel sends `*.<domain>` to the router. Both containers use the host's
-   network and listen on loopback only. The token is kept in `/srv/tico-cell/tunnel.env` (0600). Without
+   network and listen on loopback only. Both drop all Linux capabilities, set `no-new-privileges` and a read-only
+   root filesystem. The router adds back only `NET_BIND_SERVICE` (Caddy's binary needs it to exec). The tunnel
+   directory `/srv/tico-cell/tunnel` is 0700 and owned by uid/gid 65532, the user cloudflared runs as; every `init`
+   sets that owner again. The token is kept in `/srv/tico-cell/tunnel.env` (0600). Without
    `--tunnel-token-file`, the token from an earlier run is used, or only the router runs.
 
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
@@ -153,7 +156,7 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
 |---|---|
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
-| `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes, and its token (0600) |
+| `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data`, `TICO_UPDATES`, the default network and the `tico.cell.company` label |

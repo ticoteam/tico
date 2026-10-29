@@ -62,6 +62,7 @@ ROUTER_HEALTH_HOST, ROUTER_HEALTH_PATH = "cell-health.invalid", "/cell-healthz"
 PROJECT_PREFIX = "tico-"
 LABEL = "tico.cell.company"
 SERVER_UID = 10001                      # the server image's user (Dockerfile)
+TUNNEL_UID = 65532                      # cloudflared's image runs as nonroot (uid and gid 65532)
 
 # Never given to a company: our own names under the domain.
 RESERVED = frozenset({"hub", "admin", "accounts", "updates", "preview", "runner", "www", "api", "app", "mail", "status",
@@ -343,8 +344,9 @@ def edge_compose(root: Path, tunnel: bool) -> str:
     lines = ["# Written by `python3 -m setup cell init`: the shared host's front door. Companies are separate projects.",
              f"name: {EDGE_PROJECT}", "services:", "  router:", f"    image: {ROUTER_IMAGE}",
              f"    container_name: {ROUTER_CONTAINER}", "    network_mode: host", "    restart: unless-stopped",
-             "    init: true", "    security_opt: [\"no-new-privileges:true\"]", "    cap_drop: [ALL]", "    read_only: true",
-             "    tmpfs: [/tmp]", "    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]",
+             "    init: true", "    security_opt: [\"no-new-privileges:true\"]", "    cap_drop: [ALL]",
+             "    cap_add: [NET_BIND_SERVICE]",   # caddy's binary carries this as a file capability; exec fails without it
+             "    read_only: true", "    tmpfs: [/tmp]", "    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]",
              "    volumes:", f"      - {root}/router:/etc/caddy:ro", "      - router-data:/data", "      - router-config:/config"]
     if tunnel:
         lines += ["  tunnel:", f"    image: {TUNNEL_IMAGE}", "    container_name: tico-cell-tunnel", "    network_mode: host",
@@ -627,6 +629,11 @@ class Cell:
             changed += ["tunnel token"] if _write_atomic(self.root / "tunnel.env", f"TUNNEL_TOKEN={token}\n", 0o600) else []
         tunnel = (self.root / "tunnel.env").exists()
         routes_changed = _write_atomic(self.root / "tunnel" / "cloudflared.yml", tunnel_config(domain))
+        # cloudflared runs as TUNNEL_UID and cannot read a root-owned directory: every init sets the owner again
+        # (a file this run rewrote comes back root-owned, so it is covered too)
+        os.chmod(self.root / "tunnel", 0o700)
+        for f in (self.root / "tunnel", self.root / "tunnel" / "cloudflared.yml"):
+            self.system.chown(f, TUNNEL_UID, TUNNEL_UID)
         caddyfile = self.root / "router" / "Caddyfile"
         if not caddyfile.exists():      # the first run; later ones go through write_router, which reloads
             _write_atomic(caddyfile, router_config([c for c in self.companies() if c.get("state") != "removed"]))
