@@ -72,11 +72,15 @@ def ensure(c):
         c.execute("ALTER TABLE task_trash ADD COLUMN guest TEXT")
     c.execute(TRASH_ASSETS)
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
-    # A task deleted before this table existed has its attachments only in its trash row.
+    # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
+    # mention attachments and have none listed are parsed: every delete runs this, and parsing all of the trash's
+    # rows_json grows with the trash.
     c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
               "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
               "json_each(t.rows_json, '$.rows.task_assets') a "
-              "WHERE t.purged_at IS NULL AND json_extract(a.value, '$.blob_id') IS NOT NULL")
+              "WHERE t.purged_at IS NULL AND instr(t.rows_json, '\"task_assets\"') > 0 "
+              "AND NOT EXISTS (SELECT 1 FROM task_trash_assets x WHERE x.task_id=t.task_id) "
+              "AND json_extract(a.value, '$.blob_id') IS NOT NULL")
 
 
 def _columns(c, table):
@@ -192,7 +196,9 @@ def _refusals(c, ids, conversations, messages):
     if pointing:
         refusals["delegations of another task"] = len(pointing)
     # A bot not yet woken about the task (its notice waits in a shared room) would wake to a missing task.
-    waking = _column(c, "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+    # CROSS JOIN keeps jobs the outer loop: each job reads its message by primary key, where the plain JOIN
+    # scanned every message to read its refs_json.
+    waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
                         "WHERE j.state NOT IN ('completed','cancelled','failed') "
                         "AND json_extract(m.refs_json,'$.task') IN ({})", ids)
     if waking:
@@ -227,9 +233,10 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     kept = {tid for tid in ids if _task_work(c, tid)} if refusals else set()
     if kept:
         # A bot not yet woken about the task would wake to a missing task.
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-                  "(SELECT id FROM messages WHERE json_extract(refs_json,'$.task') IN ({}) "
-                  "OR conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({})))"
+        # Queued jobs only (jobs_queued), each checked against its own message by primary key.
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND EXISTS "
+                  "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs_json,'$.task') IN ({}) "
+                  "OR m.conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({}))))"
                   .format(_marks(list(kept)), _marks(list(kept))), [*kept, *kept])
     ensure(c)
     actor = actor or H.KEEPER

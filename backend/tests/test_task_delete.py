@@ -321,3 +321,33 @@ def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_g
         detail = c.execute("SELECT detail_json FROM events WHERE action='task.restored' AND target=?",
                            (ticket["id"],)).fetchone()[0]
     assert "type" in detail
+
+
+def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api):
+    """A delete counts the runs about its messages and its conversation, and reads the jobs waiting on it.
+    Each of those lookups must use an index: a scan of turns, attempt_conversations, bot_file_activity or
+    messages grows with the whole database, not with the one task (the production delete took 8 to 10 s).
+    The aliases a and m are bot_file_activity and messages in task_delete."""
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x"})
+    post(api, f"tasks/{ticket['id']}/comments", {"text": "Seen on mobile."})
+    big = {"turns", "attempt_conversations", "bot_file_activity", "messages", "a", "m"}
+    with store.transaction() as c:
+        conversation, message = c.execute("SELECT t.conversation_id, m.id FROM tasks t JOIN messages m "
+                                          "ON m.conversation_id=t.conversation_id WHERE t.id=? LIMIT 1",
+                                          (ticket["id"],)).fetchone()
+        # Work on the task, so the delete takes the keep_work path, which also updates the jobs about it.
+        c.execute("INSERT INTO turns(id,bot,started,finished,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
+                  ("turn-cart", "ops", H.now(), H.now(), "ok", message, ticket["id"]))
+        statements = []
+        c.set_trace_callback(statements.append)
+        report = delete_tasks(c, [ticket["id"]], apply=True, keep_work=True)
+        c.set_trace_callback(None)
+        assert report["applied"] is True and report["refused"]
+        scans = []
+        for sql in statements:
+            if sql.lstrip().upper().startswith(("SELECT", "UPDATE", "DELETE", "INSERT")):
+                for row in c.execute("EXPLAIN QUERY PLAN " + sql):
+                    if row[3].startswith("SCAN") and row[3].split()[-1] in big:
+                        scans.append(f"{row[3]}  <- {' '.join(sql.split())[:120]}")
+    assert scans == []
