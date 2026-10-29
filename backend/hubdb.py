@@ -5689,7 +5689,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False):
+                quiet_notice=False, from_private=False, routine=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5705,6 +5705,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `number` keeps an imported task's number: a mover's (`mover`, as in `task_update`), and free.
     `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
     (backend/blocker_asks.py) wakes when that ask is done.
+    `routine` is an automation's own run (a routine's, before the move): a Monitor or Reviewer takes it as its own work.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5716,7 +5717,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     owner = route(conn, actor, owner)
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
-    _takes_tasks(conn, actor, target, title, parent_id)
+    _takes_tasks(conn, actor, target, title, parent_id, routine)
     _learning(conn, actor, target)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate

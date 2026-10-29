@@ -400,7 +400,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
             raise ValueError(f"No bot {bot}" if not found else f"{bot} is {found['state']}")
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
-    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False,
+    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False, routine=True,
                          trigger="other", trigger_source="automation:" + auto["id"],
                          wake_refs={"automation": auto["id"], "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})

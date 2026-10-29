@@ -364,6 +364,28 @@ def test_a_reviewer_may_be_handed_a_review_child_but_not_an_ordinary_task_and_st
         assert routines.create(c, "human:ana", "checker", {"title": "Weekly sweep", "cron": "0 9 * * 1"}) is not None
 
 
+def test_a_monitor_and_a_reviewer_still_run_their_automation_turns(api):
+    """A routine moved to Automations runs on a task its automation files; a Monitor or Reviewer refusing it would stop
+    the bot's own scheduled check (TIDY's hourly stuck-bot check failed this way on v0.5.0)."""
+    with api.app.state.store.transaction() as c:
+        for slug, name in (("watch", P.MONITOR), ("checker", P.REVIEWER)):
+            add_bot(c, slug)
+            put(c, slug, name)
+        with pytest.raises(H.Refused):
+            H.task_create(c, "human:ana", "Fix the thing", "x", "bot:watch")
+    for slug in ("watch", "checker"):
+        aid = post(api, "automations", {"name": "Sweep " + slug, "owner": "person:ana",
+                                        "trigger": {"type": "event", "name": "task.created"},
+                                        "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + slug,
+                                                   "prompt": "Check the watchlist."}]})["id"]
+        post(api, "tasks", {"owner": "cpo", "title": "Start " + slug, "body": "Please."})
+        api.app.state.store.automations.drain()
+        runs = get(api, f"automations/{aid}/runs")["runs"]
+        assert runs and runs[0]["status"] != "failed", runs
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT 1 FROM tasks WHERE owner=? AND title=?", ("bot:" + slug, "Sweep " + slug)).fetchone()
+
+
 def test_a_custom_bot_that_takes_no_task_runs_no_routine_and_the_migration_copies_rows_once(api):
     from backend import routines
     with api.app.state.store.transaction() as c:
