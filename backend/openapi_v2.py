@@ -1653,6 +1653,15 @@ STABLE.extend([
      'whether bot computers stop with the server; an owner or an admin (and BotOps for one); on needs a server Tico hosts',
      'SleepWhenIdle'),
 ])
+TAGS['Screening'] = 'Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py).'
+STABLE.extend([
+    ('/api/v2/screening', 'get', 'Screening', 'getScreening', 'Each door\'s mode, the two detector switches, the defaults, '
+     'whether a decision model answers and the newest holds and warnings, never their text (an owner or an admin)', None),
+    ('/api/v2/screening', 'put', 'Screening', 'setScreening', 'Change door modes (off, warn, hold; mail off or warn) and the '
+     'patterns and model switches; an owner or an admin', None),
+    ('/api/v2/screening/test', 'post', 'Screening', 'testScreening', 'Run the built-in samples through the check; nothing is '
+     'held or kept (an owner or an admin; each sample counts against their decision budget)', None),
+])
 TAGS['Notices'] = 'Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release check.'
 STABLE.append(('/api/v2/notices', 'get', 'Notices', 'listNotices', 'Notices from Tico Team, newest first, each once '
                '(any signed-in person)', 'NoticeList'))

@@ -239,6 +239,14 @@ ENTRIES = TEAM_RULES + [
       "text", _card("system", "set-release-card"), "release-schedule#bot"),
     S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
       "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
+    *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
+        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
+        "screening#modes." + source, words="prompt injection screening")
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"))],
+    *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
+        layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
+        words="prompt injection screening detector")
+      for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
     S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
       value="json", card=_card("system", "set-task-manager-card")),
     S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
@@ -344,6 +352,7 @@ NOT_SETTINGS = {
     ("POST", "strategy-bot/log/{x}/undo"): "undoes one Strategy bot action",
     ("POST", "repositories/refresh"): "re-reads the repositories from GitHub",
     ("POST", "release/now"): "starts one release (`hub release now`)",
+    ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",
     ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",

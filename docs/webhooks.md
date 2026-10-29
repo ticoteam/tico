@@ -145,6 +145,11 @@ hub trigger delivery github <delivery> --part 2
 A bot may read a delivery only if it manages the webhook, a task made from the call is its own, or a notice from Tico naming the
 call went to it. People who manage the webhook read the whole body.
 
+Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
+injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
+person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+(Warn by default); it fails open.
+
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
@@ -190,7 +195,8 @@ call. A rule can match only on these two things, never on a field inside the bod
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
   The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
-  give that bot tasks.
+  give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
+  answered, once the check is in, and a held one goes to the rule's maker.
 
 Rules also have the ordinary outcomes: *ignore*, *note*, *wake* and *ask*.
 

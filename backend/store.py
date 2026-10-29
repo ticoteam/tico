@@ -909,6 +909,8 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import screening as _screening
+            c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs
             c.executescript(_bot_task_tabs.SCHEMA)
             # The sidebar's widgets: order, hidden and heights (Editable bot sidebar); NULL is the default four.

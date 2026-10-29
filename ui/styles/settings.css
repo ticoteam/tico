@@ -769,6 +769,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .tm-list{display:grid}
 .tm-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:4px 12px;padding:6px 0;border-top:1px solid var(--line);align-items:center;font-size:var(--t-sm)}
 @media (max-width:720px){.tm-row{grid-template-columns:minmax(0,1fr) auto}}
+#set-screening [data-screening-results]:not(:empty){margin-top:10px}
+#set-screening h3{margin:14px 0 4px;font-size:var(--t-sm)}
 /* Settings > Billing (ui/app/settings-billing.js) */
 #set-billing h3{margin:var(--s3) 0 var(--s1);font-size:var(--t-sm);display:flex;align-items:center;gap:var(--s2)}
 .billing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s2);flex-wrap:wrap}

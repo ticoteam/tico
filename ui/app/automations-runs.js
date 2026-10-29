@@ -6,7 +6,7 @@
 
 const AU_RUNS_PAGE = 25;
 const AU_RUN_STATUS = {ok: 'Done', failed: 'Failed', skipped: 'Skipped', empty: 'Nothing found', waiting: 'Waiting', running: 'Running'};
-const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend cap'};
+const AU_STEP_STATUS = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend cap', held: 'held'};
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
   create_task: 'Task created', label: 'Labeled', forward: 'Forwarded', wake_bot: 'Bot woken', note: 'Noted',

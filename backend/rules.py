@@ -1107,6 +1107,13 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     title = " ".join(templating.render(str(params.get("title") or ""), values, cap=300).split()) \
         or _default_text(event, values)
     body = _wake_text({"text": params.get("body")}, values, ctx, _default_text(event, values))
+    if event == "webhook.received":
+        # A call from outside is screened for prompt injection first (backend/screening.py): long text waits for the
+        # model after this write, short text gets the patterns' warning line now.
+        from . import screening
+        waits, body = screening.rule_task(conn, rule_id, by, slug, title, body, ctx)
+        if waits:
+            return {**result, "ok": True, "detail": waits}
     conn.execute("SAVEPOINT rule_task")
     try:
         options = {}

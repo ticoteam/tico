@@ -6997,6 +6997,8 @@ def create_app(settings=None):
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)
+    from . import screening
+    screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

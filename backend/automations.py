@@ -1266,19 +1266,77 @@ class HubServices:
             **audit_detail(result), "answers": J.summary(result["answers"])}))
         return result
 
+    def _screened(self, bot, values):
+        """A webhook run's call, screened for prompt injection before a bot gets work from it (backend/screening.py);
+        None for any other run. Outside every transaction: it may wait on the decision model."""
+        if self.row.get("trigger_type") != "webhook" or not bot:
+            return None
+        from . import screening
+        return screening.automation_check(self.hub.store, self.hub.app.state.judge, values, bot)
+
     def act(self, do, args, ctx):
-        return self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        found = None
+        if do == "create_task":
+            owner = str(args.get("owner") or "")
+            bot = owner[4:] if owner.startswith("bot:") else "" if ":" in owner else owner
+            found = self._screened(bot, ctx["values"]) if bot else None
+            if found and found["action"] != "pass":
+                args = self._screened_task(found, bot, args, ctx["values"])
+        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
+            from . import screening
+            self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
+                                                 to=args.get("owner") if found["action"] == "hold" else None))
+        return result
+
+    def _screened_task(self, found, bot, args, values):
+        """A create_task step's arguments after screening: held for a person, or with the warning line first."""
+        from . import screening
+        body = str(args.get("body") or args.get("title") or "")
+        if found["action"] == "hold":
+            with self.hub.store.read() as c:
+                person = screening.automation_person(c, values, self.flow.get("owner"), bot)
+                name = screening._name(c, bot)
+            if person:
+                return {**args, "owner": person, "title": screening.held_title(args.get("title")),
+                        "body": screening.held_body(found, bot, name, body)}
+            found["action"] = "warn"
+        return {**args, "body": screening.warning_line(found) + "\n\n" + body}
 
     def start_turn(self, who, prompt, ctx, wait):
         """The cap check and the start in one write: the turns of runs going at once cannot each see room under the
-        cap. A started turn holds its bot's usual cost until it is priced."""
+        cap. A started turn holds its bot's usual cost until it is priced. On a webhook's run the call is screened
+        first: at `hold` the turn is not started and its prompt is a held task for a person (`held` in the answer)."""
         cap = (self.flow.get("spend_cap") or {}).get("per_30m")
+        bot = who[4:] if who.startswith("bot:") else ""
+        found = self._screened(bot, ctx["values"])
+        person = None
+        if found and found["action"] == "hold":
+            from . import screening
+            with self.hub.store.read() as c:
+                person = screening.automation_person(c, ctx["values"], self.flow.get("owner"), bot)
+            if not person:
+                found["action"] = "warn"
+        if found and found["action"] == "warn":
+            from . import screening
+            prompt = screening.warning_line(found) + "\n\n" + prompt
 
         def work(c):
+            if person:
+                from . import screening
+                name = str(self.flow.get("name") or self.row["id"])
+                task = H.task_create(c, A._actor(c, self.auto), screening.held_title(name),
+                                     screening.held_body(found, bot, screening._name(c, bot), prompt), person,
+                                     lint=False, deduplicate=False)
+                screening.note(c, found, "webhook", task["id"], bot=bot, to=person)
+                return {"ref": task["id"], "held": True}
             if cap is not None and _spent(c, self.row["id"], self.run_id) + float(ctx.get("cost") or 0) >= float(cap):
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
                                    ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"))
+            if found and found["action"] == "warn":
+                from . import screening
+                screening.note(c, found, "webhook", started["ref"], bot=bot)
             c.execute("INSERT OR REPLACE INTO automation_holds(ref,automation_id,run_id,amount,at) VALUES(?,?,?,?,?)",
                       (started["ref"], self.row["id"], self.run_id, _usual_cost(c, started["turn"]["bot"]), H.now()))
             return started

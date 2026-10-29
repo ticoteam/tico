@@ -397,6 +397,11 @@ class Scheduler:
         except Exception as exc:
             failures.append({"automations": type(exc).__name__})
         try:
+            from . import screening
+            screening.tick(self.store)                         # outside text a restart left waiting for its check
+        except Exception as exc:
+            failures.append({"screening": type(exc).__name__})
+        try:
             from . import webhook_delivery
             webhook_delivery.ensure()                          # a delivery worker that died comes back on the next tick
         except Exception as exc:
@@ -433,6 +438,8 @@ class Scheduler:
                 performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
                 from . import support_triage
                 support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
+                from . import screening
+                screening.sweep(self.store, stamp(at))         # a screened item waits at most an hour; verdicts keep 30 days
                 run.did("Done")
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an

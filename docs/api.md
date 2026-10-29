@@ -298,7 +298,9 @@ from agent tools; the server binds the actor to the signed-in owner/admin, not a
 `q`, `has_code`, `spam`, `after` and `before` (message sequence numbers). `next` is the `before`
 for the next older page. Bodies and revealed codes are excluded; previews mask an extracted code.
 `messages/{id}?offset=&max_chars=` reads untrusted text in parts of at most 32 KB; `next_offset`
-continues it. `messages/{id}/code` reads the extracted code. Neither action consumes the message.
+continues it. A bot's read carries `screening` (`action` pass or warn, `score`, `kinds`) from the
+[screening](permissions.md#screening) check, and at warn the first part starts with a warning line; a person's read is not
+checked. `messages/{id}/code` reads the extracted code. Neither action consumes the message.
 
 Capture `GET /api/v2/inbound/cursor` before starting a verification. `POST inbound/wait` with
 `{after,inbox_ids?,kind?,sender?,has_code?,timeout?,limit?}` waits for newer messages, oldest first.

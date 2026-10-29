@@ -189,6 +189,55 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
   a bot with its outbound send switch on, never the Strategy Bot. The endpoint must exist and its maker must own it or be an admin: Tico checks
   that when the rule is saved, and again when it runs.
 - **Tico Team** is a built-in webhook. Nobody deletes it; only its keep days change.
+- **Screening** checks a call's text before a bot gets it ([Screening](#screening)).
+
+## Screening
+
+Text from outside Tico can carry instructions meant for the bot that reads it (a prompt injection). Screening checks that
+text at the doors it comes in by, before a bot reads it. Change it in **Settings → System → Screening** (owner or admin).
+
+| Door | What is checked | Default |
+|---|---|---|
+| Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |
+| Mail | An inbound message a bot reads (`hub inbound read`): the subject and body | Warn |
+| Ideas | The public roadmap's suggestion form: the title and summary | Warn |
+| Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
+
+Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. For now every door
+starts at Warn, which only observes: nothing is held until you set a door to Hold. The defaults are one constant,
+`DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks, ideas and watchers once the live eval
+(`python -m evals.screening.run --live`) and a week of `screening.warned` rows show the hold line is safe.
+
+The check has four layers. Two of them can be switched off in the same card:
+
+- **Fencing.** This is always on. The model reads the outside text inside a fence the writer cannot close, and a bot
+  reads a webhook call as fenced parts.
+- **Patterns.** A free check, with an on/off switch.
+- **Decision model.** It is on by default and needs Decide. With it off, only the patterns run, and they only warn.
+- **The door's mode.** Off, Warn or Hold, set per door.
+
+- **Patterns.** A few fixed phrases ("ignore all previous instructions", "print your system prompt"...) are checked on
+  every item, free. A match only warns, never holds, and counts only when the decision model did not answer: they
+  misfire on code and on writing about attacks.
+- **The decision model** reads text of 200 characters or more against the `injection-screen` question set
+  (`questions/injection-screen.json`). At or over its `hold` line (85%), on a door set to Hold, the item becomes a task
+  for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the task to the bot to release it;
+  close it if it is an attack. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a
+  prompt injection and is data. Mail at the hold line gets that line too, and a held automation turn is recorded as
+  step `held`.
+- **Who gets a held item.** Whoever made the webhook's automation or rule, else the automation's owner, else the bot's
+  operator, else the default person.
+- **Cost.** Each model call counts against the daily decision budget of the bot that would get the work and the
+  team's monthly spend cap. A verdict is kept per item (a webhook delivery, a message id) for 30 days, so a second read
+  costs nothing.
+- **It fails open.** Off, short text, no decision model, the spend cap, the bot's budget, a timeout, an error or an
+  unreadable answer all let the item through as before, with only the patterns' warning. A webhook rule's or a
+  watcher's item waits for the model a few seconds after the call is answered; one still waiting after an hour goes
+  to a person.
+- **Audit.** Each model call is one `judge.call` row labelled `injection-screen@1`, and each hold or warning one
+  `screening.held` or `screening.warned` event, with the score and kind, never the text. Settings lists the newest.
+- **Test** runs eight built-in samples, four attacks and four lookalikes (code, a security article, an ordinary
+  request), through the model and shows which it got right. Each sample counts against the person's decision budget.
 
 ## Outgoing webhooks
 

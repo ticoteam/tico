@@ -241,6 +241,10 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
         _record(state, thread, step, "spend_cap")
         return
     ref = started["ref"]
+    if started.get("held"):
+        # Screening held the webhook's text for a person (backend/screening.py): no turn, and the run goes on.
+        _record(state, thread, step, "held", {"ref": ref})
+        return
     outputs = {"ref": ref, **({"turn": started["turn"]} if started.get("turn") else {})}
     if not wait:
         _record(state, thread, step, "ok", outputs)
