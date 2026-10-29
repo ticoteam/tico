@@ -3038,7 +3038,7 @@ _AUTO_FIELDS = {
 }
 
 
-@tool("hub_automation_list", "The automations you may see, newest first, each with `can_edit`.",
+@tool("hub_automation_list", "The automations you may see, newest first, each with `can_edit` and `problems` (wake rules naming a missing step).",
       {"owner": _s("Only this owner's"), "limit": {"type": "integer", "default": 50},
        "cursor": {"type": "integer", "description": "`next` from the page before"}})
 def automation_list(api, args):
@@ -3046,7 +3046,7 @@ def automation_list(api, args):
     return _as_person(api).get("automations" + ("?" + query if query else ""))
 
 
-@tool("hub_automation_get", "One automation: its trigger, steps, version, today's counts and next run.",
+@tool("hub_automation_get", "One automation: its trigger, steps, version, today's counts, next run and `problems` (wake rules naming a missing step).",
       {"id": _s("auto_...")}, required=("id",))
 def automation_get(api, args):
     return _as_person(api).get(f"automations/{args['id']}")
@@ -3074,7 +3074,7 @@ def automation_create(api, args):
 
 
 @tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version; a bot "
-      "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`.",
+      "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`. Then check `problems`.",
       {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
       required=("id",), writes=True)
 def automation_update(api, args):
