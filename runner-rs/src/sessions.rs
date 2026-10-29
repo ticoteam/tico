@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use crate::env::Env;
+use crate::prompt::Part;
 use crate::gitrun::{self, Fault, Out};
 use crate::repositories::Repositories;
 use crate::runner::Runner;
@@ -155,16 +156,23 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
     lines
 }
 
-/// prompt.rs hook after the opening lines: the shared-checkout lines first, the task checkout's line last.
-pub fn prompt_head(attempt: &Value, lines: &mut Vec<String>) {
+/// prompt.rs hook after the opening lines: the shared-checkout lines first, the task checkout's line last. A sync
+/// problem is this turn's own; the rest stands for the thread.
+pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
     let config = &attempt["config"];
     let problem = text_of(&attempt["branch_sync_problem"]);
     if is_shared(config) {
-        let mut head = shared_lines(&text_of(&attempt["bot"]), config, &problem);
+        let shared = shared_lines(&text_of(&attempt["bot"]), config, &problem);
+        let last = shared.len() - 1;
+        let mut head: Vec<(Part, String)> = shared
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| (if i == last && !problem.is_empty() { Part::Turn } else { Part::Standing }, l))
+            .collect();
         head.append(lines);
         *lines = head;
     } else if truthy(attempt.get("repo_sync_problem")) {
-        lines.insert(0, text_of(&attempt["repo_sync_problem"]));
+        lines.insert(0, (Part::Turn, text_of(&attempt["repo_sync_problem"])));
     }
     let session = &attempt["_session"];
     if session.is_object() {
@@ -174,18 +182,20 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<String>) {
             text_of(&session["branch"]),
             text_of(&session["upstream"])
         );
+        let mut part = Part::Standing;
         if !problem.is_empty() && !is_shared(config) {
             line.push_str(&format!(" The checkout could not sync before this turn ({problem}): commit or keep what is there, run `git pull --rebase`, and resolve conflicts first."));
+            part = Part::Turn;
         }
-        lines.push(line);
+        lines.push((part, line));
     }
 }
 
 /// prompt.rs hook below the bot's own lines: the repos' rules, unless a resumed thread already has them.
-pub fn prompt_rules(attempt: &Value, resumed: bool, lines: &mut Vec<String>) {
+pub fn prompt_rules(attempt: &Value, resumed: bool, lines: &mut Vec<(Part, String)>) {
     let rules = text_of(&attempt["_repo_rules"]);
     if !rules.is_empty() && (!resumed || truthy(attempt.get("_repo_rules_changed"))) {
-        lines.push(rules);
+        lines.push((Part::Turn, rules));
     }
 }
 
