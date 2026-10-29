@@ -198,7 +198,7 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "scan"), (go_live, "expire"),
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
                          (billing_check, "read_later"), (still_wanted, "ask_idle")):
         monkeypatch.setattr(module, name, broken)
