@@ -4,6 +4,7 @@ The audit ledger is keyed by the assignment event, not by mutable task.updated. 
 restarts and does not turn a Lead's profile into an idle task-pulling profile.
 """
 import logging
+import os
 import sqlite3
 
 from . import auto_tasks, hubdb as H, task_privacy as privacy
@@ -13,6 +14,11 @@ WAKE_HOURS = 1
 ESCALATE_HOURS = 2
 SCAN_LIMIT = 200
 CURSOR_KEY = "assignment-recovery-cursor"
+# (database file, task id, assignment key) -> True once the assignment's bot has run the task since it was assigned.
+# Attempts are never deleted and a new assignment has a new key, so the answer never turns false. Keyed by the
+# database file, as health's token cache is, so separate stores (and a restored file) never share entries.
+ATTEMPTED = {}
+ATTEMPTED_LIMIT = 20000
 
 
 def page_ledger(c, rows):
@@ -30,6 +36,16 @@ def page_ledger(c, rows):
                 (EVENT, *part)):
             ledger.setdefault(target, []).append(H._json(detail, {}))
     return owners, ledger
+
+
+def _memo_scope(c):
+    """The database file this connection reads, or None (no memo) for an unnamed or missing file."""
+    path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
+    try:
+        stat = os.stat(path) if path else None
+    except OSError:
+        return None
+    return (path, stat.st_dev, stat.st_ino) if stat else None
 
 
 def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None,
@@ -68,7 +84,9 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     if page is not None:
         page[:] = [len(rows)]
     owners, ledger = page_ledger(c, rows)
-    earliest = min((row['created'] for row in rows), default=cutoff)
+    # Only a committed view may be remembered: a write transaction can still roll back what it reads.
+    writing = getattr(c, 'write_transaction', False) or c.total_changes != getattr(c, 'provenance_changes', c.total_changes)
+    memo_scope = _memo_scope(c) if rows else None
     # Tasks the page's wait checks can't rule out; the rest of the page skips waiting() (auto_tasks.maybe_waiting).
     suspect = auto_tasks.maybe_waiting(c, rows)
     for row in rows:
@@ -88,18 +106,26 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             if row['id'] in suspect and auto_tasks.waiting(c, row, starting=True):
                 continue
             # Include folded inputs and next-run carried work, not just the job's original task.
+            memo = (memo_scope, row['id'], key) if memo_scope else None
+            if memo in ATTEMPTED:
+                continue
             bot = H.actor_id(row['owner'])
             floor, touched = attempts.get(bot, ("9999", {}))
-            if earliest < floor:
+            # Only runs since this assignment can count, so the bot's attempts are read from `since`, not the page's oldest row.
+            if since < floor:
                 found = c.execute("SELECT id,created FROM attempts WHERE bot=? AND created>=? AND created<? ORDER BY created DESC",
-                                  (bot, earliest, floor)).fetchall()
+                                  (bot, since, floor)).fetchall()
                 # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
                 privacy.prime_attempts(c, [attempt['id'] for attempt in found])
                 for attempt in found:
                     for tid in privacy.attempt_tasks(c, attempt['id']):
                         touched.setdefault(tid, attempt['created'])
-                attempts[bot] = earliest, touched
+                attempts[bot] = since, touched
             if touched.get(row['id'], '') >= since:
+                if memo is not None and not writing:
+                    if len(ATTEMPTED) >= ATTEMPTED_LIMIT:
+                        ATTEMPTED.clear()
+                    ATTEMPTED[memo] = True
                 continue
             yield row, key, since, saved
         except Exception as exc:
