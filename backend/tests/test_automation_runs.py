@@ -133,7 +133,7 @@ def test_a_trigger_ref_repeating_is_a_loop_and_the_run_guard_pauses_it(api):
     aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
                trigger={"type": "webhook", "id": "trg_1"})
     paused = "SELECT owner FROM tasks WHERE title LIKE 'Automation Test paused%'"
-    before = len(sql(api, paused))
+    before = sql(api, paused)
     with api.app.state.store.transaction() as c:
         for _ in range(70):   # the same event re-fires the automation again and again, as `fire` finds it enabled
             row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
@@ -141,7 +141,7 @@ def test_a_trigger_ref_repeating_is_a_loop_and_the_run_guard_pauses_it(api):
                 automations.queue(c, row, {}, "webhook:trg_1:d0")
     assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == automations.RUN_GUARD
     assert get(api, f"automations/{aid}")["enabled"] is False
-    assert len(sql(api, paused)) == before + 1
+    assert sql(api, paused) == before + [{"owner": "human:ana"}]
     assert len(sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,))) == 1
 
 
