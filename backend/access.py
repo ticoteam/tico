@@ -177,6 +177,9 @@ def _store(c, key, record):
         record = {**record, "admins": admins, "bot_admins": admins}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (key, json.dumps(record, sort_keys=True)))
+    if key in (ACCESS, OWNER):
+        from . import people_mirror
+        people_mirror.changed()                    # roles and sign-in lists changed (backend/people_mirror.py)
 
 
 def admitted(access, email):
@@ -201,6 +204,8 @@ def _save_roster(c, roster):
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
               "value_json=excluded.value_json", (json.dumps(roster, sort_keys=True),))
+    from . import people_mirror
+    people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
 
 
 save_roster = _save_roster
@@ -562,6 +567,51 @@ def _keep_mailbox(c, person, address):
         routines.set_declared_mailbox(c, bot, address)
 
 
+def _follow_address(c, pid, old, new):
+    """Meetings filed for a person by address (backend/meetings.py filed_for), a meeting delivery they asked for and a
+    Granola sync, which acts as the address it was connected with: all follow the person when the address changes."""
+    c.execute("UPDATE meetings SET owner=?, metadata_json=CASE WHEN lower(json_extract(metadata_json,'$.owner'))=? "
+              "THEN json_set(metadata_json,'$.owner',?) ELSE metadata_json END WHERE lower(owner)=?", (new, old, new, old))
+    c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
+    c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + pid))
+
+
+def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
+    """A person's sign-in address changed in place, in the caller's transaction: the roster and `humans` (same id), the
+    allow list and the Admins where the old address was on them, and what follows the address. The owner's address
+    goes through change_owner_email. Used when a verified Tico account sign-in arrives under a new address."""
+    person = P.person(pid, roster)
+    if not person:
+        raise Problem("not_found", "Person not found", 404)
+    new, old = _valid_email(new_email), person["email"]
+    if new == old:
+        return person
+    if _email_taken(c, new, pid):
+        raise Problem("conflict", new + " already belongs to someone else on the roster", 409)
+    # An address on the Admins, the owner's or the allow list is never a person's sign-in address: moving there would
+    # hand the person that role (the Admins list) or leave someone else's entry in place.
+    before = load_access(c, settings)
+    if new in before["admins"] or new in before["allowed"] or new == load_owner(c, settings)["email"]:
+        raise Problem("conflict", new + " is on the owner's, Admins or allow list, so it cannot be a sign-in address", 409)
+    if old:
+        _keep_mailbox(c, person, old)
+    row = P._person({**person, "email": new})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
+    _sync_human(c, row)
+    access = _load_json(c, ACCESS)
+    if access is not None and old:
+        def swap(values):
+            return emails(new if e == old else e for e in values)
+        allowed, admins = swap(before["allowed"]), swap(before["admins"])
+        if allowed != before["allowed"] or admins != before["admins"]:
+            _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
+                               "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "sign_in"})
+    if old:
+        _follow_address(c, pid, old, new)
+    H.event(c, actor, "person.email_changed", pid, {"from": old, "to": new, "via": via})
+    return row
+
+
 def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision, now, settings, via="app"):
     """The owner's own sign-in address, changed in place in the caller's transaction: the same person keeps every task,
     approval, grant and conversation, and every copy of the address moves at once (the roster, `humans`, the owner
@@ -606,12 +656,7 @@ def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision,
         if allowed != before["allowed"] or admins != before["admins"]:
             _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
                                "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"})
-    # Meetings are filed for a person by address (backend/meetings.py filed_for), and a Granola sync acts as the address
-    # it was connected with: both follow the person.
-    c.execute("UPDATE meetings SET owner=?, metadata_json=CASE WHEN lower(json_extract(metadata_json,'$.owner'))=? "
-              "THEN json_set(metadata_json,'$.owner',?) ELSE metadata_json END WHERE lower(owner)=?", (new, old, new, old))
-    c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
-    c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + person["id"]))
+    _follow_address(c, person["id"], old, new)
     H.event(c, actor, "owner.email_changed", person["id"],
             {"from": old, "to": new, "revision": after["revision"], "via": via})
     return load_owner(c, settings)

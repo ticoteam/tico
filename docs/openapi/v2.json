@@ -24997,6 +24997,16 @@
               "default": "",
               "title": "Code Challenge"
             }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Prompt"
+            }
           }
         ],
         "responses": {

@@ -274,6 +274,8 @@ class Auth:
                 self.proxy.warm()
         except Exception:
             pass                        # the first sign-in fetches them instead
+        from . import people_mirror
+        people_mirror.start(self)       # a Tico account sign-in keeps its install's list on the account (no-op otherwise)
 
     def owner_id(self, c):
         """The roster id of this environment's owner. One process serves one company, so the

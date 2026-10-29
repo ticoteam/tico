@@ -1333,6 +1333,12 @@ def migrate(conn, adopt_legacy=False):
     # was sent to). Older rows read their request time and their message's recipient (approval_wait).
     add_column(conn, "approvals", "ready_since", "TEXT")
     add_column(conn, "approvals", "decision_owner", "TEXT")
+    # The Tico account a person signed in with (backend/oidc.py person): the issuer and its subject id. An install
+    # matches the account id before the email, so a changed address keeps the same person. NULL until their first
+    # sign-in with an account; one account is one person.
+    add_column(conn, "humans", "idp_issuer", "TEXT")
+    add_column(conn, "humans", "idp_sub", "TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL")
     # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
     # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
     add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
@@ -8785,10 +8791,16 @@ def bots(conn, host=None, state=None):
     return [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
 
 
+# The Tico account a person signed in with (backend/oidc.py `person`): matched by the sign-in only, never sent out.
+HUMAN_ACCOUNT_COLUMNS = ("idp_issuer", "idp_sub")
+
+
 def human(conn, pid):
     row = _one(conn, "SELECT * FROM humans WHERE id=?", (actor_id(pid),))
     if row:
         row["teams"] = _json(row.get("teams_json"), []) or []
+        for key in HUMAN_ACCOUNT_COLUMNS:
+            row.pop(key, None)
     return row
 
 
@@ -8796,6 +8808,8 @@ def humans(conn):
     out = _rows(conn.execute("SELECT * FROM humans ORDER BY id"))
     for row in out:
         row["teams"] = _json(row.get("teams_json"), []) or []
+        for key in HUMAN_ACCOUNT_COLUMNS:
+            row.pop(key, None)
     return out
 
 
