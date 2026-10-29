@@ -294,7 +294,8 @@ class Scheduler:
                     with isolated(c, "assigned_start", task_id, failures):
                         assigned_start.sweep(c, stamp(at), [task_id])
             from . import queue_refusals
-            with self.store.read() as c:
+            # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
+            with self.store.read_transaction() as c:
                 observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
             for change in observations:
                 with locked("queue_refusals:" + change[0]) as c:

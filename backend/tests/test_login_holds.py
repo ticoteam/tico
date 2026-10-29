@@ -848,3 +848,24 @@ def test_a_capacity_notice_during_a_quota_hold_leaves_the_providers_reset_where_
         busy = login_holds.record(c, "r1", "", "codex", "2026-10-23T05:00:00.000000Z",
                                   error="Selected model is at capacity. Please try a different model.")
     assert (busy["until"], busy["streak"], busy["reset"], busy["capacity"]) == (quota["until"], 1, True, False)
+
+
+def test_canonical_parses_the_readiness_once_per_transaction(api, monkeypatch):
+    # A claim scan asks for the same login per bot and per job; the readiness document is parsed once per login.
+    from backend import store as S
+    machine = runner(api)
+    row = {"installed": True, "authenticated": "ready"}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "bots": {}, "runtimes": {"fake": {**row, "profiles": {
+            "team-a": {**row, "shared_login": True}, "solo": row}}}}}, token=machine["token"])
+    rid = machine["runner_id"]
+    parsed, real = [], S.readiness_document
+    monkeypatch.setattr(S, "readiness_document", lambda value: parsed.append(1) or real(value))
+    with api.app.state.store.transaction() as c:
+        assert [login_holds.canonical(c, rid, p, "fake") for p in ("team-a", "solo", "team-a")] == ["", "solo", ""]
+        assert len(parsed) == 2                 # one parse per login asked for: team-a and solo
+        assert [login_holds.canonical(c, rid, "team-a", "fake") for _ in range(3)] == [""] * 3 and len(parsed) == 2
+        # A write in the same transaction is seen: the runner now shares its login, and its answer changes.
+        c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {
+            "fake": {**row, "profiles": {"solo": {**row, "shared_login": True}}}}}), rid))
+        assert login_holds.canonical(c, rid, "solo", "fake") == ""
