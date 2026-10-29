@@ -205,10 +205,30 @@ function updFrom(u) {
     return `<a href="${who.href}" data-upd-input="${esc(i.id)}" data-upd-input-author="${esc(i.author)}">${esc(who.label)}</a>`;
   }).join(', ')}</div>`;
 }
-// A person's update the Assistant drafted says so until they replace it with their own words.
+// A person's update the Assistant drafted says so until they replace it with their own words; a bot's update the
+// server wrote from its activity says so until the bot posts its own.
 function updDraftPill(u) {
+  if (u.written === 'activity') return '<span class="upd-pill upd-draft">Written from activity</span>';
   if (!u.drafted_by) return '';
   return `<span class="upd-pill upd-draft">${u.edited_by ? 'Drafted by ' + esc(botDisplayName(u.drafted_by)) + ', edited' : 'Drafted by ' + esc(botDisplayName(u.drafted_by))}</span>`;
+}
+// One quiet line: the author's model spend over the day the update covers (a week in review: the week), and a
+// manager's team total with its group limit. The server sends it only to a reader who may see usage (docs/usage.md),
+// priced as Usage prices it; a subscription run counts its API-equivalent.
+function updSpendText(r) {
+  const usd = useEquiv(r);
+  return `${useCount(r.tokens)} tokens${usd == null ? '' : ' · ' + useMoney(usd)}${!r.est_cost_usd && r.subscription_equiv_usd > 0 ? ' API-equivalent' : ''}`;
+}
+function updSpend(u) {
+  const s = u.spend; if (!s) return '';
+  const parts = [];
+  if (s.runs != null) parts.push(s.runs ? updSpendText(s) : 'No model runs');
+  if (s.team) {
+    const lim = s.team.limit;
+    parts.push(`team ${updSpendText(s.team)}${lim ? ` · ${useMoney(lim.spent)} of ${esc(lim.group)}'s ${useCap(lim.cap)} ${esc(lim.period)} limit` : ''}`);
+  }
+  const span = u.kind === 'weekly' ? 'the week' : 'the day';
+  return parts.length ? `<div class="upd-spend muted" data-upd-spend title="Model spend over ${span} this update covers, estimated as on Usage">${parts.join(' · ')}</div>` : '';
 }
 // The action row is icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
 // on a phone). Mark read and Archive are swapped in place, so they have their own builders.
@@ -239,7 +259,7 @@ function updCard(u, i, state, kids = '') {
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${updDraftPill(u)}
         <span class="muted">· ${esc(ago(u.updated || u.created))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
-      ${updFrom(u)}
+      ${updFrom(u)}${updSpend(u)}
       <div class="upd-actions">
         ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
       </div>

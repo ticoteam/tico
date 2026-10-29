@@ -143,7 +143,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Cleanup** | Clears old events, mail, retry keys and recorder data. | Hourly |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly |
 | **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly |
-| **Updates** | Asks people and bots for today's updates, one at a time. | Every 10 seconds |
+| **Updates** | Writes today's updates, one at a time: the bots' from their activity (or asks each bot) and people's drafts. **Bots' updates** on its row picks who writes a bot's: **From activity** (the default) or **The bot writes its own**. See [Updates](using-tico.md#updates). | Every 10 seconds |
 | **GitHub sync** | Catches up on pull requests, merges and releases whose notice from GitHub never arrived. | Every 10 seconds |
 | **Repository and setup waits** | Finishes a bot waiting for its repository or a worktree, and tells a person about a bot stuck in setup. | Every 10 seconds |
 | **Release and feed check** | Checks for a new Tico release and fetches subscribed updates. | Every 10 seconds; a new release is looked for every 6 hours |

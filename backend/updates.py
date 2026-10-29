@@ -36,6 +36,14 @@ sensitive so it can take a while."
   summaries of shared meetings they were in, their open reports' updates). No chat, memory or tool
   is in reach, so a private Assistant chat cannot reach the company. Once they post their own words
   that day, in either kind, nothing is drafted for them.
+- A bot's update is written on the server from its activity too (`write_from_activity`), unless the team
+  (team rule `updates_from_activity`, Settings > System) or the bot (`update_settings.writer`) chose the bot
+  writing its own in a run. Its facts (`bot_facts`) keep the rules of a person's draft: nothing from a private
+  task, another restricted bot or an approval. One call writes it: the Tico AI Gateway's Summarize while it is
+  connected, else the company's own model (`writer_for`), else the bot is asked in a run as before. It posts as
+  the bot's, labelled `written`, in the same roll-up order; a bot's own post clears the label.
+- Each card can carry its author's model spend over the day it covers (`add_spend`, from the runs as
+  docs/usage.md prices them), a manager's its team's total and group limit, for a reader who may see usage.
 - Meetings are read only by the owner and people with an email on file (backend/sql.py), so a draft
   whose facts held a meeting summary, or a report's update that did, is flagged `meetings` and read
   only by them (`meeting_reader`): every other reader, bots included, gets it as not found and the
@@ -43,7 +51,7 @@ sensitive so it can take a while."
 """
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import run_triggers
@@ -122,18 +130,37 @@ def kind_for(day):
     return "weekly" if datetime.fromisoformat(day).weekday() == 4 else "daily"
 
 
+WRITERS = ("team", "activity", "bot")
+
+
 def settings(c, bot):
-    row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
-    return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
+    """A bot's switches, who writes its update (`writer`: team, activity or bot) and what that comes to
+    (`from_activity`)."""
+    row = c.execute("SELECT * FROM update_settings WHERE bot=?", (bot,)).fetchone()
+    writer = row["writer"] if row and "writer" in row.keys() and row["writer"] in WRITERS else "team"
+    return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True,
+            "writer": writer, "from_activity": from_activity(c, writer)}
 
 
-def set_settings(c, bot, daily=None, weekly=None):
+def from_activity(c, writer="team"):
+    """Whether a bot with this `writer` has its update written on the server: its own choice, else the team's."""
+    if writer in ("activity", "bot"):
+        return writer == "activity"
+    from . import team_rules
+    return bool(team_rules.load(c)["updates_from_activity"])
+
+
+def set_settings(c, bot, daily=None, weekly=None, writer=None):
     now = settings(c, bot)
     daily = now["daily"] if daily is None else bool(daily)
     weekly = now["weekly"] if weekly is None else bool(weekly)
-    c.execute("INSERT INTO update_settings(bot,daily,weekly) VALUES(?,?,?) ON CONFLICT(bot) DO UPDATE SET "
-              "daily=excluded.daily, weekly=excluded.weekly", (bot, int(daily), int(weekly)))
-    return {"daily": daily, "weekly": weekly}
+    writer = now["writer"] if writer is None else writer
+    if writer not in WRITERS:
+        raise Problem("writer", "writer is team, activity or bot", 422)
+    c.execute("INSERT INTO update_settings(bot,daily,weekly,writer) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE SET "
+              "daily=excluded.daily, weekly=excluded.weekly, writer=excluded.writer",
+              (bot, int(daily), int(weekly), None if writer == "team" else writer))
+    return settings(c, bot)
 
 
 # ----------------------------------------------------------------------------- the org chart
@@ -331,6 +358,10 @@ def ensure_schema(c):
     H.add_column(c, "updates", "drafted_by", "TEXT")
     H.add_column(c, "updates", "edited_by", "TEXT")
     H.add_column(c, "updates", "inputs_json", "TEXT")
+    # `writer`: who writes a bot's update (null: the team's choice). `written`: "activity" on an update the server
+    # wrote from the bot's activity (`write_from_activity`); the bot's own post clears it.
+    H.add_column(c, "update_settings", "writer", "TEXT")
+    H.add_column(c, "updates", "written", "TEXT")
     # `source_json`: the automation run that posted it (`post_update`, backend/automation_actions.py); a post by hand
     # clears it. Shown as `source` only when set.
     H.add_column(c, "updates", "source_json", "TEXT")
@@ -398,9 +429,13 @@ def settle_sent(c, row):
                  (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone():
         _finish(c, row, "posted")
         return False
-    if is_person(row["bot"]):
-        # The server's draft (`write_draft`) is under way; one that never finished is given up on.
+    if is_person(row["bot"]) or not row["message_id"]:
+        # The server's draft (`write_draft`, `write_from_activity`) is under way. A person's that never finished is
+        # given up on; a bot's is asked of the bot, as before.
         if (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds() > PICKUP_LIMIT_S:
+            if not is_person(row["bot"]):
+                send_request(c, row)
+                return True
             _finish(c, row, "missed", "its draft did not finish")
             return False
         return True
@@ -430,13 +465,7 @@ def request_text(c, bot, kind, day, redo=False):
     A redo of a past week takes that week's finished work and the bot's old update to rewrite."""
     actor = H.bot_actor(bot)
     week = kind == "weekly"
-    if redo:
-        start = datetime.combine(datetime.fromisoformat(day).date(), datetime.min.time(), ZONE)
-        utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-        since, until = utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
-    else:
-        last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
-        since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
+    since, until = _window(c, bot, kind, day, redo)
     done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated>=? AND updated<? "
                      "ORDER BY updated DESC LIMIT 12", (actor, since, until)).fetchall()
     open_ = c.execute("SELECT title, status FROM tasks WHERE owner=? AND status IN ('open','doing','waiting','review','ready') "
@@ -556,6 +585,47 @@ def _clip(text, n):
     return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "…"
 
 
+def _activity(c, actor, since, until, hidden):
+    """One author's work between `since` and `until` that every member may read (`shared_tasks_sql`): their tasks
+    finished and open, what they asked of someone else, their goals, and their decisions, answers and comments on
+    such tasks. A person's draft and a bot's update from activity are both written from this; each list is capped."""
+    shared = shared_tasks_sql(hidden)
+    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated>=? "
+                     "AND updated<? ORDER BY updated DESC LIMIT 12", (actor, since, until)).fetchall()
+    open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner=? AND {shared} AND status IN "
+                      "('open','doing','waiting','review','ready') ORDER BY updated DESC LIMIT 12", (actor,)).fetchall()
+    asked = c.execute(f"SELECT title, owner FROM tasks WHERE requester=? AND {shared} AND owner<>? AND status IN "
+                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (actor, actor)).fetchall()
+    goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN "
+                      "('done','dropped')) ORDER BY rank LIMIT 5", (actor,)).fetchall()
+    # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
+    decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
+                        f"AND e.field='status' AND e.old IS NOT NULL AND e.ts>=? AND e.ts<? AND {shared_tasks_sql(hidden, 't.')} "
+                        "ORDER BY e.ts DESC LIMIT ?", (actor, since, until, DRAFT_LIST_MAX)).fetchall()
+    # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
+    said = lambda where: [(title, m["body"]) for m in c.execute(
+        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created>=? AND created<? AND " + where
+        + " ORDER BY created DESC LIMIT ?", (actor, since, until, DRAFT_SCAN_MAX)).fetchall()
+        if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
+    answers = said("kind='answer'")
+    comments = said("kind IN ('say','ask') AND json_extract(refs_json,'$.task') IS NOT NULL "
+                    "AND json_extract(refs_json,'$.comment')")
+    return {"done": done, "open": open_, "asked": asked, "goals": goals, "decided": decided, "answers": answers,
+            "comments": comments}
+
+
+def _activity_lines(c, work, finished, whose):
+    line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
+    who = lambda owner: _label(c, owner if is_person(owner) else H.actor_id(owner))
+    return [f"Finished {finished}:", line(work["done"], lambda r: r["title"]),
+            "Open:", line(work["open"], lambda r: f"{r['title']} ({r['status']})"),
+            "Waiting on someone else:", line(work["asked"], lambda r: f"{r['title']} ({who(r['owner'])})"),
+            f"{whose} goals:", line(work["goals"], lambda r: r["title"]),
+            f"{whose} decisions:", line(work["decided"], lambda r: f"{r['title']}: {r['new']}"),
+            f"{whose} answers:", line(work["answers"], lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
+            f"{whose} comments on tasks:", line(work["comments"], lambda r: f"On {r[0]}: {_clip(r[1], 200)}")]
+
+
 def draft_facts(c, author, kind, day):
     """Everything a person's draft is written from: what every member can already see. Their tasks that
     are not private and have no restricted bot as owner or requester, their goals, their decisions and
@@ -568,27 +638,7 @@ def draft_facts(c, author, kind, day):
     week = kind == "weekly"
     since = H.shift(H.now(), days=-7 if week else -1)
     hidden = [H.bot_actor(slug) for slug in sorted(restricted_bots(c))]
-    shared = shared_tasks_sql(hidden)
-    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated>=? "
-                     "ORDER BY updated DESC LIMIT 12", (author, since)).fetchall()
-    open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner=? AND {shared} AND status IN "
-                      "('open','doing','waiting','review','ready') ORDER BY updated DESC LIMIT 12", (author,)).fetchall()
-    asked = c.execute(f"SELECT title, owner FROM tasks WHERE requester=? AND {shared} AND owner<>? AND status IN "
-                      "('open','doing','waiting') ORDER BY updated DESC LIMIT 8", (author, author)).fetchall()
-    goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN "
-                      "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
-    # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
-    decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
-                        f"AND e.field='status' AND e.old IS NOT NULL AND e.ts>=? AND {shared_tasks_sql(hidden, 't.')} "
-                        "ORDER BY e.ts DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
-    # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
-    said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created>=? AND " + where
-        + " ORDER BY created DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
-        if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
-    answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs_json,'$.task') IS NOT NULL "
-                    "AND json_extract(refs_json,'$.comment')")
+    work = _activity(c, author, since, "9999", hidden)
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
     email = ((P.person(author[6:], _chart(c)[0]) or {}).get("email") or "").strip().lower()
@@ -602,13 +652,7 @@ def draft_facts(c, author, kind, day):
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
-             f"Finished {'this week' if week else 'since yesterday'}:", line(done, lambda r: r["title"]),
-             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-             "Waiting on someone else:", line(asked, lambda r: f"{r['title']} ({_label(c, r['owner'] if is_person(r['owner']) else H.actor_id(r['owner']))})"),
-             "Their goals:", line(goals, lambda r: r["title"]),
-             "Their decisions:", line(decided, lambda r: f"{r['title']}: {r['new']}"),
-             "Their answers:", line(answers, lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
-             "Their comments on tasks:", line(comments, lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
+             *_activity_lines(c, work, "this week" if week else "since yesterday", "Their"),
              "Meetings they were in:", line(meetings, lambda r: f"{r['title']}: {_clip(r['notes'], MEETING_CHARS)}")]
     team, missing = team_updates(c, author, kind, day)
     if team or missing:
@@ -619,11 +663,54 @@ def draft_facts(c, author, kind, day):
     return "\n".join(facts), bool(meetings) or any(u["meetings"] for u in team)
 
 
-def draft_instructions(kind):
+def _window(c, bot, kind, day, redo):
+    """(since, until) a bot's update covers: since its last update (a day or a week back when it has none), or for a
+    redo of a past day, that day or that week."""
+    week = kind == "weekly"
+    if redo:
+        start = datetime.combine(datetime.fromisoformat(day).date(), datetime.min.time(), ZONE)
+        utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        return utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
+    last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
+    return last or H.shift(H.now(), days=-7 if week else -1), "9999"
+
+
+def bot_facts(c, bot, kind, day, redo=False):
+    """What a bot's update from activity is written from (`write_from_activity`), held to the rules of a person's
+    draft: its tasks and the tasks it asked of others that are not private and have no other restricted bot on them,
+    its goals (and on a Friday its goal KPIs), its decisions and comments on such tasks, and for a manager its
+    reports' updates, none from a restricted bot and none flagged `meetings`. No chat, memory or approval is read.
+    Returns (the facts, the ids of the reports' updates it used)."""
+    week = kind == "weekly"
+    since, until = _window(c, bot, kind, day, redo)
+    restricted = restricted_bots(c)
+    hidden = [H.bot_actor(slug) for slug in sorted(restricted - {bot})]
+    work = _activity(c, H.bot_actor(bot), since, until, hidden)
+    facts = [f"{_label(c, bot)}'s {'week in review' if week else 'daily update'} for {day}.", "",
+             *_activity_lines(c, work, ("that week" if redo else "this week") if week else
+                              "that day" if redo else "since its last update", "Its")]
+    if week:
+        facts += ["Its goal KPIs (Tico adds these to the KPI slide):"]
+        facts += ["- " + f"{k['name']}: {k['value'] if k['value'] is not None else 'no data'}"
+                  f"{(' ' + k['unit']) if k['unit'] and k['value'] is not None else ''}"
+                  for k in kpi_snapshot(c, bot)] or ["- (none)"]
+    team, missing = team_updates(c, bot, kind, day)
+    team, missing = [u for u in team if u["bot"] not in restricted], [a for a in missing if a not in restricted]
+    used = [u["id"] for u in team if not u["meetings"]]
+    if team or missing:
+        facts += ["Its team's " + ("weeks in review" if week else "updates") + ":"]
+        facts += [f"{_label(c, u['bot'])}:\n{u['body']}" if not u["meetings"] else
+                  f"{_label(c, u['bot'])}: posted an update (not shown here)" for u in team] or ["- (none yet)"]
+        if missing:
+            facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
+    return "\n".join(facts), used
+
+
+def draft_instructions(kind, lead=DRAFT_INSTRUCTIONS):
     if kind == "weekly":
-        return DRAFT_INSTRUCTIONS + SLIDES_SHAPE + (' Reply with one JSON object and nothing else: {"slides": {"goal": "...", '
+        return lead + SLIDES_SHAPE + (' Reply with one JSON object and nothing else: {"slides": {"goal": "...", '
                                                     '"kpis": [], "done": [...], "focus": [...], "blockers": [...]}}.')
-    return DRAFT_INSTRUCTIONS + (f"Write one to five bullets in plain English: no title, headings or task ids, at most "
+    return lead + (f"Write one to five bullets in plain English: no title, headings or task ids, at most "
                                  f"{LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all. Reply with "
                                  'one JSON object and nothing else: {"body": "- first bullet\\n- second bullet"}.')
 
@@ -719,10 +806,180 @@ def write_draft(store, author, write, assistant):
         return posted
 
 
-def send_request(c, row, assistant=None):
+# ----------------------------------------------------------------------------- a bot's update from its activity
+ACTIVITY_INSTRUCTIONS = (
+    "You write a bot's update for its company from the facts given, in the first person, as the bot: what it did, does "
+    "next and waits on (say who). Use only the facts given; never invent work. If nothing got done, say so in one "
+    "bullet and what it does next. A manager sums up its team's updates in its own words, naming who did what. ")
+WRITTEN = "activity"
+
+
+def activity_instructions(kind):
+    """What Summarize is asked for: the update's shape as plain lines (`from_summary` reads them back)."""
+    if kind == "weekly":
+        return ACTIVITY_INSTRUCTIONS + (
+            "Reply in exactly this shape and nothing else: a line 'Goal: ' with one sentence of at most 30 words on the "
+            "goal and where it stands; a line 'Done:' then one to five lines starting '- ' on what got done; a line "
+            "'Focus:' then one to three lines starting '- ' on the focus next week; a line 'Blockers:' then up to three "
+            "lines starting '- ' on what blocks it and who can unblock it. At most 25 words a line, no task ids.")
+    return ACTIVITY_INSTRUCTIONS + (f"Reply with one to five lines, each starting '- ', in plain English: no title, headings "
+                                    f"or task ids, at most {LIMITS[kind]['bullet']} words a line.")
+
+
+def _item(line):
+    return " ".join(re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", str(line or "")).replace("**", "").split())
+
+
+NONE_WORDS = ("none", "(none)", "nothing", "n/a", "-")
+
+
+def from_summary(text, kind):
+    """Summarize's answer as a post: {"body": bullets} for a daily, {"slides": ...} for a week in review, or None when
+    it is not usable. A JSON answer in the draft shape is taken as it is."""
+    text = str(text or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict) and (parsed.get("slides") if kind == "weekly" else parsed.get("body")):
+            return parsed
+    lines = [line for line in text.splitlines() if line.strip()]
+    if kind == "weekly":
+        slides, section = {"goal": "", "kpis": [], "done": [], "focus": [], "blockers": []}, None
+        names = {"goal": "goal", "done": "done", "focus": "focus", "blocker": "blockers", "blockers": "blockers"}
+        for line in lines:
+            head = re.match(r"^\W*(goal|done|focus|blockers?)\W*:\s*(.*)$", line.strip(), re.I)
+            if head:
+                section, line = names[head.group(1).lower()], head.group(2)
+            item = _item(line)
+            if not section or not item or item.lower() in NONE_WORDS:
+                continue
+            if section == "goal":
+                slides["goal"] = slides["goal"] or item
+            else:
+                slides[section].append(item)
+        for key, (_, high, _) in SLIDES.items():
+            slides[key] = slides[key][:high]
+        return {"slides": slides} if slides["goal"] and slides["done"] else None
+    bullets = [_item(line) for line in lines if not (HEADING.match(line) and not BULLET.match(line))]
+    if len(bullets) == 1 and not BULLET.match(lines[0]):
+        bullets = [b.strip() for b in re.split(r"(?<=[.!?])\s+", bullets[0])]     # one paragraph: a bullet a sentence
+    bullets = [b for b in bullets if b and b.lower() not in NONE_WORDS][:BULLETS_MAX]
+    return {"body": "\n".join("- " + b for b in bullets)} if bullets else None
+
+
+class Unwritten(Exception):
+    """A route that did not give a usable update; the next one is tried."""
+
+
+def summarizer_for(c, settings, store, vault=None):
+    """The Tico AI Gateway's Summarize while it is connected, as `summarize(bot, text, instructions, max_words)` returning
+    the Gateway's answer; None when it is not connected or in rehearsal. The key is read at the call and sent with the
+    bot's opaque id, so the Gateway meters it as that bot's."""
+    from . import gateway_connection
+    if settings.rehearsal or store is None or not gateway_connection.connected(c, settings):
+        return None
+
+    def summarize(bot, text, instructions, max_words):
+        from clients import gateway as G
+        from .credentials import Vault
+        keys = vault or Vault(store)
+        if not keys.configured and not gateway_connection.env_key(settings):
+            raise Unwritten("no gateway key")
+        with store.read() as c:
+            secret, base, _ = gateway_connection.target(c, keys, settings)
+            header = gateway_connection.bot_header(c, keys, bot)
+        if not secret:
+            raise Unwritten("no gateway key")
+        status, answer, code = G.summarize(base, secret, text, instructions, max_words, header)
+        if status != 200:
+            raise Unwritten(f"the Gateway answered {code or status}")
+        return answer
+    return summarize
+
+
+def server_written(c, bot):
+    """Whether the bot's request out now is one the server writes (`write_from_activity`): it sent the bot no message."""
+    return not is_person(bot) and c.execute("SELECT 1 FROM update_queue WHERE bot=? AND state='sent' AND message_id IS NULL",
+                                            (bot,)).fetchone() is not None
+
+
+def write_from_activity(store, bot, summarize=None, write=None):
+    """Write the bot's update Tico has out from its activity (`bot_facts`) and post it as the bot's, labelled `written`.
+    Runs outside a transaction: no call holds the write lock. The routes in order: the Gateway's Summarize
+    (`summarizer_for`), the company's own model as a person's draft is written (`writer_for`), and when neither gives a
+    usable update the bot is asked in a run as before (`send_request`). A bot that already posted that day's update
+    keeps its own. Returns the posted update, or None."""
+    with store.read() as c:
+        row = c.execute("SELECT * FROM update_queue WHERE bot=? AND state='sent' AND message_id IS NULL", (bot,)).fetchone()
+        if not row:
+            return None
+        redo = bool(row["redo"])
+        kind, day = row["kind"], row["day"]
+        own = not redo and _posted(c, bot, kind, day)
+        if not own:
+            facts, used = bot_facts(c, bot, kind, day, redo)
+    if own:
+        with store.transaction() as c:
+            if (row := c.execute("SELECT * FROM update_queue WHERE id=? AND state='sent'", (row["id"],)).fetchone()):
+                _finish(c, row, "posted")
+        return None
+    routes = []
+    if summarize:
+        routes.append(("gateway", lambda: summarize(bot, facts, activity_instructions(kind), LIMITS[kind]["words"])))
+    if write:
+        routes.append(("model", lambda: write(draft_instructions(kind, ACTIVITY_INSTRUCTIONS), facts)))
+    for route, call in routes:
+        try:
+            answer = call()
+            out = from_summary(answer.get("summary"), kind) if route == "gateway" else answer
+            if not isinstance(out, dict):
+                continue
+        except Exception:
+            continue                      # whatever went wrong, the next route is tried
+        with store.transaction() as c:
+            row = c.execute("SELECT * FROM update_queue WHERE id=? AND state='sent'", (row["id"],)).fetchone()
+            if not row or row["message_id"]:
+                return None
+            if not redo and _posted(c, bot, kind, day):
+                _finish(c, row, "posted")
+                return None
+            c.execute("SAVEPOINT update_activity")
+            try:
+                posted = post(c, bot, out.get("body"), kind=kind, day=day,
+                              slides=out.get("slides") if kind == "weekly" else None, inputs=used, written=WRITTEN)
+            except Exception:
+                # Any shape of answer: nothing of it is kept, and the next route is tried.
+                if not c.in_transaction:
+                    raise
+                c.execute("ROLLBACK TO update_activity")
+                c.execute("RELEASE update_activity")
+                continue
+            c.execute("RELEASE update_activity")
+            cost = (answer.get("usage") or {}).get("cost_usd") if route == "gateway" else None
+            H.event(c, H.KEEPER, "update.written", posted["id"], {"bot": bot, "route": route,
+                                                                    **({"cost_usd": cost} if cost is not None else {})})
+            _finish(c, row, "posted")
+            return posted
+    with store.transaction() as c:
+        row = c.execute("SELECT * FROM update_queue WHERE id=? AND state='sent' AND message_id IS NULL",
+                        (row["id"],)).fetchone()
+        if row:
+            send_request(c, row)          # the old way: the bot writes it in a run
+    return None
+
+
+def _posted(c, bot, kind, day):
+    return c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone() is not None
+
+
+def send_request(c, row, assistant=None, server=False):
     redo = bool(row["redo"]) if "redo" in row.keys() else False
-    if is_person(row["bot"]):
-        # No message: the server drafts it (`write_draft`), so no bot run is involved.
+    if is_person(row["bot"]) or server:
+        # No message: the server drafts it (`write_draft`, `write_from_activity`), so no bot run is involved.
         c.execute("UPDATE update_queue SET state='sent', message_id=NULL, sent_at=? WHERE id=?", (H.now(), row["id"]))
         return None
     message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
@@ -733,10 +990,12 @@ def send_request(c, row, assistant=None):
     return message
 
 
-def dispatch(c, at=None, assistant=None):
+def dispatch(c, at=None, assistant=None, server=False):
     """One step, from the scheduler's tick: build today's queue after 05:00, settle the request
     that is out, and send the next one. At most one request is out at a time. With an `assistant`
-    (drafting is on), a person's draft is next once no bot can be asked: the caller writes it."""
+    (drafting is on), a person's draft is next once no bot can be asked: the caller writes it. With
+    `server` (the server can write: `summarizer_for` or `writer_for`), a bot whose update is from its
+    activity is sent no message, busy or not, and the caller writes it (`write_from_activity`)."""
     local = local_now(at)
     day = local.date().isoformat()
     if local.hour >= START_HOUR:
@@ -752,15 +1011,17 @@ def dispatch(c, at=None, assistant=None):
         if bot.get("state") != "active":
             _finish(c, row, "skipped", "the bot is " + (bot.get("state") or "gone"))
             continue
-        if not settings(c, row["bot"])[row["kind"]]:
+        switches = settings(c, row["bot"])
+        if not switches[row["kind"]]:
             _finish(c, row, "skipped", "its " + row["kind"] + " update is switched off")
             continue
-        if _busy(c, row["bot"]):
+        written = server and switches["from_activity"]
+        if not written and _busy(c, row["bot"]):
             continue                      # asked later today, once its run is over
         chart = chart or _chart(c)
         if waits_on_reports(c, row, chart):
             continue                      # asked once its reports are in, or the wait is up
-        send_request(c, row)
+        send_request(c, row, server=written)
         return row["bot"]
     drafting = set(drafted_people(c))
     for row in c.execute("SELECT * FROM update_queue WHERE state='queued' AND day=? AND bot LIKE 'human:%' "
@@ -992,7 +1253,7 @@ def check_day(c, bot, day):
 
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
-         meetings=False, reader=True, source=None):
+         meetings=False, reader=True, source=None, written=None):
     """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
@@ -1001,7 +1262,8 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it.
     `reader` is whether the person posting is a meeting reader (`meeting_reader`): one who is not was never shown a
     flagged draft, so what they post over it is their own words, and their reply links no flagged input. `source` is
-    the automation run posting it ({automation, run, task}); any other post clears it."""
+    the automation run posting it ({automation, run, task}); any other post clears it. `written` labels a bot's update
+    the server wrote from its activity (`write_from_activity`); the bot's own post clears it."""
     day = day or today()
     kind = kind or ("weekly" if slides else kind_for(day))
     if kind not in KINDS:
@@ -1042,16 +1304,16 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         draft, edited, flagged = None, None, 0
     if existing:
         c.execute("UPDATE updates SET headline=?, body=?, slides_json=?, updated=?, drafted_by=?, edited_by=?, "
-                  "inputs_json=?, meetings=?, source_json=? WHERE id=?",
-                  (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, existing["id"]))
+                  "inputs_json=?, meetings=?, source_json=?, written=? WHERE id=?",
+                  (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, written, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides_json,created,updated,drafted_by,edited_by,"
-                  "inputs_json,meetings,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "inputs_json,meetings,source_json,written) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged,
-                   source_json))
+                   source_json, written))
         # A new latest logical day supersedes updates this reader previously restored. A backdated
         # redo must not revoke a restore: there is already a newer day, and this post did not
         # supersede it. Removing just restore overrides keeps manual archives intact. Same-day
@@ -1299,6 +1561,120 @@ def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
     tops = [me] if scope == "below" and me in nodes else sorted(children.get("", []), key=lambda k: rank("", k))
     return {"kind": kind, "day": day, "scope": scope, "me": me, "roots": [build(k, {k}) for k in tops],
             "unread": count_unread(c, actor, direct, kind, meetings)}
+
+
+# ----------------------------------------------------------------------------- spend on a card
+SPEND_SUMS = ("runs", "input_tokens", "cached_tokens", "output_tokens", "api_usd", "subscription_usd", "api_priced",
+              "api_unpriced", "low_priced")
+
+
+def covered(kind, day):
+    """The [from, to) UTC times an update's spend counts: the 24 hours before 05:00 Pacific on its day, when the day's
+    queue starts (a week in review: the seven days before). Fixed by the day, so a card's figure does not move."""
+    end = datetime.combine(date.fromisoformat(day), time(START_HOUR), ZONE)
+    start = end - timedelta(days=7 if kind == "weekly" else 1)
+    utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return utc(start), utc(end)
+
+
+def _spend_rows(c, start, end, memo):
+    """{bot: sums} for the runs that finished and started in [start, end), as Usage sums them (backend/usage.py)."""
+    if (start, end) not in memo:
+        from .usage import SUMS
+        from .usage_records import RUNS
+        memo[(start, end)] = {r["k"]: dict(r) for r in c.execute(
+            f"SELECT t.bot AS k, {SUMS} FROM {RUNS} t WHERE t.finished IS NOT NULL AND t.started >= ? AND t.started < ? "
+            "GROUP BY t.bot", (start, end))}
+    return memo[(start, end)]
+
+
+def _spent(rows):
+    """Tokens and the estimate, priced and split as Usage does: `est_cost_usd` is API-billed runs (null when none was
+    priced), `subscription_equiv_usd` the API-equivalent of subscription runs."""
+    from .usage import figures
+    row = figures({k: sum(r[k] or 0 for r in rows) for k in SPEND_SUMS})
+    return {"runs": row["runs"], "tokens": row["input_tokens"] + row["cached_tokens"] + row["output_tokens"],
+            "est_cost_usd": row["est_cost_usd"], "subscription_equiv_usd": row["subscription_equiv_usd"],
+            "low_estimate_runs": row["low_estimate_runs"]}
+
+
+def team_below(c, author, chart=None):
+    """Every author below this one on the org chart, reports of reports included (bot slugs and `human:<id>`)."""
+    chart = chart or _chart(c)
+    out, todo, seen = [], [author], {author}
+    while todo:
+        for a in direct_reports(c, todo.pop(), chart):
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+                todo.append(a)
+    return out
+
+
+def group_limit(c, author, default=None):
+    """The group limit over a manager's team, as Usage > Limits shows it now: {group, period, spent, cap}, the period
+    nearest its cap. A bot's is the nearest capped group it is in; a person's, the capped group they lead that is
+    nearest its cap. None when no group limit applies."""
+    from . import usage_limits as L
+    default = default or L.company(c)
+    capped = L.pools(c, default)
+    if is_person(author):
+        from . import groups
+        scopes = ["group:" + g for g in sorted(groups.led_groups(c, author)) if "group:" + g in capped]
+    else:
+        scopes = [s for s in L.scopes_of(c, author, default) if s != L.COMPANY][:1]
+    best = None
+    for scope in scopes:
+        state = L.pool_state(c, scope, default=default)
+        for name, label in L.PERIODS:
+            cap, spent = state.get(name + "_usd"), state.get(label + "_spent")
+            if cap and spent is not None and (best is None or spent / cap > best[0]):
+                best = (spent / cap, scope, name, spent, cap)
+    if not best:
+        return None
+    named, _ = L.groups(c, default)
+    gid = best[1].split(":", 1)[1]
+    return {"group": (named.get(gid) or {}).get("name") or gid, "period": L.WORDS[best[2]],
+            "spent": round(best[3], 6), "cap": best[4]}
+
+
+def add_spend(c, items, may_see, admin=False):
+    """Each update's `spend` over the day it covers (`covered`): its author's runs, tokens and estimate, and for a
+    manager `team`, the total of itself and every bot below it on the chart, with the group limit over it (`limit`).
+    Only for a reader who may see usage (docs/usage.md): `may_see` is the bots whose usage they see
+    (backend/usage.py own_bots), so an author outside it shows none, and a team total shows only when every bot in it is
+    inside; the limit only to the owner and administrators (`admin`), who see group totals on Usage. A person runs no
+    model, so their card carries only their team's."""
+    if not may_see:
+        return items
+    chart, memo, default = _chart(c), {}, None
+    for item in items:
+        if not item or not item.get("day"):
+            continue
+        rows = _spend_rows(c, *covered(item["kind"], item["day"]), memo)
+        author, out = item["bot"], {}
+        if not is_person(author) and author in may_see:
+            out.update(_spent([rows[author]] if author in rows else []))
+        team = ([] if is_person(author) else [author]) + [a for a in team_below(c, author, chart) if not is_person(a)]
+        if team and team != [author] and set(team) <= may_see:
+            out["team"] = {**_spent([rows[b] for b in team if b in rows]), "bots": len(team)}
+            if admin:
+                from . import usage_limits as L
+                default = default or L.company(c)
+                out["team"]["limit"] = group_limit(c, author, default)
+        if out:
+            item["spend"] = out
+    return items
+
+
+def tree_updates(node_list):
+    """Every update in a `tree` answer's nodes, nested ones included."""
+    out = []
+    for node in node_list:
+        if node.get("update"):
+            out.append(node["update"])
+        out += tree_updates(node.get("children") or [])
+    return out
 
 
 def author_of(actor):

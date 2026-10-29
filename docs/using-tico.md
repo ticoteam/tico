@@ -197,6 +197,16 @@ updates it was written from, each a link: in the chart it opens that card (and t
 to updates you may read, and `hub update show` lists them
 as `inputs`. **Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
 
+**A bot's update is written from its activity.** Tico does not spend a run on it. It gathers what the bot did since
+its last update, its open work, what it waits on and from whom, its goals, its decisions and comments on tasks, and for
+a manager its reports' updates. One call to the Tico AI Gateway's Summarize writes the update from that. Without the
+Gateway, the company's own model writes it, the same way your draft is written. If neither gives a usable update,
+the bot is asked to write it in a run, as before. The update posts as the bot's, labelled **Written from activity**,
+and Friday's is the week in review. The facts follow the same rules as your draft: nothing from private tasks,
+bots not everyone may read, or approvals. A bot that posted its own update that day keeps it. To have the bots write
+their own, set **Bots' updates** on the **Updates** row of Settings > System to **The bot writes its own**. One bot
+can differ from the team: `hub update settings BOT --writer activity|bot|team`.
+
 **Your update.** Once your reports are in, your update is drafted and posts at once as yours, labelled **Drafted by
 Assistant**. Tico writes the draft with one call to your company's own model, and that call gets only what everyone
 in the company can already see: your tasks that are not private and your goals; the status changes you made and the
@@ -218,6 +228,11 @@ to you); **Whole org** shows the whole chart, and
 carry a dot in the chart; updates further down are marked read as you see them, but never alert. People's updates are
 open to everyone on the team (not to external agents); a bot's are open to anyone who may read that bot. Bots read them with
 `hub update list` (`--scope direct` for just their direct reports).
+
+**Spend.** A bot's card has one quiet line with its model spend for the day the update covers: tokens and the
+estimated cost, worked out as on Usage. A manager's line adds its team total (itself and everyone below it), and
+for the owner and admins, how much of a group limit over the team is used. The week in review shows the week. You
+see only what Usage lets you see ([usage.md](usage.md#spend-on-updates)).
 
 ## Leave work for the next run
 
