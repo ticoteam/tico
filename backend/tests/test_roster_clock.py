@@ -115,3 +115,31 @@ def test_type_list_reads_task_steps_from_the_shared_rows(api):
         H.type_list(c)
         c.set_trace_callback(None)
     assert ran == []
+
+
+def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_write(api, monkeypatch):
+    """The entries every bot list asks for are built from bot_config alone, so later snapshots share the built value."""
+    from backend import views
+    store = api.app.state.store
+    built, real = [], views._entries
+    monkeypatch.setattr(views, "_entries", lambda c, owner="": built.append(owner) or real(c, owner))
+
+    def read_entries():
+        with store.read() as c:
+            c.execute("BEGIN")
+            found = views.entries(c, shared=True)
+            c.commit()
+        return found
+    slug = snapshot_rows(store)[0][0]["bot"]
+    first = read_entries()
+    assert read_entries() is first and len(built) == 1
+    with store.read() as c:                     # a caller that changes its copy changes nothing shared
+        mine = views.entries(c)
+        mine[slug]["repo"] = "changed-by-a-caller"
+        assert views.entries(c)[slug]["repo"] != "changed-by-a-caller"
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo=? WHERE bot=?", ("emp-renamed", slug))
+    third = read_entries()
+    assert len(built) == 2 and third[slug]["repo"] == "emp-renamed"
+    assert read_entries() is third and len(built) == 2
+

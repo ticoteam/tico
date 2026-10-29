@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from copy import deepcopy
 import os
 import re
 from datetime import timezone
@@ -27,7 +28,7 @@ from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
 from pathlib import Path
 
-from . import read_cache
+from . import read_cache, roster_clock
 from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
 from .usage_records import ran_on
@@ -259,7 +260,12 @@ def _roster(c):
 
 
 def entries(c, github_owner="", shared=False):
-    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner), shared)
+    # Built from bot_config alone (follow reads the branch's original's row there too), so it is shared between
+    # snapshots until that table changes (backend/roster_clock.py), keyed on the GitHub owner it names repositories by.
+    key = ("view_entries", github_owner)
+    found = read_cache.value(c, key, lambda: roster_clock.shared(c, key, lambda: _entries(c, github_owner)), shared=True)
+    # A caller that enriches its copy gets its own: read_cache hands out the shared object outside a snapshot too.
+    return found if shared else deepcopy(found)
 
 
 def seat_parents(c, settings, auth, who):

@@ -15,7 +15,8 @@ def subjects(c, actor):
         # ask was a sqlite_master read (184 per member request on a 6k-task test hub).
         if not (H.is_bot(actor) or H.is_human(actor)) or not H._has_table(c, "bot_config"):
             return {actor}
-        roster, entries = views.roster(c), views.entries(c)
+        # Read only below (people.org_parent never changes them), so the snapshot's own copies are shared, not copied.
+        roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
         archived = {r['slug'] for r in H.bots(c) if r.get('state') == 'archived'}
         nodes = {**{'b:' + slug: ('bot', slug) for slug in entries if slug not in archived},
                  **{'p:' + p['id']: ('person', p['id']) for p in roster.get('people', [])}}

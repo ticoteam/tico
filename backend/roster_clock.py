@@ -57,3 +57,35 @@ def rows(c, statement):
     if not getattr(c, "write_transaction", False):
         shared[statement] = (clock, found)
     return found
+
+
+def shared(c, key, build):
+    """`build()`'s value for `key`, shared between snapshots while the roster tables (TABLES) are unchanged. `build`
+    may read only those tables, and what `key` names; the value is then the same as building it in this snapshot.
+    Mirrors rows(): the clock is read in the snapshot the build runs in, and a connection with writes of its own
+    shares nothing. Callers must not change the value, which every later snapshot gets as it is."""
+    store = getattr(c, "roster_rows", None)
+    if store is None or c.total_changes != getattr(c, "provenance_changes", None):
+        return build()
+    try:
+        clock = _clock(c)
+    except (sqlite3.OperationalError, TypeError):
+        return build()
+    hit = store.get(key)
+    if hit is not None and hit[0] == clock:
+        return hit[1]
+    if c.in_transaction:
+        found = build()
+    else:
+        c.execute("BEGIN")
+        try:
+            clock = _clock(c)
+            found = build()
+        except BaseException:
+            c.rollback()
+            raise
+        c.commit()
+    if not getattr(c, "write_transaction", False):
+        store[key] = (clock, found)
+    return found
+
