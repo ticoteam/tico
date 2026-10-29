@@ -247,21 +247,33 @@ def waiting(c, row, starting=False, *, include_next_run=True, result=False):
 
 def counts(c, bot, who=None, tasks=None):
     """Only tasks readable by the viewer contribute to the displayed counts."""
-    tasks = tasks if tasks is not None else H._rows(c.execute(
-        "SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing')", ('bot:' + bot,)))
-    going = queued = 0
-    suspect = maybe_waiting(c, tasks)
-    steps = step_names(c, tasks)
-    for row in tasks:
-        if who is not None and not privacy.task_readable(c, who, row):
-            continue
-        if row['id'] in suspect and waiting(c, row):
-            continue
-        if row['status'] == 'doing':
-            going += 1
-        elif startable(c, row, steps):
-            queued += 1
-    return {'going': going, 'waiting': queued}
+    return counts_many(c, {bot: tasks}, who)[bot]
+
+
+def counts_many(c, tasks_by_bot, who=None):
+    """`counts` for many bots at once: {bot: {'going', 'waiting'}} from `tasks_by_bot` ({bot: its open tasks}, or None to
+    read them). The wait checks and the step names are read once for all their tasks, not once a bot."""
+    for bot, tasks in tasks_by_bot.items():
+        if tasks is None:
+            tasks_by_bot[bot] = H._rows(c.execute(
+                "SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing')", ('bot:' + bot,)))
+    every = [row for tasks in tasks_by_bot.values() for row in tasks]
+    suspect = maybe_waiting(c, every)
+    steps = step_names(c, every)
+    out = {}
+    for bot, tasks in tasks_by_bot.items():
+        going = queued = 0
+        for row in tasks:
+            if who is not None and not privacy.task_readable(c, who, row):
+                continue
+            if row['id'] in suspect and waiting(c, row):
+                continue
+            if row['status'] == 'doing':
+                going += 1
+            elif startable(c, row, steps):
+                queued += 1
+        out[bot] = {'going': going, 'waiting': queued}
+    return out
 
 
 def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=None):
