@@ -498,6 +498,29 @@ def test_init_without_a_token_runs_only_the_router(host):
     assert json.loads((host.root / "cell.json").read_text())["domain"] == "cell.example.com"
 
 
+def test_the_router_keeps_net_bind_service_so_caddy_can_exec(host):
+    router = cell.edge_compose(host.root, tunnel=True).split("  tunnel:")[0]
+    assert "cap_add: [NET_BIND_SERVICE]" in router and "cap_drop: [ALL]" in router
+    assert "no-new-privileges:true" in router and "read_only: true" in router
+
+
+def test_init_gives_the_tunnel_directory_to_cloudflared(host):
+    host("init", "--tunnel-token-file", secret_file(host.tmp, "token", TOKEN), "--json")
+    d = host.root / "tunnel"
+    assert (str(d), 65532, 65532) in host.system.chowns
+    assert (str(d / "cloudflared.yml"), 65532, 65532) in host.system.chowns
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+def test_rerunning_init_sets_the_tunnel_owner_again(host):
+    token = secret_file(host.tmp, "token", TOKEN)
+    host("init", "--tunnel-token-file", token, "--json")
+    host.system.chowns.clear()
+    answer = host("init", "--json")
+    assert answer["ok"] and answer["changed"] == []
+    assert (str(host.root / "tunnel"), 65532, 65532) in host.system.chowns
+
+
 def test_init_installs_docker_when_missing(host):
     host.system.fail["compose version"] = Result(1, "", "docker: not found")
     host("init", "--json")
