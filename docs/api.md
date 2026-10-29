@@ -97,8 +97,8 @@ generates; after a change to the API, `python -m backend.openapi_v2` rewrites it
 - `from` and `to`: ISO times with a zone.
 
 `GET /api/v2/history.csv` takes the same filters and returns `time,actor,kind,subject,result,link`, up to 5,000 rows;
-`X-Next` holds the `before` for the rest. It is the owner's and the Admins' (403 for others). A cell that would start
-a spreadsheet formula starts with `'`. Both routes are internal for now ([Stable and internal](#stable-and-internal)).
+`X-Next` holds the `before` for the rest (the Log's Export CSV in the UI fetches every page and saves one file). It is
+the owner's and the Admins' (403 for others). A cell that would start a spreadsheet formula starts with `'`. Both routes are internal for now ([Stable and internal](#stable-and-internal)).
 
 ## Three ways to call it
 

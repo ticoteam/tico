@@ -116,7 +116,8 @@ on the bot’s **History** tab.
 granted and denied, sends kept as drafts because the send switch was off, credential reveals, permission changes, and
 answers people gave bots (decisions). Filter by teammate, team (with the teams nested under it) or kind. The filters are
 in the address, so a filtered view can be shared; whoever opens it sees only the rows they may read. The owner and the
-Admins get **Export CSV**: time, actor, kind, subject, result and link for the rows shown by the filters.
+Admins get **Export CSV**: time, actor, kind, subject, result and link for every row the filters show, all pages in
+one file.
 
 Not in the Log, because Tico does not record them in one place: a bot's mail send that the mail connector turned into a
 draft (kept in that connector's own log on the bot's computer), and a webhook send refused while the send switch is off.
