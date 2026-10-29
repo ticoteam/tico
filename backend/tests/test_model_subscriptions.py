@@ -233,13 +233,13 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
     assert json.loads(value["value"])["tokens"]["refresh_token"] == "r-1"
     body = {"attempt": turn["id"], "subscription": sid, "revision": 1}
     other = runner(api, label="Other Mac")
-    post(api, "runner-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, other["token"], expected=403)
-    post(api, "runner-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, "ana-test", expected=403)
-    assert post(api, "runner-subscription-refresh", {**body, "value": codex_file("acct-2", "r-2")},
+    post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, other["token"], expected=403)
+    post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, "ana-test", expected=403)
+    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file("acct-2", "r-2")},
                 m["token"])["stored"] is False                  # another account's file is never kept
-    assert post(api, "runner-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
+    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
                 m["token"]) == {"stored": True, "revision": 2}
-    assert post(api, "runner-subscription-refresh", {**body, "value": codex_file(refresh="r-3")},
+    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-3")},
                 m["token"])["stored"] is False                  # stale: the stored one moved on
     with api.app.state.store.read() as c:
         sub = MS.row(c, sid)

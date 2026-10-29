@@ -15,6 +15,7 @@ pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
     crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY,
     crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, "turns_at_once_v1",
+    "person_subscriptions_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 

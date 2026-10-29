@@ -67,6 +67,7 @@ mod mcp;
 mod op;
 mod panics;
 mod perbot;
+mod person_subscriptions;
 mod perf;
 mod placement;
 mod playbook;

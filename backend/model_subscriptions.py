@@ -28,7 +28,7 @@ whichever computer runs the turn, a fresh cloud machine included, and never the 
 subscription (a token or Anthropic key) is set in the turn's environment for that CLI; a home subscription (a ChatGPT
 login or OpenAI key for Codex) becomes `auth.json` in a home of its own under the runner's state, kept per subscription
 on that computer so threads resume (runner-rs/src/person_subscriptions.rs). Codex refreshes a ChatGPT login in that
-file; the runner sends the refreshed file back (`POST runner-subscription-refresh`) so the next computer starts from it.
+file; the runner sends the refreshed file back (`POST runner-person-subscription-refresh`) so the next computer starts from it.
 
 Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before, and the pickers say
 the computer needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there
@@ -700,7 +700,7 @@ def install(app, store, auth, mutate, settings):
             return picks_view(c, auth, who, body.scope, body.id, settings)
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runner-subscription-refresh")
+    @app.post("/api/v2/runner-person-subscription-refresh")
     def refresh(request: Request, body: SubscriptionRefresh):
         who = request.state.identity
         with store.transaction() as c:
