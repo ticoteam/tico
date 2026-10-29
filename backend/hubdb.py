@@ -8726,10 +8726,16 @@ def bots(conn, host=None, state=None):
     return [dict(row) for row in rows(conn, sql + " ORDER BY slug", args)]
 
 
+# The Tico account a person signed in with (backend/oidc.py `person`): matched by the sign-in only, never sent out.
+HUMAN_ACCOUNT_COLUMNS = ("idp_issuer", "idp_sub")
+
+
 def human(conn, pid):
     row = _one(conn, "SELECT * FROM humans WHERE id=?", (actor_id(pid),))
     if row:
         row["teams"] = _json(row.get("teams_json"), []) or []
+        for key in HUMAN_ACCOUNT_COLUMNS:
+            row.pop(key, None)
     return row
 
 
@@ -8737,6 +8743,8 @@ def humans(conn):
     out = _rows(conn.execute("SELECT * FROM humans ORDER BY id"))
     for row in out:
         row["teams"] = _json(row.get("teams_json"), []) or []
+        for key in HUMAN_ACCOUNT_COLUMNS:
+            row.pop(key, None)
     return out
 
 

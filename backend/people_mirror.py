@@ -68,14 +68,20 @@ def payload(c, settings):
     roster = load_roster(c)
     owner = access.load_owner(c, settings)
     lists = access.load_access(c, settings)
-    rows, seen = [], set()
+    rows, seen, skipped = [], set(), 0
     for person in roster["people"]:
         email = str(person.get("email") or "").strip().lower()
         if (not email or email in seen or person.get("bot") or person.get("hidden")
                 or person.get("directory_left") or not person.get("sign_in", True)):
             continue
+        # The account refuses the whole list over one bad address, so an address it would refuse is left out and counted.
+        if not access._EMAIL.match(email):
+            skipped += 1
+            continue
         seen.add(email)
         rows.append({"email": email, "role": access.role_of(lists, owner["email"], email)})
+    if skipped:
+        log.warning("%d roster row(s) with no valid email address were left out of the sign-in list", skipped)
     rows.sort(key=lambda row: row["email"])
     if len(rows) > MAX_PEOPLE:
         log.warning("the sign-in list has %d people; the Tico account takes %d", len(rows), MAX_PEOPLE)

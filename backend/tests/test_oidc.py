@@ -16,7 +16,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from backend import access as Access
-from backend import identity_proxy, oidc, people_mirror
+from backend import hubdb, identity_proxy, oidc, people_mirror
 from backend.config import Settings
 from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
 
@@ -548,6 +548,15 @@ def test_the_not_on_the_list_page_names_the_address_and_ends_the_old_session(sig
     assert signin.sessions() == [] and signin.api.cookies.get("tico_session") is None
 
 
+def test_an_address_with_no_roster_row_is_refused_and_not_added_even_at_the_company_domain(signin):
+    signin.start(oidc_allowed_domains=("acme.example",))
+    refused = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
+    assert refused.status_code == 403 and "dan@acme.example" in refused.text
+    with signin.auth.store.read() as c:
+        assert c.execute("SELECT 1 FROM humans WHERE lower(email)='dan@acme.example'").fetchone() is None
+    assert signin.sessions() == []
+
+
 @pytest.mark.parametrize("prompt,sent", [("select_account", "select_account"), ("login", "login"), ("consent", None)])
 def test_login_passes_only_the_two_prompts_to_the_provider(signin, prompt, sent):
     began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
@@ -574,6 +583,24 @@ def test_the_people_list_goes_to_the_account_with_roles_and_no_bots(signin):
     sent = json.loads(signin.fake.people_calls[0]["people"])
     assert sent == [{"email": "ana@acme.example", "role": "owner"}, {"email": "ben@acme.example", "role": "admin"}]
     assert signin.fake.people_calls[0]["client_secret"] == SECRET
+
+
+def test_an_odd_address_is_left_out_so_it_cannot_block_the_list(signin):
+    signin.fake.people = [(200, {"stored": 3})]
+    with signin.auth.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        Access._save_roster(c, {**roster, "people": [*roster["people"], {"id": "odd", "email": "odd name@acme.example"}]})
+    assert people_mirror.push_now(signin.auth) == (200, {"stored": 3})
+    sent = [row["email"] for row in json.loads(signin.fake.people_calls[-1]["people"])]
+    assert sent == ["ana@acme.example", "ben@acme.example", "cara@acme.example"]
+
+
+def test_the_account_id_never_leaves_the_database_layer(signin):
+    signin.login(claims={"sub": "acct-ben"})
+    with signin.auth.store.read() as c:
+        assert "idp_sub" in dict(c.execute("SELECT * FROM humans WHERE id='ben'").fetchone())
+        assert "idp_sub" not in hubdb.human(c, "ben") and "idp_issuer" not in hubdb.human(c, "ben")
+        assert all("idp_sub" not in row and "idp_issuer" not in row for row in hubdb.humans(c))
 
 
 def test_the_people_list_is_sent_only_when_the_account_advertises_it(signin):

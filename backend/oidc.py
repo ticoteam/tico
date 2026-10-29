@@ -310,7 +310,6 @@ class Oidc:
         """The roster id this verified sign-in is. The account (issuer, subject) is matched first, so a person who changed
         their address keeps their place, and the address moves to the new one unless someone else has it. Otherwise the
         email is matched, and the account is remembered. Raises NotOnRoster."""
-        from . import access
         if account:
             issuer, sub = account
             row = c.execute("SELECT id,email FROM humans WHERE idp_issuer=? AND idp_sub=?", (issuer, sub)).fetchone()
@@ -321,12 +320,7 @@ class Oidc:
                     self._move_email(c, row["id"], email)
                 return row["id"]
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
-        if not row:
-            # An address the owner admits (Settings > People) joins on its first verified sign-in; a retired one never does.
-            if email in access.retired_emails(c) or not access.admitted(access.load_access(c, self.settings), email):
-                raise NotOnRoster(email)
-            row = {"id": access.join_on_sign_in(c, email)}
-        elif self._left(c, row["id"]):
+        if not row or self._left(c, row["id"]):
             raise NotOnRoster(email)
         if account:
             self._remember(c, row["id"], account)
