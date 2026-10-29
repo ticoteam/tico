@@ -27,6 +27,7 @@ from pydantic import Field, SecretStr
 from .auth import validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
+from . import reconnects
 from .store import H, Problem
 
 ENV = r"^[A-Z_][A-Z0-9_]{0,99}$"
@@ -192,6 +193,9 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
             c.execute("UPDATE credential_grants SET revoked=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked IS NULL",
                       (H.now(), who.actor, r["id"], subject))
     H.event(c, who.actor, "credential.set_for_bot", saved["id"], {"env": env, "bot": bot, "replaced": bool(existing)})
+    # A replaced value keeps its grant, so the grant's own hook did not run: the waiting tasks go on here.
+    from . import reconnects
+    reconnects.secret_stored(c, bot, env)
     return {"id": saved["id"], "name": saved["name"], "env": env, "bot": bot, "replaced": bool(existing)}
 
 
@@ -255,7 +259,8 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         return H.message(c, row["message_id"]) if row else None
 
     def requester(c, who, ref="turn"):
-        """The person a bot's turn is for, and the conversation they are in: the one whose own chat message started it."""
+        """(the person a bot's turn is for, the message whose conversation the card goes in, the task or None): the
+        one whose own chat message started it, or on a task the person who fixes the bot's accounts."""
         if (who.role != "bot" and who.via != "botops") or not who.attempt_id:
             raise Problem("forbidden", "Only a bot in a turn asks for a credential", 403)
         turn = turn_of(c, who)
@@ -263,18 +268,35 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             person = delegate(c, who, ref or "turn")
             if person.role not in ("owner", "human"):
                 raise Problem("no_person", "A credential card needs a human requester", 409)
-            msg = H.message(c, ref) if ref and ref not in ("turn", "default") else turn
-        else:
-            msg = turn
-            refs = (msg or {}).get("refs") or {}
-            if (not msg or not str(msg["from_actor"]).startswith("human:") or msg["to_actor"] != who.actor
-                    or refs.get("via") or refs.get("assistant") or refs.get("slack") or refs.get("task")):
-                raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
-            conversation = H.conversation(c, msg["conversation_id"]) or {}
-            if conversation.get("task_id") or conversation.get("scope") == "task":
-                raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
-            person = auth.identity_for_actor(c, msg["from_actor"])
-        return person, msg
+            return person, (H.message(c, ref) if ref and ref not in ("turn", "default") else turn), None
+        msg = turn
+        refs = (msg or {}).get("refs") or {}
+        plain = bool(msg and str(msg["from_actor"]).startswith("human:") and msg["to_actor"] == who.actor
+                     and not (refs.get("via") or refs.get("assistant") or refs.get("slack")))
+        task = task_of(c, who, msg)
+        if task:
+            # A turn on a task: the card goes in the task's thread, for the person who wrote to the bot there, else
+            # whoever fixes the bot's accounts (backend/reconnects.py), and the task waits on it.
+            person = msg["from_actor"] if plain else reconnects.person_for(c, store.settings, H.actor_id(who.actor))
+            if not person:
+                raise Problem("no_person", "Nobody can store a credential for this bot: it has no operator or owner", 409)
+            return auth.identity_for_actor(c, person), {**msg, "conversation_id": task["conversation_id"]}, task
+        if not plain:
+            raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
+        return auth.identity_for_actor(c, msg["from_actor"]), msg, None
+
+    def task_of(c, who, msg):
+        """The live task the bot's turn works on, from the turn's message (its thread, or its `task` reference)."""
+        if not msg:
+            return None
+        conversation = H.conversation(c, msg["conversation_id"]) or {}
+        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["to_actor"] == who.actor else None)
+        task = H.task(c, task_id) if task_id else None
+        if task and task["owner"] == who.actor and task["status"] in H.ACTIVE_STATUSES:
+            return task
+        if conversation.get("task_id") or conversation.get("scope") == "task" or (msg.get("refs") or {}).get("task"):
+            raise Problem("no_person", "A credential card in a task needs a live task the bot owns", 409)
+        return None
 
     def person_only(request):
         who = request.state.identity
@@ -293,7 +315,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         who = request.state.identity
         with store.transaction() as c:
             validate_identity(c, who)
-            person, msg = requester(c, who, body.on_behalf_of or "turn")
+            person, msg, task = requester(c, who, body.on_behalf_of or "turn")
             asker = botops if who.via == "botops" and who.role in ("owner", "human") else H.actor_id(who.actor)
             target = body.for_bot or asker
             if target != asker and asker != botops:
@@ -312,8 +334,12 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                       ":kind,:status,:created,:updated,:credential_id,:message_id)", row)
             shown = view(c, row, person)
             card = H._write_message(c, "bot:" + asker, person.actor, shown["title"], H.conversation(c, msg["conversation_id"]), "say",
-                                    {"credential_request": rid}, None, None, delivered_at=H.now())
+                                    {"credential_request": rid, **({"task": task["id"]} if task else {})}, None, None,
+                                    delivered_at=H.now())
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
+            if task:
+                reconnects.open(c, task["id"], target, "secret:" + body.env, "secret", body.label.strip() or body.env,
+                                person.actor, {"kind": "secret", "request": rid}, message_id=card["id"])
             H.event(c, who.actor, "credential.requested", rid, {"env": body.env, "bot": target, "for": person.actor})
             return {"id": rid, "status": "pending", "message_id": card["id"], "title": shown["title"],
                     "detail": "A card is open in the chat. You are told when it is saved: do not ask for the value in words."}
@@ -346,9 +372,10 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute("UPDATE credential_requests SET status='saved',updated=?,credential_id=? WHERE id=?", (H.now(), stored["id"], rid))
-            # The asking bot hears it as the person's own next message: saved, go on. The value is not in it.
+            # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. A card in
+            # a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])
-            if conversation and H.bot(c, row["asker"]):
+            if conversation and H.bot(c, row["asker"]) and not reconnects.card_of(c, row["message_id"]):
                 H._write_message(c, row["requester"], "bot:" + row["asker"],
                                  f"Saved {row['label'] or row['env']}. Test the connection now.", conversation, "say",
                                  {"credential_saved": rid}, None, None)

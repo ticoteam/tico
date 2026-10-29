@@ -458,4 +458,8 @@ def install(app, store, publisher, mutate):
                        H.now(), person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
+            if body.status == "connected" and row["mailbox"]:
+                # Its tasks' reconnect cards end now, not at the connector's next report (backend/reconnects.py).
+                from . import reconnects
+                reconnects.fixed(c, "google:" + str(row["mailbox"]).lower(), why="connected")
             return {"ok": True}

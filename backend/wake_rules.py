@@ -79,6 +79,7 @@ AWAITED = (
     ("watcher", "something the bot watches moved or ended"),
     ("resume", "a quiet task's stored resume condition came true (backend/quiet_work.py)"),
     ("milestone", "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)"),
+    ("reconnected", "the account or credential its reconnect card waited for works again (backend/reconnects.py)"),
 )
 # Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A stall or
 # status check, a schedule, a pull request's checks and anything else keep their own rules (wake presets).
@@ -166,11 +167,13 @@ def awaited(refs):
         return "resume"
     if refs.get("milestone"):
         return "milestone"
+    if refs.get("reconnected"):
+        return "reconnected"
     return None
 
 
 def parked(conn, task_row):
-    """What the task waits on: 'blocked_by', 'wake_once', 'milestone', or None when it is not parked."""
+    """What the task waits on: 'blocked_by', 'wake_once', 'milestone', 'reconnect', or None when it is not parked."""
     if not task_row or task_row.get("status") not in UNFINISHED:
         return None
     marks = ",".join("?" * len(UNFINISHED))
@@ -185,6 +188,9 @@ def parked(conn, task_row):
     from .milestone_waits import pending
     if pending(conn, task_row["id"]):
         return "milestone"
+    from .reconnects import pending as reconnect_pending
+    if reconnect_pending(conn, task_row["id"]):
+        return "reconnect"
     return None
 
 
@@ -387,7 +393,8 @@ def hold(conn, msg, rule, rule_id=None):
     why = "a wake rule holds it" if rule in ROW_HOLDS else {
         "own_write": "your own write caused it", "blocked_by": "the task waits on another task (blocked by)",
         "wake_once": "the task waits on its pull request's checks (wake once)",
-        "milestone": "the task waits for a pull request to merge or a release to be published"}.get(
+        "milestone": "the task waits for a pull request to merge or a release to be published",
+        "reconnect": "the task waits for an account to be reconnected"}.get(
         rule if rule == "own_write" else parked(conn, task_row), "the task is waiting")
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:

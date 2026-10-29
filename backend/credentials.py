@@ -517,6 +517,10 @@ class Vault:
         c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created) VALUES(?,?,?,?,?,?)',
                   (gid,cid,subject,who.actor,parent,H.now()))
         H.event(c,who.actor,'credential.granted',cid,{'grant':gid,'subject':subject,'parent':parent})
+        if subject.startswith('bot:') and row['env']:
+            # A task waiting for this variable on its reconnect card goes on (backend/reconnects.py).
+            from . import reconnects
+            reconnects.secret_stored(c,H.actor_id(subject),row['env'])
         return {'id':gid,'subject':subject,'credential':row['name'],'env':row['env']}
 
     def reveal(self,c,who,cid):

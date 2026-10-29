@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, quarantine_stops, run_backoff, turn_budgets
+from . import claim_holds, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -2273,6 +2273,8 @@ class Execution:
                       "capacity=?,readiness_json=?,capabilities_json=?,readiness_at=? WHERE id=?",
                       (now, awake_since, body.version, body.platform, body.capacity, reported[3], reported[4], now,
                        who.runner_id))
+            # A login it now reports signed in ends the reconnect cards that waited on it (backend/reconnects.py).
+            reconnects.login_report(c, who.runner_id, readiness)
         if not offered_before and screen.CAPABILITY in body.capabilities:
             screen.first_offer(c, who.runner_id)
         from . import bot_tools
@@ -4623,6 +4625,11 @@ class Execution:
             self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
                     {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason})
+            # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
+            reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
+                                     body.auth_rejected.runtime, turn_task_id)
+        elif body.outcome == "completed" and not check:
+            reconnects.login_works(c, row["runner_id"], [runtime])
         if body.fallback:
             # The runner ran this turn on the bot's fallback harness: countable here, and
             # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is

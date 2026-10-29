@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import google_connect, routines
+from . import google_connect, reconnects, routines
 from .store import H, P, Problem, encode
 
 
@@ -354,18 +354,21 @@ def install_connectors(app, store, execution, mutate):
                 c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                           "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
                           "detail_json=excluded.detail_json", (service, H.now(), encode({"runner_id": runner["id"]})))
+                reconnects.google_report(c, [])
                 return {"ok": True}
             label = "Calendar" if body.service == "calendar" else "Mail"
             error = "; ".join(
                 f"{label} can't refresh for {f.account}: "
                 + CONNECTOR_REASON[f.reason].format(domain=f.account.rpartition("@")[2]) for f in body.failing)
             signin = any(f.reason == "signin" for f in body.failing)
-            detail = {"runner_id": runner["id"], "needs_person": signin,
-                      **({"action": "Reconnect the Google account for " + ", ".join(
-                          f.account for f in body.failing if f.reason == "signin")} if signin else {})}
+            refused = [f.account for f in body.failing if f.reason == "signin"]
+            detail = {"runner_id": runner["id"], "needs_person": signin, "signin": refused,
+                      **({"action": "Reconnect the Google account for " + ", ".join(refused)} if signin else {})}
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (service, error[:1000], encode(detail)))
+            # The tasks a refused sign-in stops get a card for the mailbox's person (backend/reconnects.py).
+            reconnects.google_report(c, refused)
             return {"ok": False}
         return mutate(request, body, work)
 

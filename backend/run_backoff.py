@@ -325,9 +325,11 @@ def failed(c, settings, row, body, aid, now=None):
 def hold(c, settings, bot, fails, kind, error, now):
     """Hold the bot: one Needs-you item for its operator, and an event. Its queued work is kept, and its first try is
     due PROBE_FIRST from now."""
-    from . import bot_stops
+    from . import bot_stops, reconnects
     name = bot_stops.name_of(c, bot)
-    task_id = bot_stops.raise_item(
+    # A sign-in its task's reconnect card already puts in front of the person who fixes it is that card, not a second
+    # item (backend/reconnects.py): the hold still stands, Health names it, and the card's fix releases it.
+    task_id = None if kind == SIGN_IN and reconnects.bot_open(c, bot, "") else bot_stops.raise_item(
         c, settings, bot, f"{name} stopped after {fails} failed runs in a row",
         f"Tico stopped {name}: its last {fails} runs each failed within a minute, with {CLASS_WORDS[kind]}.\n\n"
         f"Last error: {error or 'none was reported'}\n\n"

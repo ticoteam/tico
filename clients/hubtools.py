@@ -4355,7 +4355,8 @@ def slack_channel_import(api, args):
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
-      "key, token or password. Never ask for the value in words.",
+      "key, token or password. On a task, the card goes in its thread and the task waits for it. Never ask for the value in "
+      "words.",
       {"env": _s("The variable's name, like JIRA_BASIC_AUTH"),
        "for_bot": _s("The bot that needs it; you, when you leave it out"),
        "label": _s("What it is, for the card's title: 'your Jira login'"),
@@ -5714,7 +5715,8 @@ AUDIENCE = {
     # (report_managers); the server refuses any other bot.
     "hub_bot_update": REQUESTER + ("bot", "agent"), "hub_bot_model": REQUESTER + ("bot", "agent"),
     "hub_bot_task_model": REQUESTER + ("bot", "agent"),
-    "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
+    # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
+    "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,

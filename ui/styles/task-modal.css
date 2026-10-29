@@ -107,3 +107,9 @@
 .task-chat .task-send .p-menu button{border:0}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}.task-chat .task-send .task-send-caret{width:34px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
+/* A reconnect card (ui/app/task-modal.js reconnectCardHTML): one line and its fix, as dense as a credential card. */
+.rc-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:4px 0;background:var(--surface)}
+.rc-line{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.rc-card button,.rc-card .button{min-height:36px}
+.rc-card[data-status="fixed"]{background:none}
+.rc-done{font-size:12.5px;color:var(--ok);font-weight:600}

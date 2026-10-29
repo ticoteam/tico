@@ -1177,6 +1177,8 @@ def need_of(item):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
+    if item.get("reconnect"):
+        return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
     if kind == "approval":
         return {"spend": "pay", "send": "review", "publish": "review", "support": "review", "merge": "review"}.get(
             item.get("what"), "decide")
@@ -1314,6 +1316,23 @@ def approval_title(kind, payload, task_title=""):
     if named:
         return kind.capitalize() + ": " + _quoted(named)
     return "Approve this " + kind
+
+
+def fold_reconnects(items):
+    """One card per account to fix: the tasks waiting on the same reconnect (backend/reconnects.py) fold into the
+    first one's `folded` list, so reconnecting once is one item, however many tasks it holds up."""
+    first, gone = {}, set()
+    for it in items:
+        key = (it.get("reconnect") or {}).get("key") if it.get("kind") == "waiting" else None
+        if not key:
+            continue
+        if key not in first:
+            first[key] = it
+            continue
+        first[key].setdefault("folded", []).append({k: it.get(k) for k in (
+            "id", "title", "owner", "kind", "person_ask", "note", "status", "due")})
+        gone.add(str(it["id"]))
+    return [it for it in items if str(it["id"]) not in gone] if gone else items
 
 
 def fold_related(items, c, me):
@@ -1629,6 +1648,9 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         [row["id"] for row in cards]
         + [tid for originals in merged.values() for tid in originals]
         + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    from . import reconnects
+    reconnect_cards = {tid: card for tid, card in reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]]).items()
+                       if card["person"] == who.actor}
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
@@ -1648,6 +1670,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                     "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
+            if row["id"] in reconnect_cards:
+                # A reconnect card (backend/reconnects.py): its one line is the ask, its fix is on the card.
+                card = reconnect_cards[row["id"]]
+                item["reconnect"] = card
+                item["person_ask"], item["ask_missing"] = reconnects.line(c, card["bot"], card["service"], card["label"]), False
             if row.get('assigned_not_started'):
                 item.update(assigned_not_started=True, note=row['note'])
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
@@ -1702,7 +1729,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         setup = models_preset.card(c)
         if setup:
             items.append(setup)
-    items = fold_related(items, c, who.actor)
+    items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
@@ -1806,6 +1833,7 @@ def needs_actor(it, me):
     elif it.get("kind") in ("task", "question", "waiting"):
         ask = it.get("ask") or {}
         on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
+        on = on or (it.get("reconnect") or {}).get("person")
         if it.get("owner") == me or ask.get("to_actor") == me or on == me:
             asked = (it.get("origin_actor") or "keeper") if it.get("requester") == "keeper" else it.get("requester")
             options = [it.get("owner")] if on == me else [ask.get("from_actor"), asked, it.get("owner")]

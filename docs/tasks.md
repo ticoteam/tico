@@ -227,6 +227,26 @@ waits in the trash and gets them back when restored. The MCP tool is `hub_task_w
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
+### Reconnect cards
+
+When a bot's work on a task stops because an account or a credential needs a person, Tico puts one card in the
+task's thread ("Sales Bot can't reach Google (ana@acme.example)."), with the fix for the person who can make it and
+"Waiting on <person>" for everyone else. The task waits on the card: it is in that person's Needs you under connect,
+and no stall check, stranded sweep or news wakes the bot meanwhile. When the account works again the card says
+Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnected. Continue."); the task goes back to
+the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item.
+
+| What stopped | Who fixes it | Fix on the card | Fixed when |
+| --- | --- | --- | --- |
+| The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | a clean connector report, or the person connects it again |
+| The provider refused a computer's sign-in or key (`login:<computer>:<runtime>`) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports it signed in, or a run there completes |
+| A credential the bot asked for from a task (`secret:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner | the credential card | the variable is stored for or granted to the bot |
+
+A bot held for failed sign-ins with a card open has no second Needs-you item; the fix releases it. Each card's
+message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `status`). The table is
+`task_reconnects`; other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
+(backend/reconnects.py).
+
 When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then
 name the bot with `--on` and give the reason in the note:
 

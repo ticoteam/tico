@@ -1246,6 +1246,9 @@ def migrate(conn, adopt_legacy=False):
     # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
     from .milestone_waits import ensure as ensure_milestone_waits
     ensure_milestone_waits(conn)
+    # Reconnect cards: a task waits for a person to fix a missing or refused account (backend/reconnects.py).
+    from .reconnects import ensure as ensure_reconnects
+    ensure_reconnects(conn)
     # Recruiting seats: org-chart roles with no bot yet (backend/lifecycle.py).
     from .lifecycle import ensure as ensure_seats
     ensure_seats(conn)
@@ -7063,6 +7066,10 @@ def wait_detail(conn, row, *, children=True):
         return {"why": "an open blocker", "on": (_one(conn, "SELECT owner FROM tasks WHERE id=?", (blocker,)) or {}).get("owner")}
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
         return {"why": "an undecided approval", "on": "person"}
+    from .reconnects import hold as reconnect_hold
+    reconnect = reconnect_hold(conn, row["id"])
+    if reconnect:
+        return {"why": reconnect["why"], "on": reconnect["on"]}
     if row.get("waiting_on"):
         return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
     from .worktree_waits import for_task as worktree_waits
@@ -9347,6 +9354,10 @@ def needs_you(conn, who):
     # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
     waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
                                             "ORDER BY created", (actor,))) if t["id"] not in seen and not TS.snoozed(t)]
+    # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them.
+    from . import reconnects
+    seen |= {t["id"] for t in waited}
+    waited += [t for t in reconnects.tasks_for(conn, actor) if t["id"] not in seen and not TS.snoozed(t)]
     # What the Strategy Bot merged into one item of its own is that item here, not each original
     # (backend/strategy_merge.py).
     from . import strategy_merge

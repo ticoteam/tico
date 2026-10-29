@@ -92,6 +92,10 @@ def holds(conn, row):
                                   (row["id"],))):
         H.approval_wait(conn, a)
         out.append({"kind": "approval", "on": a.get("decision_owner"), "what": f"a {a.get('kind') or 'yes'} approval"})
+    from .reconnects import hold as reconnect_hold
+    reconnect = reconnect_hold(conn, row["id"])
+    if reconnect:
+        out.append({"kind": "person", "on": reconnect["on"], "what": reconnect["what"]})
     if row.get("waiting_on") and not any(h["on"] == row["waiting_on"] for h in out):
         out.append({"kind": "person", "on": row["waiting_on"], "what": ""})
     # The external holds wait_detail reads after these: a worktree, a milestone, a GitHub callback.
