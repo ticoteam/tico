@@ -8,6 +8,7 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
   rows(...)                a group's row: id, name, parent, people, bots
   create / update / delete the changes the API and the tools make
   place(...)               the team builder: bots into the groups of their templates, made if they are not there yet
+  team_groups(...)         a company file's team names as groups, one per name (company_import)
   link_bets(...)           setup's links from the groups it made to the strategy bets they serve
   migrate(c, settings)     once, for a team that had `teams`, org groups or derived departments: every one becomes a
                            group and every bot its group's member (idempotent; `groups_migrated` in the roster)
@@ -480,6 +481,20 @@ def seat_teams(c, settings, templates, group_order=()):
         home = homes.get(str(template or ""))
         if home:
             out[template] = ensure(roster, home["id"], home["name"])
+    if set(roster["org_groups"]) != made:
+        _save(c, roster)
+    return out
+
+
+def team_groups(c, names):
+    """{team name: group id} for a company file's teams, `names` in file order. A name is the group with that name (any
+    case, as `ensure` finds it), else a new group made at the top with the name's id: an id is never another group's,
+    so a team named like a group of another name gets a group of its own. Made once per name."""
+    roster = _roster(c)
+    made, out = set(roster["org_groups"]), {}
+    for name in names:
+        if name not in out:
+            out[name] = ensure(roster, _new_id(roster["org_groups"], name), name)
     if set(roster["org_groups"]) != made:
         _save(c, roster)
     return out
