@@ -22,7 +22,7 @@
 .dash-pin-head h2{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dash-pin-head h2 .muted{font-weight:500}
 .dash-pin-head .spacer{flex:1}
-.dash-plus{font-size:16px;line-height:1}
+.dash-plus{font-size:16px;line-height:var(--lh-none)}
 .dash-grip{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;margin-left:-6px;padding:0;border:0;background:transparent;color:var(--muted);cursor:grab;touch-action:none;border-radius:5px}
 .dash-grip:hover,.dash-grip:focus-visible{background:var(--surface2);color:var(--ink)}
 .dash-more{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
@@ -43,14 +43,14 @@
 .dash-none{margin:4px 0;font-size:var(--t-sm)}
 .dash-big{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:inherit;text-decoration:none}
 a.dash-big:hover strong{text-decoration:underline}
-.dash-big strong{font-size:28px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.dash-big strong{font-size:var(--t-2xl);font-weight:600;line-height:var(--lh-display);font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
 .dash-big strong small{font-size:var(--t-base);font-weight:500;color:var(--muted)}
 .dash-big .muted{font-size:var(--t-sm)}
 .dash-bad{color:var(--fail)}
 .dash-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .dash-stat{display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:8px;background:var(--surface2);color:inherit;text-decoration:none;min-width:0}
 .dash-stat:hover{text-decoration:none;outline:1px solid var(--line)}
-.dash-stat strong{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.dash-stat strong{font-size:var(--t-xl);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
 .dash-stat span{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dash-pin[data-size=small] .dash-stats,.bot-pin .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 .dash-bars{display:block;width:100%;height:72px;margin-top:10px}
@@ -96,7 +96,7 @@ a.dash-big:hover strong{text-decoration:underline}
 
 /* the bot sidebar's card and page widgets */
 .bot-pin{padding:8px 12px 12px}
-.bot-pin .dash-big strong{font-size:22px}
+.bot-pin .dash-big strong{font-size:var(--t-xl)}
 .bot-pin>.rail-h{margin:0 0 6px}
 .bot-w-x{display:none}
 .editing>.bot-w>.bot-w-bar .bot-w-x{display:inline-grid}

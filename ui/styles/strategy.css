@@ -2,7 +2,7 @@
    (ui/market-page.js), the page's contents rail and reading column, the bets, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
 .strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
-.strat-head h1{margin:0;font-size:var(--t-lg);line-height:1.2}
+.strat-head h1{margin:0;font-size:var(--t-lg);line-height:var(--lh-tight)}
 .strat-head .spacer{flex:1}
 /* On Market the page has no padding of its own: the heading brings the same gutters, so switching tabs never moves it. */
 #main.market-layout .strat-head{flex:none;margin:0;padding:8px 28px}
@@ -34,7 +34,7 @@
 .strat-sec-head .strat-k{margin:0}
 .strat-sec-head .cnt{color:var(--muted);font-size:var(--t-sm)}
 .strat-k{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:1.3}
+.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:var(--lh-tight)}
 .strat-empty{margin:0;font-size:var(--t-base)}
 .strat-text{margin:0;font-size:var(--t-md);line-height:var(--lh-read);white-space:pre-line;overflow-wrap:anywhere}
 .strat-summary .strat-text,.strat-summary .strat-field{font-size:var(--prose)}
@@ -53,7 +53,7 @@
 .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
 .strat-bet-top{display:flex;align-items:baseline;gap:8px;min-width:0}
 .strat-bet-n{flex:none;width:16px;color:var(--muted);font-size:var(--t-sm)}
-.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
 .strat-retired .strat-bet-st{font-weight:500;color:var(--g7)}
 .strat-pill{flex:none}
 .pill.proposed{background:var(--wait-bg);color:var(--wait-ink)}

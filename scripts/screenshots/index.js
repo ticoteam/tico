@@ -119,10 +119,11 @@ async function verify(page, problems, label) {
     // An icon whose font has not loaded is its ligature name ("dynamic_feed") in body type: far wider than an icon.
     const icons = [...document.querySelectorAll('.nav-icon, .mobile-nav-icon')].filter(seen)
       .filter(el => el.getBoundingClientRect().width > 48).map(el => el.textContent.trim());
-    return {banners, icons, font: document.fonts.check('24px "Material Symbols Outlined"'),
+    return {banners, icons, font: document.fonts.check('24px "Material Symbols Outlined"'), text: document.fonts.check('13px Inter'),
             loading: [...document.querySelectorAll('.loading, .skeleton, .market-loading')].filter(seen).length};
   });
   if (!found.font) problems.push(`${label}: the icon font is not loaded`);
+  if (!found.text) problems.push(`${label}: the text font is not loaded`);
   for (const text of found.icons) problems.push(`${label}: icon shown as text "${text}"`);
   for (const text of found.banners) problems.push(`${label}: error banner "${text.slice(0, 120)}"`);
   if (found.loading) problems.push(`${label}: still loading`);
@@ -151,6 +152,10 @@ async function main() {
         });
         page.on('response', response => { if (response.status() >= 400) problems.push(`${where}: HTTP ${response.status()} ${response.url()}`); });
         await page.goto(demo.url + '/');
+        await page.locator('#tree a.node').first().waitFor({state: 'attached'});
+        // Inter is font-display: optional, so a cold first load keeps the fallback face; every later load has it.
+        await page.evaluate(() => document.fonts.ready);
+        await page.reload();
         await page.locator('#tree a.node').first().waitFor({state: 'attached'});
         for (const spec of PAGES) {
           if (only && !only.has(spec.name)) continue;

@@ -19,9 +19,9 @@ body.in-setup .rd-lib{display:none}
 @media (max-width:760px){.rd-lib .nav-link{padding-left:46px}}
 
 /* "?" help: one per panel, on hover, focus or tap. */
-.rd-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:var(--t-2xs);line-height:1;cursor:help;vertical-align:middle}
+.rd-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:var(--t-2xs);line-height:var(--lh-none);cursor:help;vertical-align:middle}
 .rd-help:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.rd-help-pop{display:none;position:absolute;z-index:30;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:min(260px,70vw);padding:6px 9px;border-radius:7px;background:var(--raised,var(--surface2));border:1px solid var(--line);color:var(--ink);font-size:var(--t-sm);font-weight:400;line-height:1.35;text-align:left;white-space:normal;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.rd-help-pop{display:none;position:absolute;z-index:30;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:min(260px,70vw);padding:6px 9px;border-radius:7px;background:var(--raised,var(--surface2));border:1px solid var(--line);color:var(--ink);font-size:var(--t-sm);font-weight:400;line-height:var(--lh);text-align:left;white-space:normal;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 .rd-help:hover .rd-help-pop,.rd-help:focus .rd-help-pop{display:block}
 
 /* Strategy tabs: one row, scrolling sideways inside itself on a phone, never the page. */

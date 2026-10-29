@@ -822,6 +822,11 @@ def create_app(settings=None):
             elif request.url.path in ui_bundle.PATHS and response.status_code in (200, 304) \
                     and "immutable" in str(response.headers.get("cache-control", "")):
                 pass                    # a hashed script or stylesheet (ui_bundle): kept for a year
+            elif request.query_params.get("v") and response.status_code in (200, 304) \
+                    and re.fullmatch(r"/(?:tico/ui/)?vendor/fonts/[\w.-]+\.woff2", request.url.path):
+                # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
+                # optional, so a font that had to be revalidated first could miss the first paint.
+                response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = ("private, max-age=3600" if request.url.path.startswith("/assets/")
                                                      else "private, no-cache")
@@ -7101,9 +7106,14 @@ def create_app(settings=None):
     install_granola(app)
     from .meeting_review import install_meeting_review
     install_meeting_review(app, store, auth, mutate)
+    # Before install_credentials: its POST /api/v2/credentials/{cid} would otherwise take `import` for an id.
+    from .credential_files import install_credential_imports
+    install_credential_imports(app, store)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
+    from .browser_logins import install as install_browser_logins
+    install_browser_logins(app, store, auth)
     from . import company_storage
     company_storage.install(app, store, auth)
     from . import tico_storage

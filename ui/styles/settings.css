@@ -40,7 +40,7 @@
 .people-line{display:flex;align-items:center;gap:10px;margin:0;font-size:var(--t-base)}
 .people-note,.people-synced{margin:0;font-size:var(--t-base);color:var(--muted)}
 .people-extras{flex-wrap:wrap}.people-extras .allow-chips{margin:0}
-.people-chip-x{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 0 0 2px;font-size:14px;line-height:1}
+.people-chip-x{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 0 0 2px;font-size:14px;line-height:var(--lh-none)}
 .people-chip-x:hover{color:var(--fail)}
 input.people-switch{appearance:none;-webkit-appearance:none;position:relative;flex:none;width:34px;height:20px;margin:0;border-radius:10px;background:color-mix(in srgb,var(--muted) 45%,var(--line));cursor:pointer;transition:background var(--dur) var(--ease);vertical-align:middle}
 input.people-switch::before{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform var(--dur) var(--ease)}
@@ -246,7 +246,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .sb-search{position:relative;display:flex;flex:1 1 200px;min-width:140px;max-width:280px}
 .sb-search .settings-filter-search{flex:1 1 auto;min-width:0;max-width:none;padding-right:32px}
 .sb-search .settings-filter-search::-webkit-search-cancel-button{display:none}
-.sb-search-clear{position:absolute;top:50%;right:3px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;transform:translateY(-50%);border:0;border-radius:50%;background:none;color:var(--muted);font-size:var(--t-lg);line-height:1;cursor:pointer}
+.sb-search-clear{position:absolute;top:50%;right:3px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;transform:translateY(-50%);border:0;border-radius:50%;background:none;color:var(--muted);font-size:var(--t-lg);line-height:var(--lh-none);cursor:pointer}
 .sb-search-clear:hover{background:var(--surface2);color:var(--ink)}
 .sb-search-clear[hidden]{display:none}
 .sb-pick-tools{display:none}
@@ -314,7 +314,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .needs-you{position:fixed;left:12px;bottom:52px;z-index:40;width:min(400px,calc(100vw - 24px));max-height:min(70vh,640px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);box-shadow:0 16px 48px rgba(0,0,0,.4)}
 /* The header stays in view while the list scrolls under it, its title wrapping beside Close, never under it. */
 .needs-you header{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px 8px;background:var(--surface)}
-.needs-you header h2{margin:0;min-width:0;font-size:var(--t-lg);overflow-wrap:anywhere}.needs-you header [data-close]{flex:none}
+.needs-you header h2{margin:0;min-width:0;font-size:var(--t-lg);overflow-wrap:anywhere;letter-spacing:var(--track-tight)}.needs-you header [data-close]{flex:none}
 .needs-you [data-list]{padding:0 16px 8px}.needs-you .row{display:flex;gap:8px;align-items:center;padding:0 16px 14px}
 /* In the panel an issue's actions sit under its text, each as wide as its words, not a column as tall as the text. */
 .needs-you .settings-issue{grid-template-columns:minmax(0,1fr)}
@@ -353,7 +353,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 /* The computer's pop-up: Connections, Screen, Bots on this computer, Versions and updates, Settings. */
 .computer-detail{width:min(760px,calc(100vw - 32px))}
 .computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}
-.computer-detail-head h2{margin:0;font-size:var(--t-lg)}
+.computer-detail-head h2{margin:0;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
 .computer-detail-body{padding:4px 16px 16px;overflow:auto;max-height:calc(86vh - 70px)}
 .computer-detail-section{padding:10px 0;border-bottom:1px solid var(--line)}.computer-detail-section:last-child{border-bottom:0}
 .computer-detail-section h3{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
@@ -380,7 +380,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .people-menu-check{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:5px;font-size:var(--t-base);white-space:nowrap;cursor:pointer}.people-menu-check:hover{background:var(--surface2)}
 .machine-rejected{flex-basis:100%;font-size:var(--t-sm)}.machine-shared-login{display:block;flex-basis:100%;font-size:var(--t-sm)}
 .machine-signin{padding:1px 8px;font-size:var(--t-sm)}
-.machine-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;line-height:1}.machine-icon-btn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
+.machine-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:1px 4px;line-height:var(--lh-none)}.machine-icon-btn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
 .machine-harness-item .ghost{padding:1px 8px;font-size:var(--t-sm)}
@@ -417,7 +417,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-tools-2{grid-template-columns:minmax(0,1fr) max-content}
 .machine-tool{display:contents}
 .machine-tool>[role=cell],.machine-tool>[role=columnheader]{padding:5px 0;border-top:1px solid var(--line);min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;gap:3px 4px}
-.machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.04em}
+.machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps)}
 .machine-tool-name{font-weight:600}
 .machine-account{overflow-wrap:anywhere;min-width:0}
 .machine-tool-version{display:block!important;max-width:18ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -488,7 +488,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 /* Hierarchy: a field's label in the ink at 600, what it holds in the ink at 400, help under it quieter and smaller,
    and each group under a small uppercase head. Kept at no specificity so a component's own label (a check, a repo row) wins. */
 :where(.bot-editor-grid) label{display:grid;align-content:start;gap:5px;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
-.bot-editor-grid small,.bot-editor-hint{font-size:var(--t-xs);font-weight:400;line-height:1.4;color:var(--muted)}
+.bot-editor-grid small,.bot-editor-hint{font-size:var(--t-xs);font-weight:400;line-height:var(--lh);color:var(--muted)}
 .bot-editor-hint{margin:-6px 0 0}
 .bot-editor-sec{margin:6px 0 -2px;padding-top:14px;border-top:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .bot-editor-sec:first-child{margin-top:0;padding-top:0;border-top:0}
@@ -588,7 +588,7 @@ input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px
 fieldset.brepo{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;position:relative;margin:0;padding:var(--s2) 0 0;border:0;border-top:1px solid var(--line);min-width:0}
 fieldset.brepo[hidden]{display:none}
 fieldset.brepo>.repo-name{grid-area:auto;display:flex;align-items:center;gap:8px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
-fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-height:1.4}
+fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-height:var(--lh)}
 .brepo-h{padding:0 0 2px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .brepo-status{position:absolute;right:0;top:var(--s2);font-size:var(--t-sm)}
 .brepo-mode{justify-self:start;max-width:100%}
@@ -601,7 +601,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .brepo-run{display:flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .brepo-row:has([data-brepo-pick]:not(:checked)) .brepo-run{visibility:hidden}
 .brepo-run:has(input:disabled){opacity:.6}
-.brepo-why{margin:0;font-size:var(--t-xs);line-height:1.4}
+.brepo-why{margin:0;font-size:var(--t-xs);line-height:var(--lh)}
 .brepo-eff{display:flex;gap:8px;align-items:baseline;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .brepo-eff>span:last-child{display:flex;flex-wrap:wrap;gap:2px 10px;min-width:0}
 .brepo-eff-item{overflow-wrap:anywhere;font-family:var(--mono);font-size:var(--t-sm)}
@@ -736,7 +736,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-title{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .sysr-dept{font-size:var(--t-xs)}
 .sysr-rule{font-size:var(--t-sm);overflow-wrap:anywhere}
-.sysr-rule b{font-size:var(--t-xs);letter-spacing:.04em;color:var(--muted)}
+.sysr-rule b{font-size:var(--t-xs);letter-spacing:var(--track-normal);color:var(--muted)}
 .sysr-label{display:block;font-size:var(--t-sm);color:var(--muted)}
 .sysr-schedule{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:0}
 .sysr-schedule .sysr-label{flex-basis:100%}
@@ -751,7 +751,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-fallback{flex-basis:100%;color:var(--wait-ink)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
 /* Webhook dialogs' small section heads (ui/app/settings-webhooks.js) */
-.wr-sub{margin:8px 0 2px;font-size:var(--t-xs);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.wr-sub{margin:8px 0 2px;font-size:var(--t-xs);letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 /* A swappable field (input or step list) sits in the grid as its label would. */
 /* Releases and Task Manager cards (ui/app/settings-release.js) */
 .rel-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}

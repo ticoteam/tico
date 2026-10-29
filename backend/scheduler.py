@@ -432,7 +432,7 @@ class Scheduler:
                     webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
                 sweep_idempotency(self.store, stamp(at))
                 sweep_mail(self.store, stamp(at))
-                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep two weeks
+                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
                 sweep_events(self.store, stamp(at))            # bookkeeping events keep 30 days (store.EVENT_SWEEP_ACTIONS)
                 from . import events
                 events.sweep(self.store, stamp(at))            # live events keep a day

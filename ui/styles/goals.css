@@ -3,11 +3,11 @@
 /* goals: one tree, a line per owner (indent guides like the org chart), the goal to the right */
 .gt{--ind:14px;--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .gt-row,.gt-group{display:grid;grid-template-columns:calc(var(--d,0) * var(--ind)) 28px max(48px,calc(var(--name-w) - var(--d,0) * var(--ind) - 28px)) minmax(0,1fr) auto;
-  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 10px;font-size:var(--t-base);line-height:1.3}
+  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 10px;font-size:var(--t-base);line-height:var(--lh-tight)}
 .gt-row{cursor:pointer}.gt-row:hover,.gt-row:focus-visible{background:var(--surface2);outline:none}
 /* "+" adds a goal for the line's owner (a group's: its lead), shown under a pointer; a phone long-presses the line. */
 .gt-row,.gt-group{position:relative}
-.gt-add{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:var(--t-md);line-height:1;cursor:pointer}
+.gt-add{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:var(--t-md);line-height:var(--lh-none);cursor:pointer}
 .gt-add:hover{border-color:var(--accent);color:var(--accent)}
 @media (hover:hover){.gt-row:hover>.gt-add,.gt-row:focus-within>.gt-add,.gt-group:hover>.gt-add{display:inline-flex}}
 .gt-row>.gt-goal{cursor:pointer}
@@ -16,7 +16,7 @@
 .gt-av{grid-area:av}.gt-name{grid-area:name;padding-right:12px}.gt-goal{grid-area:goal;gap:8px}.gt-kpis{grid-area:kpis;gap:6px;padding-left:12px}
 .gt-name>span,.gt-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gt-co .gt-name{font-weight:600}
-.gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:700}
+.gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:600}
 .gt-standing{color:var(--muted)}
 .gt-group{min-height:26px;grid-template-areas:"ind name name name name"}
 .gt-group>.gt-name{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
@@ -27,7 +27,7 @@
 .gt-kn{display:none;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .gt-needs{margin:0 0 var(--s3);padding:4px 10px;background:var(--surface);border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:var(--radius)}
 .gt-needs-h{display:flex;align-items:center;gap:8px;height:28px;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
-.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:0}
+.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:var(--track-normal)}
 .gt-needs ul{list-style:none;margin:0;padding:0}
 @media (max-width:760px){
   .gt{--ind:10px;padding:2px 0}
@@ -55,7 +55,7 @@
 }
 /* the bot page's Goals card: a goal edited in place */
 .goal-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;min-width:0}
-.goal-lines li{display:flex;align-items:center;gap:7px;line-height:20px;cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goal-lines li{display:flex;align-items:center;gap:7px;line-height:var(--lh);cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .goal-lines li:hover{background:var(--surface)}
 .goal-lines li>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .head-goals{margin-top:6px;font-size:var(--t-base)}.head-goals:empty{display:none}.head-goals li{padding-left:0}.head-goals li:hover{background:var(--surface2)}
@@ -75,10 +75,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gdot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;background:var(--idle)}
 .gdot.green{background:var(--ok)}.gdot.yellow{background:var(--wait)}.gdot.red{background:var(--fail)}
 .gdot.none{background:transparent;border:1.5px solid var(--idle)}
-.goal-note{font-size:var(--t-sm);line-height:1.4;color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
+.goal-note{font-size:var(--t-sm);line-height:var(--lh);color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
 .goal-note b{font-weight:600}.goal-suggest{margin-top:-2px}
 /* a goal's Why: one line tying it to the company's vision; none is a quiet note, not an error */
-.goal-why{font-size:var(--t-sm);line-height:1.4;margin:-2px 0 6px 19px;overflow-wrap:anywhere}
+.goal-why{font-size:var(--t-sm);line-height:var(--lh);margin:-2px 0 6px 19px;overflow-wrap:anywhere}
 .goal-why-k{font-weight:600;color:var(--muted)}.goal-why-none{color:var(--muted);font-style:italic}
 .goal-why .linkish{font-size:var(--t-sm);font-style:normal}
 .goal-why-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px 19px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:var(--t-sm)}
@@ -89,7 +89,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-bet-st{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 @media (max-width:760px){.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
-.kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.35}
+.kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:var(--lh)}
 .kpi-archived-more{padding:3px 6px;font-size:var(--t-sm)}
 .kpi-line:hover,.need-row:hover{background:var(--surface2)}
 .kpi-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -103,7 +103,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-colour-row input{box-sizing:border-box;width:100%;height:36px;padding:0 9px;font-size:var(--t-md)}
 .goal-f textarea{box-sizing:border-box;width:100%;padding:7px 9px;font:inherit;font-size:var(--t-md);resize:vertical}
 .goal-form [hidden],.kpi-panel [hidden]{display:none!important}
-.need-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.3}
+.need-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:var(--lh-tight)}
 .need-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .need-task{margin-left:auto;flex:none;font-size:var(--t-sm)}
 .gt-needs .kpi-prop{padding:4px 0;font-size:var(--t-base)}.gt-needs .kpi-prop-main{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:0 8px}.gt-needs .kpi-prop-do button{height:28px}
@@ -124,9 +124,9 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gpanel[open]{display:flex}
 .gpanel .tmodal-head{padding-bottom:10px;border-bottom:1px solid var(--line)}
 .gpanel .tmodal-body{flex:1;max-height:none;padding-top:4px}
-.gp-who{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg);font-weight:600;color:var(--ink)}
+.gp-who{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg);font-weight:600;color:var(--ink);letter-spacing:var(--track-tight)}
 .gp-who>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gp-back{font-size:18px;line-height:1}
+.gp-back{font-size:18px;line-height:var(--lh-none)}
 .gp-goals{list-style:none;margin:0;padding:0}
 .gp-goal{padding:8px 0;border-top:1px solid var(--line)}.gp-goal:first-child{border-top:0}
 .gp-goal>.goal-form{margin:4px 0 10px}
@@ -134,7 +134,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-signal{border:0;margin:0;padding:0;min-width:0}.gp-signal legend{padding:0;margin-bottom:4px;font-size:var(--t-sm);color:var(--muted)}
 .gp-signal-row{display:flex;flex-wrap:wrap;gap:4px var(--s3)}.gp-signal-row label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}.gp-signal-row input{margin:0}
 .gp-update .gp-update-note,.gp-update .err{margin:0;font-size:var(--t-sm)}
-.gp-gline{display:flex;align-items:center;gap:10px;width:calc(100% + 12px);margin:0 -6px;padding:6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer}
+.gp-gline{display:flex;align-items:center;gap:10px;width:calc(100% + 12px);margin:0 -6px;padding:6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer;letter-spacing:var(--track-snug)}
 .gp-gline:hover{background:var(--surface2)}
 .gp-goal .kpi-check,.gp-goal .kpi-props,.gp-goal>.linkish{margin-left:19px}
 .gp-goal>.linkish{font-size:var(--t-sm)}
@@ -148,19 +148,19 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-fin-head{display:flex;align-items:center;gap:8px}
 .goal-fin-line{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:4px 0;text-align:left;color:inherit;font:inherit;cursor:pointer}
 .goal-fin-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-fin-what{flex:none;font-size:12px;padding:0 6px;border:1px solid var(--line);border-radius:999px}
-.goal-fin-when{flex:none;font-size:12px}
+.goal-fin-what{flex:none;font-size:var(--t-sm);padding:0 6px;border:1px solid var(--line);border-radius:999px}
+.goal-fin-when{flex:none;font-size:var(--t-sm)}
 .goal-fin-detail{padding:4px 0 8px 8px}
 .goal-fin-kpis,.goal-fin-history{list-style:none;margin:2px 0 6px;padding:0}
 .goal-fin-kpis li{display:flex;align-items:center;gap:6px}
-.goal-fin-history li{font-size:12px}
+.goal-fin-history li{font-size:var(--t-sm)}
 .goal-reopen{margin:4px 0 8px}
 .gp-history-list{margin-top:4px}
 .gp-history-list .kpi-lines{margin-left:0}
 .kpi-archived{padding:8px 10px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
 .kpi-add [data-new],.kpi-add [data-target]{display:grid;gap:var(--s3)}
-.kpi-ptitle{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg)}.kpi-ptitle .who{font-size:var(--t-lg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kpi-big{font-size:var(--t-xl);font-weight:600;letter-spacing:-.01em}.kpi-why{font-size:var(--t-sm);margin-top:2px}
+.kpi-ptitle{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t-lg)}.kpi-ptitle .who{font-size:var(--t-lg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:var(--track-tight)}
+.kpi-big{font-size:var(--t-xl);font-weight:600;letter-spacing:var(--track-tight)}.kpi-why{font-size:var(--t-sm);margin-top:2px}
 .kchart{display:block;width:100%;height:auto;margin:10px 0 4px}
 .kc-axis{stroke:var(--line)}.kc-line{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-linejoin:round}.kc-dot{fill:var(--accent)}
 .kc-pace{stroke:var(--muted);stroke-width:1.2;stroke-dasharray:4 3}.kc-band{fill:var(--ok-bg)}.kc-t{fill:var(--muted);font-size:var(--t-2xs)}
@@ -216,7 +216,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
 .strat-prop-open{margin-left:6px;font-size:var(--t-sm)}
 .strat-prop-list,.strat-realign{list-style:none;margin:2px 0;padding:0;display:grid;gap:4px}
-.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
+.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 .strat-prop-k{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .strat-prop-wrong{display:block;font-size:var(--t-sm)}
 .strat-realign-goal{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 0}
@@ -240,7 +240,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .kpi-prop-do:has(.kpi-prop-line){flex-wrap:wrap;max-width:280px}
 .kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--accent,inherit);width:max-content}
 .kpi-prop-tf{margin-top:6px;display:grid;gap:var(--s2,8px)}
-.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:1.4}
+.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:var(--lh)}
 .prop-np-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
 .prop-np-k{color:var(--muted);font-size:var(--t-sm)}.prop-np-v{overflow-wrap:anywhere;white-space:pre-line}
 .prop-np-label{margin-top:4px;font-weight:600;font-size:var(--t-sm)}
@@ -248,7 +248,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .prop-np>.linkish{justify-self:start;font-size:var(--t-sm)}
 
 /* One goal in the sheet (ui/app/goals.js goalSheetOpen): the owner's panel's frame, a side panel or a phone's sheet. */
-.gsheet .gs-h{margin:0;font-size:var(--t-md);font-weight:600}
+.gsheet .gs-h{margin:0;font-size:var(--t-md);font-weight:600;letter-spacing:var(--track-snug)}
 .gsheet .tmodal-head{gap:8px}
 .gsheet .goal-form{max-width:none}
 .goal-measure{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.2fr)}

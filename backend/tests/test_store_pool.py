@@ -230,28 +230,43 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub.close()
 
 
-def test_sweep_deltas_drops_old_finished_runs_text_pieces_only(tmp_path):
+def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_path):
     from backend.store import H, sweep_deltas
     s = store(tmp_path)
     now = H.now()
-    old, recent = H.shift(now, days=-20), H.shift(now, days=-3)
+    day, hours = (lambda n: H.shift(now, days=-n)), (lambda n: H.shift(now, hours=-n))
+    # (created, finished, final_text, final message?, job state): what a run's pieces are kept beside
+    runs = {
+        "a-old": (day(4), day(3), "", True, None),              # finished 3 days ago, its final message holds the text
+        "b-recent": (day(3), hours(12), "", True, None),        # a long run finished 12 hours ago: a day has not passed
+        "c-open": (day(3), None, "", False, None),              # still running
+        "d-no-final": (day(4), day(3), "", False, None),        # only a partial message: its text is not whole anywhere
+        "e-review": (day(4), day(3), "", True, "uncertain"),    # held for review: the card and auto_reconcile read it
+        "f-final-text": (day(4), day(3), "Hello", False, None), # no message, but attempts.final_text holds the reply
+    }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT, final_text TEXT)")
+        c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
                   "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
-        for aid, created, finished in (("a-old", old, H.shift(old, hours=1)), ("b-recent", recent, recent),
-                                       ("c-open", old, None)):
-            c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
-            for seq, kind, payload in ((1, "delta", '{"text":"Hel","delta_kind":"text"}'), (2, "delta", '{"text":"lo"}'),
-                                       (3, "delta", '{"text":"hm","delta_kind":"thought"}'),
-                                       (4, "message", '{"text":"Hello","final":true}'), (5, "tool", '{"tool":"x"}')):
+        for aid, (created, finished, final_text, final_msg, job) in runs.items():
+            c.execute("INSERT INTO attempts VALUES(?,?,?,?)", (aid, created, finished, final_text))
+            if job:
+                c.execute("INSERT INTO jobs VALUES(?,?,?)", ("job-" + aid, aid, job))
+            events = [(1, "delta", '{"text":"Hel","delta_kind":"text"}'), (2, "delta", '{"text":"lo"}'),
+                      (3, "delta", '{"text":"hm","delta_kind":"thought"}'),
+                      (4, "message", '{"text":"Hello","final":true}' if final_msg else '{"text":"Hel"}'),
+                      (5, "tool", '{"tool":"x"}')]
+            for seq, kind, payload in events:
                 c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
-    assert sweep_deltas(s, now, batch=1) == 2
+    assert sweep_deltas(s, now, batch=1) == 4          # batch=1: one row per transaction, the pass still drains
     with s.read() as c:
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
-    assert left == {("a-old", 3), ("a-old", 4), ("a-old", 5)} | {(a, n) for a in ("b-recent", "c-open") for n in range(1, 6)}
+    everything = {(a, n) for a in runs for n in range(1, 6)}
+    # Only a-old and f-final-text lose their two text pieces; the thought, the message and the tool all stay.
+    assert left == everything - {("a-old", 1), ("a-old", 2), ("f-final-text", 1), ("f-final-text", 2)}
     assert sweep_deltas(s, now) == 0, "the mark moved past what was swept"
 
 

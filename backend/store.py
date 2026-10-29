@@ -292,7 +292,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL,
- updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
+ sites TEXT NOT NULL DEFAULT '[]', has_totp INTEGER NOT NULL DEFAULT 0);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -489,7 +490,7 @@ def sweep_idempotency(store, now=None, batch=5000):
             return deleted
 
 
-DELTA_RETENTION_DAYS = 14
+DELTA_RETENTION_DAYS = 1
 DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
 
 
@@ -497,10 +498,12 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
     than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
 
-    A finished run's text is whole in its `message` events and `attempts.final_text`; the pieces only typed the live
-    reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
+    A run's pieces go only when its reply is whole elsewhere: `attempts.final_text` or a final `message` event holds
+    it. A run still held for review (a job 'uncertain') keeps them: review_jobs shows its output, and
+    auto_reconcile reads the deltas (hop_failed, empty_fallback_interruption) to decide. The pieces only typed the
+    live reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
     Attempts are walked in creation order from a mark kept in registry_metadata, so a pass never rescans the table;
-    one created before the cutoff and still unfinished is passed over for good."""
+    one created before the cutoff and still unfinished, or not whole, is passed over for good (its pieces stay)."""
     at = now or H.now()
     cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
     created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
@@ -510,9 +513,15 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     deleted = 0
     while deleted < most:
         with store.read() as c:
-            rows = c.execute("SELECT id,created,finished FROM attempts WHERE created<? AND (created,id)>(?,?) "
-                             "ORDER BY created,id LIMIT 200", (created_before, *mark)).fetchall()
-        done = [r["id"] for r in rows if r["finished"] and r["finished"] < cutoff]
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,"
+                "((a.final_text IS NOT NULL AND a.final_text<>'') OR EXISTS(SELECT 1 FROM attempt_events m "
+                "WHERE m.attempt_id=a.id AND m.kind='message' AND json_valid(m.payload_json) "
+                "AND json_extract(m.payload_json,'$.final')=1)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS whole "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        done = [r["id"] for r in rows if r["whole"] and r["finished"] and r["finished"] < cutoff]
         while done and deleted < most:
             with store.transaction() as c:
                 removed = c.execute(
@@ -911,6 +920,9 @@ class Store:
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
             c.executescript(_credential_cards.SCHEMA)
+            # A login card's sites and the username it suggests (backend/credential_cards.py, kind "login").
+            H.add_column(c, "credential_requests", "sites_json", "TEXT NOT NULL DEFAULT '[]'")
+            H.add_column(c, "credential_requests", "username", "TEXT NOT NULL DEFAULT ''")
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
             from . import screening as _screening
@@ -993,6 +1005,10 @@ class Store:
                 # starts at 0: on a server that ran the backfill above, `created_by` named every admin who ever added a
                 # company credential as its owner, and nothing recorded which rows a member stored, so none stay theirs.
                 H.add_column(c, "credentials", "member_stored", "INTEGER NOT NULL DEFAULT 0")
+                # A website login's sites (lowercase hostnames, JSON) and whether it has a 2FA key; the password and
+                # key themselves are in its sealed value (backend/credentials.py `write_login`).
+                H.add_column(c, "credentials", "sites", "TEXT NOT NULL DEFAULT '[]'")
+                H.add_column(c, "credentials", "has_totp", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")

@@ -5,7 +5,7 @@
 .p-pill{display:flex;align-items:center;gap:6px;min-height:46px;padding:5px 6px 5px 5px;background:var(--surface);border:1px solid var(--line);border-radius:24px}
 .p-pill:focus-within{border-color:var(--accent)}
 .p-pill.over{border-color:var(--accent);box-shadow:0 0 0 3px var(--run-bg)}
-.ask textarea{flex:1;min-width:0;height:32px;max-height:120px;padding:5px 4px;border:0;background:transparent;border-radius:0;resize:none;overflow-y:auto;line-height:1.5}
+.ask textarea{flex:1;min-width:0;height:32px;max-height:120px;padding:5px 4px;border:0;background:transparent;border-radius:0;resize:none;overflow-y:auto;line-height:var(--lh)}
 .ask textarea:focus{outline:0}
 .p-icon{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:0;border-radius:18px;background:transparent;color:var(--muted);cursor:pointer}
 .p-icon:hover{background:var(--surface2);color:var(--ink)}
@@ -50,15 +50,15 @@
 
 /* notes page */
 .meeting-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:16px}
-.meeting-head h1{font-size:var(--t-lg);line-height:1.2;margin:2px 0 3px}
+.meeting-head h1{font-size:var(--t-lg);line-height:var(--lh-tight);margin:2px 0 3px}
 /* notes page: one card, list on the left, the open note on the right; below 900px the two swap
    in and out like a phone mail app (the .detail class on .notes shows the open note) */
 .notes-head{display:grid;grid-template-columns:auto minmax(180px,1fr) auto;align-items:center;gap:12px;margin-bottom:14px}
-.notes-head h1{font-size:var(--t-lg);line-height:1.2;margin:0 0 2px}
+.notes-head h1{font-size:var(--t-lg);line-height:var(--lh-tight);margin:0 0 2px}
 .notes-head .primary{flex:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .notes-head-actions{display:flex;align-items:center;gap:8px}
 .notes-head input[type=search]{width:100%;min-width:0;max-width:440px;justify-self:end}
-.round-add.primary{flex:0 0 36px;width:36px;height:36px;min-width:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-size:24px;font-weight:400;line-height:1}
+.round-add.primary{flex:0 0 36px;width:36px;height:36px;min-width:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-size:24px;font-weight:400;line-height:var(--lh-none)}
 .notes{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .notes-list{min-width:0}
 .notes-filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 14px;border-bottom:1px solid var(--line)}
@@ -124,7 +124,7 @@
 .meet-tile:hover:not(:disabled){border-color:var(--accent)}
 .meet-tile:disabled{cursor:default;opacity:1}
 .meet-tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.mt-text{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.mt-text{display:flex;flex-direction:column;min-width:0;line-height:var(--lh-tight)}
 .mt-text b{font-size:var(--t-base);font-weight:600;white-space:nowrap}
 .mt-status{display:flex;align-items:center;gap:5px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .mt-status .dot{width:7px;height:7px}
@@ -168,18 +168,18 @@
 @media (max-width:760px){#notes-modal-window{display:none}}
 .notes.detail .notes-list{display:none}
 .notes:not(.detail) .notes-detail{display:none}
-.notes-empty{padding:28px 18px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:1.5}
+.notes-empty{padding:28px 18px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
 .notes-empty button{margin-top:10px}
 .notes-detail{padding:18px 22px 20px;min-width:0}
 .notes-back{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0 0 10px;color:var(--accent);font:inherit;cursor:pointer}
 .note-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .note-head>div{flex:1;min-width:0}
-.note-head h2{display:flex;align-items:center;gap:8px;font-size:var(--t-lg);line-height:1.25;min-width:0;overflow-wrap:anywhere}
+.note-head h2{display:flex;align-items:center;gap:8px;font-size:var(--t-lg);line-height:var(--lh-tight);min-width:0;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
 .note-head h2 .nk svg{width:17px;height:17px}
 .note-head .meta{color:var(--muted);font-size:var(--t-sm);margin-top:3px}
 .note-head .pill{margin-top:5px}
 .note-head input{font-size:var(--t-lg);font-weight:600;padding:6px 9px}
-.note-content{margin-top:14px;line-height:1.55}
+.note-content{margin-top:14px;line-height:var(--lh-read)}
 .note-body{white-space:pre-wrap;max-height:340px;overflow:auto;overflow-wrap:anywhere}
 .note-body.aside{margin-top:12px;padding:8px 12px;border-left:2px solid var(--line);color:var(--ink)}
 .note-body.aside .lbl{display:block;color:var(--muted);font-size:var(--t-sm);margin-bottom:2px}
@@ -215,11 +215,11 @@
 .meet-done-cols .meet-sections{margin-top:0}
 .note-head h2[data-editable]{cursor:text;border-radius:6px;padding:2px 6px;margin-left:-6px}
 .note-head h2[data-editable]:hover{background:var(--bg)}
-.note-head input.meet-title{font-size:16px;font-weight:600;width:100%;padding:2px 6px;margin-left:-6px}
+.note-head input.meet-title{font-size:var(--t-lg);font-weight:600;width:100%;padding:2px 6px;margin-left:-6px}
 .meta .note-sub{margin-left:8px}
 .meet-comments{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:6px}
 .meet-comments h4{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);margin:0;font-weight:600}
-.meet-comment{font-size:var(--t-base);line-height:1.45;overflow-wrap:anywhere}
+.meet-comment{font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 .meet-comment .who{font-weight:600;margin-right:6px}
 .meet-comment .when{font-size:var(--t-xs);color:var(--muted);margin-left:6px;font-family:var(--mono)}
 .meet-comment-form{display:flex;gap:6px;align-items:flex-end}
@@ -250,7 +250,7 @@
 .meet-sec>header h4{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);margin:0;flex:1;font-weight:600}
 .meet-sec>header .linkish{font-size:var(--t-sm);text-decoration:none}
 .meet-sec>header .linkish:hover{text-decoration:underline}
-.meet-item{padding:8px 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:1.5;min-width:0}
+.meet-item{padding:8px 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh);min-width:0}
 .meet-sec .meet-item:first-of-type{border-top:0}
 .meet-item.gone{opacity:.55}
 .meet-item .t{overflow-wrap:anywhere}
@@ -287,7 +287,7 @@ a.meet-made-chip:hover{text-decoration:underline}
 .meet-proposed{font-size:var(--t-sm);white-space:nowrap}
 .meet-syncing{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--accent) 5%,var(--surface))}
 .meet-syncing[hidden]{display:none}
-.meet-syncing b{font-size:var(--t-md);font-weight:600}
+.meet-syncing b{font-size:var(--t-md);font-weight:600;letter-spacing:var(--track-snug)}
 .meet-made{margin-top:12px;padding:8px 0 10px;border-bottom:1px solid var(--line)}
 .meet-made h3{margin:0 0 4px;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 .meet-made ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
@@ -355,7 +355,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-review-detail{flex-wrap:wrap}
 .meet-review-detail .hint{flex:1;min-width:180px}
 .meet-settings-modal{width:460px;max-width:calc(100vw - 24px);padding:24px}
-.meet-settings-modal h2{margin:0 0 18px;font-size:var(--t-lg)}
+.meet-settings-modal h2{margin:0 0 18px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
 .meet-settings-modal label{display:grid;gap:6px;font-size:var(--t-base);margin-top:14px}
 .meet-settings-modal select{width:100%}
 .meet-settings-modal .row{flex-wrap:wrap;margin-top:20px;gap:8px}
@@ -394,13 +394,13 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-state.live{color:var(--ok,var(--accent))}.live-state.paused{color:var(--muted)}.live-state.ended{color:var(--muted)}
 .live-card{min-width:0;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .live-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.live-card-head h2{margin:0 0 7px;font-size:var(--t-lg)}
+.live-card-head h2{margin:0 0 7px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
 .live-controls{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}
 .live-bot-picker{display:flex;align-items:flex-end;gap:8px;margin:12px 0}
 .live-bot-picker select{min-width:220px;max-width:460px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px}
 .live-members{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0;color:var(--muted);font-size:var(--t-sm)}
 .live-section{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
-.live-section h3{margin:0 0 8px;font-size:var(--t-md)}
+.live-section h3{margin:0 0 8px;font-size:var(--t-md);letter-spacing:var(--track-snug)}
 .live-section>p{margin:0 0 8px;font-size:var(--t-sm)}
 .live-transcript,.live-chat{max-height:300px;overflow:auto}
 .live-transcript>p,.live-chat>p{display:grid;grid-template-columns:minmax(80px,130px) minmax(0,1fr);gap:5px 10px;margin:0;padding:7px 4px;border-bottom:1px solid var(--line);font-size:var(--t-base);white-space:pre-wrap;overflow-wrap:anywhere}

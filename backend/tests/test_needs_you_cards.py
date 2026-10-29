@@ -7,6 +7,7 @@ from backend import batch, views
 from backend import hubdb as H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 from backend.tests.test_batch import approval_for_ana
+from backend.tests.test_task_privacy_reads import traced
 
 SEND = {"to": ["Jennie Ooten <jennie@acme.example>"], "cc": [], "subject": "$200 for each rental owner you introduce",
         "body_sha256": "a" * 64, "mailbox": "work"}
@@ -249,3 +250,14 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     again = get(api, f"needs-you?limit=2&cursor={held}")
     assert again["restart"] is True and ids(again["items"]) == ids(get(api, "needs-you")["items"][:2])
     get(api, "needs-you?limit=2&cursor=nonsense", expected=422)
+
+
+def test_each_card_task_is_read_by_id_once_however_many_cards(api):
+    """The list reads its cards' task rows in one pass: the owner's rows are the read, and their visibility comes from
+    the same statement as the chain's rows. A second read by id of every card cost a full row each (bodies included)."""
+    for n in range(12):
+        post(api, "tasks", {"title": f"Card {n}", "body": "x" * 4000, "owner": "human:ana"})
+    page, statements = traced(api, lambda: get(api, "needs-you"))
+    assert len([i for i in page["items"] if i["kind"] == "task"]) == 12
+    by_id = [s for s in statements if "FROM tasks WHERE id IN" in s]
+    assert len(by_id) <= 1, by_id

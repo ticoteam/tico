@@ -44,7 +44,7 @@ button.bt-main{cursor:pointer}
 .bt-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .bt-sec{padding:10px 0 4px}
 .bt-sec+.bt-sec{border-top:1px solid var(--line)}
-.bt-sec h3{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-size:var(--t-xs);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps,.06em);color:var(--muted)}
+.bt-sec h3{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-size:var(--t-xs);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
 .bt-sec h4{margin:10px 0 2px;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
 .bt-held{margin:10px 0 0;color:var(--fail);font-size:var(--t-sm)}
 .bt-win,.bt-cap{display:grid;align-items:center;gap:10px;min-height:40px}

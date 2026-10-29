@@ -4377,20 +4377,39 @@ def slack_channel_import(api, args):
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
-      "key, token or password. On a task, the card goes in its thread and the task waits for it. Never ask for the value in "
-      "words.",
-      {"env": _s("The variable's name, like JIRA_BASIC_AUTH"),
+      "key, token or password. For a website your browser logs in to, use kind `login` with its `sites` (no `env`): the card "
+      "takes a username, password and optional 2FA setup key, and your browser types them in (hub_browser_fill). On a task, "
+      "the card goes in its thread and the task waits for it. Never ask for the value in words.",
+      {"env": _s("The variable's name, like JIRA_BASIC_AUTH; leave out for a login"),
        "for_bot": _s("The bot that needs it; you, when you leave it out"),
        "label": _s("What it is, for the card's title: 'your Jira login'"),
        "format": _s("The exact shape, as the input's placeholder: you@example.com:API token"),
        "help_url": _s("An https page where they create one, when you know it"),
-       "kind": _s("api_key, token, password or connection", enum=["api_key", "token", "password", "connection"])},
-      required=("env",), writes=True)
+       "kind": _s("api_key, token, password, connection, or login for a website",
+                  enum=["api_key", "token", "password", "connection", "login"]),
+       "sites": {"type": "array", "items": {"type": "string"}, "maxItems": 50,
+                 "description": "A login's websites, as hostnames like app.acme.example (a subdomain of one matches too)"},
+       "username": _s("A login's username or email, when you know it")},
+      writes=True)
 def credential_request(api, args):
-    body = {k: args[k] for k in ("env", "for_bot", "label", "format", "help_url", "kind") if args.get(k)}
+    body = {k: args[k] for k in ("env", "for_bot", "label", "format", "help_url", "kind", "sites", "username") if args.get(k)}
     if _as_person(api) is not api:
         body["on_behalf_of"] = "turn"
     return api.post("credential-requests", body, key=_key(args))
+
+
+@tool("hub_browser_needs_you", "Ask a person to step in on a website your browser is on: a login you were not given, a captcha, "
+      "a code only they get. Your task waits on a card in its thread and in their Needs you, with a link to this computer's "
+      "screen and a form to save a login for the site. You are woken once when they press Done or save a login for it: then "
+      "try again. Runs on your current task (HUB_TASK_ID). Never ask for a password in words.",
+      {"host": _s("The website's host, like app.acme.example"),
+       "reason": _s("What you need, in one short line: 'log in', 'solve the captcha', 'the code sent to your phone'"),
+       "task": TASK_ID},
+      required=("host",), writes=True)
+def browser_needs_you(api, args):
+    task = args.get("task") or os.environ.get("HUB_TASK_ID")
+    body = {"host": args["host"], **({"reason": args["reason"]} if args.get("reason") else {}), **({"task": task} if task else {})}
+    return api.post("browser/needs-you", body, key=_key(args))
 
 
 @tool("hub_credential_set", "Store a credential a person gave you in chat, for the bot they name, as them: it is kept in Credentials "
@@ -5739,6 +5758,8 @@ AUDIENCE = {
     "hub_bot_task_model": REQUESTER + ("bot", "agent"),
     # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
     "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
+    # A bot's own browser asks a person on its own task (backend/browser_logins.py); the server refuses anyone else.
+    "hub_browser_needs_you": ("bot", "botops"),
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,

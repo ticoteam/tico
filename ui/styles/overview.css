@@ -18,7 +18,7 @@ body:has(#main.overview-layout) #topbar{display:none}
 .overview-hours:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .overview-hours:hover .ovh-head{text-decoration:underline}
 .overview-hours p{margin:0}
-.ovh-title{grid-area:title;font-size:var(--t-label);color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.ovh-title{grid-area:title;font-size:var(--t-label);color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
 .ovh-head{grid-area:head}
 .ovh-head strong{font-size:var(--t-lg)}
 .overview-hours>.ovh-note{grid-area:note;font-size:var(--t-sm);color:var(--muted)}

@@ -249,10 +249,11 @@ needed, and the task stops waiting on it.
 | The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | every service that refused it (mail, calendar) reports that mailbox working, or the person connects it again |
 | The provider refused a computer's sign-in or key for one profile (`login:<computer>:<runtime>:<profile>`, `_default` for the computer's own login) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports that profile's login ready, or a run on that profile completes (not a fallback's) |
 | A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<bot>:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; cancelling the card ends the wait too |
+| The bot's browser needs a person on a website (`site:<bot>:<host>`: `hub browser needs-you`, or a login card from a task) | the bot's operator, else the owner | Open screen, Enter login, Done ([Website logins](credential-vault.md#website-logins)) | the person presses Done, or a login covering the host is saved for or granted to the bot |
 
 A bot held for failed sign-ins with a standing login card has no second Needs-you item; the fix releases it, and the
 item comes back if the card is retired unfixed. Each card's
-message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `status`). The tables are
+message carries `refs.reconnect` (`id`, the message itself; `key`, `service`, `label`, `person`, `fix`, `status`). The tables are
 `task_reconnects` and `google_signin_refusals` (each refusing service per mailbox); other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
 (backend/reconnects.py).
 

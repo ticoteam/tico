@@ -595,6 +595,7 @@ function reconnectCardHTML(m) {
   if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
     return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
   }
+  if (r.service === 'site') return wrap(siteCardHTML(m, r, fix, status, mine));
   let act = '';
   if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
   else if (status !== 'open') act = `<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`;
@@ -604,6 +605,59 @@ function reconnectCardHTML(m) {
     act = `<button type="button" class="primary" data-model-login data-runner="${esc(fix.runner || '')}" data-runtime="${esc(fix.runtime || '')}" data-machine="${esc(fix.machine || '')}">Sign in</button>`;
   } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
   return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
+}
+// A bot's browser needs a person on a website (backend `hub_browser_needs_you`): Log in to <host> and why, then Open
+// screen (the bot's computer, when its screen is on and this person may open it), Enter login (the login card: through
+// its credential request when the card carries one, else straight to the vault for a credential administrator) and Done.
+// The open login forms, by card key, so a repaint of the thread keeps them; Enter login again folds one away (the
+// form's Not now is hidden here: on a request it would cancel the request).
+const TASK_SITE_LOGIN = new Set();
+const siteDonePath = (m, r) => `/v2/reconnects/${encodeURIComponent(r.id || m.id || '')}/done`;
+function siteCardHTML(m, r, fix, status, mine) {
+  const host = fix.host || r.host || r.label || '', reason = fix.reason || r.reason || '';
+  const line = `<span class="rc-line">Log in to <b>${esc(host)}</b>${reason ? ` <span class="muted">· ${esc(reason)}</span>` : ''}</span>`;
+  const card = (act, below = '') => `<div class="rc-card rc-site" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}">${line}${act}${below}</div>`;
+  if (status === 'fixed') return card('<span class="rc-done">Done</span>');
+  if (status !== 'open') return card(`<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`);
+  // Done is the person's, or a manager's of the bot (the route's rule); a manager who is not asked gets only Done.
+  const doneHTML = `<button type="button" class="ghost" data-site-done="${esc(siteDonePath(m, r))}" data-task="${esc(m.refs.task || '')}" data-key="${esc(r.key || '')}">Done</button>`;
+  if (!mine) {
+    const manages = typeof settingsCanManageBot === 'function' && settingsCanManageBot((S.emps || []).find(e => e.name === r.bot));
+    return card(`<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>${manages ? `<span class="rc-acts">${doneHTML}</span>` : ''}`);
+  }
+  const computer = fix.computer || r.computer || '', machine = typeof screenMachine === 'function' ? screenMachine(computer) : null;
+  const screen = machine && screenOn(machine) && screenMayOpen(machine);
+  const request = fix.request || m.refs.credential_request || '';
+  const open = TASK_SITE_LOGIN.has(r.key);
+  // With no request behind the card, the login goes straight to the vault: only for someone who may open it.
+  const enter = request || S.me?.credential_access;
+  const acts = `<span class="rc-acts">${screen ? `<a class="button primary" href="${screenHref(computer)}" data-site-screen>Open screen</a>` : ''}
+    ${enter ? `<button type="button" class="${screen ? 'ghost' : 'primary'}" data-site-login="${esc(r.key || '')}" aria-expanded="${open}">Enter login</button>` : ''}
+    ${doneHTML}</span>`;
+  if (!open || !enter) return card(acts);
+  const form = request
+    ? `<div class="rc-form" data-credential-host="${esc(request)}"><div class="cc-done">Loading the card…</div></div>`
+    : `<div class="rc-form" data-login-host="${esc('site:' + (r.key || ''))}" data-host="${esc(host)}" data-bot="${esc(r.bot || '')}" data-bot-name="${esc(botDisplayName(r.bot || ''))}"
+        data-done="${esc(siteDonePath(m, r))}" data-task="${esc(m.refs.task || '')}" data-key="${esc(r.key || '')}"></div>`;
+  return card(acts, form);
+}
+async function siteCardClick(state, ev) {
+  const login = ev.target.closest('[data-site-login]'), done = ev.target.closest('[data-site-done]');
+  if (login) {
+    const key = login.dataset.siteLogin;
+    if (TASK_SITE_LOGIN.has(key)) TASK_SITE_LOGIN.delete(key); else TASK_SITE_LOGIN.add(key);
+    state.rendered = ' ';         // drawn again in place, not scrolled to the newest comment
+    taskCommentsRender(state, state.data);
+    if (TASK_SITE_LOGIN.has(key)) $(`.rc-card[data-reconnect="${CSS.escape(key)}"] .rc-form`, state.host)?.scrollIntoView({block: 'nearest'});
+    return;
+  }
+  if (!done) return;
+  done.disabled = true;
+  try {
+    await post(done.dataset.siteDone, {task: done.dataset.task, key: done.dataset.key});
+    TASK_SITE_LOGIN.delete(done.dataset.key);
+    await taskChatRead(state);
+  } catch (e) { toast(e.message, true); done.disabled = false; }
 }
 // Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
 document.addEventListener('click', async ev => {
@@ -841,6 +895,7 @@ function taskCommentsRender(state, data, sent = '') {
     thread.addEventListener('click', ev => {
       const stop = ev.target.closest('[data-task-stop]');
       if (stop && taskChatCurrent(state)) void taskRunStop(state, stop);
+      if (ev.target.closest('[data-site-login],[data-site-done]') && taskChatCurrent(state)) void siteCardClick(state, ev);
     });
   }
   state.data = data;
@@ -861,6 +916,8 @@ function taskCommentsRender(state, data, sent = '') {
   const thread = $('.task-comments', host);
   if (!can) d.askDrafts?.clear();
   if (can && askBusy(thread)) return;     // never under someone answering
+  // nor under someone typing into a credential card: a repaint would take the focus out of the field
+  if ([...thread.querySelectorAll('.cc-card')].some(el => el.contains(document.activeElement))) return;
   if (html !== state.rendered) {
     // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
     const stick = stickScroll(thread);
@@ -870,7 +927,7 @@ function taskCommentsRender(state, data, sent = '') {
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
     roadmapCommentsBind(state);
-    if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
+    if (thread.querySelector('[data-credential-host],[data-login-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
       reload: () => taskChatRead(state)});
     state.rendered = html;
   }

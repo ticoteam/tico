@@ -454,6 +454,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub credential request <ENV> [--for-bot B] [--label "your Jira login"] [--format "you@x.com:API token"]
                     [--help-url https://...] [--kind api_key|token|password]
                                            open a card in the chat for the person to type the secret into
+    hub credential request --kind login --site HOST [--site HOST ...] [--username U] [--label "your Acme login"]
+                                           a card for a website login (username, password, 2FA setup key) your
+                                           browser types in; you never see it
     hub credential set <ENV> --for-bot B [--name N] [--kind K] [--username U] [--no-redact]
                                            store a secret a person gave you (read from stdin, never the command line)
     hub credential list                    names, variables and which bots have each; never a value
@@ -462,6 +465,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub credential import <VAR> --from-bot <bot> [--name N] [--wait S]
                                            move one variable from that bot's own secrets file into Credentials, granted to
                                            that bot: its computer sends the value itself, it is never shown
+    hub credential import --format bitwarden|keepass FILE
+                                           import a Bitwarden/Vaultwarden JSON or KeePass/KeePassXC CSV export as logins
+                                           (a credential admin; encrypted exports are refused; duplicates are skipped)
+    hub browser needs-you <host> [--reason "log in"] [--task ID]
+                                           a person steps in on a website (screen, login card, Done); your task
+                                           waits and you are woken once they are done or save a login for it
     hub slack channel list                 the Slack channels bots may read and post in, who reads each
     hub slack channel add <channel> [--reader BOT ...] [--post|--no-post] [--note "..."] [--digest-hours N]
                                            list a channel (#name or id) or add readers to one already listed; an owner
@@ -2823,12 +2832,15 @@ def parser():
     s.set_defaults(fn="computer turns-at-once")
     cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(dest="sub")
     s = cred.add_parser("request", help="open a card in the chat for the person to type the credential into")
-    s.add_argument("env", help="the variable's name, like JIRA_BASIC_AUTH")
+    s.add_argument("env", nargs="?", help="the variable's name, like JIRA_BASIC_AUTH (none for --kind login)")
     s.add_argument("--for-bot", dest="for_bot")
     s.add_argument("--label", help="what it is: 'your Jira login'")
     s.add_argument("--format", help="its shape: you@company.com:API token")
     s.add_argument("--help-url", dest="help_url", help="an https page where they make one")
-    s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
+    s.add_argument("--kind", choices=["api_key", "token", "password", "connection", "login"])
+    s.add_argument("--site", dest="sites", action="append", metavar="HOST",
+                   help="a login's website (repeat for more); with --kind login, leave out ENV")
+    s.add_argument("--username", help="a login's username or email, when you know it")
     s.set_defaults(fn="credential request")
     s = cred.add_parser("set", help="store a credential a person gave you, for one bot; the value is read from stdin")
     s.add_argument("env")
@@ -2850,13 +2862,21 @@ def parser():
     s = cred.add_parser("delete", help="erase a Credential and all its grants (credential administrators)")
     s.add_argument("credential")
     s.set_defaults(fn="credential delete")
-    s = cred.add_parser("import", help="move one variable from a bot's own secrets file into Credentials, granted to that bot")
-    s.add_argument("env", metavar="VAR", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--from-bot", dest="from_bot", required=True, metavar="BOT")
+    s = cred.add_parser("import", help="import a password manager's export (--format), or move one variable from a bot's "
+                                       "own secrets file into Credentials, granted to that bot")
+    s.add_argument("env", nargs="?", metavar="VAR|FILE", help="the variable's name, like JIRA_BASIC_AUTH; with --format, the export file")
+    s.add_argument("--format", choices=["bitwarden", "keepass"], help="the export's format: Bitwarden or Vaultwarden JSON, KeePass or KeePassXC CSV")
+    s.add_argument("--from-bot", dest="from_bot", metavar="BOT", help="the bot whose secrets file has the variable")
     s.add_argument("--name", help="what to call it in Credentials; the variable's name by default")
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
     s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
     s.set_defaults(fn="credential import")
+    browser = sub.add_parser("browser", help="your browser on this computer: ask a person to step in on a website").add_subparsers(dest="sub")
+    s = browser.add_parser("needs-you", help="your task waits on a card for a person on a website: Done or a saved login wakes you")
+    s.add_argument("host", help="the website's host, like app.acme.example")
+    s.add_argument("--reason", help="what you need, in one short line: 'log in', 'solve the captcha'")
+    s.add_argument("--task", help="the task (your current one, HUB_TASK_ID, when left out)")
+    s.set_defaults(fn="browser needs-you")
     slack = sub.add_parser("slack", help="the Slack channels bots may read and post in").add_subparsers(dest="sub")
     chan = slack.add_parser("channel", help="list, add or remove a channel").add_subparsers(dest="subsub")
     chan.add_parser("list", help="the listed channels, their readers, and whether bots may post").set_defaults(fn="slack channel list")

@@ -12,7 +12,11 @@
 const RD_TOOLS = '#/library/tools';
 const RD_CONNECTIONS = '#/library/connections';   // the page's first name
 const LC_KIND_ICONS = {api: 'api', sql: 'inventory_2', browser: 'travel_explore', mail: 'mail', cli: 'code', mcp: 'link', credential: 'key_vertical'};
-const LC_CRED_KIND = {api_key: 'API key', password: 'Password', token: 'Token', file: 'File', connection: 'Connection'};
+const LC_CRED_KIND = {api_key: 'API key', password: 'Password', token: 'Token', file: 'File', connection: 'Connection', login: 'Login'};
+// A website login (kind `login`): its username and the sites it is for, and a 2FA mark when it holds an authenticator key.
+const lcSites = cred => (Array.isArray(cred?.sites) ? cred.sites : []).filter(Boolean);
+const lcSitesShort = cred => { const s = lcSites(cred); return s.length ? s[0] + (s.length > 1 ? ` +${s.length - 1}` : '') : ''; };
+const lc2fa = cred => cred?.has_totp ? '<span class="lc-2fa" title="Has an authenticator key">2FA</span>' : '';
 const LC_LEVEL_RANK = {never: 0, approval: 1, allowed: 2};
 let LC = null;              // {rows, groups, items, error, root, loading, key, filter: {who, issues, q}, show}
 const lcPhone = () => matchMedia('(max-width:760px)').matches;
@@ -70,9 +74,11 @@ function lcModel(rows) {
       if (kind === 'bot') bots.set(id, {level: '', problem: ''});
       if (kind === 'human') people.set(id, {level: ''});
     }
-    items.push({key: 'credentials/' + cred.id, cred, title: cred.name, kind: LC_CRED_KIND[cred.kind] || cred.kind, icon: 'key_vertical',
+    const login = cred.kind === 'login';
+    items.push({key: 'credentials/' + cred.id, cred, title: cred.name, icon: 'key_vertical',
+                kind: login ? [cred.username, lcSitesShort(cred)].filter(Boolean).join(' · ') || 'Login' : LC_CRED_KIND[cred.kind] || cred.kind,
                 group: 'Credentials', bots, people, creds: [cred], issues: cred.stored ? [] : [{text: 'No value stored'}],
-                text: [cred.name, cred.env, cred.username, cred.source, 'credential key'].join(' ').toLowerCase()});
+                text: [cred.name, cred.env, cred.username, cred.source, ...lcSites(cred), login ? 'login' + (cred.has_totp ? ' 2fa' : '') : '', 'credential key'].join(' ').toLowerCase()});
   }
   return items;
 }
@@ -172,7 +178,15 @@ function lcWire() {
   q.oninput = () => { LC.filter.q = q.value.trim(); changed(); };
   who.onchange = () => { LC.filter.who = who.value; changed(true); };
   issues.onclick = () => { LC.filter.issues = !LC.filter.issues; changed(); };
-  root.querySelector('.lc-add').onclick = ev => { if (ev.target.closest('[data-lc-add]')) vaultEdit(); };
+  const add = root.querySelector('.lc-add');
+  add.onclick = ev => {
+    if (ev.target.closest('[data-lc-add]')) vaultEdit();
+    else if (ev.target.closest('[data-lc-import]')) add.querySelector('[data-lc-import-file]')?.click();
+  };
+  add.onchange = ev => {
+    const input = ev.target.closest('[data-lc-import-file]'), file = input?.files?.[0];
+    if (file) void vaultImport(file).finally(() => { input.value = ''; });
+  };
 }
 // The picker: teams (nested ones indented under theirs), people, bots. Built once the groups have arrived.
 function lcDrawControls() {
@@ -191,7 +205,10 @@ function lcDrawControls() {
   // A filter for someone the list does not know (a link to a bot this person cannot see) still shows as chosen.
   if (LC.filter.who && !who.querySelector(`option[value="${CSS.escape(LC.filter.who)}"]`)) who.insertAdjacentHTML('beforeend', opt(LC.filter.who, LC.filter.who.split(':')[1]));
   who.value = LC.filter.who;
-  root.querySelector('.lc-add').innerHTML = VAULT?.can_manage ? '<button class="ghost small" type="button" data-lc-add>Add credential</button>' : '';
+  // Import reads a password manager's export (Bitwarden or Vaultwarden .json, KeePass or KeePassXC .csv) into logins.
+  root.querySelector('.lc-add').innerHTML = VAULT?.can_manage ? `<button class="ghost small" type="button" data-lc-import>Import</button>
+    <input type="file" accept=".json,.csv,application/json,text/csv" data-lc-import-file hidden aria-label="Password manager export">
+    <button class="ghost small" type="button" data-lc-add>Add credential</button>` : '';
 }
 
 function lcDrawList(key) {
@@ -208,7 +225,7 @@ function lcDrawList(key) {
     const trouble = item.issues.length ? `${item.issues.length} issue${item.issues.length === 1 ? '' : 's'}: ${item.issues[0].text}` : '';
     return `<a class="lc-row${sel ? ' sel' : ''}" href="${lcHref(item.key)}" data-key="${esc(item.key)}"${sel ? ' aria-current="page"' : ''} title="${esc([item.row?.summary, trouble].filter(Boolean).join(' · '))}">
       <span class="nav-icon" aria-hidden="true">${item.icon}</span>
-      <span class="lc-nm">${esc(item.title)} <span class="muted">· ${esc(item.kind)}</span></span>
+      <span class="lc-nm">${esc(item.title)} <span class="muted">· ${esc(item.kind)}</span></span>${lc2fa(item.cred)}
       ${item.issues.length ? `<span class="lc-dot" role="img" aria-label="${esc(trouble)}"></span>` : ''}
       <span class="lc-n${n ? '' : ' none'}" title="${esc(who)}" aria-label="${esc(who)}">${n}</span></a>`;
   }).join('')).join('');
@@ -259,15 +276,19 @@ function lcAccessHTML(item) {
     ${sorted(xs)}</details>`).join('');
 }
 // One stored credential: name and variable, whether a value is stored, when a bot last used it, and what may be done.
-function lcCredHTML(cred) {
+// `facts`: its own page lists a login's username and sites below, so the row leaves them out there.
+function lcCredHTML(cred, facts = false) {
   const used = cred.last_used ? `used ${ago(cred.last_used)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
+  const login = cred.kind === 'login';
   const acts = [
-    VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
+    VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${login ? 'Edit' : cred.stored ? 'Rotate' : 'Set'}</button>` : '',
     `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
+    login && cred.can_code ? `<button class="linkish" type="button" data-vault-code="${esc(cred.id)}">Show code</button>` : '',
     cred.stored && cred.can_reveal ? `<button class="linkish" type="button" data-vault-reveal="${esc(cred.id)}">Reveal</button>` : '',
   ].filter(Boolean).join('');
+  const sub = login && !facts ? [cred.username, lcSites(cred).join(', ')].filter(Boolean).join(' · ') : '';
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
-    <span class="lc-cn"><b>${esc(cred.name)}</b>${cred.env ? ` <span class="mono muted">${esc(cred.env)}</span>` : ''}</span>
+    <span class="lc-cn"><b>${esc(cred.name)}</b>${cred.env ? ` <span class="mono muted">${esc(cred.env)}</span>` : ''}${lc2fa(cred)}${sub ? ` <span class="muted">${esc(sub)}</span>` : ''}</span>
     <span class="pill ${cred.stored ? 'ok' : 'fail'}">${cred.stored ? 'Set' : 'No value'}</span>
     <span class="muted lc-used" title="${esc(cred.last_used ? fmt(cred.last_used) : '')}">${esc(used)}</span>
     <span class="lc-acts">${acts}</span></div>`;
@@ -297,7 +318,7 @@ function lcFactsHTML(item) {
   const row = item.row, n = item.bots.size + item.people.size;
   const held = new Set(item.creds.map(c => c.env).filter(Boolean));
   const missing = row.status === 'removed' ? [] : lcEnvs(row).filter(env => !held.has(env));
-  const creds = item.creds.map(lcCredHTML).join('') + missing.map(env => lcEnvHTML(env, row)).join('');
+  const creds = item.creds.map(c => lcCredHTML(c)).join('') + missing.map(env => lcEnvHTML(env, row)).join('');
   return lcIssuesHTML(item)
     + `<section class="card lc-access"><header><h2>Access <span class="muted">${n}</span></h2></header>${lcAccessHTML(item)}</section>`
     + (creds ? `<section class="card lc-creds"><header><h2>Credentials</h2></header>${creds}</section>` : '');
@@ -313,6 +334,7 @@ function lcWireFacts() {
     if (b.dataset.vaultEdit) vaultEdit(cred(b.dataset.vaultEdit));
     else if (b.dataset.vaultShare) vaultShare(b.dataset.vaultShare);
     else if (b.dataset.vaultReveal) vaultReveal(b.dataset.vaultReveal);
+    else if (b.dataset.vaultCode) vaultCode(b.dataset.vaultCode);
     else if (b.dataset.vaultDelete) { if (confirm(`Delete ${cred(b.dataset.vaultDelete)?.name || 'this credential'} and every grant of it?`)) void vaultDelete(b.dataset.vaultDelete); }
     else if (b.dataset.lcAddEnv) {
       const row = LC.items.find(i => i.key === LC.key)?.row;
@@ -347,7 +369,7 @@ function lcDrawCredential(id, back) {
   }).join('') || '<p class="muted lc-none">Owners only.</p>';
   detail.innerHTML = `<div class="meeting-head">${back}<div><h1>${esc(cred.name)}</h1></div></div>
     <div id="tool-facts">${lcIssuesHTML(item)}
-    <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
+    <section class="card lc-creds">${lcCredHTML(cred, true)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Sites', esc(lcSites(cred).join(', ')))}${row('2FA', cred.kind === 'login' && (cred.has_totp ? 'On' : 'Off'))}${row('Value', cred.kind !== 'login' && cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
       ${row('Changed', cred.updated && `<span title="${esc(fmt(cred.updated))}">${esc(ago(cred.updated))}</span>`)}</dl>
       ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;

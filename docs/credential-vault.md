@@ -104,6 +104,15 @@ and then tries the connection as the bot:
 The same three steps are the tools `hub_credential_import`, `hub_credential_grant` and `hub_credential_revoke`, and Tools → Credentials
 does the grant and revoke by hand. A grant to a person, or to every computer, still asks for the person's own click when it comes through BotOps.
 
+## Import from a password manager
+
+A credential administrator can bring logins over from Bitwarden or Vaultwarden (an unencrypted JSON export) or from KeePass
+or KeePassXC (a CSV export): Tools → Credentials → Import, or `hub credential import --format bitwarden|keepass FILE`.
+Each login keeps its name, username, password, authenticator key and the hostnames of its web addresses; an entry without a
+web address or a password is left out and the reply says why. A login already stored with the same name, username and
+hostnames is skipped. Imported logins are granted to no bot, so a bot gets one only when someone grants it. An encrypted
+Bitwarden export is refused; export again with the unencrypted format.
+
 ## The local credential key and backups
 
 Without `TICO_CREDENTIAL_KMS_KEY`, the data key is 32 random bytes in `/data/credential.key` (mode 0600) on the server's data
@@ -174,6 +183,49 @@ If a human pastes a credential into the chat instead, BotOps stores it with `hub
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `hub message redact <id>` does the same for one message.
+
+## Website logins
+
+A **login** is a credential for a website a bot's browser signs in to: a username, a password, an optional 2FA setup key
+(the base32 key a site shows under "can't scan the code?", or the `otpauth://totp/...` link in its QR code), and the
+sites it is for. Sites are lowercase hostnames (`app.acme.example`); a page on a listed host or any subdomain of one
+matches. The password and the 2FA key are sealed together as one value (`{"password", "totp"}`); the username, the sites
+and whether it has 2FA are plain columns, so Credentials lists them (`sites`, `has_totp`) without opening the vault.
+
+A login is never an environment variable, and a bot never holds its password or 2FA key: the turn's own commands
+can read whatever the turn holds, its hub token included. Only the bot's runner reads it, with its computer token, from
+`GET /api/v2/runner-login-credentials?attempt=<run id>` (`logins`: id, name, username, sites, password and 2FA key,
+for the logins granted to that run's bot, while the run is live on that computer), to type it into the page with
+`hub browser fill` and to mask it in what the run records; the model asks for a field and never sees the value. Each
+send is recorded as `credential.sent_to_computer` (`use: "browser"`), never with the value. A bot token, an API token,
+BotOps acting for someone and a person are refused there, and `GET /api/v2/credential-runtime` leaves logins out.
+
+A person who may open a login (a credential admin, or someone it is granted to), signed in themselves, may reveal its
+password (`POST /api/v2/credentials/{id}/reveal`, recorded as `credential.revealed`) and see its current 2FA code with
+**Show code** (`GET /api/v2/credentials/{id}/code`: `code` and `expires_in` seconds; recorded as `credential.code`,
+never with the code). The 2FA key itself is never returned by any route. A bot, an API token or BotOps acting for
+someone is refused both.
+
+Add a login in Tools > Credentials, or with `POST /api/v2/credentials` `{"kind": "login", "name", "username",
+"password", "totp", "sites"}` (credential admins; `secret` is taken for `password`; a blank name is the first site). On a
+change (`POST /api/v2/credentials/{id}` with `expected_revision`), a field left out, or a blank password, stays as it
+was, and `"totp": ""` takes the 2FA key off. Saving a login whose sites cover a host a bot holding it waits on closes
+that wait. A login stays a login: it has no variable to become.
+
+A bot that needs a login asks for one on a card: `hub credential request --kind login --site app.acme.example
+[--username ana@acme.example] [--label "the Acme portal"]`. The card takes a username, a password and an optional 2FA
+setup key and saves them (`POST /api/v2/credential-requests/{id}/save` `{"username", "password", "totp"}`) as a login
+granted to that bot: the one it already has for that username and a site in common is replaced, keeping its 2FA key
+unless a new one is typed; otherwise a new login. On a task the card is a reconnect card on `site:<bot>:<host>`, and the
+same rules as above hold for who may save it.
+
+When a site wants something only a person has (a login the bot was not given, a captcha, a code sent to a phone), the
+bot runs `hub browser needs-you <host> --reason "log in"` (`POST /api/v2/browser/needs-you`, on its current task). Its
+task waits on a website card in the task's thread and in the fixer's Needs you: "Ops Bot needs you on app.acme.example:
+log in". The card's `fix` names the `host`, the bot's `computer` (to open its screen and take over the browser), the
+`reason`, and a login card for the host (`request`). It closes when the person presses **Done**
+(`POST /api/v2/reconnects/{id}/done`, `id` being the card's `id` in its refs, its message; or a body `{"task", "key"}`), or when a login covering that host is saved for
+or granted to the bot; either way every task of that bot waiting on the host is woken once.
 
 ## Credential files on the computer
 
