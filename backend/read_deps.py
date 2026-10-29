@@ -278,11 +278,15 @@ def _settle_some(conn, keys, gate=None):
     return settled[0]
 
 
-def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
+def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None, searched=None):
     """Settle the queued rows, then every message and run no pass has walked yet (a row any pass walked has a node of
     its own in `read_deps`). Each `batch` is walked and written in short write transactions (`_settle_some`), each
     admitted through `gate` (the server's writer queue) when one is given; the search reads `span` rowids at a time
-    outside the write lock. Returns how many rows it walked."""
+    outside the write lock. Returns how many rows it walked.
+
+    `searched` ({table: rowid}), kept by the caller between passes, is how far a pass has walked every row. A walked
+    row keeps its node, and a row inserted later is queued by its trigger, so the next pass searches only past it
+    rather than every row again (about 90 ms per 20,000 rows, each pass)."""
     def stopped():
         return stop is not None and stop.is_set()
     done = 0
@@ -292,7 +296,7 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
             break
         done += _settle_some(conn, keys, gate)
     for table, prefix in (("messages", "m:"), ("attempts", "a:")):
-        after = 0
+        after = (searched or {}).get(table, 0)
         top = conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0]
         while after < top and not stopped():
             keys = [prefix + r[0] for r in conn.execute(
@@ -304,16 +308,22 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
                     return done
                 settled = _settle_some(conn, keys[:batch], gate)
                 keys, done = keys[settled:], done + settled
+            if searched is not None:
+                searched[table] = min(after, top)
     return done
 
 
 def loop(store, stop, seconds=10):
     """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next."""
     import logging
+    searched, file = {}, None
     while not stop.is_set():
         try:
             with store.read() as conn:
-                sweep(conn, stop=stop, gate=store.writer)
+                if getattr(conn, "pool_file", None) != file:
+                    # A restored or replaced database file is searched from its first row again.
+                    searched, file = {}, getattr(conn, "pool_file", None)
+                sweep(conn, stop=stop, gate=store.writer, searched=searched)
         except Exception as exc:
             logging.getLogger("tico.read_deps").error("Settling history reads failed: %s", type(exc).__name__)
         stop.wait(seconds)
