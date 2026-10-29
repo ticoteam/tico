@@ -104,6 +104,13 @@ person pins to the Dashboard or a team page may be read by that place's audience
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
 asked (`hub card`, `hub pin`).
 
+## History's Log
+
+Settings > History > Log reads through the reader's own SQL rights ([Hub SQL](hub-sql.md)): a row shows when that
+person or bot could select it from `POST /api/v2/sql`, and never otherwise. A member sees their own rows and those of
+the tasks, chats and bots they may read. Not even the owner sees a decision made in someone else's personal chat. Filtering by a bot needs Read on that bot. A credential's name shows
+only to someone who may see the credential. Export CSV (`GET /api/v2/history.csv`) is the owner's and the Admins'.
+
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;

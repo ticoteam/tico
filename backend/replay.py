@@ -64,28 +64,30 @@ def clip_text(value, n=TEXT_MAX):
     return value if len(value) <= n else value[: n - 1].rstrip() + "…"
 
 
-def install(app, store, auth):
-    def members(c, who, kind, ident):
-        """The actors a scope covers, or None for everyone. A bot scope needs Read on the bot, as its pages do."""
-        if not kind:
-            return None
-        if kind == "bot":
-            auth.require_read(c, who, ident)
-            return {"bot:" + ident}
-        if kind == "person":
-            if not H.human(c, ident):
-                raise Problem("not_found", "Person not found", 404)
-            return {"human:" + ident}
-        roster = views.roster(c)
-        groups = P.group_and_below(ident, roster)
-        if not groups:
-            raise Problem("not_found", "Team not found", 404)
-        entries = views.entries(c)
-        return ({"human:" + p["id"] for p in roster.get("people") or [] if p.get("team") in groups}
-                | {"bot:" + slug for slug in entries if P.team_of(slug, entries, roster) in groups})
+def members(c, auth, who, kind, ident):
+    """The actors a scope covers, or None for everyone: a team is everyone in it and in the groups nested under it.
+    A bot scope needs Read on the bot, as its pages do. History's Log filters with the same scopes."""
+    if not kind:
+        return None
+    if kind == "bot":
+        auth.require_read(c, who, ident)
+        return {"bot:" + ident}
+    if kind == "person":
+        if not H.human(c, ident):
+            raise Problem("not_found", "Person not found", 404)
+        return {"human:" + ident}
+    roster = views.roster(c)
+    groups = P.group_and_below(ident, roster)
+    if not groups:
+        raise Problem("not_found", "Team not found", 404)
+    entries = views.entries(c)
+    return ({"human:" + p["id"] for p in roster.get("people") or [] if p.get("team") in groups}
+            | {"bot:" + slug for slug in entries if P.team_of(slug, entries, roster) in groups})
 
+
+def install(app, store, auth):
     def build(c, who, first, last, kind, ident):
-        actors = members(c, who, kind, ident)
+        actors = members(c, auth, who, kind, ident)
         reader = privacy.actor(who)
         within = (lambda *names: any(n in actors for n in names)) if actors is not None else (lambda *names: True)
         visible_sql = auth.task_sql(c, who)
