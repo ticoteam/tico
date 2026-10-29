@@ -91,6 +91,38 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
 
 
+def test_renamed_task_flags_still_take_their_older_names():
+    """`brief` (update, done) and `wake: false` (close) were both `quiet`; an older caller's `quiet` still sends the
+    same request, through the MCP schema check and the CLI."""
+    class Api:
+        def __init__(self):
+            self.bodies = []
+
+        def get(self, path, **query):
+            return {"actor": "human:ana", "role": "human"} if path == "me" else {"task": {"version": 3}}
+
+        def post(self, path, body=None, key=None):
+            self.bodies.append(body)
+            return {"task": {"id": "t1"}}
+
+    def sent(name, args):
+        args = {"id": "t1", **args}
+        assert hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"]) is None, args
+        api = Api()
+        hubtools.BY_NAME[name]["fn"](api, args)
+        return api.bodies[-1].get("quiet", False)
+
+    for name in ("hub_task_update", "hub_task_done"):
+        assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
+        assert sent(name, {}) is False
+    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
+    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
+    cli = hubcli.parser()
+    assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "create", "--owner", "ops", "--title", "T", "--quiet"]).next_run is True
+
+
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]

@@ -311,7 +311,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if sum(bool(x) for x in (after, at, next_run, handled)) != 1:
         H.refuse(conn, actor, "defer", "give one of --after <task>, --at <time>, --next-run or --handled")
     if not row.get("next_run") or row["status"] != "open":
-        H.refuse(conn, actor, "defer", "only an open quiet task (filed for the bot's next run) is deferred; "
+        H.refuse(conn, actor, "defer", "only an open deferred task (filed for the bot's next run) takes a resume condition; "
                                        "snooze or set waiting on any other")
     aid = row.get("carried_by")
     if handled:

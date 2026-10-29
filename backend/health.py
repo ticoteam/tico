@@ -595,7 +595,12 @@ def _waiting(c, online_ids, settings=None, limits=None):
     orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     # The whole queue, not the next three jobs: queued_reasons reads every queued message.
-    prime_claimables(c, [slug for slug in queued if slug in assigned], first=None)
+    aged_bots = [slug for slug in queued if slug in assigned]
+    prime_claimables(c, aged_bots, first=None)
+    # Which queued tasks a wait might hold, for every bot's queue at once: one read a table, not one a bot.
+    from .execution import _queue_suspects, queued_jobs_sql
+    every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
+    suspect = _queue_suspects(c, every_job)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
@@ -653,7 +658,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
             # Counts belong to the individual job's task, not the representative oldest job.
             groups = {}
-            for job, why in queued_reasons(c, settings, where[0], slug, limits):
+            for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect):
                 key = why or "slow"
                 group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
                 group["queued"] += 1

@@ -131,3 +131,4 @@ def test_the_guide_carries_the_flow_format(api, botops):
     err, guide = mcp(api, "hub_automation_guide", {}, attempt["token"])
     assert not err and "hub automation create --file -" in guide["text"] and "`send_reply`" in guide["text"], guide
     assert "{{flow_shape}}" not in guide["text"]
+    assert "`problems`" in guide["text"] and "exact name or id" in guide["text"], guide["text"]  # What wakes
