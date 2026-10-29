@@ -6288,6 +6288,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if labels is not None:
         _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
         sets.append("updated=:updated")
+    owner_event = None
     if owner is not None:
         new_owner = _reach(conn, actor, owner)
         if actor == TASK_MANAGER and new_owner != row["owner"]:
@@ -6314,7 +6315,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     conn.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['id']))
         sets.append("owner=:owner")
         args["owner"] = new_owner
-        _task_event(conn, task_id, actor, "owner", row["owner"], new_owner, note or "")
+        owner_event = _task_event(conn, task_id, actor, "owner", row["owner"], new_owner, note or "")
         if new_owner != row["owner"]:
             from . import task_run_models
             task_run_models.moved(conn, actor, task_id)
@@ -6406,6 +6407,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     args["updated"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
+    if owner_event:
+        # A QM bot's new task starts its turn now. After the owner write, so the read check sees the new owner.
+        from . import external_sync
+        external_sync.wake(conn, task_id, args["owner"], owner_event)
     if person and status == "waiting":
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     after = task(conn, task_id) or {}
@@ -7105,9 +7110,6 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
     # The owner column is written just after its event, so a new owner is said from `new`.
     hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
                                        **({"owner": new} if field == "owner" else {})}, actor, revision=revision)
-    if field == "owner":
-        from . import external_sync
-        external_sync.wake(conn, task_id, new, revision)     # a QM bot's new task starts its turn now
 
 
 def _task_event(conn, task_id, actor, field, old, new, note=""):
@@ -7126,6 +7128,7 @@ def _task_event(conn, task_id, actor, field, old, new, note=""):
                   *(v for _, v in extra)))
     if field in ("status", "owner", "step"):
         _task_changed(conn, task_id, actor, field, old, new, event_id)
+    return event_id
 
 
 def _strategy_changed(conn, task_id):

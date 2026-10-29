@@ -86,7 +86,10 @@ a QM cron that runs the routine below, as the person:
 >    (all of them the first time), oldest first, as `role` (user or bot), `text` verbatim and `at` (ISO time). At
 >    most 200 messages per call; repeat until all are sent.
 > 2. For each `inbox` message in the reply, act on it as from me, in order. Each one is handed over once.
-> 3. Tell me in one line what Tico added and what you did with the inbox.
+> 3. Call `hub_task_list` with `owner` set to this bot's slug and `status` `open` and `doing`. Work each task in the
+>    order returned: read it with `hub_task_show`, do the work, and finish it with `hub_task_done`, or ask me with
+>    `hub_task_ask` if you are blocked.
+> 4. Tell me in one line what Tico added, what you did with the inbox and which tasks you worked.
 
 The first sync may take a few calls. Later ones send only what is new, so a daily run is short.
 
