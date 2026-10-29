@@ -118,17 +118,42 @@ def test_a_bots_turn_started_by_an_automation_cannot_start_it_again(api):
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
-def test_a_webhook_loop_is_paused_by_the_run_guard(api):
+def test_a_burst_of_distinct_external_events_is_a_backlog_not_a_loop(api):
     aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
                trigger={"type": "webhook", "id": "trg_1"})
     with api.app.state.store.transaction() as c:
-        for n in range(70):   # a webhook whose call calls it back: no chain links one delivery to the next
+        for n in range(70):   # an outage's backlog flushed: 70 distinct deliveries, none calls another
             automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70
+    assert get(api, f"automations/{aid}")["enabled"] is True
+    assert sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,)) == []
+
+
+def test_a_trigger_ref_repeating_is_a_loop_and_the_run_guard_pauses_it(api):
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
+               trigger={"type": "webhook", "id": "trg_1"})
+    paused = "SELECT owner FROM tasks WHERE title LIKE 'Automation Test paused%'"
+    before = len(sql(api, paused))
+    with api.app.state.store.transaction() as c:
+        for _ in range(70):   # the same event re-fires the automation again and again, as `fire` finds it enabled
+            row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+            if row["enabled"]:
+                automations.queue(c, row, {}, "webhook:trg_1:d0")
     assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == automations.RUN_GUARD
     assert get(api, f"automations/{aid}")["enabled"] is False
-    needs = sql(api, "SELECT owner FROM tasks WHERE title LIKE 'Automation Test paused%'")
-    assert needs == [{"owner": "human:ana"}]
+    assert len(sql(api, paused)) == before + 1
     assert len(sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,))) == 1
+
+
+def test_a_flood_of_distinct_external_events_past_the_ceiling_is_paused(api, monkeypatch):
+    monkeypatch.setattr(automations, "RUN_GUARD_BURST", 70)   # a webhook whose call calls it back, with new ids each time
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Hook"}}],
+               trigger={"type": "webhook", "id": "trg_1"})
+    with api.app.state.store.transaction() as c:
+        for n in range(80):
+            automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
+    assert len(sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))) == 70
+    assert get(api, f"automations/{aid}")["enabled"] is False
 
 
 # ---------------------------------------------------------------------------------------------- the spend cap
