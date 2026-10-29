@@ -1,6 +1,6 @@
 // Offline browser regression: a bot's task stopped on an account (backend/reconnects.py) shows one card in its thread.
 // The person who can fix it gets the fix (Reconnect Google goes to Google's own page only); anyone else sees whom it
-// waits on; a fixed card says Reconnected with no button. Desktop in dark, phone in light, no sideways scroll.
+// waits on; a fixed or retired card has no button. Desktop in dark, phone in light, no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,6 +24,8 @@ const comments = [
     fix: {kind: 'secret', request: 'cr9'}, line: 'BotOps needs the Acme CRM token to go on.'}, 6),
   card('q4', {key: 'login:r1:codex', service: 'login', label: 'Codex on Acme Mac', person: 'human:ana', status: 'fixed',
     fix: {kind: 'login', runner: 'r1', runtime: 'codex', machine: 'Acme Mac'}, line: "BotOps can't sign in to Codex on Acme Mac."}, 3),
+  card('q5', {key: 'google:cara@acme.example', service: 'google', label: 'Google (cara@acme.example)', person: 'human:ana', status: 'retired',
+    fix: {kind: 'google', account: 'cara@acme.example'}, line: "BotOps can't reach Google (cara@acme.example)."}, 2),
 ];
 
 async function run(viewport, scheme, shot) {
@@ -72,6 +74,10 @@ async function run(viewport, scheme, shot) {
     assert.equal(await login.getAttribute('data-status'), 'fixed');
     assert.match(await login.innerText(), /Reconnected/);
     assert.equal(await login.locator('button, a.button').count(), 0);
+    // Retired (its task ended or moved on): asks nothing.
+    const retired = thread.locator('.rc-card[data-reconnect="google:cara@acme.example"]');
+    assert.equal(await retired.getAttribute('data-status'), 'retired');
+    assert.equal(await retired.locator('button, a.button').count(), 0);
     // Nothing runs off the side of the thread at phone width.
     const wide = await page.evaluate(() => [...document.querySelectorAll('#task-modal .rc-card')]
       .some(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > innerWidth + 1));

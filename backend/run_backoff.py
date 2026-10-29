@@ -325,22 +325,37 @@ def failed(c, settings, row, body, aid, now=None):
 def hold(c, settings, bot, fails, kind, error, now):
     """Hold the bot: one Needs-you item for its operator, and an event. Its queued work is kept, and its first try is
     due PROBE_FIRST from now."""
-    from . import bot_stops, reconnects
+    from . import reconnects
+    # A sign-in a standing login card on its task already puts in front of the person who fixes it is that card, not
+    # a second item (backend/reconnects.py): the hold still stands, Health names it, and the card's fix releases it.
+    task_id = None if kind == SIGN_IN and reconnects.bot_open(c, bot, "login:") else _item(c, settings, bot, fails, kind, error)
+    c.execute("UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
+              (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot))
+    H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
+    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
+           H.KEEPER, revision=now)
+
+
+def _item(c, settings, bot, fails, kind, error):
+    from . import bot_stops
     name = bot_stops.name_of(c, bot)
-    # A sign-in its task's reconnect card already puts in front of the person who fixes it is that card, not a second
-    # item (backend/reconnects.py): the hold still stands, Health names it, and the card's fix releases it.
-    task_id = None if kind == SIGN_IN and reconnects.bot_open(c, bot, "") else bot_stops.raise_item(
+    return bot_stops.raise_item(
         c, settings, bot, f"{name} stopped after {fails} failed runs in a row",
         f"Tico stopped {name}: its last {fails} runs each failed within a minute, with {CLASS_WORDS[kind]}.\n\n"
         f"Last error: {error or 'none was reported'}\n\n"
         f"Tico tries one run of {name} on its own, first in {PROBE_FIRST // 60} minutes and then at growing intervals, and "
         f"releases it when one completes. To start it sooner, check its last runs in Runs, fix the cause and release "
         f"{name} (Settings > Bots > {name}, or `hub bot release {bot}`). Everything queued for it is kept.")
-    c.execute("UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
-              (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot))
-    H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
-    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
-           H.KEEPER, revision=now)
+
+
+def raise_hold_item(c, settings, bot):
+    """A held bot whose login card stood for its item (backend/reconnects.py) lost that card unfixed: its own item."""
+    state = get(c, bot)
+    if state.get("held_at") and not state.get("task_id"):
+        task_id = _item(c, settings, bot, int(state.get("fails") or 0), state.get("error_class") or OTHER, state.get("error"))
+        c.execute("UPDATE run_backoff SET task_id=? WHERE bot=?", (task_id, bot))
+        return task_id
+    return None
 
 
 def release(c, actor, bot):

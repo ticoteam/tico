@@ -584,7 +584,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
 // A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
 function reconnectCardHTML(m) {
-  const r = m.refs.reconnect, fix = r.fix || {}, fixed = r.status === 'fixed', mine = r.person === myActor();
+  const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
   const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>`;
   const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
   if (r.service === 'secret' && mine && m.refs.credential_request) {
@@ -592,12 +592,13 @@ function reconnectCardHTML(m) {
   }
   let act = '';
   if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
+  else if (status !== 'open') act = `<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`;
   else if (!mine) act = `<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`;
   else if (r.service === 'google') act = '<button type="button" class="primary" data-reconnect-google>Reconnect Google</button>';
   else if (r.service === 'login' && typeof harnessCaps === 'function' && harnessCaps(fix.runtime).browser_sign_in) {
     act = `<button type="button" class="primary" data-model-login data-runner="${esc(fix.runner || '')}" data-runtime="${esc(fix.runtime || '')}" data-machine="${esc(fix.machine || '')}">Sign in</button>`;
   } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
-  return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${fixed ? 'fixed' : 'open'}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
+  return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
 }
 // Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
 document.addEventListener('click', async ev => {

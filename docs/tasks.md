@@ -234,17 +234,21 @@ task's thread ("Sales Bot can't reach Google (ana@acme.example)."), with the fix
 "Waiting on <person>" for everyone else. The task waits on the card: it is in that person's Needs you under connect,
 and no stall check, stranded sweep or news wakes the bot meanwhile. When the account works again the card says
 Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnected. Continue."); the task goes back to
-the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item.
+the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
+another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
+stands only while its task is unfinished and keeps the owner it was opened for, and its bot is not archived; otherwise
+it says Not needed and asks nothing.
 
 | What stopped | Who fixes it | Fix on the card | Fixed when |
 | --- | --- | --- | --- |
-| The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | a clean connector report, or the person connects it again |
+| The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | every service that refused it (mail, calendar) reports that mailbox working, or the person connects it again |
 | The provider refused a computer's sign-in or key (`login:<computer>:<runtime>`) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports it signed in, or a run there completes |
-| A credential the bot asked for from a task (`secret:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner | the credential card | the variable is stored for or granted to the bot |
+| A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; cancelling the card ends the wait too |
 
-A bot held for failed sign-ins with a card open has no second Needs-you item; the fix releases it. Each card's
-message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `status`). The table is
-`task_reconnects`; other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
+A bot held for failed sign-ins with a standing login card has no second Needs-you item; the fix releases it, and the
+item comes back if the card is retired unfixed. Each card's
+message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `status`). The tables are
+`task_reconnects` and `google_signin_refusals` (each refusing service per mailbox); other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
 (backend/reconnects.py).
 
 When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then

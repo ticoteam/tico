@@ -268,12 +268,18 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             person = delegate(c, who, ref or "turn")
             if person.role not in ("owner", "human"):
                 raise Problem("no_person", "A credential card needs a human requester", 409)
-            return person, (H.message(c, ref) if ref and ref not in ("turn", "default") else turn), None
+            msg = H.message(c, ref) if ref and ref not in ("turn", "default") else turn
+            # On a task BotOps works, the card goes in that task's thread and the task waits on it, as any bot's does;
+            # a person who cannot read the task gets it where they asked, as before.
+            task = task_of(c, "bot:" + botops, turn, strict=False)
+            if task and msg and H.task_private_readable(c, person.actor, task):
+                return person, {**msg, "conversation_id": task["conversation_id"]}, task
+            return person, msg, None
         msg = turn
         refs = (msg or {}).get("refs") or {}
         plain = bool(msg and str(msg["from_actor"]).startswith("human:") and msg["to_actor"] == who.actor
                      and not (refs.get("via") or refs.get("assistant") or refs.get("slack")))
-        task = task_of(c, who, msg)
+        task = task_of(c, who.actor, msg)
         if task:
             # A turn on a task: the card goes in the task's thread, for the person who wrote to the bot there, else
             # whoever fixes the bot's accounts (backend/reconnects.py), and the task waits on it.
@@ -285,16 +291,17 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
         return auth.identity_for_actor(c, msg["from_actor"]), msg, None
 
-    def task_of(c, who, msg):
-        """The live task the bot's turn works on, from the turn's message (its thread, or its `task` reference)."""
+    def task_of(c, owner, msg, strict=True):
+        """The live task `owner` (the bot in the turn) works on, from the turn's message (its thread, or its `task`
+        reference). `strict` refuses a turn on a task it cannot card."""
         if not msg:
             return None
         conversation = H.conversation(c, msg["conversation_id"]) or {}
-        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["to_actor"] == who.actor else None)
+        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["to_actor"] == owner else None)
         task = H.task(c, task_id) if task_id else None
-        if task and task["owner"] == who.actor and task["status"] in H.ACTIVE_STATUSES:
+        if task and task["owner"] == owner and task["status"] in H.ACTIVE_STATUSES:
             return task
-        if conversation.get("task_id") or conversation.get("scope") == "task" or (msg.get("refs") or {}).get("task"):
+        if strict and (conversation.get("task_id") or conversation.get("scope") == "task" or (msg.get("refs") or {}).get("task")):
             raise Problem("no_person", "A credential card in a task needs a live task the bot owns", 409)
         return None
 
@@ -324,8 +331,19 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("not_found", "Bot not found", 404)
             manager(c, person, target)
             url = clean_help_url(body.help_url)
-            c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE requester=? AND bot=? AND env=? AND status='pending'",
-                      (H.now(), person.actor, target, body.env))
+            key = "secret:" + body.env
+            again = reconnects.request_of(c, task["id"], key) if task else None
+            if again:
+                # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
+                shown = view(c, again, person)
+                return {"id": again["id"], "status": "pending", "message_id": again["message_id"], "title": shown["title"],
+                        "detail": "The card is still open in the task. You are told when it is saved: do not ask for the value in words."}
+            # A newer card replaces the person's older one for the same variable, except one another task waits on.
+            waited = reconnects.waited_requests(c, target, body.env)
+            for (old,) in c.execute("SELECT id FROM credential_requests WHERE requester=? AND bot=? AND env=? AND status='pending'",
+                                    (person.actor, target, body.env)).fetchall():
+                if old not in waited:
+                    c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), old))
             rid = H.new_id()
             row = {"id": rid, "requester": person.actor, "conversation_id": msg["conversation_id"], "bot": target, "asker": asker,
                    "env": body.env, "label": body.label.strip(), "format": body.format.strip(), "help_url": url,
@@ -338,8 +356,8 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                                     delivered_at=H.now())
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
             if task:
-                reconnects.open(c, task["id"], target, "secret:" + body.env, "secret", body.label.strip() or body.env,
-                                person.actor, {"kind": "secret", "request": rid}, message_id=card["id"])
+                reconnects.open(c, task["id"], target, key, "secret", body.label.strip() or body.env,
+                                person.actor, {"kind": "secret", "request": rid}, message_id=card["id"], owner=task["owner"])
             H.event(c, who.actor, "credential.requested", rid, {"env": body.env, "bot": target, "for": person.actor})
             return {"id": rid, "status": "pending", "message_id": card["id"], "title": shown["title"],
                     "detail": "A card is open in the chat. You are told when it is saved: do not ask for the value in words."}
@@ -358,6 +376,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if row["status"] == "pending":
                 c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), rid))
                 row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
+                reconnects.dropped(c, rid)     # a task waiting on this card goes on without it
             return view(c, row, who)
 
     @app.post("/api/v2/credential-requests/{rid}/save")

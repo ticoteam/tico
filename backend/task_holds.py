@@ -167,6 +167,11 @@ def refresh(conn, task_id, cleared=None, at=None):
         if H.task(conn, task_id)["status"] != "waiting":
             return "resumed"
     if cleared and H.is_bot(row["owner"]):
+        # A reconnect wake owed on it goes now, with what cleared, as its one wake (backend/reconnects.py).
+        from . import reconnects
+        if reconnects.deliver(conn, task_id, why="holds", cleared=cleared):
+            task_blocked.bump(conn, row)
+            return "open"
         note = f"{cleared}; nothing left to wait on"
         H._set_status(conn, H.KEEPER, row, "open", note=note)
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))

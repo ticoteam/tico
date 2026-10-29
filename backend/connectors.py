@@ -340,6 +340,7 @@ def install_connectors(app, store, execution, mutate):
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
                       ("connector:calendar", H.now(), encode({"runner_id": runner["id"], "snapshots": len(seen)})))
+            reconnects.google_good(c, "calendar", seen)      # a published calendar is that account working
             return {"ok": True, "snapshots": len(seen)}
         return mutate(request, body, work)
 
@@ -354,7 +355,7 @@ def install_connectors(app, store, execution, mutate):
                 c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                           "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
                           "detail_json=excluded.detail_json", (service, H.now(), encode({"runner_id": runner["id"]})))
-                reconnects.google_report(c, [])
+                reconnects.google_report(c, body.service, [])
                 return {"ok": True}
             label = "Calendar" if body.service == "calendar" else "Mail"
             error = "; ".join(
@@ -367,8 +368,9 @@ def install_connectors(app, store, execution, mutate):
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (service, error[:1000], encode(detail)))
-            # The tasks a refused sign-in stops get a card for the mailbox's person (backend/reconnects.py).
-            reconnects.google_report(c, refused)
+            # The tasks a refused sign-in stops get a card for the mailbox's person; an account this service no longer
+            # lists works again for it (backend/reconnects.py).
+            reconnects.google_report(c, body.service, refused, [f.account for f in body.failing])
             return {"ok": False}
         return mutate(request, body, work)
 
@@ -608,6 +610,7 @@ def install_connectors(app, store, execution, mutate):
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
                       ("connector:mail", now, encode(detail)))
+            reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working
             return {"accepted": accepted}
         return mutate(request, body, work)
 

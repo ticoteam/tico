@@ -1688,6 +1688,9 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
                       (heir, ts, task["id"]))
     H._recount(c, "bot:" + bot)
     H._recount(c, heir)
+    # Its tasks' reconnect cards retired as they changed hands; a card for its own account on another bot's task too.
+    from . import reconnects
+    reconnects.bot_gone(c, bot)
 
     entries = {row["bot"]: SettingsAdmin._entry(row) for row in read_cache.configs(c)}
     loaded = P.load(roster or {"people": H.humans(c)})

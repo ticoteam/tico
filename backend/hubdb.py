@@ -7204,6 +7204,10 @@ def _task_event(conn, task_id, actor, field, old, new, note=""):
                  (event_id, task_id, now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note,
                   *(v for _, v in extra)))
+    if field in ("status", "owner"):
+        # A reconnect card stands only on its unfinished task with the owner it was opened for (backend/reconnects.py).
+        from .reconnects import moved as reconnects_moved
+        reconnects_moved(conn, task_id, field, old, new)
     if field in ("status", "owner", "step"):
         _task_changed(conn, task_id, actor, field, old, new, event_id)
 
@@ -8301,6 +8305,10 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None
+    if is_bot(target) and target == task_row.get("owner") and not (refs or {}).get("quiet"):
+        # A reconnect wake still owed on this task rides on this one (backend/reconnects.py): one wake, not two.
+        from .reconnects import fold_into as reconnects_fold
+        body, refs = reconnects_fold(conn, task_row, body, refs)
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",

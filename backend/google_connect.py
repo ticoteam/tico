@@ -461,5 +461,5 @@ def install(app, store, publisher, mutate):
             if body.status == "connected" and row["mailbox"]:
                 # Its tasks' reconnect cards end now, not at the connector's next report (backend/reconnects.py).
                 from . import reconnects
-                reconnects.fixed(c, "google:" + str(row["mailbox"]).lower(), why="connected")
+                reconnects.google_connected(c, row["mailbox"])
             return {"ok": True}
