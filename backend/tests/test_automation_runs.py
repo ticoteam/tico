@@ -329,6 +329,30 @@ def test_a_run_cut_off_during_a_hold_resumes_held_not_queued(api):
     assert release(api, aid) == 1 and run_row(api, rid)["status"] == "queued"
 
 
+def test_a_hold_that_starts_during_a_step_stops_the_run_before_its_next_step(api, monkeypatch):
+    aid = make(api, [{"id": "one", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "First"}},
+                     {"id": "two", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Second"}}])
+    rid = queued(api, aid)
+    act, done = automations.HubServices.act, []
+
+    def acting(self, do, args, ctx):
+        out = act(self, do, args, ctx)
+        done.append(args["text"])
+        if args["text"] == "First":
+            put_on_hold(api, aid)   # the guard trips (another trigger) while step one runs
+        return out
+    monkeypatch.setattr(automations.HubServices, "act", acting)
+    hub(api).drain()
+    held = run_row(api, rid)
+    assert held["status"] == "held" and held["finished"] is None and done == ["First"]
+    assert [s["id"] for s in held["state"]["steps"]] == ["one"]
+    assert release(api, aid) == 1
+    hub(api).drain()
+    finished = run_row(api, rid)
+    assert finished["status"] == "ok" and done == ["First", "Second"]   # step one is not done twice
+    assert [s["id"] for s in finished["state"]["steps"]] == ["one", "two"]
+
+
 def test_a_run_put_on_hold_mid_step_finishes_the_step_and_is_not_queued_again(api, monkeypatch):
     aid = webhook_auto(api)
     rid = queued(api, aid)

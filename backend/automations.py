@@ -778,12 +778,13 @@ def _ring(c):
 
 def _guard(c, row):
     """The backstop for loops the chain cannot see (a webhook that calls back with a new id each time, a mail rule
-    answered by mail): the rule that holds now, with what it counted, or None. `flood`: RUN_GUARD_BURST runs in the
-    last RUN_GUARD_MINUTES; `sustained`: at least RUN_GUARD_SUSTAINED runs in the last RUN_GUARD_SPAN minutes that fall
-    in at least RUN_GUARD_SPREAD distinct minutes of it (a loop keeps going over time; a backlog lands in a minute or
-    two and does not spread). Exact repeats are not counted here: redelivery is deduped per source, and a bot's own
-    writes are stopped by the chain. Manual runs are not counted. Only runs since its last hold was cleared count, so
-    runs a person released do not put it straight back on hold."""
+    answered by mail): the rule that holds now, with what it counted, or None. It counts the runs already started,
+    before the new one is added, so the run past each count is the one held: `flood`, more than RUN_GUARD_BURST in the
+    last RUN_GUARD_MINUTES; `sustained`, more than RUN_GUARD_SUSTAINED in the last RUN_GUARD_SPAN minutes, the ones
+    before it falling in at least RUN_GUARD_SPREAD distinct minutes of it (a loop keeps going over time; a backlog lands
+    in a minute or two and does not spread). Exact repeats are not counted here: redelivery is deduped per source, and a
+    bot's own writes are stopped by the chain. Manual runs are not counted. Only runs since its last hold was cleared
+    count, so runs a person released do not put it straight back on hold."""
     now = H.now()
     last = c.execute("SELECT cleared FROM automation_guard_holds WHERE automation_id=?", (row["id"],)).fetchone()
     floor = (last and last["cleared"]) or ""
@@ -1478,6 +1479,11 @@ class HubServices:
                           skip=_held(c, self.row["id"], self.run_id) | {ident for _, ident in mark["done"]},
                           idle_hours=idle_hours)
 
+    def on_hold(self):
+        """Whether the run guard put the automation on hold since this run was claimed: no further step starts."""
+        with self.hub.store.read() as c:
+            return _hold_row(c, self.row["id"]) is not None
+
     def checkpoint(self, state):
         """Save the run after a step that did something, before the next one starts."""
         if not self.dirty:
@@ -1550,7 +1556,7 @@ class Hub:
             settle_mail(c, state)   # in the same write as the save, so a result reported meanwhile is not lost
             status = state["status"]
             if any(t.get("state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
-                # Put on hold while this step ran: it finishes the step, then waits held, not queued.
+                # Put on hold while a step ran: it finished that step and stopped, and waits held, not queued.
                 status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
                 _cancel_mail(c, rid, state)
@@ -1631,6 +1637,11 @@ def _settle_run(c, run_id):
         return   # a held run settles once it is released and runs
     state = json.loads(run["state_json"])
     status = settle_mail(c, state)
+    if run["status"] == "skipped":
+        # Dropped (or turned off) while an action was out: the result is on record, the run stays skipped.
+        state["status"] = "skipped"
+        c.execute("UPDATE automation_runs SET state_json=? WHERE id=?", (json.dumps(state, default=str), run_id))
+        return
     status = "failed" if run["status"] == "failed" else status   # the tick gave up on it: it stays failed
     if status == "failed":
         _cancel_mail(c, run_id, state)
