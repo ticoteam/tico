@@ -1653,6 +1653,7 @@ def create_app(settings=None):
                                                     "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
+        cloud_access.sync_later(store, vault, settings)     # a new key: HQ's Tico Cloud access answer, now
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 

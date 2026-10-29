@@ -3,7 +3,7 @@ frozen holds turns that would spend credit and passes routines over; locked refu
 the download, and runs no bot; open again resumes everything with no restart. Nothing changes off cloud. HQ is a fake."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -11,6 +11,9 @@ from backend import automations, cloud_access, company_billing, routines
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_company_billing import ANSWER, KEY, URL, FakeHQ
+from backend.tests.test_gateway_enroll import fake_hq
+from backend.tests.test_gateway_enroll import setup as enroll_setup
+from backend.tests.test_gateway_enroll import tick
 
 BILLING_URL = "https://app.tico.dev/billing/boatyard"
 
@@ -178,3 +181,35 @@ def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
         assert (runs, skipped) == (1, [])
     else:
         assert runs == 0 and skipped == [cloud_access.ROUTINES_PAUSED[access]]
+
+
+def test_a_new_key_asks_hq_for_cloud_access_at_once(api, monkeypatch):  # noqa: F811
+    # The first ask can run before the install has its key (the hourly wait was the bug): an enrolled key asks at once.
+    asked = []
+    monkeypatch.setattr(cloud_access, "sync_later", lambda store, vault, settings: asked.append(store))
+    with fake_hq() as fake:
+        enroll_setup(api, monkeypatch, fake)
+        assert tick(api) == "enrolled"
+    assert asked == [api.app.state.store]
+
+
+def test_a_cloud_cell_with_no_answer_yet_asks_every_sync_not_every_unknown(api, monkeypatch, hq):  # noqa: F811
+    store = api.app.state.store
+    monkeypatch.setenv("TICO_UPDATES", "tico")
+    last = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+    assert cloud_access.current(store) is None
+    assert not cloud_access.due(store, last + timedelta(seconds=59), last)
+    assert cloud_access.due(store, last + cloud_access.SYNC, last)
+    say(api, hq, "open")                                              # once HQ has answered, the same cadence holds
+    assert cloud_access.due(store, last + cloud_access.SYNC, last)
+
+
+def test_a_self_hosted_or_ec2_install_keeps_the_hourly_ask(api, monkeypatch):  # noqa: F811
+    store = api.app.state.store
+    monkeypatch.delenv("TICO_UPDATES", raising=False)
+    last = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+    assert cloud_access.current(store) is None
+    assert not cloud_access.due(store, last + timedelta(seconds=60), last)
+    assert not cloud_access.due(store, last + timedelta(minutes=59), last)
+    assert cloud_access.due(store, last + cloud_access.UNKNOWN, last)
+    assert cloud_access.due(store, last, None)                       # the first check of a start always runs
