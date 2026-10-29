@@ -1,6 +1,7 @@
 // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.js myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words only, and their earlier chat with the
-// Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats.
+// Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
+// and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
 // Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -123,6 +124,13 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.locator('#chat-composer .p-text').press('Enter');
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
       assert.deepEqual(sent.map(s => s.path), ['/api/v2/assistant/messages'], 'admin: words only');
+      // A helper's own page still opens for an admin, with no composer: the Assistant hands it its work.
+      for (const helper of ['botops', 'goal-manager']) {
+        await page.goto('https://tico-ui.test/#/bot/' + helper);
+        await page.locator('#chat-composer [data-ask-open]').waitFor();
+        assert.equal(await page.locator('#chat-composer .p-text').count(), 0, `admin: no composer on ${helper}'s page`);
+        assert.match(await page.locator('#chat-composer').innerText(), /The Assistant hands .+ its work/);
+      }
       assert.deepEqual(errors, [], 'admin: no page errors');
       await page.close();
     }

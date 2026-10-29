@@ -3,7 +3,7 @@
 // it; a run asks the steps one at a time (a list adds rows on Enter, the scores grid is built from the earlier answers,
 // Back keeps what was typed, a skipped step is left out of the answers) and goes to the run page, which polls until done and
 // draws the value curve (Us thick and in the accent, end labels that never overlap, a legend), the 2x2, the tables and the
-// cascade; Add to draft sends the draft's revision and a 409 reloads the run; Ask the Librarian files once; a draft run
+// cascade; Add to draft sends the draft's revision and a 409 reloads the run; Ask (to sharpen a finding) files once; a draft run
 // carries its chip, and a member cannot see one; failed, no-model and nothing-published runs say so; no page scrolls sideways
 // at 400px.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
@@ -238,7 +238,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await dlg.locator('[data-lens-next]').innerText(), 'Run');
       assert.deepEqual(await dlg.locator('[data-lens-on]').allInnerTexts(), ['Published', 'Draft']);
       assert.equal(await dlg.locator('[data-lens-on="published"]').getAttribute('aria-pressed'), 'true');
-      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the Strategy Bot assume');
+      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the Assistant assume');
       await dlg.locator('.lens-pill', {hasText: 'Three years'}).click();
       await dlg.locator('[data-lens-back]').click();
       await dlg.locator('[data-lens-skip]').click();     // skips Scores: the grid's answer is dropped
@@ -309,7 +309,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual([...errors, ...racy.errors], []);
       await racy.page.close();
     }
-    // The value curve and its run page; Add to draft with a 409; Ask the Librarian once.
+    // The value curve and its run page; Add to draft with a 409; Ask once.
     {
       const {page, errors, sent} = await open(browser, {runs: PAST, route: '#/strategy/lenses/r-blue'});
       await page.locator('.lens-curve').waitFor();
@@ -352,7 +352,8 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual(sent.filter(x => x[1] === '/apply')[1], ['POST', '/apply', {index: 0, revision: 8}]);
       assert.equal(await page.locator('[data-lens-change="0"] [data-lens-apply]').count(), 0);
       assert.equal(await page.locator('[data-lens-apply="1"]').count(), 1, 'the other change is still open');
-      // Ask the Librarian: once.
+      // Ask: once, and the button reads Ask (no helper named).
+      assert.equal(await page.locator('[data-lens-sharpen="0"]').innerText(), 'Ask');
       await page.locator('[data-lens-sharpen="0"]').click();
       const asked = page.locator('[data-lens-sharpen-row="0"] .lens-done');
       await asked.waitFor();

@@ -1,5 +1,5 @@
 // Offline regression for the pieces around the wizard: there is no checklist and no card above any page; an
-// empty Market page is where the Librarian asks the owner four questions (kept as answered, so they can skip and
+// empty Market page is where the owner is asked four questions (kept as answered, so they can skip and
 // resume; the last one asks for research, and a notice shows until the market has content), and a quiet empty
 // state for everyone else; one line under the org list
 // points at BotOps while there are no bots of your own; the tour is replayable from Help, traps focus, closes
@@ -129,7 +129,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.waitForFunction(() => location.hash === '#/tasks');
     await page.close();
 
-    // ---- Market (its Players view): an empty market is the page's own empty state: the Librarian asks four questions, one at a
+    // ---- Market (its Players view): an empty market is the page's own empty state: it asks four questions, one at a
     // time, kept as answered so the owner can skip and pick up again; the last asks for research, and a notice
     // shows until the market has content
     page = await context.newPage();
@@ -142,7 +142,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     const posts = () => calls.filter(c => c.p === '/api/v2/librarian/setup/market');
     await box.waitFor();
     assert.equal(await asked(), 'What do you sell?');
-    assert.match(await box.locator('.market-who').textContent(), /Librarian$/);
+    assert.equal(await box.locator('.market-who').count(), 0, 'no one is named as asking');
     assert.equal(await box.locator('textarea').count(), 1);                 // one question at a time
     assert.equal(await box.locator('[type=submit]').textContent(), 'Next');
     assert.equal(await box.locator('a[href="#/docs?import=1"]').textContent(), 'Attach files');
@@ -198,7 +198,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio',
       competitors: 'CleanCo', watch: 'r/PropertyManagement'}, step: 3, action: 'finish'});
     assert.equal(posts().filter(c => c.body.action === 'finish').length, 2);
-    assert.match(await notice.textContent(), /The Librarian is researching your market\.\s+This usually takes 5–10 minutes\./);
+    assert.match(await notice.textContent(), /^\s*Researching your market\.\s+This usually takes 5–10 minutes\./);
     assert.equal(await page.locator('[data-market-setup]').count(), 0);
     assert.equal(await notice.locator('a[href="#/task/t-market"]').count(), 1);
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.market.researching')).task), 't-market');

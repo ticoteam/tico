@@ -1,4 +1,5 @@
-/* Internal documents and external sources share Docs search. Ask the Librarian is ui/docs-ask.js. */
+/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.js), which
+   sees the page. */
 'use strict';
 let DOC_DATA = {docs: [], linked: []};
 let DOC_QUERY = '';
@@ -45,10 +46,10 @@ function docsMenu(menu, button) {
   });
   menu.addEventListener('click', event => { if (event.target.closest('button,a')) menu.hidePopover(); });
 }
-// ---------------------------------------------------------------- the Librarian sets up Docs
+// ---------------------------------------------------------------- setting up Docs
 // The first-run question (backend/librarian_setup.py): where the docs are. The links become sources at once and one
-// task has the Librarian read them and write the map of the docs (playbooks/docs-setup.md). Skip is the person's own;
-// "Set up with the Librarian…" in the menu brings the question back.
+// task has the Librarian, a helper nobody chats with, read them and write the map of the docs (playbooks/docs-setup.md).
+// Skip is the person's own; "Set up Docs…" in the menu brings the question back.
 // /api/me names every signed-in person owner or viewer; a member is a viewer there, not human.
 const docsIsPerson = () => ['owner', 'viewer'].includes(S.me?.role);
 let DOCS_SETUP_SENT = null;          // what was just filed, shown until closed
@@ -57,9 +58,8 @@ async function docsSetup(slot, {asked, current, openImport, reload}) {
   const sent = DOCS_SETUP_SENT;
   if (sent) {
     slot.innerHTML = `<section class="docs-setup" role="status" aria-labelledby="docs-setup-h">
-        <p class="docs-setup-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>
         <h2 id="docs-setup-h">Setting up your Docs</h2>
-        <p class="muted">${sent.count ? `${sent.count} ${sent.count === 1 ? 'source is' : 'sources are'} in Docs now. ` : ''}I'm reading what you gave me and writing a map of your docs, so anyone can find things. This usually takes 10–15 minutes.</p>
+        <p class="muted">${sent.count ? `${sent.count} ${sent.count === 1 ? 'source is' : 'sources are'} in Docs now. ` : ''}Reading them and mapping your docs, so anyone can find things. This usually takes 10–15 minutes.</p>
         <div class="gs-card-actions"><a class="docs-new" role="button" href="#/task/${esc(sent.task)}">View task</a>
           <button class="ghost" type="button" data-setup-close>Close</button></div></section>`;
     slot.querySelector('[data-setup-close]').onclick = () => { DOCS_SETUP_SENT = null; slot.innerHTML = ''; };
@@ -69,14 +69,13 @@ async function docsSetup(slot, {asked, current, openImport, reload}) {
   try { setup = await get('/v2/librarian/setup'); } catch { return; }
   if (!current() || !document.body.contains(slot)) return;
   if (!setup.available) {
-    if (asked) slot.innerHTML = '<p class="docs-setup-off muted">The Librarian is off, so it cannot set up Docs right now.</p>';
+    if (asked) slot.innerHTML = '<p class="docs-setup-off muted">Docs setup is off right now.</p>';
     return;
   }
   if (!asked && !setup.docs.show) return;
   slot.innerHTML = `<section class="docs-setup" aria-labelledby="docs-setup-h"><form data-docs-setup novalidate>
-      <p class="docs-setup-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>
       <h2 id="docs-setup-h">Where are your docs?</h2>
-      <p class="muted">Tell me where your team keeps what it knows. I'll add each place to Docs, read it, and map it so anyone can find things.</p>
+      <p class="muted">Each place your team keeps what it knows is added to Docs, read, and mapped so anyone can find things.</p>
       <label class="gs-field"><span>Links, one per line</span><textarea name="sources" rows="3" maxlength="20000" autocomplete="off" spellcheck="false" placeholder="https://github.com/acme/handbook&#10;https://help.acme.example"></textarea></label>
       <label class="gs-field"><span>Anything else? <em>(optional)</em></span><input name="note" type="text" maxlength="4000" autocomplete="off" placeholder="Our policies are in Google Drive"></label>
       <p class="err" data-error role="alert" hidden></p>
@@ -104,7 +103,7 @@ async function docsSetup(slot, {asked, current, openImport, reload}) {
       DOC_CACHE_KEY = '';                      // the new sources are in the list at once
       if (asked) location.hash = docsHref(); else reload();
     } catch (error) {
-      fail(error?.body?.error?.code === 'librarian_off' ? 'The Librarian is off.' : error.message || 'That did not go through.');
+      fail(error?.body?.error?.code === 'librarian_off' ? 'Docs setup is off right now.' : error.message || 'That did not go through.');
     }
   };
 }
@@ -130,12 +129,11 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
 
   $('#main').innerHTML = `<div class="docs-heading"><h1>Docs</h1>
     <div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>
-    <button class="docs-ask" id="docs-ask" type="button" data-librarian-open aria-label="Ask the Librarian" title="Ask the Librarian"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask the Librarian</span></button>
+    <button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button>
     <div class="docs-actions"><button class="docs-new" id="docs-add-source" type="button">Add source</button><a class="docs-new" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>
-      ${librarianBot() ? `<a class="docs-settings" id="docs-librarian-settings" href="#/bot/librarian/more" aria-label="Librarian settings" title="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>` : ''}
       <button class="docs-settings" id="docs-more" type="button" popovertarget="docs-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></div>
     <div id="docs-menu" class="docs-pop" popover aria-label="Docs actions"><button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>
-      ${docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: 1})}">Set up with the Librarian…</a>` : ''}
+      ${docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: 1})}">Set up Docs…</a>` : ''}
       <a id="docs-archived" href="${docsHref('', archived ? {} : {archived: 1})}">${archived ? 'Active' : 'Archived'}</a></div>
     <p class="docs-feedback" id="docs-feedback" role="status" hidden></p>
     <div id="docs-setup"></div>
@@ -153,7 +151,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
-  // #docs-ask opens the Librarian's panel (ui/docs-ask.js), which shows it only on an install with the Librarian.
+  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.js); what it sends carries this page.
 
   const cacheKey = archived ? 'archived' : 'active';
   const fresh = docsLoadAll(archived);
@@ -165,7 +163,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   let {docs, linked} = DOC_DATA;
   const browser = $('#docs-browser');
   if (params.get('import') === '1') { history.replaceState(null, '', location.pathname + location.search + docsHref()); openImport(); }
-  // The Librarian asks where the docs are on a first visit, while Docs holds nothing a person wrote or linked.
+  // Docs asks where the docs are on a first visit, while Docs holds nothing a person wrote or linked.
   const ownDocs = docs.filter(d => !d.path.startsWith('_librarian/') && d.path !== 'FAQ.md');
   if (docsIsPerson() && !archived && !selected && (DOCS_SETUP_SENT || params.get('setup') === '1' || (!linked.length && !ownDocs.length)))
     void docsSetup($('#docs-setup'), {asked: params.get('setup') === '1', current, openImport, reload});
@@ -450,7 +448,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
 document.addEventListener('keydown', event => {
   if (typeof S === 'undefined' || !S.route?.startsWith(DOCS) || event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return;
   const el = event.target;
-  if (el?.closest?.('input,textarea,select,[contenteditable=""],[contenteditable=true],dialog,[data-docs-ask]')) return;
+  if (el?.closest?.('input,textarea,select,[contenteditable=""],[contenteditable=true],dialog,#ask-panel')) return;
   if (event.key === '/') { const field = $('#docs-search'); if (field) { event.preventDefault(); field.focus(); field.select(); } }
   if (event.key === 'e') { const edit = $('#doc-edit'); if (edit && edit.getAttribute('aria-disabled') !== 'true') { event.preventDefault(); location.hash = edit.getAttribute('href'); } }
 });

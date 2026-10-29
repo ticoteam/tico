@@ -363,8 +363,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .asst-empty{display:flex;min-height:100%;align-items:flex-end;justify-content:center;padding:16px 0 4px}
 .asst-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
 .asst-hints button{border-radius:999px;font-size:var(--t-base);padding:6px 12px}
-/* "Earlier chats" on the owner's Strategy Bot page (ui/app/assistant-page.js): their Assistant chats from before,
-   read-only. */
+/* "Earlier chats" on the Assistant page (ui/app/assistant-page.js): the owner's old Strategy Bot chat, read-only. */
 .asst-earlier{margin:0 0 var(--s2)}
 .asst-earlier>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 .asst-earlier-list{max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s2);padding:var(--s2) 0}

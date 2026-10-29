@@ -317,14 +317,3 @@ function auOverviewWire(root) {
     if (AU.tab === 'runs' && AU.all?.next && !AU.all.loading && box.scrollTop + box.clientHeight > box.scrollHeight - 200) void auAllLoad(AU, true);
   }, {passive: true});
 }
-
-// What BotOps is told the viewer is looking at when no automation is open (refs.automations_filter, CONTRACT §2).
-function auBotScope() {
-  if (!AU) return {};
-  const f = AU.f, out = {range: AU.range, tab: AU.tab, shown: auShown().length};
-  if (f.q) out.q = f.q;
-  if (f.trig.size) out.trigger = [...f.trig];
-  for (const k of ['status', 'team', 'owner']) if (f[k]) out[k] = f[k];
-  if (AU.tab === 'runs' && AU.rstatus) out.run_status = AU.rstatus;
-  return {automations_filter: out};
-}

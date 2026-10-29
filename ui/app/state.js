@@ -48,12 +48,12 @@ const assistantName = () => {
 };
 const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The assistant, BotOps, the Librarian, the Strategy Bot and the Task Manager are built in to every team: pause and rename
-// them, never archive or delete. None is on the org chart: the Task Manager's entry point is Settings > System, the
-// Strategy Bot's its panel beside the Strategy tabs.
+// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and Settings > System.
 const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager';
-// The Librarian (a helper, as BotOps is): its chat beside Library's pages and its settings from Docs; an install without one shows
-// neither.
-const librarianBot = () => (S.emps || []).find(e => e.name === 'librarian' && e.status !== 'archived' && e.status !== 'retired') || null;
+// The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
+// work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
+const ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian'];
+const isAssistantHelper = slug => ASSISTANT_HELPERS.includes(slug);
 // The Strategy Bot (backend/strategy_bot.py, slug goal-manager) is on every install, by the name the owner gave it,
 // else
 // "Strategy Bot". An install that has not started the new server yet still stores its older default names ("CEO Bot",
@@ -64,12 +64,7 @@ const strategyBotName = () => {
   const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
-// The room_key the server stores the owner's Strategy Bot chat under (backend/rooms.py). The value stays "ceo" so a
-// runner one version behind still finds that chat by it; only the constant's name follows the bot.
-const STRATEGY_ROOM = 'ceo';
 // Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
-// meStrategyBot is being removed with the surfaces that still call it; until then it is false for everyone.
-const meStrategyBot = () => false;
 const myChatBot = () => assistantBot();
 const myChatName = () => assistantName();
 const companyName = () => S.config.company_name || appName();

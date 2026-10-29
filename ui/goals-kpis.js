@@ -158,9 +158,8 @@ function propDoHtml(p, {yes, no = 'No, leave it', line = '', decide = 'confirm',
 // Sent, the reason is the suggestion's decision note (POST /v2/proposals/{id}/note, once, by whoever said no), read by
 // the Strategy Bot before it suggests again; left, nothing more happens. The server's cap (backend/goals.py REASON_MAX).
 const PROP_REASON_MAX = 280;
-const propStrategyBot = () => { const name = strategyBotName(); return name === strategyDefaultName() ? 'the ' + name : name; };
 function propLeftHtml() {
-  return `<form class="kpi-prop-left" data-prop-left novalidate><span class="kpi-prop-left-k">Left as it is. Tell ${esc(propStrategyBot())} why? (optional)</span>
+  return `<form class="kpi-prop-left" data-prop-left novalidate><span class="kpi-prop-left-k">Left as it is. Tell it why? (optional)</span>
     <input type="text" name="note" maxlength="${PROP_REASON_MAX}" autocomplete="off" aria-label="Why you left it (optional)" placeholder="One line, e.g. no billing yet">
     <button class="primary" type="submit">Send</button><span class="kpi-prop-left-err" role="alert" hidden></span></form>`;
 }
@@ -174,7 +173,7 @@ function bindPropLeft(li, after) {
     send.disabled = true;
     try {
       await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/note`, {note});
-      toast(`Sent: ${propStrategyBot()} reads it before it suggests again`);
+      toast('Sent');
       await after();
     } catch (e) {
       // The server's refusal, in its words, beside the box (a reason already added, too long, not theirs to add).
@@ -798,7 +797,7 @@ function bindGoalWhy(state, root, reload) {
 }
 
 // What the tree is drawn from in the roster, so a refresh redraws it only when that changed (goalsFollowRoster).
-const goalTreeKey = () => JSON.stringify([strategyBotName(),
+const goalTreeKey = () => JSON.stringify([
   (S.emps || []).map(e => [e.name, e.display_name, e.org_parent, e.team, e.status]),
   (S.people || []).map(p => [p.id, p.org_parent, p.team, p.hidden]), (S.orgGroups || []).map(g => [g.id, g.parent, g.org_parent])]);
 function goalsRender(state) {
@@ -1120,12 +1119,12 @@ const needTaskLink = it => it.task ? `<a class="need-task muted" href="#/task/${
 // pick
 // marked, one Approve per option and one Reject for them all. A part that can't happen now says why.
 function recoveryHtml(it) {
-  const p = it.proposal || {}, pl = p.payload || {}, name = esc(strategyBotName());
-  const options = (it.options || []).map((o, n) => `<li class="rec-opt${o.pick ? ' rec-pick' : ''}"><div class="rec-opt-h"><b>${esc(o.label)}</b>${o.pick ? `<span class="muted"> · the ${name}'s pick</span>` : ''}</div>
+  const p = it.proposal || {}, pl = p.payload || {};
+  const options = (it.options || []).map((o, n) => `<li class="rec-opt${o.pick ? ' rec-pick' : ''}"><div class="rec-opt-h"><b>${esc(o.label)}</b>${o.pick ? '<span class="muted"> · recommended</span>' : ''}</div>
     <ul class="rec-acts">${o.actions.map(a => `<li>${esc(a.text)}${a.note ? `<span class="muted"> · ${esc(a.note)}; this part would come back to you</span>` : ''}</li>`).join('')}</ul>
     <button class="${o.pick ? 'primary' : 'ghost'}" type="button" data-decide="confirm" data-option="${n}">Approve${(it.options || []).length > 1 ? ` option ${n + 1}` : ''}</button></li>`).join('');
   return `<li class="kpi-prop rec" data-proposal="${esc(p.id)}"><div class="kpi-prop-main"><span><b>A recovery</b> <span class="muted">· ${esc(it.goal_title || '')}</span></span>
-    <span class="kpi-prop-detail">${esc(pl.evidence || '')}</span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)} · ${name}</span>` : ''}
+    <span class="kpi-prop-detail">${esc(pl.evidence || '')}</span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}
     <ol class="rec-opts">${options}</ol></div>
     <div class="kpi-prop-do"><button class="ghost" type="button" data-decide="reject">Reject</button></div>${needTaskLink(it)}</li>`;
 }
@@ -1136,7 +1135,7 @@ function goalNeedsHtml(items) {
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
     // Where the Strategy Bot is on: the vision, written on Strategy, and the Why lines waiting on this
     // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
-    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Tell your ${esc(strategyBotName())} what this company is for</b><span class="muted">: write the Vision on Strategy</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the Vision on Strategy</span></span>${needTaskLink(it)}</li>`;
     if (it.kind === 'why') {
       const goals = it.goals || [];
       return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>

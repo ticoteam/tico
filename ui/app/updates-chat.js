@@ -3,17 +3,13 @@
 'use strict';
 
 // The Updates chat (docs/assistant.md; spec: Strategy Bot v3, section 10.8). On a desktop it is a right rail beside the
-// feed,
-// named for the person's chat bot: the Strategy Bot (by its name) for the owner, the Assistant for everyone else. The
-// header's
-// button shows or hides it, remembered per person (on this device and as preference ui.updates_chat, the newer copy
-// winning, as ui/app/rails.js keeps widths); its edge resizes it like the other right rails (rails.js `chat`). On a
+// feed, named for the person's Assistant, the owner's too. The header's button shows or hides it, remembered per
+// person (on this device and as preference ui.updates_chat, the newer copy winning, as ui/app/rails.js keeps widths); its edge resizes it like the other right rails (rails.js `chat`). On a
 // phone the same button opens it full screen, and its close button or Back shuts it.
 // It is the same conversation as the menu tab: GET /v2/assistant reads it and POST /v2/assistant/messages sends with
 // `place: "updates"`, so that turn is handed the updates this person may read (backend/updates_chat.py). It keeps its own
-// small state, like Goals' Strategy Bot panel, never the shared chat state the bot pages use (chat.js V2C, CHAT_CACHE),
-// so
-// the two never clash; sending drops the menu tab's cached copy so it reads the new messages when it opens.
+// small state, like the Ask panel, never the shared chat state the bot pages use (chat.js V2C, CHAT_CACHE), so the two
+// never clash; sending drops the menu tab's cached copy so it reads the new messages when it opens.
 // A link to an update in a reply stays on the page: it scrolls to the card and highlights it (updates.js updGoTo).
 const UPDC_KEY = 'tico.updates.chat', UPDC_PREF = 'ui.updates_chat';
 const UPDC_HINT = "What's the top update today?";
@@ -190,7 +186,7 @@ async function updcLoad(chat) {
   el.setAttribute('aria-label', info.name);
   thread.setAttribute('aria-label', info.name + ' conversation');
   if (!info.available) {
-    if (!info.can_turn_on && !info.strategy_bot) { chat.unusable = true; if (updcPhone()) void updcClose(); updcLayout(); return; }
+    if (!info.can_turn_on) { chat.unusable = true; if (updcPhone()) void updcClose(); updcLayout(); return; }
     window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) { chat.mounted = false; void updcLoad(chat); } }});
     return;
   }

@@ -1,6 +1,6 @@
-/* ui/styles/getting-started.css — After the wizard: tour and BotOps line.
+/* ui/styles/getting-started.css — After the wizard: the tour.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* After the wizard: the tour and the BotOps line under the org list (ui/getting-started.js) */
+/* After the wizard: the tour under the org list (ui/getting-started.js) */
 .help-actions{display:flex;align-items:center;gap:var(--s4);margin-top:var(--s4);flex-wrap:wrap}
 .gs-field{display:grid;gap:3px;margin:0 0 8px;max-width:520px}
 .gs-field[hidden]{display:none}

@@ -14,7 +14,7 @@ owner can also confirm Suggests actions as their own choice, so a later change t
 
 | Level | Name | What the Strategy Bot does |
 |---|---|---|
-| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when you talk to it. It proposes a strategy draft when you ask, writes the card when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
+| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when asked through your Assistant. It proposes a strategy draft when you ask, writes the card when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
 | 2 | **Suggests actions** (default) | Also takes "Draft the strategy" tasks, asks you for the vision, proposes Why lines, sends a Monday note, asks a goal's owner what is happening, and suggests how your bots could recover a goal that falls behind, as items in **Needs you** that you approve one by one. |
 | 3 | **Acts on its own** | Also decides on its own: makes, reorders, reassigns and closes bot tasks itself to recover a goal, each decision with an Undo. |
 
@@ -80,7 +80,7 @@ the bets, and you publish:
 
 - **Runs the regular checks.** It posts KPI readings and keeps each goal's automatic colour. Nothing else happens on its
   own.
-- **Answers when you talk to it.** Ask it for the strategy, a KPI, a goal or a Why line and it suggests one. It changes nothing until
+- **Answers when asked.** Ask your Assistant for the strategy, a KPI, a goal or a Why line and it suggests one. It changes nothing until
   you accept ([A goal's Why](goals-and-kpis.md#a-goals-why), [Strategy](#strategy)).
 - **Asks for nothing.** There is no vision ask, no Why bundle in **Needs you**, no ask to a goal's owner and no Monday
   note. Those start at **Suggests actions**. An ask filed earlier stays until it is settled. The one exception is a

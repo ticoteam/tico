@@ -154,8 +154,8 @@ a.rdm-row:hover{background:var(--surface2)}
 }
 
 /* ---------------------------------------------------------------- Strategy and Goals */
-/* The Strategy Bot's rail sits beside every tab, so the Strategy tab drops its contents column and reads as one column,
-   as in the mock; the version line sits tight under the tabs. */
+/* The Strategy tab drops its contents column and reads as one column, as in the mock; the version line sits tight
+   under the tabs. */
 html.redesign #main.strategy-layout .strat-grid{grid-template-columns:minmax(0,860px)}
 html.redesign #main.strategy-layout .strat-toc{display:none}
 html.redesign #main.strategy-layout .strat-meta{margin-bottom:4px}

@@ -48,7 +48,7 @@ const {unrouted} = require('./support/routes.cjs');
         return json(providers);
       }
       if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0].revoked_at = new Date().toISOString(); return json({revoked: true}); }
-      if (p === '/api/v2/chat/botops') { writes.push({p, body: req.postDataJSON()}); return json({}); }
+      if (p === '/api/v2/assistant/messages') { writes.push({p, body: req.postDataJSON()}); return json({}); }
       if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner: {}, rules: {}});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
       if (p === '/api/v2/slack/app') return json({configured: false});
@@ -167,9 +167,9 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => settingsEditInstructions('helper'));
     await page.locator('textarea[name=changes]').fill('Use the updated support policy.');
     await page.locator('#bot-instructions-editor [type=submit]').click();
-    await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent to BotOps.');
+    await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
     assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.match(writes.find(row => row.p === '/api/v2/chat/botops').body.text, /Instructions \(AGENT.md\).*Helper/);
+    assert.match(writes.find(row => row.p === '/api/v2/assistant/messages').body.text, /Instructions \(AGENT.md\).*Helper/);
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

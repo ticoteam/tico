@@ -169,6 +169,7 @@ async function open(browser, me, branches = false) {
       });
       return json({});
     }
+    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -529,14 +530,14 @@ async function teamAdd(browser) {
   await page.locator('[data-recruit-new] [name=title]').fill('Ledger');
   await page.locator('[data-recruit-new] [name=reports_to]').selectOption('scout');
   await page.locator('[data-recruit-new] [type=submit]').click();
-  await page.locator('[data-recruit-draft]', {hasText: 'is drafting'}).waitFor();
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafting the job description'}).waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'seats', {title: 'Ledger', reports_to: 'scout', description: ''}]);
   assert.deepEqual(calls.shift(), ['POST', 'open', 'seat1', {}]);
   assert.equal(bots.some(b => b.name === 'ledger'), false, 'no bot exists until a candidate is picked');
   await page.locator('#tree a.node.seat[data-seat-open="seat1"]').waitFor({state: 'attached'});
   assert.match(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').textContent(), /Ledger\s*Recruiting/);
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout'].map(n => n.kind + ':' + n.id)), ['seat:seat1']);
-  await page.locator('[data-recruit-draft]', {hasText: 'Drafted by Strategy Bot'}).waitFor({timeout: 8000});
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafted for you.'}).waitFor({timeout: 8000});
   assert.equal(await page.locator('#recruit-picker textarea').inputValue(), 'Keeps the books and closes each month.');
   await page.getByRole('button', {name: 'Recruit', exact: true}).click();
   const cards = page.locator('[data-recruit-candidate]');
@@ -622,22 +623,22 @@ async function teamAdd(browser) {
   await node(page, 'p:new-human').waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'humans', {email: 'dana@acme.example', name: 'Dana'}]);
 
-  // BotOps (for an agent you already run) starts an editable draft, never sends it, and keeps one being written.
+  // Ask (for an agent you already run) opens the Ask panel with an editable draft, never sends it, and keeps one being written.
   await choose('Add bot');
-  await page.locator('[data-recruit-botops]').click();
-  const draft = page.locator('#chat-composer .p-text');
+  await page.locator('[data-recruit-ask]').click();
+  const draft = page.locator('#ask-panel .ask-form .p-text');
   await draft.waitFor();
   assert.match(await draft.inputValue(), /folder path and computer, or GitHub URL/);
   assert.equal(await draft.evaluate(el => el === document.activeElement), true);
   await draft.fill('Keep this existing request.');
   await choose('Add bot');
-  await page.locator('[data-recruit-botops]').click();
+  await page.locator('[data-recruit-ask]').click();
   assert.equal(await draft.inputValue(), 'Keep this existing request.');
   assert.deepEqual(calls, [], 'the handoff does not send a chat message');
 
   // The same actions work from the phone drawer and the menu stays within the screen.
   await page.setViewportSize({width: 390, height: 844});
-  await page.locator('#bot-back-arrow').click();
+  await page.evaluate(() => { askToggle(false); location.hash = '#/updates'; });
   await page.waitForFunction(() => location.hash === '#/updates');
   await page.locator('#mobile-more').click();
   await page.locator('#org-add-group').click();

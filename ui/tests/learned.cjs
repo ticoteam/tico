@@ -51,7 +51,7 @@ const chat = over => ({available: true, state: 'active', can_turn_on: false, roo
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    // The owner: from the Strategy Bot chat to the page, with both layers; they edit their own entry and delete a
+    // The owner: from their Assistant chat to the page, with both layers; they edit their own entry and delete a
     // company one.
     {
       const owner = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
@@ -91,7 +91,7 @@ const chat = over => ({available: true, state: 'active', can_turn_on: false, roo
     // A member: their own layer only, named for their Assistant; with nothing taught yet it says how to teach it.
     {
       const member = {id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true};
-      const {page, errors} = await open(browser, member, {personal: [], company: null}, chat({bot: 'coo', strategy_bot: false, name: 'Assistant'}));
+      const {page, errors} = await open(browser, member, {personal: [], company: null}, chat({bot: 'coo', name: 'Assistant'}));
       await page.goto('https://tico-ui.test/#/assistant/learned');
       await page.locator('#learned-personal').waitFor();
       assert.equal(await page.locator('#learned-company').count(), 0, 'member: no company layer');

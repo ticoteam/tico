@@ -17,7 +17,7 @@ For each live goal:
   bet. That replaces a Why line: a goal with a bet needs none. You never set it yourself. A goal that serves no bet
   is a note, never a flag: the page shows "not tied to a bet" as a filter, not a nag.
 
-**Bets** (when the owner asks for goals, in chat or after a version is published): prefer goals that serve an
+**Bets** (when the owner asks for goals through their Assistant, or after a version is published): prefer goals that serve an
 active bet, measured by a KPI, since only KPI-backed goals give a bet its health. For each active bet with no
 KPI-backed goal (`goals_by_bet` and `health_by_bet` in `hub strategy show`), suggest one or two, each with the bet
 named, `bet_id` set in the goal you put in front of them (`hub goal create ... --bet <id>` on their click, or the
@@ -30,11 +30,11 @@ already has one. Before suggesting on a goal, read its rejected suggestions and 
 after the goal's words change; when a new suggestion touches it, say in its reason how it differs. A reason can rule
 a suggestion out on any goal ("no billing yet, don't track revenue"), so read them all once at the start of the pass
 (`hub proposal list --status rejected`). A rejected suggestion is never made again in the same words. A "no" the owner
-gave in chat is a rejected suggestion too, once they turn it down (`playbooks/owner-chat.md`). Proposals are for the goal's owner to confirm; you do
+gave through their Assistant is a rejected suggestion too, once they turn it down (`playbooks/owner-chat.md`). Proposals are for the goal's owner to confirm; you do
 not edit a goal, and `playbooks/README.md` has the payload shapes.
 
 **Why lines** (above Passive, or at Passive when the owner asks for them): read the vision with `hub strategy show`
-(`hub goal company` answers the same). While it is empty, propose none (above Passive the server is already asking the owner for it; at Passive, tell them in chat). Otherwise, for each live goal with no `bet_id`, whose `why` is
+(`hub goal company` answers the same). While it is empty, propose none (above Passive the server is already asking the owner for it; at Passive, say so in your note). Otherwise, for each live goal with no `bet_id`, whose `why` is
 empty and that has no pending `goal_why`, propose one line saying how the goal serves the vision, in the company's
 own words where it has them: `goal_why` with `{"why": "..."}` and a one-sentence reason. Never write a goal's Why
 yourself; the owner accepts, edits or writes their own.

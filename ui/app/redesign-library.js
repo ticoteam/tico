@@ -116,7 +116,7 @@ async function pageRdTools() {
   } else if (!LC || !document.body.contains(LC.root)) {
     $('#main').innerHTML = `<div class="lc" id="lc-root">
       <header class="lc-ph"><h1>Tools</h1>${helpBubble('Who may use each tool, and what they may change there: read only, with approval, or freely.')}
-        <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-librarian-open aria-label="Ask the Librarian" title="Ask the Librarian"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask the Librarian</span></button><span class="lc-add"></span></header>
+        <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button><span class="lc-add"></span></header>
       <div class="lc-body"><aside class="lc-list" aria-label="Tools">
           <div class="lc-filters"><input class="lc-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off">
             <div class="lc-frow"><select class="lc-who" aria-label="Who has access"><option value="">Everyone</option></select>

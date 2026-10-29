@@ -2,9 +2,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Ask (docs/assistant.md). The one way in to the Assistant (the owner's Strategy Bot), to BotOps behind it, and to Tico
-// support. On a computer a round button at the bottom left of the page (or ⌘J) opens a panel above it; on a phone the
-// Ask tab opens it as a sheet over the page, and the tab closes it again. It is the same conversation as the Assistant
+// Ask (docs/assistant.md). The one way in to the Assistant, to the helpers behind it (BotOps, the Strategy Bot, the
+// Librarian), and to Tico support. On a computer a round button at the bottom left of the page (or ⌘J) opens a panel
+// above it; on a phone the Ask tab opens it as a sheet over the page, and the tab closes it again. It is the same conversation as the Assistant
 // page (#/assistant, "Show chat"): GET /v2/assistant reads it and POST /v2/assistant/messages sends with the page the
 // person is on (`page`), so the turn knows what "this" means. Like the Updates chat it keeps its own small state, never
 // the bot pages' (chat.js V2C), and drops the Assistant page's cached copy when it sends.
@@ -66,6 +66,19 @@ function askToggle(open = !ASK?.open, focus = true) {
   // A phone keeps its keyboard down until the person taps the box.
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
   else if (!open && focus && $('#ask-panel')?.contains(document.activeElement)) (askPhone() ? $('#mobile-ask') : $('#ask-fab'))?.focus();
+}
+// Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
+function askDraft(text) {
+  ASK ||= {open: false, mounted: false};
+  ASK.draft = text;
+  askToggle(true);
+  askFillDraft(ASK);
+}
+function askFillDraft(chat) {
+  const box = chat.draft && chat.composer ? pq(chat.composer, '.p-text') : null;
+  if (!box) return;
+  if (!box.value.trim()) { box.value = chat.draft; box.dispatchEvent(new Event('input', {bubbles: true})); }
+  chat.draft = '';
 }
 function askMenu(open) {
   const menu = $('#ask-panel [data-ask-menu]'), add = $('#ask-add');
@@ -272,7 +285,7 @@ async function askLoad(chat) {
   thread.setAttribute('aria-label', info.name + ' conversation');
   if (!info.available) {
     // Support stays a tap away in the + even then.
-    if (!info.can_turn_on && !info.strategy_bot) { thread.innerHTML = `<p class="muted">${esc(info.name)} is off. Ask the team owner to turn it on.</p>`; return; }
+    if (!info.can_turn_on) { thread.innerHTML = `<p class="muted">${esc(info.name)} is off. Ask the team owner to turn it on.</p>`; return; }
     window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
     return;
   }
@@ -281,6 +294,7 @@ async function askLoad(chat) {
                             send: (P, text) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
   el.querySelector('.ask-form').replaceChildren(chat.composer.el);
+  askFillDraft(chat);
   draw();
   watch();
   if (chat.open && !askPhone()) pq(chat.composer, '.p-text').focus();
