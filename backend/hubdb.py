@@ -1477,7 +1477,6 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS events_target_action ON events(target,action)")
     # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
     # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
     conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail_json) WHERE action='tag.attach'")
