@@ -1643,6 +1643,10 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("version", "Version", "info",
                                  f"Tico will update this server to {_v(notice['scheduled'])} when idle.",
                                  [_fix("What is new", "#/changelog")]))
+        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (docs/cell.md)
+            checks.append(_check("version", "Version", "info",
+                                 f"{_v(notice.get('latest'))} is out. You are on {_v(releases.version())}. "
+                                 "Tico updates this server.", [_fix("What is new", "#/changelog")]))
         elif notice.get("available"):
             checks.append(_check("version", "Version", "warn",
                                  f"{_v(notice.get('latest'))} is available. You are on {_v(releases.version())}.",
