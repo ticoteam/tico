@@ -2,11 +2,11 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-let LAST_ROUTE = '';
-function route() {
-  if (location.hash.startsWith('#/settings?recruit=')) {
+let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
+function route(hash = location.hash) {
+  if (hash.startsWith('#/settings?recruit=')) {
     try {
-      const raw = new URLSearchParams(location.hash.split('?')[1]).get('recruit');
+      const raw = new URLSearchParams(hash.split('?')[1]).get('recruit');
       if (raw && raw.length <= 5000) {
         const value = JSON.parse(raw);
         if (value && typeof value.title === 'string' && typeof value.brief === 'string') RECRUIT_HANDOFF = value;
@@ -15,15 +15,15 @@ function route() {
     SETTINGS_TAB = 'bots'; location.replace(SETTINGS); return;
   }
   // Decide is the Needs you card now: an old link goes to Needs you, and one naming an item opens that item's card.
-  if (location.hash === DECIDE || location.hash.startsWith(DECIDE + '?')) {
-    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (hash === DECIDE || hash.startsWith(DECIDE + '?')) {
+    const q = new URLSearchParams(hash.split('?')[1] || '');
     DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
     location.replace(NEEDS_YOU); return;
   }
   overviewStop(); DASH = null;
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
-  S.route = LAST_ROUTE = location.hash || UPDATES;
+  S.route = LAST_ROUTE = hash || UPDATES;
   // The tab address Settings wrote for itself is still Settings: a redraw (route() called again) keeps the page as it is.
   if (from === SETTINGS && S.route === SETTINGS_ADDRESS) S.route = LAST_ROUTE = SETTINGS;
   if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_PRESENCE.timer = null; }
@@ -36,8 +36,10 @@ function route() {
   // two-column grid) would lay the next page out in that grid. Each page adds its own again.
   const main = $('#main');
   main.className = '';
-  // A new page fades in (opacity only); a query change within the same page does not.
-  if (from && from.split('?')[0] !== S.route.split('?')[0] && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+  // A new page fades in (opacity only); a query change within the same page does not. A view transition
+  // (routeChanged) already cross-fades it, so this is the fallback for a browser without one.
+  const newPath = !from || from.split('?')[0] !== S.route.split('?')[0];
+  if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
   document.body.classList.remove('task-peek-open');
   if (!isMarketRoute(S.route)) window.marketStop?.();
@@ -51,7 +53,7 @@ function route() {
   if (!S.route.startsWith(MAIL)) { MAIL_LOAD++; clearTimeout(MAIL_SEARCH); mailForget(); }
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
-  convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); TASKS_ST = null; // page-local work never outlives its page
+  convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
   if (!/^#\/computers\/[^/?]+\/screen$/.test(S.route)) screenStop();
@@ -144,6 +146,77 @@ function route() {
   else if (isAutomationsRoute(S.route)) pageAutomations();
   else location.hash = UPDATES;         // unknown or empty routes land on Updates, home
   redesignAfterRoute();
-  $('#main').scrollTop = 0;
+  // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.
+  if (newPath) $('#main').scrollTop = 0;
 }
-window.addEventListener('hashchange', route);
+// A move to another page cross-fades from the old page to the new one in 150ms (a view transition, ui/styles/base.css):
+// the browser holds the old page's picture while route() draws, so the switch never shows a half-drawn frame. A query
+// change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
+// still surfaces as an error (not a rejected transition).
+function routeChanged() {
+  const path = h => (h || UPDATES).split('?')[0], seq = ++ROUTE_SEQ;
+  // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
+  // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
+  // first page writes for itself (Settings names its tab) gives way to the newer one.
+  if (ROUTE_PENDING) {
+    const was = ROUTE_PENDING, now = location.hash; ROUTE_PENDING = '';
+    route(was);
+    if (location.hash !== now) history.replaceState(history.state, '', now);
+    route(); return;
+  }
+  if (!LAST_ROUTE || path(location.hash) === path(LAST_ROUTE) || !document.startViewTransition || document.hidden
+    || matchMedia('(prefers-reduced-motion: reduce)').matches) { route(); return; }
+  ROUTE_PENDING = location.hash || UPDATES;
+  const fade = document.startViewTransition(() => {
+    if (seq !== ROUTE_SEQ) return;
+    ROUTE_PENDING = ''; ROUTE_FADING = true;
+    try { route(); } catch (e) { setTimeout(() => { throw e; }); } finally { ROUTE_FADING = false; }
+  });
+  ROUTE_FADE = fade;
+  fade.finished.finally(() => { if (ROUTE_FADE !== fade) return; ROUTE_FADE = null; routeFadeHover(); }).catch(() => {});
+  for (const done of [fade.ready, fade.updateCallbackDone, fade.finished]) done.catch(() => {});
+}
+// While a fade runs, Chrome gives the pointer to the root element, not the page under it, whatever pointer-events says
+// (ui/styles/base.css). So a press during the fade ends it at once and goes to what is under it: the press, and the
+// click it makes (which the browser gives to the root, where the press began). A pointer moved during the fade is told
+// where it is when the fade ends, so a tooltip or a hover shows without another move.
+let ROUTE_PRESS = null, ROUTE_MOVE = null;
+const routeMouse = (type, e, el) => {
+  const init = {bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail, button: e.button,
+    buttons: e.buttons, clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+    ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey};
+  const pointer = type.startsWith('pointer');
+  if (pointer) Object.assign(init, {pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary,
+    width: e.width, height: e.height, pressure: e.pressure});
+  return el.dispatchEvent(pointer ? new PointerEvent(type, init) : new MouseEvent(type, init));
+};
+const routeUnder = e => { const el = document.elementFromPoint(e.clientX, e.clientY); return el === document.documentElement ? null : el; };
+function routeFadeHover() {
+  const e = ROUTE_MOVE, el = e && routeUnder(e); ROUTE_MOVE = null;
+  if (el) for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) routeMouse(type, e, el);
+}
+document.addEventListener('pointerdown', e => {
+  if (!e.isTrusted) return;
+  ROUTE_PRESS = null;
+  if (!ROUTE_FADE || e.target !== document.documentElement) return;
+  ROUTE_MOVE = null; ROUTE_FADE.skipTransition();
+  const el = routeUnder(e); if (!el) return;
+  ROUTE_PRESS = el; e.stopImmediatePropagation();
+  routeMouse('pointerdown', e, el);
+}, true);
+for (const type of ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu']) document.addEventListener(type, e => {
+  const el = ROUTE_PRESS;
+  if (!el || !e.isTrusted || e.target !== document.documentElement) return;
+  if (type !== 'mousedown') ROUTE_PRESS = null;
+  e.stopImmediatePropagation(); e.preventDefault();
+  const hit = routeUnder(e);
+  if (type !== 'mousedown' && !(hit && (el.contains(hit) || hit.contains(el)))) return;   // released somewhere else
+  if (routeMouse(type, e, el) && type === 'mousedown')
+    el.closest('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]')?.focus({preventScroll: true});
+}, true);
+// A scroll during the fade ends it too, so the page under the pointer scrolls, not the window.
+document.addEventListener('wheel', e => { if (ROUTE_FADE && e.target === document.documentElement) ROUTE_FADE.skipTransition(); }, {capture: true, passive: true});
+for (const type of ['pointermove', 'mousemove']) document.addEventListener(type, e => {
+  if (ROUTE_FADE && e.isTrusted && e.target === document.documentElement) ROUTE_MOVE = e;
+}, true);
+window.addEventListener('hashchange', routeChanged);

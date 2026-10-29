@@ -92,6 +92,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(()=>settingsBotProblem(S.emps.find(e=>e.name==='history-copy'))),'');
 
     await page.goto('https://tico-ui.test/#/bot/live-agent/settings');
+    await page.waitForFunction(()=>S.route==='#/bot/live-agent/settings');   // a page change draws a frame later (its fade)
     await page.locator('#pane-settings:not([hidden]) #bot-editor form').waitFor();
     assert.match(await page.locator('#bot-alert').innerText(),/Offline with work waiting/);
     assert.equal(await page.locator('#pane-settings [data-agent-credential], #pane-settings [data-agent-revoke]').count(),2,

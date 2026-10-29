@@ -13,6 +13,8 @@
 .dash-actions button{gap:6px}
 .dash-error{margin:0 20px 8px}
 .dash-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;padding:0 20px 24px}
+/* A card redrawn with new numbers lays out only the grid, never the page around it; its menus are not clipped (layout only). */
+.dash-grid{contain:layout}
 .dash-grid>.empty,.dash-grid>.skel{grid-column:1/-1}
 .dash-pin{grid-column:span 3;min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;flex-direction:column}
 .dash-pin[data-size=small]{grid-column:span 2}
@@ -91,7 +93,7 @@ a.dash-big:hover strong{text-decoration:underline}
 .dash-form-foot .spacer{flex:1}
 
 /* Campus keeps its own full-height layout; the tabs sit in its first row. */
-.overview-tabs{flex:none;display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid var(--line);background:var(--surface)}
+.overview-tabs{flex:none;display:flex;align-items:center;gap:8px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--surface)}
 .overview-tabs h1{margin:0;font-size:var(--t-lg);font-weight:600}
 
 /* the bot sidebar's card and page widgets */
@@ -113,5 +115,5 @@ a.dash-big:hover strong{text-decoration:underline}
   .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .dash-more{width:36px;height:36px}
   .dash-grip{width:32px;height:32px}
-  .overview-tabs{padding:8px 16px}
+  .overview-tabs{padding:10px 16px}
 }

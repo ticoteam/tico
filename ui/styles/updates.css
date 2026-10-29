@@ -12,7 +12,7 @@
 .upd-chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
 .upd-chip[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .upd-allread{font-size:var(--t-base)}
-.upd-feed{display:flex;flex-direction:column;gap:8px}
+.upd-feed{display:flex;flex-direction:column;gap:8px;contain:layout}   /* a story redrawn lays out only the feed; layout only, so nothing in it is clipped */
 /* A card's padding and avatar, which its thread's lines are measured from (below). */
 :root{--upd-pad:16px;--upd-pad-y:14px;--upd-av:36px;--upd-none-av:24px;
   --upd-cx:calc(1px + var(--upd-pad) + var(--upd-av) / 2);--upd-in:calc(var(--tree-r) + var(--s1))}
@@ -160,7 +160,6 @@
 @keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}}
 @media (min-width:761px){
   #main.upd-chat-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-chat);padding:0;height:100%;overflow:hidden;position:relative}
-  body:has(#main.upd-chat-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
   #main.upd-chat-layout>.upd-col{min-width:0;min-height:0;overflow-y:auto;padding:18px var(--s4) 60px 28px}
   #main.upd-chat-layout>.upd-chat{border-left:1px solid var(--line);padding:10px 12px var(--s3) 14px}
 }

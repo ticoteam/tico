@@ -127,7 +127,8 @@ async function check(page, name = 'Strategy Bot') {
       assert.deepEqual(await above(page, 'b:scribe'), []);
       assert.equal(await page.evaluate(() => strategyBotName()), 'Atlas', 'it keeps its name');
       await page.evaluate(() => { location.hash = '#/settings'; });
-      await page.waitForFunction(() => typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
+      // The page change draws a frame later (its fade); Settings' data can already be loaded before it does.
+      await page.waitForFunction(() => S.route === '#/settings' && typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
       await page.evaluate(() => settingsShow('bots'));
       const row = page.locator('[data-settings-bot="goal-manager"]');
       await row.waitFor();

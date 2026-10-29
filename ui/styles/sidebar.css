@@ -146,6 +146,9 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #tree .node:is(.drop-before,.drop-after,.drop-refused){position:relative;z-index:1}
 #tree .node.drop-before{box-shadow:0 -2px 0 var(--accent)}#tree .node.drop-after{box-shadow:0 2px 0 var(--accent)}
 #tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
+/* A status change redraws rows of the team list several times a minute: what moves inside it never lays out the
+   rest of the sidebar again. Layout only, not paint: the Move menu reaches past the list's box. */
+#tree{contain:layout}
 /* Folded to no width rather than hidden, so focus can come back to it after a move. */
 .org-order{display:inline-flex;position:relative;flex:none;width:0;overflow:hidden}
 .tree .noderow:hover>.org-order,.tree .noderow:focus-within>.org-order,.org-order.open{width:auto;overflow:visible;margin-left:2px}

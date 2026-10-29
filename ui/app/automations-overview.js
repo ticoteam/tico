@@ -247,7 +247,7 @@ function auDrawTable() {
   const box = AU.root.querySelector('.au-tbl');
   if (AU.listError) { box.innerHTML = `<p class="err au-pad">${esc(AU.listError)}</p>`; return; }
   if (AU.list === null) { box.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
-  box.innerHTML = AU.tab === 'runs' ? auAllHTML() : auTableHTML();
+  patchLiveHTML(box, AU.tab === 'runs' ? auAllHTML() : auTableHTML());   // a fresh read that changed nothing moves nothing
   box.scrollTop = AU.scroll[AU.tab] || 0;
 }
 

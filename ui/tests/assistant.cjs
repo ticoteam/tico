@@ -93,6 +93,7 @@ function fixture() {
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Profile', 'Slack'], tag + ': no Assistant on another person\'s page');
       await page.goto('https://tico-ui.test/#/person/ana');
+      await page.waitForFunction(() => S.route === '#/person/ana');   // a page change draws a frame later (its fade)
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Assistant', 'Profile', 'Slack'], tag + ': Assistant is first on your own page');
       await page.locator('#ptabs [data-pt="assistant"]').click();
