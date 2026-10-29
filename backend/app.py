@@ -6898,6 +6898,7 @@ def create_app(settings=None):
     # And one for each computer, in place of its polls (runner-rs/src/events.rs).
     install_runner_events(app, store, execution)
     app_delivery.install(app, store, execution, mutate)
+    external_sync.install(app, auth)      # a QM bot's wake address (docs/qm.md)
 
     from .views import install_views
     from .task_types import install_task_types

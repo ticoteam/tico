@@ -98,6 +98,7 @@ from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
 from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
 from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
 from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
+from backend.webhooks_v7_schema import SCHEMA as WEBHOOKS_V7_SCHEMA
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -884,7 +885,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
               WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA,
               TASK_CAPS_SCHEMA, TASK_CAP_LOG_SCHEMA, TASK_LINK_ACTIVITY_SCHEMA,
-              RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA]
+              RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
+              WEBHOOKS_V7_SCHEMA]
 
 
 class Refused(Exception):
@@ -5892,6 +5894,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
+    from . import external_sync
+    external_sync.wake(conn, row["id"], target, 0)            # a task made for a QM bot starts its turn now
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts
@@ -7101,6 +7105,9 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
     # The owner column is written just after its event, so a new owner is said from `new`.
     hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
                                        **({"owner": new} if field == "owner" else {})}, actor, revision=revision)
+    if field == "owner":
+        from . import external_sync
+        external_sync.wake(conn, task_id, new, revision)     # a QM bot's new task starts its turn now
 
 
 def _task_event(conn, task_id, actor, field, old, new, note=""):

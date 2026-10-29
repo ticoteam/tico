@@ -41,7 +41,7 @@ ONLINE_WITHIN_S = 60
 
 # A CLI's name is its manifest's; external agents have none.
 HARNESS_NAMES = {**{h: row["name"] for h, row in harness_manifests.load().items()},
-                 "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot", "dots": "Dots", "muse": "Muse"}
+                 "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot", "dots": "Dots", "muse": "Muse", "qm": "QM"}
 PROVIDER_LOGOS = {"openai": "openai", "anthropic": "anthropic", "google": "google"}
 
 SERVICE_NAMES = {

@@ -261,12 +261,14 @@ def _event_row(c, event_id, type_, subject, data, actor, skipped=0, only=""):
                                              H.now(), only))
 
 
-def _queue(c, hook, event_id, type_, subject, data, at=None):
-    """One send for one endpoint; 0 when that endpoint already has this event. `at` is the event's own time."""
+def _queue(c, hook, event_id, type_, subject, data, at=None, body=None):
+    """One send for one endpoint; 0 when that endpoint already has this event. `at` is the event's own time. `body`
+    is sent as it is instead of the standard envelope (`publish` with `only`)."""
     stamp = H.now()
-    if len(json.dumps(data, default=str)) > MAX_DATA:
-        data = {"truncated": True}
-    body = body_of(envelope(type_, str(subject), data, at or stamp))
+    if body is None:
+        if len(json.dumps(data, default=str)) > MAX_DATA:
+            data = {"truncated": True}
+        body = body_of(envelope(type_, str(subject), data, at or stamp))
     return c.execute("INSERT OR IGNORE INTO webhook_sends(id,event_id,webhook_id,type,subject,body,state,attempts,"
                      "next_attempt,created) VALUES(?,?,?,?,?,?,'ready',0,?,?)",
                      ("wh_" + uuid.uuid4().hex[:24], event_id, hook["id"], type_, str(subject), body, stamp, stamp)).rowcount
@@ -276,7 +278,7 @@ def _event_id(type_, subject, revision):
     return f"{type_}:{subject}:{revision}" if revision is not None else "we_" + uuid.uuid4().hex[:20]
 
 
-def publish(c, type, subject, data, actor, *, only=None, revision=None):
+def publish(c, type, subject, data, actor, *, only=None, revision=None, body=None):
     """Queue `type` about `subject` for the endpoints that should hear of it; the number of sends queued.
 
     Inside the caller's write transaction, inserts only. Without `only` it never raises: the event is kept in the
@@ -284,9 +286,10 @@ def publish(c, type, subject, data, actor, *, only=None, revision=None):
     `type` gets a message built through its owner's read view, at most MAX_PER_EVENT of them. With
     `only` (an endpoint id) it sends to that one and raises Refused when it cannot: the endpoint is missing, paused
     or deleted, the sender is the Strategy Bot or a bot whose send switch is off, or the endpoint's owner may not read
-    the subject. `revision` makes the event id repeatable, so a retried write queues nothing twice."""
+    the subject. `revision` makes the event id repeatable, so a retried write queues nothing twice. `body` (with `only`)
+    is the exact JSON to send, for an endpoint that expects its own shape (backend/external_sync.py, QM)."""
     if only is not None:
-        return _publish_only(c, str(type), str(subject), data or {}, actor, only, revision)
+        return _publish_only(c, str(type), str(subject), data or {}, actor, only, revision, body)
     try:
         name = canonical(type)
         # One indexed query when nobody listens, which is nearly always.
@@ -326,7 +329,7 @@ def _fan_out(c, hooks, name, subject, data, actor, revision):
     return sum(_queue(c, hook, event_id, name, subject, views[hook["created_by"]]) for hook in kept)
 
 
-def _publish_only(c, type_, subject, data, actor, only, revision):
+def _publish_only(c, type_, subject, data, actor, only, revision, body=None):
     hook = c.execute("SELECT * FROM webhooks WHERE id=?", (only,)).fetchone()
     if not hook or hook["deleted_at"]:
         raise Refused("That endpoint does not exist")
@@ -348,7 +351,7 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("The person who owns that endpoint may not read this")
     event_id = _event_id(name, subject, revision)
     _event_row(c, event_id, name, subject, data, actor, only=only)
-    queued = _queue(c, hook, event_id, name, subject, data)
+    queued = _queue(c, hook, event_id, name, subject, data, body=body)
     if queued:
         _refresh(c)
     return queued
@@ -747,6 +750,30 @@ def _insert(c, vault, who, spec, owner, requested_by="", headers=()):
                owner, requested_by, now, now, json.dumps(filt), json.dumps(stored)))
     H.event(c, who.actor, "webhook.created", hook_id, {"name": spec["name"], "host": host, "for": owner})
     return {**view(c.execute("SELECT * FROM webhooks WHERE id=?", (hook_id,)).fetchone(), who), "secret": secret}
+
+
+def signed_endpoint(c, vault, owner, name, url, secret, endpoint_id="", allow_http=False):
+    """An endpoint that signs each send with `secret` as written (`hmac-sha256`) and listens to no event: it is sent to
+    only with `publish(..., only=id, body=...)`. Made for one caller's address, such as a QM wake address (external_sync).
+    `endpoint_id` updates that endpoint's address and secret in place. `allow_http` is the endpoint's plain-http switch
+    (check_address). Returns the endpoint id."""
+    host = check_address(url, allow_http)
+    now = H.now()
+    if endpoint_id:
+        hook = c.execute("SELECT id FROM webhooks WHERE id=? AND deleted_at IS NULL", (endpoint_id,)).fetchone()
+        if hook:
+            c.execute("UPDATE webhooks SET name=?,url=?,host=?,secret=?,enabled=1,signing=?,allow_http=?,updated=? WHERE id=?",
+                      (name, url, host, vault.cipher.seal(c, D.sealed_as(endpoint_id), secret), D.HMAC, int(allow_http),
+                       now, endpoint_id))
+            return endpoint_id
+    if c.execute("SELECT count(*) FROM webhooks WHERE created_by=? AND deleted_at IS NULL", (owner,)).fetchone()[0] >= MAX_PER_PERSON:
+        raise Problem("webhook", f"One person has at most {MAX_PER_PERSON} webhook endpoints", 409)
+    hook_id = "ep_" + uuid.uuid4().hex[:12]
+    c.execute("INSERT INTO webhooks(id,name,url,host,enabled,events_json,secret,rate_per_hour,allow_http,created_by,"
+              "requested_by,created,updated,filter_json,headers_json,signing) VALUES(?,?,?,?,1,'[]',?,600,?,?,'',?,?,'{}','[]',?)",
+              (hook_id, name, url, host, vault.cipher.seal(c, D.sealed_as(hook_id), secret), int(allow_http), owner, now,
+               now, D.HMAC))
+    return hook_id
 
 
 def _approval_payload(spec):

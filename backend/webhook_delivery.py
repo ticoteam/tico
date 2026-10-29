@@ -38,6 +38,7 @@ NOTIFY_HOURS = 24
 KEEP_DAYS = 30
 KEEP_ATTEMPTS = 200
 PREFIX = "whsec_"
+STANDARD, HMAC = "standard", "hmac-sha256"     # an endpoint's `signing` (webhooks_v7_schema.py)
 TERMINAL = ("delivered", "failed", "cancelled", "withheld")
 
 
@@ -56,12 +57,19 @@ def signature(secret, send_id, timestamp, body):
     return "v1," + base64.b64encode(hmac.new(key_of(secret), signed, hashlib.sha256).digest()).decode()
 
 
-def headers_for(secrets_, send_id, timestamp, body, custom=None):
+def hmac_signature(secret, body):
+    """`sha256=<hex>` over the body alone, keyed by the secret as written (a QM inbound webhook checks this)."""
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def headers_for(secrets_, send_id, timestamp, body, custom=None, signing=STANDARD):
     """The headers of one attempt. The endpoint's own headers (lowercase names) go under Tico's: they can add or
     replace the user-agent, never the content type or the signing headers (webhooks.clean_headers refuses those)."""
-    return {"user-agent": "Tico-Webhooks/1", **(custom or {}), "content-type": "application/json",
-            "webhook-id": send_id, "webhook-timestamp": str(timestamp),
-            "webhook-signature": " ".join(signature(s, send_id, timestamp, body) for s in secrets_)}
+    head = {"user-agent": "Tico-Webhooks/1", **(custom or {}), "content-type": "application/json",
+            "webhook-id": send_id, "webhook-timestamp": str(timestamp)}
+    if signing == HMAC:
+        return {**head, "x-signature": hmac_signature(secrets_[0], body)}
+    return {**head, "webhook-signature": " ".join(signature(s, send_id, timestamp, body) for s in secrets_)}
 
 
 def retry_delay(failed, rng=random):
@@ -209,7 +217,7 @@ def deliver(store, vault, send_id, *, transport=None):
     """Post one claimed send and record what came back."""
     with store.read() as c:
         send = c.execute("SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
-                         "w.headers_json "
+                         "w.headers_json, w.signing "
                          "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?", (send_id,)).fetchone()
         if not send:
             return
@@ -232,7 +240,7 @@ def deliver(store, vault, send_id, *, transport=None):
     started = time.monotonic()
     status, head, error, abort = None, "", "", False
     try:
-        answer = egress.post(send["url"], body, headers_for(keys, send_id, timestamp, body, custom),
+        answer = egress.post(send["url"], body, headers_for(keys, send_id, timestamp, body, custom, send["signing"]),
                              allow_http=bool(send["allow_http"]), transport=transport)
         status, head = answer.status, answer.head
         abort = answer.headers.get("webhook-delivery", "").strip().lower() == "abort-message"

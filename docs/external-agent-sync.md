@@ -1,6 +1,6 @@
-# External agent sync: Grok Bot, Dots and Muse
+# External agent sync: Grok Bot, Dots, Muse and QM
 
-> **Beta**: external agents (Hermes, OpenClaw, Grok Bot, Dots and Muse sync) work today and may still change. See [Beta features](support.md#beta-features).
+> **Beta**: external agents (Hermes, OpenClaw, Grok Bot, Dots, Muse and QM sync) work today and may still change. See [Beta features](support.md#beta-features).
 
 Bots a human runs on another platform, shown on the team chart under that human, with their history and
 instructions kept in Tico in case the account goes away:
@@ -10,21 +10,23 @@ instructions kept in Tico in case the account goes away:
 | **Grok Bot** (grok.com/bot) | xAI's cloud agents, any number on one account | One ordinary row per Bot, initially under the human; place each Bot anywhere on the org chart |
 | **Dots** | OpenAI's always-on agent, one per account | A single **Dots** row under the human |
 | **Muse** | Meta's always-on agent, one per account | A single **Muse** row under the human |
+| **QM** ([github.com/yc-software/qm](https://github.com/yc-software/qm)) | Y Combinator's open-source multiplayer agent harness, one agent per person | A single **QM** row under the human. It takes tasks, and can be woken the moment one is given: [QM in Tico](qm.md) |
 
 The agent itself calls Tico's MCP tools as its human on a routine, so the sync runs on the platform, with the human's
 own sign-in (`backend/external_sync.py`). Grok Bot also supports [HTTP-triggered routines](https://cursor.com/help/grok-bot/routines),
-but Tico does not dispatch webhook calls through this sync integration.
+but Tico does not dispatch webhook calls through this sync integration. The one exception is a QM bot's wake address
+([QM in Tico](qm.md#d-instant-hand-off-optional)).
 
 ## What Tico does with a sync
 
-- A bot it has not seen becomes a bot with the `grokbot`, `dots` or `muse` harness, **under the human who synced it**
+- A bot it has not seen becomes a bot with the `grokbot`, `dots`, `muse` or `qm` harness, **under the human who synced it**
   (`reports_to: human:<them>`), active, with them as owner. Every synced Bot is an ordinary movable row. Move it anywhere
   on the team chart afterwards; a later sync never moves it back. It also joins its human's group (a bot reporting to a
   human does not inherit their group on its own), until someone puts it in another group or none.
 - Any human may link their own bots. A new bot counts toward a member's bot limit, like any bot they add.
 - Name, description and source section follow the platform. The source section is retained as metadata; it does not
   create groups, reorder Bots or override reporting relationships on Tico's org chart. The full instructions are kept in the bot's
-  `config_json.grok.instructions` (Dots: `config_json.dots`), with when they last changed, so the bot can be rebuilt
+  `config_json.grok.instructions` (Dots: `config_json.dots`, QM: `config_json.qm`), with when they last changed, so the bot can be rebuilt
   on another runtime. Sending an explicit empty description or instructions clears it; leaving either field out
   preserves it.
 - The transcript is copied into the human's own chat with the bot, already read, with no job queued. Resending a
@@ -39,9 +41,12 @@ but Tico does not dispatch webhook calls through this sync integration.
 - Grok Bots named "Tico …" in Grok read "Grok …" here: in Grok the word marks the Bot as one of ours; here it says
   where the bot runs. The Grok name is kept in `config_json.grok.name`.
 - Presence is the last sync: synced in the last 26 hours shows as synced, older as not synced lately. Nothing is
-  dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app).
+  dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app) and
+  a QM bot with a [wake address](qm.md#d-instant-hand-off-optional).
+- Only a QM bot takes tasks. A task given to a Grok Bot, Dots or Muse is refused and says to write to it in its chat instead;
+  a QM bot takes them and waits for its next sync, or is woken for each one when it has a wake address.
 
-The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
+The tool is `hub_external_sync` with `provider` `grokbot`, `dots`, `muse` or `qm` (`POST /api/v2/external/sync`;
 `hub external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
 `provider: grokbot` and no inbox, for routines set up before.
 
@@ -122,6 +127,12 @@ Muse makes connectors when you ask it in a chat. Ask it to add a custom connecto
 to Tico when it asks ([OAuth sign-in](connect-an-agent.md#oauth-sign-in)); if it wants a header instead, use a token
 from [Connect an external agent](connect-an-agent.md). Then give it the Dots routine above with `provider` `muse`. Like
 Dots, a human has one Muse, and it needs no `id`.
+
+## QM
+
+QM is one agent per person, like Dots and Muse, and it can take tasks. Its setup is its own page: [QM in Tico](qm.md). It
+covers the token, registering Tico's MCP server in QM, the daily sync routine (`provider` `qm`), the optional instant
+hand-off, and what the QM agent can do with Tico's tools.
 
 ## Recovering a bot
 
