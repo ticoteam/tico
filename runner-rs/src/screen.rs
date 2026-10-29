@@ -1016,7 +1016,7 @@ mod tests {
         s.hub.store(true, Ordering::SeqCst);
         s.on.store(true, Ordering::SeqCst);
         let mut procs = children();
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         let next = s.display.lock().unwrap().unwrap();
         assert!(next > taken, "{next} after {taken}");
         assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
@@ -1028,7 +1028,7 @@ mod tests {
         // TICO_SCREEN_DISPLAY on the held display: the reason names it, and nothing starts.
         std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{taken}"));
         let mut procs = children();
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         let reason = text_of(&readiness().unwrap()["reason"]);
         assert!(reason.starts_with(&format!("Display :{taken} is in use by another X server (Xvfb, pid {})", other.0.id())), "{reason}");
         assert!(procs[0].child.is_none());
@@ -1037,7 +1037,7 @@ mod tests {
         // And on a free one: Xvfb, the window manager, both x11vnc and bot turns use exactly it.
         let free = (taken + 2..LAST_DISPLAY).find(|n| holder(root, *n).is_none()).unwrap();
         std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{free}"));
-        tick(&mut procs).await;
+        tick(&mut procs, true).await;
         std::env::remove_var("TICO_SCREEN_DISPLAY");
         assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
         assert_eq!(display(), Some(format!(":{free}")));

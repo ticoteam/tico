@@ -774,6 +774,9 @@ async fn launch(bot: &Bot, chrome: &install::Chrome, display: &str) -> Result<La
 }
 
 #[cfg(test)]
+mod live;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
