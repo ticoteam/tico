@@ -549,10 +549,10 @@ impl ClaudeHost {
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
-        // claude.ai connectors) (hosts/claude.py _argv).
-        if t.settings.shared {
-            argv.extend(["--setting-sources".into(), "project,local".into()]);
-        }
+        // claude.ai connectors) (hosts/claude.py _argv). `--setting-sources project,local` keeps out the operator's
+        // own instructions too (~/.claude/CLAUDE.md, user settings and hooks): on the computer's own login HOME is the
+        // operator's, and a bot followed their personal git rule and committed as them (Oct 29).
+        argv.extend(["--setting-sources".into(), "project,local".into()]);
         argv.push("--strict-mcp-config".into());
         let project = std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
             .ok()
@@ -1602,7 +1602,10 @@ mod tests {
         }
         let thread = host.start_thread(&settings);
         let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        assert!(argv.contains(&"--strict-mcp-config".to_string()) && !argv.contains(&"--setting-sources".to_string()));
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        // A bot without branches keeps out the operator's own CLAUDE.md, settings and hooks as a branch bot does.
+        let at = argv.iter().position(|a| a == "--setting-sources").expect("--setting-sources on every turn");
+        assert_eq!(argv[at + 1], "project,local");
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
         assert_ne!(config["mcpServers"]["hub"]["command"], "stale");

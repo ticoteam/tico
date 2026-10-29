@@ -532,6 +532,8 @@ borrows another bot's credential. To let it use one, the owner grants it (Tools 
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
 A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
+Nor does a run read the operator's own instructions or settings: a Claude Code turn loads only the repository's
+(`--setting-sources project,local`), never `~/.claude/CLAUDE.md`, user settings or hooks, even on the computer's own login.
 
 ### What humans see about a bot's tools
 
