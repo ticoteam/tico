@@ -247,8 +247,8 @@ def team_services(c, who, auth):
                  "SELECT service,last_success,last_error FROM service_health ORDER BY service")]
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -258,8 +258,8 @@ def _roster(c):
     return P.load({"people": H.humans(c)})
 
 
-def entries(c, github_owner=""):
-    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner))
+def entries(c, github_owner="", shared=False):
+    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner), shared)
 
 
 def seat_parents(c, settings, auth, who):
