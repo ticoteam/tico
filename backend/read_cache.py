@@ -62,14 +62,17 @@ def metadata(c, key):
     return found[0] if found else None
 
 
-def value(c, key, build):
+def value(c, key, build, shared=False):
+    """The snapshot's value for `key`. A caller that enriches the result gets its own copy; one that only reads it
+    (`shared=True`) gets the snapshot's object, so it must never change it: a copy of a roster and every bot's
+    configuration costs more than the read it saves, and a request asks for them several times."""
     values = cache(c)
     if values is None:
         return build()
     if key not in values:
         values[key] = build()
     # Callers enrich roster/config dictionaries; their changes must not become cached policy.
-    return deepcopy(values[key])
+    return values[key] if shared else deepcopy(values[key])
 
 
 def one(c, statement, args=()):

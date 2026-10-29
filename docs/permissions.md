@@ -443,7 +443,7 @@ human whose own chat message started its current run**, checked with that human'
 
 For unfinished work, BotOps can create a continuation task with `hub task create --request-id <originating message id>`.
 The server checks that the request came from the human's own BotOps chat and keeps that human as requester.
-Progress with `hub task update <id> --quiet --note "..."` stays on the task; chat still shows its link and status.
+Progress with `hub task update <id> --brief --note "..."` stays on the task; chat still shows its link and status.
 
 Every BotOps tool uses the requester's rights by default. A human's chat or task uses that human's full rights.
 A task lends its human requester's rights only when BotOps has owned it since it was filed or the requester moved it

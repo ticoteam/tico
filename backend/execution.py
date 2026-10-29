@@ -2052,8 +2052,9 @@ def _queue_suspects(c, queue):
     return auto_tasks.maybe_waiting(c, tasks)
 
 
-def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
-    """Each queued job with its own claim reason; common bot fences are read once."""
+def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None):
+    """Each queued job with its own claim reason; common bot fences are read once. `suspect`: the suspects of every
+    queue the caller reads at once (_queue_suspects), so a page of many bots reads them once, not a bot at a time."""
     from .read_cache import one, rows
     from .shared_bots import follow
     runner = one(c, RUNNER_SQL, (runner_id,))
@@ -2075,7 +2076,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
     busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
-    suspect = _queue_suspects(c, queue)
+    suspect = _queue_suspects(c, queue) if suspect is None else suspect
     for job in queue:
         if not job["in_scope"]:
             why = "scoped"
