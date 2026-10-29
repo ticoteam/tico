@@ -587,7 +587,8 @@ function reconnectCardHTML(m) {
   const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
   const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>`;
   const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
-  if (r.service === 'secret' && mine && m.refs.credential_request) {
+  // A retired card asks nothing: its request is cancelled, so it shows Not needed, never a card to save.
+  if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
     return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
   }
   let act = '';

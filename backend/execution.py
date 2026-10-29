@@ -4627,9 +4627,10 @@ class Execution:
                     {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason})
             # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
             reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
-                                     body.auth_rejected.runtime, turn_task_id)
-        elif body.outcome == "completed" and not check:
-            reconnects.login_works(c, row["runner_id"], [runtime])
+                                     body.auth_rejected.runtime, turn_task_id, body.profile_used or "")
+        elif body.outcome == "completed" and not check and not body.fallback:
+            # A run that completed on the bot's own login (not a fallback's) shows that profile's login works.
+            reconnects.login_works(c, row["runner_id"], [(runtime, body.profile_used or "")])
         if body.fallback:
             # The runner ran this turn on the bot's fallback harness: countable here, and
             # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is

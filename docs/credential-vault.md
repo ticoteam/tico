@@ -162,10 +162,12 @@ credential they stored themselves, unless the owner turns **Members store creden
 else sees who to ask.
 
 A bot asking from a task (its turn works on one) puts the card in the task's thread instead, for the person who wrote to it
-there, else its operator or the company owner, and the task waits on the card ([Reconnect cards](tasks.md#reconnect-cards)):
+there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
+task waits on the card ([Reconnect cards](tasks.md#reconnect-cards)):
 saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
 task does the same, for the person it acts for. Asking again on the same task returns the open card; another task's open
 card for the same variable stays (saving either saves both); cancelling the card ends the task's wait and tells the bot.
+When the task finishes or changes hands, its card says Not needed and its request is cancelled.
 
 If a human pastes a credential into the chat instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept

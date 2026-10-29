@@ -21,8 +21,10 @@ keys:
   service_health row a snapshot or sync overwrites; the card is fixed once every service that refused reports that
   account good again, or the person connects it again (backend/google_connect.py). The person is the mailbox's
   own: only they connect it.
-- `login:<computer>:<runtime>`: the provider refused the computer's sign-in or key (`auth_rejected` on a run,
-  backend/execution.py); fixed when that computer reports the runtime signed in, or a run on it completes.
+- `login:<computer>:<runtime>:<profile>`: the provider refused that profile's sign-in or key on the computer
+  (`auth_rejected` on a run, backend/execution.py; `_default` is the computer's own login, named apart from every
+  profile); fixed when that computer reports that profile's login ready, or a run on that profile completes. A
+  runtime-wide ready says nothing of a named profile, nor one profile's of another's.
 - `secret:<bot>:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Cancelling its credential card ends the wait with a wake that
@@ -81,11 +83,16 @@ def _live(alias="r"):
             f"WHERE b.slug={alias}.bot AND b.state='archived')"), tuple(H.ACTIVE_STATUSES)
 
 
-def person_for(c, settings, bot):
-    """Who fixes the bot's accounts: its operator, else the company owner, as an actor, or None."""
+def person_for(c, settings, bot, task=None):
+    """Who fixes the bot's accounts: its operator, else the company owner, as an actor, or None. For a card on `task`,
+    the first of them who can read it: the card is in its thread."""
     from . import usage_limits
-    person = usage_limits.recipients(c, bot, getattr(settings, "owner_email", "") or "")
-    return _H().human_actor(person["id"]) if person else None
+    H, email = _H(), getattr(settings, "owner_email", "") or ""
+    people = [p for p in (usage_limits.recipients(c, bot, email), usage_limits.recipients(c, None, email)) if p]
+    for actor in dict.fromkeys(H.human_actor(p["id"]) for p in people):
+        if task is None or H.task_private_readable(c, actor, task):
+            return actor
+    return None
 
 
 def _bot_name(c, bot):
@@ -209,9 +216,14 @@ def _close(c, wait, ended, at=None):
 
 
 def _retire(c, wait, refresh=True, cleared=None):
-    """The card stopped standing (its task ended or changed hands, its bot was archived): it asks nothing now."""
+    """The card stopped standing (its task ended or changed hands, its bot was archived): it asks nothing now, and a
+    credential card's request is cancelled, so nobody saves a credential the task no longer needs."""
     if not _close(c, wait, "retired"):
         return
+    request = json.loads(wait.get("fix_json") or "{}").get("request")
+    if request and _H()._has_table(c, "credential_requests"):
+        c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=? AND status='pending'",
+                  (_H().now(), request))
     if refresh:
         from . import task_holds
         task_holds.refresh(c, wait["task_id"], cleared)
@@ -343,7 +355,14 @@ def fold_into(c, task_row, body, refs):
     """A wake to a task's owner while a reconnect wake is owed and no card still stands (a milestone, a hold that
     cleared by its own path): the owed lines ride on it, so the bot hears them once and is not woken twice
     (H._wake). Returns (body, refs)."""
-    if (refs or {}).get(WAKE_REF) or not _present(c) or pending(c, task_row["id"]):
+    if (refs or {}).get(WAKE_REF) or not _present(c) or not c.execute(
+            f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
+            (task_row["id"], task_row.get("owner"))).fetchone():
+        return body, refs
+    # Another hold still stands (a child, a question, another card): the wake its last clearing sends carries the news.
+    from . import task_holds
+    row = _H().task(c, task_row["id"])
+    if not row or row["status"] == "waiting" and task_holds.holds(c, row):
         return body, refs
     owed = _claim_owed(c, task_row["id"], task_row.get("owner"))
     if not owed:
@@ -475,34 +494,65 @@ def waited_requests(c, bot, env):
 
 
 # ------------------------------------------------------------------------------------------------ the hooks
-def login_refused(c, settings, bot, runner_id, runtime, task_id):
-    """A run on `task_id` ended because the provider refused the computer's sign-in or key for `runtime`."""
+DEFAULT_PROFILE = "_default"    # the computer's own login: profile names are [a-z0-9-], so no profile is called this
+
+
+def login_key(runner_id, runtime, profile=""):
+    return f"login:{runner_id}:{runtime}:{profile or DEFAULT_PROFILE}"
+
+
+def login_refused(c, settings, bot, runner_id, runtime, task_id, profile=""):
+    """A run on `task_id` ended because the provider refused the computer's sign-in or key for `runtime` on `profile`
+    ("" for the computer's own login)."""
     if not task_id or not runtime:
         return None
+    task = _H().task(c, task_id)
     machine = (c.execute("SELECT label FROM runners WHERE id=?", (runner_id,)).fetchone() or [runner_id])[0]
-    label = f"{runtime_name(runtime)} on {machine}"
-    return open(c, task_id, bot, f"login:{runner_id}:{runtime}", "login", label, person_for(c, settings, bot),
-                {"kind": "login", "runner": runner_id, "runtime": runtime, "machine": machine})
+    label = f"{runtime_name(runtime)} on {machine}" + (f" ({profile})" if profile else "")
+    return open(c, task_id, bot, login_key(runner_id, runtime, profile), "login", label,
+                person_for(c, settings, bot, task) if task else None,
+                {"kind": "login", "runner": runner_id, "runtime": runtime, "machine": machine, "profile": profile or ""})
 
 
-def login_works(c, runner_id, runtimes):
-    """The computer's report, or a completed run on it: each of `runtimes` is signed in there again."""
+def login_works(c, runner_id, logins):
+    """The computer's report, or a completed run on it: each (runtime, profile) of `logins` is signed in there again."""
     if not _present(c):
         return []
     woken = []
-    for runtime in runtimes:
-        woken += fixed(c, f"login:{runner_id}:{runtime}", why="signed_in")
+    for runtime, profile in logins:
+        woken += fixed(c, login_key(runner_id, runtime, profile), why="signed_in")
     return woken
 
 
+def _login_state(readiness, runtime, profile):
+    """The computer's report row for one login (runner-rs/src/readiness.rs): its own login is `profiles[""]`, or the
+    runtime's row when it reports only that one; a named profile is its own `profiles` row, or the own login's when
+    it is the computer's named home (`computer_profile`) or shares that login (`shared_login`). {} when unreported."""
+    state = ((readiness or {}).get("runtimes") or {}).get(runtime)
+    state = state if isinstance(state, dict) else {}
+    rows = state.get("profiles") if isinstance(state.get("profiles"), dict) else None
+    own = (rows.get("") if rows is not None else state) or {}
+    if not profile:
+        return own
+    row = (rows or {}).get(profile)
+    if isinstance(row, dict) and row:
+        return own if row.get("shared_login") is True else row
+    return own if profile == (readiness or {}).get("computer_profile") else {}
+
+
 def login_report(c, runner_id, readiness):
-    """A computer's heartbeat changed what it reports: the logins it now says are ready end their cards."""
-    if not _present(c) or not c.execute("SELECT 1 FROM task_reconnects WHERE fixed_at IS NULL AND key LIKE ? LIMIT 1",
-                                        (f"login:{runner_id}:%",)).fetchone():
+    """A computer's heartbeat changed what it reports: the logins it now says are ready end their cards. A
+    runtime-wide ready says nothing of a named profile (`_login_state`)."""
+    if not _present(c):
         return []
-    ready = [name for name, state in ((readiness or {}).get("runtimes") or {}).items()
-             if isinstance(state, dict) and state.get("authenticated") == "ready"]
-    return login_works(c, runner_id, ready)
+    ready = []
+    for (fix,) in c.execute("SELECT DISTINCT fix_json FROM task_reconnects WHERE fixed_at IS NULL AND key LIKE ?",
+                            (f"login:{runner_id}:%",)).fetchall():
+        fix = json.loads(fix or "{}")
+        runtime, profile = fix.get("runtime"), fix.get("profile") or ""
+        if _login_state(readiness, runtime, profile).get("authenticated") == "ready":
+            ready.append((runtime, profile))
+    return login_works(c, runner_id, list(dict.fromkeys(ready)))
 
 
 def _accounts(values):

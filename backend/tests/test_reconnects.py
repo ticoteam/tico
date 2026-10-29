@@ -70,7 +70,7 @@ def test_a_refused_sign_in_cards_the_task_which_waits_and_wakes_once_when_signed
         "auth_rejected": {"runtime": "codex", "reason": "OAuth session expired and could not be refreshed"}},
         machine["token"])
     [card] = cards(api, t)
-    assert card["key"] == f"login:{machine['runner_id']}:codex" and card["status"] == "open"
+    assert card["key"] == f"login:{machine['runner_id']}:codex:_default" and card["status"] == "open"
     assert card["person"] == "human:ana" and card["fix"]["runner"] == machine["runner_id"]
     assert shown(api, t)["task"]["status"] == "waiting"
     with api.app.state.store.read() as c:
@@ -91,6 +91,76 @@ def test_a_refused_sign_in_cards_the_task_which_waits_and_wakes_once_when_signed
         "bots": {"ops": {"runtime": "codex", "ready": True}}}}, machine["token"])
     assert len(wakes(api, t)) == 1
     assert not [i for i in needs(api) if i["id"] == t["id"]]
+
+
+def refused(api, machine, attempt, profile=None):
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "reconnect"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {
+        "outcome": "failed", "last_seq": 0, **({"profile_used": profile} if profile else {}),
+        "auth_rejected": {"runtime": "codex", "reason": "OAuth session expired and could not be refreshed"}},
+        machine["token"])
+
+
+def next_turn(api, machine):
+    """The bot's next claim, past the short retry wait its failed run started (backend/run_backoff.py)."""
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM run_backoff WHERE bot='ops'")
+    return claim(api, machine)
+
+
+def report(api, machine, codex):
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "runtimes": {"codex": {"installed": True, **codex}},
+        "bots": {"ops": {"runtime": "codex", "ready": True}}}}, machine["token"])
+
+
+def test_a_refused_profile_waits_for_that_profile_not_the_computers_own_login(api):
+    machine = codex_bot(api)
+    t = task(api)
+    refused(api, machine, claim(api, machine), profile="work")
+    [card] = cards(api, t)
+    assert card["key"] == f"login:{machine['runner_id']}:codex:work" and card["label"] == "Codex on Test Mac (work)"
+    # The computer's own login ready, a good run on it, and that login ready beside the still-refused profile: the
+    # card stands through all three.
+    report(api, machine, {"authenticated": "ready", "detail": "signed in"})
+    task(api, "Book the Acme call")
+    done = next_turn(api, machine)
+    post(api, f"attempts/{done['id']}/started", {"thread_id": "other"}, machine["token"])
+    post(api, f"attempts/{done['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    report(api, machine, {"authenticated": "failed", "profiles": {
+        "": {"authenticated": "ready"}, "work": {"authenticated": "failed"}}})
+    assert [c["status"] for c in cards(api, t)] == ["open"] and wakes(api, t) == []
+    # That profile's own row ready: fixed, one wake.
+    report(api, machine, {"authenticated": "ready", "profiles": {
+        "": {"authenticated": "ready"}, "work": {"authenticated": "ready"}}})
+    assert [c["status"] for c in cards(api, t)] == ["fixed"] and len(wakes(api, t)) == 1
+
+
+def test_a_run_that_completes_on_the_refused_profile_fixes_its_card_and_a_fallback_run_does_not(api):
+    machine = codex_bot(api)
+    t = task(api)
+    refused(api, machine, claim(api, machine), profile="work")
+    for extra, status in (({"profile_used": "work", "fallback": "claude"}, "open"), ({"profile_used": "work"}, "fixed")):
+        task(api, f"Reply to Acme ({status})")
+        done = next_turn(api, machine)
+        post(api, f"attempts/{done['id']}/started", {"thread_id": status}, machine["token"])
+        post(api, f"attempts/{done['id']}/complete", {"outcome": "completed", "last_seq": 0, **extra}, machine["token"])
+        assert [c["status"] for c in cards(api, t)] == [status]
+    assert len(wakes(api, t)) == 1
+
+
+def test_which_report_row_is_a_logins_own():
+    own = {"authenticated": "ready"}
+    profiles = {"runtimes": {"codex": {"authenticated": "rejected", "profiles": {
+        "": own, "work": {"authenticated": "rejected"}, "lab": {"shared_login": True, "authenticated": "missing"}}}}}
+    assert R._login_state(profiles, "codex", "") == own
+    assert R._login_state(profiles, "codex", "work") == {"authenticated": "rejected"}
+    assert R._login_state(profiles, "codex", "lab") == own                        # shares the computer's login
+    assert R._login_state(profiles, "codex", "gone") == {}                         # unreported: not ready
+    single = {"computer_profile": "acme", "runtimes": {"codex": own}}
+    assert R._login_state(single, "codex", "") == R._login_state(single, "codex", "acme") == own
+    assert R._login_state(single, "codex", "work") == {}
+    assert R._login_state({}, "codex", "") == {}
 
 
 def test_two_tasks_on_one_account_are_one_needs_you_item_and_each_wakes_once(api):
@@ -300,6 +370,46 @@ def test_two_fixers_on_one_task_each_have_their_own_item(api):
         assert item["reconnect"]["key"] == key
 
 
+def test_a_credential_card_whose_task_finishes_or_changes_hands_can_no_longer_be_saved(api):
+    machine = ops_machine(api)
+    for end in ("close", "reassign"):
+        t = task(api, f"Reply to Acme ({end})")
+        attempt = claim(api, machine)
+        asked = ask_secret(api, attempt)
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": end}, machine["token"])
+        post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+        with api.app.state.store.transaction() as c:
+            if end == "close":
+                H.task_close(c, "human:ana", t["id"], "Not needed")
+            else:
+                H.task_update(c, "human:ana", t["id"], owner="bot:cpo")
+        assert [c["status"] for c in cards(api, t)] == ["retired"] and request_status(api, asked["id"]) == "cancelled"
+        saved = api.post(f"/api/v2/credential-requests/{asked['id']}/save", json={"value": "crm-token-0123456789"},
+                         headers=headers("ana-test"))
+        assert saved.status_code >= 400 and request_status(api, asked["id"]) == "cancelled"
+
+
+def test_a_private_task_cards_a_fixer_who_can_read_it_and_never_one_who_cannot(api, monkeypatch):
+    machine = codex_bot(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")           # cara cannot read it
+    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x", "private": True}, "ben-test")
+    attempt = claim(api, machine)
+    # Its turn may not ask for a credential at all: refused, not a card nobody can see.
+    asked = api.post("/api/v2/credential-requests", json={"env": "ACME_CRM_TOKEN", "label": "the Acme CRM token"},
+                     headers=headers(attempt["token"]))
+    assert asked.status_code == 403
+    refused(api, machine, attempt)
+    [card] = cards(api, t)
+    assert card["person"] == "human:ana"                                             # the company owner can read it
+    assert shown(api, t, "ben-test")["task"]["status"] == "waiting"
+    monkeypatch.setattr(api.app.state.store.settings, "owner_email", "cara@acme.example")
+    with api.app.state.store.transaction() as c:
+        row = H.task(c, t["id"])
+        assert R.person_for(c, api.app.state.store.settings, "ops", row) is None    # nobody who fixes it reads it
+        assert R.person_for(c, api.app.state.store.settings, "ops") == "human:cara"
+
+
 def test_asking_again_on_one_task_reuses_its_card_and_another_task_keeps_its_own(api):
     machine = ops_machine(api)
     first = task(api, "Reply to Acme")
@@ -362,6 +472,30 @@ def test_a_fix_while_another_hold_stands_is_told_once_when_that_hold_clears(api)
     with api.app.state.store.transaction() as c:
         assert R.google_connected(c, "ana@acme.example") == []
     assert len(wakes(api, t)) == 1
+
+
+def test_a_fix_while_several_holds_stand_is_told_with_the_wake_the_last_one_clearing_sends(api):
+    t = task(api)
+    with api.app.state.store.transaction() as c:
+        first, second = (H.task_create(c, "bot:ops", title, "x", "bot:cpo", parent_id=t["id"])["id"]
+                         for title in ("Get the Acme price list", "Get the Acme contract"))
+    open_card(api, t)
+
+    def told():
+        with api.app.state.store.read() as c:
+            return [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND body LIKE '%is reconnected%'")]
+    with api.app.state.store.transaction() as c:
+        assert R.google_connected(c, "ana@acme.example") == []
+        H.task_update(c, "bot:cpo", first, status="done", note="Sent")
+        assert H.task(c, t["id"])["status"] == "waiting"
+        # Any other wake to the owner while a hold stands leaves the news owed.
+        assert H._wake(c, H.task(c, t["id"]), "bot:ops", "The Acme price list is in.")
+    assert told() == []
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", second, status="done", note="Sent")
+        assert H.task(c, t["id"])["status"] in ("open", "doing")
+    [woke] = told()
+    assert "Google (ana@acme.example) is reconnected." in woke and "Get the Acme contract is done" in woke
 
 
 def hold_item(api, bot="ops"):

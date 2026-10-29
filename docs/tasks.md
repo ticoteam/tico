@@ -237,12 +237,13 @@ Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnect
 the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
 another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
 stands only while its task is unfinished and keeps the owner it was opened for, and its bot is not archived; otherwise
-it says Not needed and asks nothing.
+it says Not needed and asks nothing (a credential card's request is cancelled, so it can no longer be saved). The
+person is one who can read the task; on a private task nobody else gets the card.
 
 | What stopped | Who fixes it | Fix on the card | Fixed when |
 | --- | --- | --- | --- |
 | The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | every service that refused it (mail, calendar) reports that mailbox working, or the person connects it again |
-| The provider refused a computer's sign-in or key (`login:<computer>:<runtime>`) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports it signed in, or a run there completes |
+| The provider refused a computer's sign-in or key for one profile (`login:<computer>:<runtime>:<profile>`, `_default` for the computer's own login) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports that profile's login ready, or a run on that profile completes (not a fallback's) |
 | A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<bot>:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; cancelling the card ends the wait too |
 
 A bot held for failed sign-ins with a standing login card has no second Needs-you item; the fix releases it, and the

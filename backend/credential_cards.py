@@ -282,10 +282,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         task = task_of(c, who.actor, msg)
         if task:
             # A turn on a task: the card goes in the task's thread, for the person who wrote to the bot there, else
-            # whoever fixes the bot's accounts (backend/reconnects.py), and the task waits on it.
-            person = msg["from_actor"] if plain else reconnects.person_for(c, store.settings, H.actor_id(who.actor))
+            # whoever fixes the bot's accounts and can read the task (backend/reconnects.py), and the task waits on it.
+            person = msg["from_actor"] if plain else reconnects.person_for(c, store.settings, H.actor_id(who.actor), task)
             if not person:
-                raise Problem("no_person", "Nobody can store a credential for this bot: it has no operator or owner", 409)
+                raise Problem("no_person", "Nobody can store a credential for this bot on this task: neither its operator "
+                              "nor the company owner can read it", 409)
             return auth.identity_for_actor(c, person), {**msg, "conversation_id": task["conversation_id"]}, task
         if not plain:
             raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
@@ -359,9 +360,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                                     {"credential_request": rid, **({"task": task["id"]} if task else {})}, None, None,
                                     delivered_at=H.now())
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
-            if task:
-                reconnects.open(c, task["id"], target, key, "secret", body.label.strip() or body.env,
-                                person.actor, {"kind": "secret", "request": rid}, message_id=card["id"], owner=task["owner"])
+            if task and not reconnects.open(c, task["id"], target, key, "secret", body.label.strip() or body.env,
+                                            person.actor, {"kind": "secret", "request": rid}, message_id=card["id"],
+                                            owner=task["owner"]):
+                # The task could not wait on it: no card is better than one nobody is told was not made.
+                raise Problem("no_card", "This task cannot wait on a credential card now", 409)
             H.event(c, who.actor, "credential.requested", rid, {"env": body.env, "bot": target, "for": person.actor})
             return {"id": rid, "status": "pending", "message_id": card["id"], "title": shown["title"],
                     "detail": "A card is open in the chat. You are told when it is saved: do not ask for the value in words."}

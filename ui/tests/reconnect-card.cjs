@@ -22,11 +22,15 @@ const comments = [
     fix: {kind: 'google', account: 'ana@acme.example'}, line: "BotOps can't reach Google (ana@acme.example)."}, 9),
   card('q3', {key: 'secret:botops:ACME_CRM_TOKEN', service: 'secret', label: 'the Acme CRM token', person: 'human:ben',
     fix: {kind: 'secret', request: 'cr9'}, line: 'BotOps needs the Acme CRM token to go on.'}, 6),
-  card('q4', {key: 'login:r1:codex', service: 'login', label: 'Codex on Acme Mac', person: 'human:ana', status: 'fixed',
+  card('q4', {key: 'login:r1:codex:_default', service: 'login', label: 'Codex on Acme Mac', person: 'human:ana', status: 'fixed',
     fix: {kind: 'login', runner: 'r1', runtime: 'codex', machine: 'Acme Mac'}, line: "BotOps can't sign in to Codex on Acme Mac."}, 3),
   card('q5', {key: 'google:cara@acme.example', service: 'google', label: 'Google (cara@acme.example)', person: 'human:ana', status: 'retired',
     fix: {kind: 'google', account: 'cara@acme.example'}, line: "BotOps can't reach Google (cara@acme.example)."}, 2),
+  // Ana's own credential card, retired when the task moved on: Not needed, never a card she can still save.
+  card('q6', {key: 'secret:botops:ACME_ERP_TOKEN', service: 'secret', label: 'the Acme ERP token', person: 'human:ana', status: 'retired',
+    fix: {kind: 'secret', request: 'cr8'}, line: 'BotOps needs the Acme ERP token to go on.'}, 1),
 ];
+comments[comments.length - 1].refs.credential_request = 'cr8';
 
 async function run(viewport, scheme, shot) {
   const browser = await launch();
@@ -70,7 +74,7 @@ async function run(viewport, scheme, shot) {
     assert.match(await secret.innerText(), /Waiting on/);
     assert.equal(await secret.locator('button, a.button, [data-credential-host]').count(), 0);
     // Fixed: Reconnected, nothing to press.
-    const login = thread.locator('.rc-card[data-reconnect="login:r1:codex"]');
+    const login = thread.locator('.rc-card[data-reconnect="login:r1:codex:_default"]');
     assert.equal(await login.getAttribute('data-status'), 'fixed');
     assert.match(await login.innerText(), /Reconnected/);
     assert.equal(await login.locator('button, a.button').count(), 0);
@@ -78,6 +82,9 @@ async function run(viewport, scheme, shot) {
     const retired = thread.locator('.rc-card[data-reconnect="google:cara@acme.example"]');
     assert.equal(await retired.getAttribute('data-status'), 'retired');
     assert.equal(await retired.locator('button, a.button').count(), 0);
+    const unneeded = thread.locator('.rc-card[data-reconnect="secret:botops:ACME_ERP_TOKEN"]');
+    assert.equal(await unneeded.getAttribute('data-status'), 'retired');
+    assert.equal(await thread.locator('[data-credential-host="cr8"]').count(), 0, 'a retired credential card is not mounted');
     // Nothing runs off the side of the thread at phone width.
     const wide = await page.evaluate(() => [...document.querySelectorAll('#task-modal .rc-card')]
       .some(el => el.scrollWidth > el.clientWidth + 1 || el.getBoundingClientRect().right > innerWidth + 1));
