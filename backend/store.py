@@ -489,7 +489,7 @@ def sweep_idempotency(store, now=None, batch=5000):
             return deleted
 
 
-DELTA_RETENTION_DAYS = 14
+DELTA_RETENTION_DAYS = 1
 DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
 
 
@@ -497,10 +497,12 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
     than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
 
-    A finished run's text is whole in its `message` events and `attempts.final_text`; the pieces only typed the live
-    reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
+    A run's pieces go only when its reply is whole elsewhere: `attempts.final_text` or a final `message` event holds
+    it. A run still held for review (a job 'uncertain') keeps them: review_jobs shows its output, and
+    auto_reconcile reads the deltas (hop_failed, empty_fallback_interruption) to decide. The pieces only typed the
+    live reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
     Attempts are walked in creation order from a mark kept in registry_metadata, so a pass never rescans the table;
-    one created before the cutoff and still unfinished is passed over for good."""
+    one created before the cutoff and still unfinished, or not whole, is passed over for good (its pieces stay)."""
     at = now or H.now()
     cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
     created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
@@ -510,9 +512,15 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     deleted = 0
     while deleted < most:
         with store.read() as c:
-            rows = c.execute("SELECT id,created,finished FROM attempts WHERE created<? AND (created,id)>(?,?) "
-                             "ORDER BY created,id LIMIT 200", (created_before, *mark)).fetchall()
-        done = [r["id"] for r in rows if r["finished"] and r["finished"] < cutoff]
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,"
+                "((a.final_text IS NOT NULL AND a.final_text<>'') OR EXISTS(SELECT 1 FROM attempt_events m "
+                "WHERE m.attempt_id=a.id AND m.kind='message' AND json_valid(m.payload_json) "
+                "AND json_extract(m.payload_json,'$.final')=1)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS whole "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        done = [r["id"] for r in rows if r["whole"] and r["finished"] and r["finished"] < cutoff]
         while done and deleted < most:
             with store.transaction() as c:
                 removed = c.execute(
