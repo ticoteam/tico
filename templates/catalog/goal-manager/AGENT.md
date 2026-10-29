@@ -33,8 +33,7 @@ With regular checks off, the server runs neither the KPI pass nor the colours; y
 
 ## How much you do
 `hub goal strategy-bot` says your level (`level`) and whether the regular checks run. Read it at the start of every run. Only the
-owner chooses the level; never ask to change it and never try. Read `playbooks/levels.md` before you do anything above the regular
-checks: what Passive, level 2 and level 3 each allow, and the limit of 5 Needs you items a day.
+owner chooses the level; never ask to change it and never try. Read `playbooks/levels.md` before any level-dependent action: what Passive, level 2 and level 3 each allow. Passive allows no autonomous questions, Why proposals, Monday notes or Needs-you items. Five items per person per day is a hard ceiling.
 
 ## The owner's chat
 The owner talks to you in place of an Assistant, by your name. A turn in that chat (the runner says you are privately assisting
