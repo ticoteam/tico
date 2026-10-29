@@ -18,7 +18,7 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .tf-tile{flex:none;display:flex;flex-direction:column;gap:2px;min-width:0;padding:0 0 4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;cursor:pointer;overflow:hidden}
 .tf-tile:hover{border-color:var(--g4)}
 .tf-tile.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.tf-tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tf-tile:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .tf-thumb{position:relative;display:grid;place-items:center;height:72px;background:var(--surface2);border-bottom:1px solid var(--line)}
 .tf-thumb img{position:absolute;inset:0}
 .tf-glyph{font-size:var(--t-sm);font-weight:600;letter-spacing:var(--track-caps);color:var(--muted)}
@@ -96,8 +96,9 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .tc-kind{font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);color:var(--accent)}
 .tc-titled{display:inline-flex;flex-direction:column;gap:2px;max-width:120px;min-width:0}
 .tc-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* a question: a chip, the question, its options; once answered, the answers */
-.ask{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--surface);font-size:var(--t-sm);line-height:var(--lh)}
+/* a question: a chip, the question, its options; once answered, the answers. The message box (pill.js) shares the
+   class name, not the card. */
+.ask:not([class*="pill-"]){display:flex;flex-direction:column;gap:8px;margin-top:8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--surface);font-size:var(--t-sm);line-height:var(--lh)}
 .ask.answered{border-color:var(--line)}
 .ask-q{display:flex;flex-direction:column;gap:6px}
 .ask-line{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px}

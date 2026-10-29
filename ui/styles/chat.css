@@ -69,9 +69,7 @@
 .chat-task-row .chat-time{flex:none;margin-left:8px}
 .chat-task-more{cursor:default}
 .chat-side>summary{padding:5px 0;cursor:pointer;display:flex;align-items:baseline;min-width:0}
-.chat-side>summary::before{content:"▶";flex:none;width:1.6em;font-size:.72em}
-.chat-side[open]>summary::before{content:"▼"}
-.chat-side>summary::-webkit-details-marker{display:none}
+.chat-side>summary::before{align-self:center}
 .chat-side>summary b{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-weight:500}
 .chat-side>summary .cs-gist{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.3em}
 .chat-side>summary .chat-time{flex:none;margin-left:8px}
@@ -187,10 +185,8 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .run-did .did.failed .did-arrow{color:var(--fail)}
 .run-did .ref{white-space:nowrap}
 .run-steps{max-width:100%}
-.run-steps>summary{list-style:none;cursor:pointer;padding-left:calc(1em + 5px);color:var(--muted)}
-.run-steps>summary::-webkit-details-marker{display:none}
-.run-steps>summary::before{content:'▸';display:inline-block;width:1em;margin-left:calc(-1em - 5px);margin-right:5px;text-align:center}
-.run-steps[open]>summary::before{content:'▾'}
+.run-steps>summary{cursor:pointer;padding-left:calc(1em + 5px);color:var(--muted)}
+.run-steps>summary::before{margin-left:calc(-1em - 5px);margin-right:calc(1em + 1px)}   /* hangs in the indent */
 .run-steps>summary:hover{color:var(--ink)}
 .steps-list{display:flex;flex-direction:column;gap:1px;margin:2px 0 4px calc(1em + 5px);padding-left:8px;border-left:1px solid var(--line)}
 .steps-list .step{display:flex;gap:8px;min-width:0;white-space:nowrap}
@@ -255,7 +251,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-thumb:not(.ready){cursor:progress}
 .chat-thumb img{width:100%;height:auto;max-height:240px;object-fit:contain;display:block}
 .chat-thumb img[hidden]{display:none}
-.chat-thumb:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chat-thumb:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .chat-titled{display:inline-flex;flex-direction:column;gap:2px;width:calc((100% - 18px) / 4);min-width:64px}
 .chat-titled>.chat-thumb{width:100%}
 .chat-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -361,7 +357,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 /* the Assistant page (ui/app/assistant-page.js): an empty chat offers a few things to ask, just above the composer */
 .asst-empty{display:flex;min-height:100%;align-items:flex-end;justify-content:center;padding:16px 0 4px}
 .asst-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
-.asst-hints button{border-radius:999px;font-size:var(--t-base);padding:6px 12px}
 /* "Earlier chats" on the Assistant page (ui/app/assistant-page.js): the owner's old Strategy Bot chat, read-only. */
 .asst-earlier{margin:0 0 var(--s2)}
 .asst-earlier>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}

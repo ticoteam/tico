@@ -39,6 +39,15 @@
   --t-label:11px;--track-caps:.06em;
   /* motion: short and decelerating; nothing animates layout */
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
+  /* the house rules these serve are at the top of components.css */
+  /* focus: one ring for buttons, links, rows and switches, outside the box, or inside it on a row that meets its
+     container's edge; a text field takes the halo instead (its border turns the accent) */
+  --focus-ring:2px solid var(--accent);--focus-offset:2px;--focus-inset:-2px;
+  --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
+  /* control heights: small and regular (a phone's are 40px, layout.css) */
+  --ctl-sm:28px;--ctl:32px;
+  /* a fold's chevron (chevron_right) turns a quarter to open */
+  --chev-open:rotate(90deg);
 }
 /* Dark is the default. ui/theme.js sets <html data-theme> before the page paints: "dark" (also when nothing is
    saved), "light", or "system", which follows the OS. Light is the same nine steps in reverse order, so every rule
