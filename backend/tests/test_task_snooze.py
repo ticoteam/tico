@@ -156,3 +156,45 @@ def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(
     done = post(api, f"tasks/{task['id']}", {"version": get(api, "tasks/" + task["id"])["task"]["version"],
                                               "status": "done"})
     assert done["snoozed_until"] is None and done.get("snoozed_note") is None
+
+
+def snooze_comments(c, task_id):
+    """The notes the keeper left on the task when a snooze ended without a wake."""
+    return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=? "
+                                    "AND body LIKE 'Snooze over. Note:%' ORDER BY created", (task_id,))]
+
+
+def test_a_snooze_that_changes_bumps_the_version_and_the_same_one_again_does_not(api):
+    task = post(api, "tasks", {"owner": "ana", "title": "Sign the lease", "body": "x"})
+    day = ahead(20)[:10]
+    first = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord"})
+    assert first["version"] == task["version"] + 1
+    moved = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord by mail"})
+    assert moved["version"] == first["version"] + 1 and moved["snoozed_note"] == "Ask the landlord by mail"
+    same = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord by mail"})
+    assert same["version"] == moved["version"], "the same date and note again change nothing"
+    back = post(api, f"tasks/{task['id']}/unsnooze", {})
+    assert back["version"] == same["version"] + 1, "ending the snooze is a change too"
+
+
+def test_a_note_for_a_person_or_a_paused_bot_is_left_on_the_task_when_the_snooze_ends(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        person = H.task_create(c, H.human_actor("ana"), "Sign the lease", "x", "human:ben")
+        paused = H.task_create(c, H.human_actor("ana"), "File the receipts", "x", "bot:ops")
+        active = H.task_create(c, H.human_actor("ana"), "Book the venue", "x", "bot:finance")
+        for row in (person, paused, active):
+            H.TS.snooze(c, "human:ana", row["id"], ahead(2), note="Check the reply")
+        c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+        c.execute("UPDATE jobs SET state='completed'")
+    at = H.parse_ts(ahead(2)) + timedelta(seconds=1)
+    Scheduler(store, api.app.state.execution).tick(at)
+    with store.read() as c:
+        assert snooze_comments(c, person["id"]) == ["Snooze over. Note: Check the reply"]
+        assert snooze_comments(c, paused["id"]) == ["Snooze over. Note: Check the reply"]
+        assert snooze_comments(c, active["id"]) == [], "an active bot is woken with the note, not told twice"
+        woken = c.execute("SELECT body FROM messages WHERE to_actor='bot:finance' AND body LIKE 'Snooze over%' "
+                          "AND json_extract(refs_json,'$.task')=?", (active["id"],)).fetchall()
+        assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Check the reply")
+        assert snooze_wakes(c, paused["id"], "Snooze over:") == [], "no wake for a paused bot"
+        assert H.task(c, person["id"])["snoozed_note"] is None
