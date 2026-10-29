@@ -207,16 +207,144 @@ def test_a_second_hold_after_a_release_is_a_new_hold_with_its_own_task(api):
     assert len(sql(api, "SELECT id FROM events WHERE action='automation.run_guard' AND target=?", (aid,))) == 2
 
 
-def test_a_flood_past_the_ceiling_keeps_its_runs_held_and_counts_the_rest_dropped(api):
-    aid = webhook_auto(api)
-    with time_machine.travel(datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tick=False):
+def flood(api, count, tag="d", at=datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc)):
+    with time_machine.travel(at, tick=False):
         with api.app.state.store.transaction() as c:
-            for n in range(600):   # 600 distinct deliveries inside one minute
-                automations.on_webhook(c, "trg_1", "Deploys", "custom", f"d{n}", {}, "")
-        assert statuses(api, aid) == {"held": automations.RUN_GUARD_BURST}
-        hold = get(api, f"automations/{aid}")["hold"]
-        assert hold["rule"] == "flood" and hold["held"] == 500 and hold["dropped"] == 100   # none vanishes unseen
-        assert sql(api, "SELECT dropped FROM automation_daily WHERE automation_id=?", (aid,))[0]["dropped"] == 100
+            for n in range(count):   # distinct deliveries inside one minute
+                automations.on_webhook(c, "trg_1", "Deploys", "custom", f"{tag}{n}", {}, "")
+
+
+def live_hold(api, aid):
+    with api.app.state.store.read() as c:
+        hold = automations.hold_of(c, aid)
+        row = automations._hold_row(c, aid)
+    return hold and {**hold, "arrivals": row["arrivals"]}
+
+
+def test_the_delivery_that_trips_a_flood_is_held_with_the_backlog_and_none_is_dropped(api):
+    aid = webhook_auto(api)
+    flood(api, automations.RUN_GUARD_BURST)
+    assert statuses(api, aid) == {"queued": 500} and live_hold(api, aid) is None
+    flood(api, 1, tag="trip")   # the 501st: the 500 queued are moved, not counted against the ceiling
+    assert statuses(api, aid) == {"held": 501}
+    hold = live_hold(api, aid)
+    assert hold["rule"] == "flood" and hold["held"] == 501 and hold["dropped"] == 0 and hold["arrivals"] == 1
+
+
+def test_a_manual_run_at_the_flood_boundary_does_not_trip_the_guard(api):
+    aid = webhook_auto(api)
+    flood(api, automations.RUN_GUARD_BURST)
+    with time_machine.travel(datetime(2030, 1, 1, 9, 0, 6, tzinfo=timezone.utc), tick=False):
+        with api.app.state.store.transaction() as c:
+            row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+            assert automations.queue(c, row, {}, "manual", manual=True)
+    assert statuses(api, aid) == {"queued": 501} and live_hold(api, aid) is None
+
+
+def test_a_flood_keeps_the_backlog_held_and_caps_new_arrivals_counting_the_rest_dropped(api):
+    aid = webhook_auto(api)
+    flood(api, 1100)   # 500 queued, then the hold: 500 more arrive held, the last 100 are dropped
+    assert statuses(api, aid) == {"held": 1000}
+    hold = live_hold(api, aid)
+    assert hold["rule"] == "flood" and hold["arrivals"] == 500 and hold["dropped"] == 100   # none vanishes unseen
+    assert sql(api, "SELECT dropped FROM automation_daily WHERE automation_id=?", (aid,))[0]["dropped"] == 100
+
+
+def test_a_hold_after_a_release_moves_the_released_backlog_and_caps_only_its_own_arrivals(api):
+    aid = webhook_auto(api)
+    flood(api, 501)
+    with time_machine.travel(datetime(2030, 1, 1, 9, 1, 0, tzinfo=timezone.utc), tick=False):
+        with api.app.state.store.transaction() as c:   # released, and left queued (no request drains them)
+            assert automations._unhold(c, aid, "human:ana", "release") == 501
+    assert statuses(api, aid) == {"queued": 501} and live_hold(api, aid) is None
+    # The loop goes on: 120 spread arrivals since the release, and the next one holds it again.
+    slow_drain(api, aid, minutes=15, start=datetime(2030, 1, 1, 9, 2, 5, tzinfo=timezone.utc), tag="again")
+    assert statuses(api, aid) == {"queued": 621}
+    flood(api, 1, tag="trip", at=datetime(2030, 1, 1, 9, 17, 5, tzinfo=timezone.utc))
+    assert statuses(api, aid) == {"held": 622}
+    assert live_hold(api, aid)["arrivals"] == 1 and live_hold(api, aid)["rule"] == "sustained"
+    flood(api, 500, tag="more", at=datetime(2030, 1, 1, 9, 17, 10, tzinfo=timezone.utc))
+    hold = live_hold(api, aid)
+    assert hold["arrivals"] == 500 and hold["dropped"] == 1 and statuses(api, aid) == {"held": 1121}
+
+
+def put_on_hold(api, aid):
+    with api.app.state.store.transaction() as c:
+        automations._hold(c, dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()), "flood")
+
+
+def release(api, aid):
+    with api.app.state.store.transaction() as c:
+        return automations._unhold(c, aid, "human:ana", "release")
+
+
+def test_a_turn_that_answers_a_waiting_run_during_a_hold_leaves_it_held_with_the_answer(api):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    aid = post(api, "automations", draft_then_tell())["id"]
+    rid = queued(api, aid)
+    hub(api).drain()
+    assert run_row(api, rid)["status"] == "waiting"
+    put_on_hold(api, aid)
+    finish(api, r, "Held draft")   # its requests drain, but the drain never takes a held run
+    held = run_row(api, rid)
+    assert held["status"] == "held" and held["state"]["steps"][0]["outputs"]["text"] == "Held draft"
+    assert release(api, aid) == 1
+    hub(api).drain()
+    done = run_row(api, rid)
+    assert done["status"] == "ok" and [s["id"] for s in done["state"]["steps"]] == ["draft", "tell"]
+
+
+def test_a_wake_that_comes_during_a_hold_ends_held_and_resumes_from_its_save_on_release(api):
+    aid = make(api, [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Batched"}}],
+               batch={"times": ["09:30"], "tz": "UTC"})
+    with time_machine.travel(datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tick=False):
+        rid = queued(api, aid)
+        hub(api).drain()
+    saved = run_row(api, rid)
+    assert saved["status"] == "waiting" and saved["wake_at"].startswith("2030-01-01T09:30")
+    put_on_hold(api, aid)
+    with time_machine.travel(datetime(2030, 1, 1, 9, 31, tzinfo=timezone.utc), tick=False):
+        automations.tick(api.app.state.store)
+        held = run_row(api, rid)
+        assert held["status"] == "held" and held["wake_at"] is None and held["state"] == saved["state"]
+        assert hub(api).claim() is None
+        assert release(api, aid) == 1
+        hub(api).drain()
+    done = run_row(api, rid)
+    assert done["status"] == "ok" and [(s["id"], s["status"]) for s in done["state"]["steps"]] == [("tell", "ok")]
+
+
+def test_a_run_cut_off_during_a_hold_resumes_held_not_queued(api):
+    aid = webhook_auto(api)
+    rid = queued(api, aid)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automation_runs SET status='running',claimed_at=? WHERE id=?",
+                  (H.shift(H.now(), hours=-1), rid))
+    put_on_hold(api, aid)
+    automations.tick(api.app.state.store)
+    held = run_row(api, rid)
+    assert held["status"] == "held" and held["claimed_at"] is None and held["state"]["resumes"] == 1
+    assert release(api, aid) == 1 and run_row(api, rid)["status"] == "queued"
+
+
+def test_a_run_put_on_hold_mid_step_finishes_the_step_and_is_not_queued_again(api, monkeypatch):
+    aid = webhook_auto(api)
+    rid = queued(api, aid)
+    advance = automations.E.advance
+
+    def held_meanwhile(flow, state, services):
+        put_on_hold(api, aid)   # the guard trips while this step runs; another step is ready after it
+        return {**state, "status": "running", "threads": [{**state["threads"][0], "state": automations.E.READY}]}
+    monkeypatch.setattr(automations.E, "advance", held_meanwhile)
+    hub(api).drain()
+    held = run_row(api, rid)
+    assert held["status"] == "held" and held["finished"] is None and held["claimed_at"] is None
+    monkeypatch.setattr(automations.E, "advance", advance)
+    assert release(api, aid) == 1
+    hub(api).drain()
+    assert run_row(api, rid)["status"] == "ok"
 
 
 def test_dropping_held_runs_skips_them_clears_the_hold_and_closes_its_task(api):
@@ -241,9 +369,10 @@ def test_turning_it_off_while_held_skips_the_held_runs_and_clears_the_hold(api):
 def test_a_manual_run_while_held_is_refused_and_queues_nothing(api):
     aid = webhook_auto(api)
     slow_drain(api, aid)
+    before = live_hold(api, aid)
     r = api.post(f"/api/v2/automations/{aid}/run", json={}, headers=headers())
     assert r.status_code == 409 and "on hold" in r.text
-    assert statuses(api, aid) == {"held": 128}
+    assert statuses(api, aid) == {"held": 128} and live_hold(api, aid) == before   # the hold is intact
 
 
 def test_only_someone_who_may_change_it_releases_or_drops_its_held_runs(api):
