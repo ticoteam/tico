@@ -136,6 +136,17 @@ pub fn interrupted_key(thread: &str) -> String {
     format!("interrupted:{thread}")
 }
 
+/// The key under which the state keeps the digest of the standing lines this thread holds (crate::prompt::Built);
+/// empty while it may not hold them.
+pub fn standing_key(thread: &str) -> String {
+    format!("standing:{thread}")
+}
+
+/// The key under which the state keeps the id and digest of the task this thread holds, the same way.
+pub fn task_key(thread: &str) -> String {
+    format!("standing-task:{thread}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

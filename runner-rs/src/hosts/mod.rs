@@ -673,6 +673,29 @@ impl Host {
         }
     }
 
+    /// Whether the harness says in its stream when it compacts a session (`compaction_events`), so a resumed turn
+    /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
+    pub fn reports_compaction(&self) -> bool {
+        let (runtime, harness) = self.harness();
+        crate::harness_tools::caps(runtime, harness).compaction_events && matches!(self, Host::Claude(_))
+    }
+
+    /// Whether the harness compacted `thread_id` since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.compacted(thread_id),
+            _ => false,
+        }
+    }
+
+    /// The whole prompt of the turn about to start, when what it sends leaves parts out: a session that turns out to
+    /// be missing, so the harness starts a new one in its place (`restored`), is given this instead.
+    pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
+        if let Host::Claude(h) = self {
+            h.full_prompt(thread_id, text);
+        }
+    }
+
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
     /// that does not confirm threads.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {

@@ -371,6 +371,10 @@ struct Inner {
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
     tools: HashMap<String, ToolCall>,
+    /// Threads whose session Claude compacted (a `compact_boundary`) since the runner last asked.
+    compacted: HashSet<String>,
+    /// The whole prompt of a thread's turn whose prompt leaves parts out, for a missing session restarted as new.
+    full_prompts: HashMap<String, String>,
     /// Called each time a turn's pipe has just been published (ordering tests).
     #[cfg(test)]
     pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
@@ -537,6 +541,19 @@ impl ClaudeHost {
     /// The session Claude said it runs `thread_id` as (its system init), once it has.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone())
+    }
+
+    /// Whether Claude compacted `thread_id`'s session since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        self.inner().compacted.remove(thread_id)
+    }
+
+    pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
+        let mut inner = self.inner();
+        match text {
+            Some(t) => inner.full_prompts.insert(thread_id.into(), t),
+            None => inner.full_prompts.remove(thread_id),
+        };
     }
 
     pub fn argv(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
@@ -715,7 +732,7 @@ impl ClaudeHost {
         inner.pipe = Some(pipe);
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, mut text: String, effort: Option<String>) {
         let mut recovered = false;
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
@@ -874,6 +891,10 @@ impl ClaudeHost {
                     stderr = s;
                     recovered = true;
                     requeued = followups;
+                    // The new session holds none of what the short prompt left out.
+                    if let Some(full) = self.inner().full_prompts.remove(&tid) {
+                        text = full;
+                    }
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
                 }
@@ -1125,6 +1146,10 @@ impl ClaudeHost {
                     p.background = p.held.len();
                     p.close_if_done();
                 }
+            }
+            "system" if msg["subtype"] == "compact_boundary" => {
+                // Claude summarised the session, manually or on its own: what earlier turns said may be gone.
+                self.inner().compacted.insert(tid.into());
             }
             "system" if msg["subtype"] == "init" => {
                 let session = msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string();

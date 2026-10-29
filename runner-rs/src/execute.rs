@@ -1551,9 +1551,11 @@ impl Runner {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
                 return Err(Fail::runtime(CONTINUE_LOST));
             }
-            // A resumed thread already holds the repo rules unless they changed since it was given them.
+            // A resumed thread already holds the repo rules unless they changed since it was given them, or a
+            // compaction first may have taken them out.
             let digest = p.rules_digest.clone();
-            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str()));
+            let compacted_first = session.as_ref().is_some_and(|s| s.why == Some(crate::continuity::COMPACTED));
+            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
             let names = self.names().await;
             let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
@@ -1563,19 +1565,44 @@ impl Runner {
             let after_interrupt = resumed && self.state.repo_rules(&crate::continuity::interrupted_key(&th), None)?.as_deref() == Some("1");
             attempt["_replaced"] = json!(session.as_ref().is_some_and(|s| s.replaces()));
             attempt["_side_ran"] = json!(side_ran);
-            let mut prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            // A resumed thread that still holds its standing instructions and its task, both unchanged, is given a
+            // line for each instead (crate::prompt::build): only on a host that says when it compacts, and never when
+            // anything since may have taken them out (a compaction, a side session, an interruption).
+            let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
+            let seen = if prompt_turn && resumed && !compacted_first && !side_ran && !after_interrupt {
+                crate::prompt::Seen {
+                    standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
+                    task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
+                }
+            } else {
+                crate::prompt::Seen::default()
+            };
+            // Until this turn ends with no compaction, the thread may not hold what it is given.
+            for key in [crate::continuity::standing_key(&th), crate::continuity::task_key(&th)] {
+                self.state.repo_rules(&key, Some(""))?;
+            }
+            // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
+            let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
+            let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
+            let built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
+            let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
-                prompt = format!("{prompt}\n\n{note}");
+                tail = format!("{tail}\n\n{note}");
             }
             if side_ran {
-                prompt = format!("{prompt}\n\n{}", crate::continuity::AFTER_SIDE);
+                tail = format!("{tail}\n\n{}", crate::continuity::AFTER_SIDE);
             }
             if after_interrupt {
-                prompt = format!("{prompt}\n\n{}", crate::continuity::AFTER_INTERRUPT);
+                tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
-                prompt = format!("{prompt}\n\n{line}");
+                tail = format!("{tail}\n\n{line}");
             }
+            let prompt = format!("{}{tail}", built.text);
+            // A session that turns out to be missing restarts with all of it (hosts::Host::full_prompt).
+            h.full_prompt(&th, (built.text != built.full).then(|| format!("{}{tail}", built.full)));
+            // A compaction before this prompt (compact_first's own) is already accounted for above.
+            let _ = h.compacted(&th);
             let t = if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
@@ -1605,6 +1632,13 @@ impl Runner {
             let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
+            if h.compacted(&th) {
+                // The harness compacted the session during the turn: the next one is given everything again.
+                self.state.repo_rules(&th, Some(""))?;
+            } else if prompt_turn && drove.outcome == "completed" {
+                self.state.repo_rules(&crate::continuity::standing_key(&th), Some(&built.standing))?;
+                self.state.repo_rules(&crate::continuity::task_key(&th), Some(&built.task))?;
+            }
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
             // harness runs the turn there instead of losing it.
             unavailable = drove.limited || drove.retryable;
@@ -3360,16 +3394,26 @@ for line in sys.stdin:
     /// merged over a Claude bot whose host is the fake): (the session id of each process's command line, the
     /// prompt each process read, the result Tico got for each turn).
     async fn claude_turns(turns: &[Value]) -> (Vec<String>, Vec<String>, Vec<Value>) {
+        claude_turns_compacting(turns, &[]).await
+    }
+
+    /// `claude_turns`, with Claude compacting its session on its own (a `compact_boundary`) in each process of
+    /// `compacting` (counted from 0, a /compact first being a process of its own).
+    async fn claude_turns_compacting(turns: &[Value], compacting: &[usize]) -> (Vec<String>, Vec<String>, Vec<Value>) {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(true)));
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        for n in compacting {
+            std::fs::write(dir.join(format!("compacts-{n}")), "").unwrap();
+        }
         let script = format!(
             "case \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\n\
              n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'\n\
              IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n\n\
              id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
+             if [ -e '{d}/compacts-'$n ]; then echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
              cat >/dev/null\n", d = dir.display());
@@ -3431,6 +3475,41 @@ for line in sys.stdin:
         // One-shot: the next claim does not carry the flag.
         assert_eq!(session_of(&completions[2]), ("resumed".to_string(), Value::Null, Value::Null));
         assert!(!prompts[3].contains("/compact"));
+    }
+
+    #[tokio::test]
+    async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
+        let held = |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI");
+        let full = |p: &str| !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI") && p.contains("Read AGENT.md and state.md");
+        // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
+        // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
+        let turns = [json!({}), json!({}), json!({}), json!({}), json!({}), json!({"compact_first": true}), json!({})];
+        let (threads, prompts, _) = claude_turns_compacting(&turns, &[2]).await;
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        assert_eq!(prompts.len(), 8, "{prompts:?}");
+        assert!(full(&prompts[0]), "a new session: {}", prompts[0]);
+        for n in [1, 2, 4, 7] {
+            assert!(held(&prompts[n]), "turn {n}: {}", prompts[n]);
+            assert!(prompts[n].contains(&format!("Tico-Run: a-claude-{}", if n == 7 { 6 } else { n })), "{}", prompts[n]);
+        }
+        for n in [3, 6] {
+            assert!(full(&prompts[n]), "after a compaction: {}", prompts[n]);
+        }
+        assert!(prompts[5].contains("/compact"), "{}", prompts[5]);
+        for (n, p) in prompts.iter().enumerate().filter(|(n, _)| *n != 5) {
+            let q = if n > 5 { n - 1 } else { n };
+            assert!(p.contains(&format!("Question {q}")), "turn {n} lost its message: {p}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_does_not_say_when_it_compacts_gets_the_whole_prompt_every_turn() {
+        // Pi: every resumed turn is told everything, as before.
+        let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({})), ("m4", json!({}), json!({}))]).await;
+        assert!(ran.sessions.iter().all(|s| *s == ran.sessions[0]), "{:?}", ran.sessions);
+        for p in &ran.prompts {
+            assert!(!p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI") && p.contains("Assigned task:"), "{p}");
+        }
     }
 
     #[tokio::test]
