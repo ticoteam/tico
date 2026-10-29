@@ -2455,6 +2455,8 @@ def create_app(settings=None):
                 from .report_order import roster_saved
                 roster_saved(c, roster)                    # a new manager's report goes last there
                 c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+                from . import people_mirror
+                people_mirror.changed()                    # `left` and sign-in changes reach the Tico account
                 H.event(c, who.actor, "person.updated", pid, {"title": body.title is not None, "about": body.about is not None,
                                                               "goals": body.goals is not None, "notes": body.notes is not None,
                                                               "notify_slack_task_done": body.notify_slack_task_done,

@@ -38,7 +38,7 @@ def browser_login(h, email, client=None):
     client = client or h.browser
     began = client.get("/auth/login", follow_redirects=False)
     assert began.status_code == 302, began.text
-    code, state = h.fake.approve(began.headers["location"], email=email)
+    code, state = h.fake.approve(began.headers["location"], email=email, sub="acct-" + email)   # one account per address
     return client.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False)
 
 
