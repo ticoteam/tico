@@ -508,6 +508,37 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
             assert counts[300, key, brief] <= counts[30, key, brief] + 5, counts
 
 
+def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_private_tasks(api):
+    """The tag list reads every tag's links and attach events together, so a tag on 100 tasks costs what one on 10
+    does, and passes exactly the tags tag_readable passes one by one: a tag only on another's private tasks, still
+    named by an attach event after it came off, stays hidden."""
+    store = api.app.state.store
+
+    def attach(size):
+        with store.transaction() as c:
+            for n in range(size):
+                hidden = H.task_create(c, "human:cara", f"Plan {size}-{n}", "Secret", "human:cara", private=True,
+                                       lint=False)
+                H._set_task_tags(c, "human:cara", hidden["id"], [f"secret-{size}", "mixed"])
+                H._set_task_tags(c, "human:cara", hidden["id"], ["mixed"])        # the attach event stays
+                shared = H.task_create(c, "human:ana", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
+                H._set_task_tags(c, "human:ana", shared["id"], ["mixed", f"open-{size}"])
+
+    counts = {}
+    for size in (10, 100):
+        attach(size)
+        for token, person in (("ben-test", "human:ben"), ("cara-test", "human:cara")):
+            listed, counts[size, person] = traced_get(api, "tags", token)
+            with store.read() as c:
+                one_by_one = [t["id"] for t in H.tags(c) if task_privacy.tag_readable(c, Identity(person, "human"), t)]
+            assert [t["id"] for t in listed["tags"]] == one_by_one
+            keys = {t["key"] for t in listed["tags"]}
+            assert {"mixed", f"open-{size}"} <= keys
+            assert (f"secret-{size}" in keys) == (person == "human:cara")
+    assert counts[100, "human:ben"] <= counts[10, "human:ben"] + 5, counts
+    assert counts[100, "human:cara"] <= counts[10, "human:cara"] + 5, counts
+
+
 def busy(api):
     """Another bot's write: it moves the provenance clock, so the next request rebuilds what it caches by it."""
     with api.app.state.store.transaction() as c:
