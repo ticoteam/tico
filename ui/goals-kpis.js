@@ -801,6 +801,33 @@ function bindGoalWhy(state, root, reload) {
 const goalTreeKey = () => JSON.stringify([strategyBotName(),
   (S.emps || []).map(e => [e.name, e.display_name, e.org_parent, e.team, e.status]),
   (S.people || []).map(p => [p.id, p.org_parent, p.team, p.hidden]), (S.orgGroups || []).map(g => [g.id, g.parent, g.org_parent])]);
+// The tree's lines (goals.css, tree-lines.css). The rows are one flat list, each with its depth, so whether a line
+// runs on past a row depends on the rows after it: read bottom up, open[l] says a row at depth l is still to come
+// before the tree climbs above it. A row at depth d hangs from the last row above it at depth d - 1 (its manager, or a
+// group), turns its elbow into its own avatar, and drops a stub from its avatar when its reports follow; a further
+// goal of the same owner (gt-cont) only carries the lines past it, its owner's reports' among them.
+function goalTreeLines(tree) {
+  const rows = [...tree.children], depth = li => Number(li.style.getPropertyValue('--d')) || 0;
+  const cont = li => li.classList.contains('gt-cont');
+  const group = [], under = rows.map(li => {   // top down: is each level's manager a group?
+    const was = group.slice();
+    if (!cont(li)) group[depth(li) + 1] = li.classList.contains('gt-group');
+    return was;
+  });
+  const open = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const li = rows[i], d = depth(li), more = cont(li), ind = li.querySelector(':scope>.gt-ind');
+    ind.classList.toggle('gt-elbow', !more && d > 0);
+    ind.classList.toggle('gt-gp', !more && d > 0 && !!under[i][d]);
+    ind.classList.toggle('gt-kids', !more && !!open[d + 1]);
+    let rails = '';
+    for (let l = 1; l <= (more ? d + 1 : d); l++) {
+      if (open[l]) rails += `<i class="gt-rail${under[i][l] ? ' gt-gp' : ''}" style="--l:${l}" aria-hidden="true"></i>`;
+    }
+    ind.insertAdjacentHTML('afterend', rails);
+    if (!more) { open.length = d + 1; open[d] = true; }
+  }
+}
 function goalsRender(state) {
   const body = $('#goal-body');
   if (!body || !state.loaded) return;
@@ -827,6 +854,7 @@ function goalsRender(state) {
   // goals (someone gone from the roster), at the end.
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
   body.innerHTML = goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}</ul>`;
+  goalTreeLines(body.querySelector('#goal-tree'));
   // Tapping a goal opens it on its own (goalSheetOpen); the name, a line with no goal, or Enter opens the owner's panel.
   for (const li of body.querySelectorAll('.gt-row')) {
     const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});

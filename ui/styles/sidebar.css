@@ -50,7 +50,8 @@
 .inbox-kind{width:16px;height:16px;font-size:16px;flex:none}
 .inbox-slack{width:15px;height:15px;flex:none;color:var(--muted)}
 .inbox-list a.cur .inbox-slack,.inbox-list a.cur .inbox-kind{color:var(--ink)}
-.tree ul.node-sources{margin:0 0 2px 27px;padding:0 0 0 2px}
+/* A bot's mailboxes and channels, their icons in line with its reports' avatars; its rail runs past them to the reports. */
+.tree ul.node-sources{margin:0 0 2px;padding:0 0 0 calc(var(--tree-av) / 2 + var(--tree-elbow) + var(--tree-gap) + var(--tree-lead) - 8px);--tree-from:0px;--tree-down:2px}
 .tree ul.node-sources a{padding:4px 8px;font-size:var(--t-sm);color:var(--muted)}
 .tree ul.node-sources a:hover,.tree ul.node-sources a.cur{color:var(--ink)}
 .side-footer{flex:none;border-top:1px solid var(--line);padding:3px 0 max(3px,env(safe-area-inset-bottom))}
@@ -107,16 +108,29 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #account-menu{width:max-content;min-width:100%;box-sizing:border-box}#account-menu .nav-link{white-space:nowrap}
 #account-menu button.nav-link{width:100%;border:0;background:none;text-align:left;cursor:pointer}#account-menu button.nav-link:hover{background:var(--surface2)}
 .tree,.tree ul{list-style:none;margin:0;padding:0}
-.tree ul{margin-left:12px;border-left:1px solid var(--line);padding-left:2px}
-.tree li.dept{margin-top:4px}
+/* The lines (tree-lines.css): a rail from each manager's avatar, an elbow into each report's. A row's avatar sits
+   --tree-lead in from its left (a.node's padding) and is --tree-av across (16px, 20px on the top level when nobody is on
+   top: renderTree's sizes); a group's rail hangs from its name's left edge, as if its avatar had no width. Reports are
+   indented just enough for the elbow, so every offset follows from those two. The chevron that folds a row sits at its
+   right end, as on the sidebar's sections, and leaves the space between the rail and the avatar to the line. */
+.tree{--tree-lead:6px;--tree-elbow:12px;--tree-x:calc(var(--tree-lead) - var(--tree-elbow) - var(--tree-gap))}
+.tree li{position:relative;--tree-av:16px;--tree-up:0px;margin-top:var(--tree-up);--tree-stub-x:calc(var(--tree-lead) + var(--tree-av) / 2)}
+#tree:not(:has(>li.org-top))>li{--tree-av:20px}
+.tree li:has(>.noderow>.seat){--tree-av:20px}
+.tree li.org-group{--tree-av:0px}
+.tree ul:not(.node-sources){margin-left:calc(var(--tree-av) / 2 + var(--tree-elbow) + var(--tree-gap))}
+.tree .noderow,.tree ul.node-sources{position:relative}
+.tree .noderow{--tree-from:calc(50% + var(--tree-av) / 2)}
+.tree li.org-group>.noderow{--tree-from:calc(50% + var(--t-label) / 2)}
+.tree li.dept{--tree-up:4px}
 .tree li.dept>.noderow .node{font-weight:600}
 /* The top of the chart (ui/app/sidebar.js renderTree): its row reads as a manager's without the chevron; what reports to it
    sits beside it, not under it. */
 .tree li.org-top>.noderow .node{font-weight:600}
 /* A bot or human after a group at the top is spaced like the next group, so it does not read as the group's last row. */
-.tree li.org-group+li:not(.org-group){margin-top:8px}
-.tree li.org-group{margin-top:8px}
-.tree li.org-group:first-child{margin-top:2px}
+.tree li.org-group+li:not(.org-group){--tree-up:8px}
+.tree li.org-group{--tree-up:8px}
+.tree li.org-group:first-child{--tree-up:2px}
 .org-group-tools{display:none;margin-left:auto;flex:none}
 .tree li.org-group>.noderow:hover .org-group-tools,.tree li.org-group>.noderow:focus-within .org-group-tools{display:inline-flex}
 @media (hover:none){.org-group-tools{display:inline-flex}}
@@ -125,9 +139,11 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-tool .nav-icon{font-size:16px}
 .org-plus{font-size:20px;line-height:var(--lh-none);font-weight:400;color:var(--muted)}.org-history:hover .org-plus,.org-tool:hover .org-plus{color:var(--ink)}
 .org-name{flex:1;min-width:0;font:inherit;font-size:var(--t-base);padding:2px 6px;border:1px solid var(--accent);border-radius:6px;background:var(--surface);color:var(--ink)}
-.tree li.org-new{padding:2px 0 2px 16px;display:flex}
-.tree .noderow.drop-target,.tree .org-no-group.drop-target{outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+.tree li.org-new{padding:2px 0 2px var(--tree-lead);display:flex}
+/* Over the tree's lines, which are drawn above the rows. */
+.tree .noderow.drop-target,.tree .org-no-group.drop-target{position:relative;z-index:1;outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
 /* A report's place among its manager's reports: a line where it will go, and its Move menu (ui/app/sidebar.js). */
+#tree .node:is(.drop-before,.drop-after,.drop-refused){position:relative;z-index:1}
 #tree .node.drop-before{box-shadow:0 -2px 0 var(--accent)}#tree .node.drop-after{box-shadow:0 2px 0 var(--accent)}
 #tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
 /* Folded to no width rather than hidden, so focus can come back to it after a move. */
@@ -140,15 +156,14 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-order-menu button:disabled{color:var(--muted);background:none;cursor:default}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;padding:6px 6px 4px 2px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+.tree .dept-label{flex:1;padding:5px 6px 5px var(--tree-lead);color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */
 .tree a.dept-label{text-decoration:none}
 .tree a.dept-label:hover,.tree a.dept-label.cur{color:var(--ink);text-decoration:none}
 .noderow{display:flex;align-items:center}
-.chev{background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:rotate(90deg);transition:transform var(--dur) var(--ease);flex:none;border-radius:4px}
+.chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:rotate(90deg);transition:transform var(--dur) var(--ease);flex:none;border-radius:4px}
 .chev.col{transform:rotate(0deg)}
 .chev:hover{color:var(--ink);background:var(--surface2)}
-.tree li:not(.dept) .noderow{padding-left:16px}
 .tree a.node{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
 .tree a.node:hover{background:var(--surface2);text-decoration:none}
 .tree a.node.cur{background:var(--surface2);font-weight:600}
@@ -169,7 +184,9 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}
 /* A group's Bet picker, under its row (ui/app/sidebar.js orgBetPopHTML); the flag stays lit when the group has one. */
 .org-tool.on{color:var(--accent)}
-.org-bet-pop{margin:4px 0 6px 18px;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop)}
+/* In line with the group's members; the group's rail runs past it on the left. */
+.org-bet-pop{position:relative;margin:4px 0 6px calc(var(--tree-elbow) + var(--tree-gap) + var(--tree-lead));padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);
+  --tree-stub-x:calc(-1px - var(--tree-elbow) - var(--tree-gap));--tree-from:-5px;--tree-down:7px}
 .org-bet-pop .org-bet-f select{height:32px;font-size:var(--t-base)}
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}

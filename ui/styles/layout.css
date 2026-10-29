@@ -29,9 +29,8 @@ body.native #app-nudge{display:none}
   .tree a.node{font-size:var(--t-lg);min-height:46px;padding:6px 8px}
   .tree .dept-label{font-size:var(--t-base);min-height:44px;display:flex;align-items:center;cursor:pointer}
   .tree .cnt{font-size:var(--t-sm);padding:1px 8px}
-  .chev{width:44px;height:44px;font-size:24px;margin-left:-8px}
-  .tree li:not(.dept) .noderow{padding-left:36px}
-  .tree ul{margin-left:14px}
+  .chev{width:44px;height:44px;font-size:24px;margin-right:-8px}
+  .tree{--tree-lead:8px}
   .section-toggle{min-height:44px;font-size:var(--t-base)}
   /* iOS Safari zooms into any field whose text is under 16px and leaves the page zoomed, so on a
      phone every text field is 16px. Zoom itself stays allowed. */
