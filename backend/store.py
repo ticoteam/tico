@@ -287,6 +287,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(
  subject, body, from_addr, to_text, mailbox UNINDEXED, msg_id UNINDEXED, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS credential_uses(
+ credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', at TEXT NOT NULL,
+ logged TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(credential_id, actor, bot));
+CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, at);
 CREATE TABLE IF NOT EXISTS credentials(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
@@ -548,8 +553,9 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
 # than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source), `credential.revealed` (credentials.last_used reads the
-# newest use of a credential, however old).
+# runtime of an old limited run that kept no limit_source). `credential.revealed` and `credential.sent_to_computer`
+# are not swept: they are the credential's audit trail, and their repeats are written less often (credentials.record_use).
+# Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
 EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
                        "message.notice")
 EVENT_RETENTION_DAYS = 30
@@ -957,6 +963,8 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
+            H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
