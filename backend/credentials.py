@@ -5,9 +5,11 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Request
@@ -23,6 +25,13 @@ CONTEXT = {'application': 'tico-credentials'}
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
+# A website login (docs/credential-vault.md "Website logins"): its value is JSON {"password", "totp"}, it is never an
+# environment variable, and only the bot's own runner reads it (runner-login-credentials) to type it into a page.
+LOGIN = 'login'
+MAX_SITES = 50
+_HOST = re.compile(r'^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$')
+# The vault `create_login`/`update_login` write through when no vault is passed: the app's (install_credentials).
+VAULT = None
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -44,6 +53,42 @@ def refuse_reserved(env, stored=''):
                           f"in the same save (for example {env.removeprefix('TICO_')}) and the change is saved", 422)
         raise Problem('env', f"{env} is a name Tico or the computer uses itself; choose another variable name "
                       "(names starting TICO_, DYLD_ or LD_ are reserved)", 422)
+
+
+def clean_sites(values):
+    """A login's sites as stored: lowercase hostnames, no scheme, port or path, in order, once each. A full address is
+    taken for its hostname; anything that is not a hostname is refused."""
+    out = []
+    for value in values or ():
+        text = str(value or '').strip().lower()
+        if not text:
+            continue
+        try:
+            host = (urlsplit(text if '://' in text else '//' + text).hostname or '').strip('.')
+            host = host.encode('idna').decode('ascii') if host and not host.isascii() else host
+        except (ValueError, UnicodeError):
+            host = ''
+        if not _HOST.match(host):
+            raise Problem('sites', 'A site is a hostname like acme.example', 422)
+        if host not in out:
+            out.append(host)
+    if len(out) > MAX_SITES:
+        raise Problem('sites', f'A login lists at most {MAX_SITES} sites', 422)
+    return out
+
+
+def site_matches(sites, host):
+    """Whether a page on `host` belongs to a login for `sites`: the host itself or a subdomain of one."""
+    host = str(host or '').strip().lower().strip('.')
+    return bool(host) and any(host == s or host.endswith('.' + s) for s in sites or ())
+
+
+def sites_of(row):
+    try:
+        found = json.loads(row['sites'] or '[]')
+    except (ValueError, TypeError, IndexError, KeyError):
+        return []
+    return [s for s in found if isinstance(s, str)] if isinstance(found, list) else []
 
 
 def administrator(c, who, admins):
@@ -135,12 +180,18 @@ def can_open(c, who, admins):
 class CredentialWrite(Contract):
     # Password spaces are significant. SecretStr prevents repr/debug output from exposing it.
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
-    name: str = Field(min_length=1, max_length=150)
+    # Empty only for a login, which is then named for its first site.
+    name: str = Field(default='', max_length=150)
     username: str = Field(default='', max_length=250)
-    kind: Literal['api_key', 'password', 'token', 'file', 'connection'] = 'api_key'
+    kind: Literal['api_key', 'password', 'token', 'file', 'connection', 'login'] = 'api_key'
     env: str = Field(default='', max_length=100, pattern=r'^$|^[A-Z_][A-Z0-9_]*$')
     secret: SecretStr | None = Field(default=None, max_length=100_000)
     source: str = Field(default='', max_length=500)
+    # A login's: its password (`secret` is taken too; absent or empty keeps the stored one), its 2FA setup key (a base32
+    # key or an otpauth:// link; empty removes it, absent keeps it) and its sites. Ignored for every other kind.
+    password: SecretStr | None = Field(default=None, max_length=4096)
+    totp: SecretStr | None = Field(default=None, max_length=1000)
+    sites: list[str] | None = Field(default=None, max_length=MAX_SITES * 2)
     expected_revision: int | None = Field(default=None, ge=1)
     # BotOps adding a credential a person asked for in chat, as that person (backend/app.py
     # delegated_identity). Only create and grant take it; reveal, update and revoke never do.
@@ -363,8 +414,9 @@ class Vault:
             # Keyed fingerprint: neither a plaintext secret nor an offline password-guessing
             # hash enters the mutation receipt. Responses here contain only metadata.
             payload = body.model_dump()
-            if isinstance(payload.get('secret'), SecretStr):
-                payload['secret'] = payload['secret'].get_secret_value()
+            for field, value in list(payload.items()):
+                if isinstance(value, SecretStr):
+                    payload[field] = value.get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
             old = c.execute('SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
@@ -386,8 +438,11 @@ class Vault:
 
     @staticmethod
     def brief(row):
-        return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created', 'updated')} | {
+        out = {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created', 'updated')} | {
             'stored': row['ciphertext'] is not None, 'env': model_env(row['name'], row['kind'], row['env'])}
+        if row['kind'] == LOGIN:
+            out |= {'sites': sites_of(row), 'has_totp': bool(row['has_totp'])}
+        return out
 
     def member_stores(self, c, who, bot):
         """Whether this person, not a credential administrator, may store a credential for `bot`: the team rule
@@ -408,6 +463,8 @@ class Vault:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
         if not old and body.expected_revision is not None:
             raise Problem('version_conflict', 'New credentials have no previous revision', 409)
+        if body.kind == LOGIN or (old and old['kind'] == LOGIN):
+            return self.write_login(c, who, body, old, cid, member)
         cid, now = cid or H.new_id(), H.now()
         ciphertext, nonce, preview = (old['ciphertext'], old['nonce'], old['preview']) if old else (None, None, '')
         secret = body.secret.get_secret_value() if body.secret is not None else None
@@ -432,6 +489,57 @@ class Vault:
                    int(member)))
         H.event(c,who.actor,'credential.updated' if old else 'credential.created',cid,{'secret_changed':secret is not None})
         return self.brief(self.row(c,cid))
+
+    def open_login(self, c, row):
+        """A stored login's {"password", "totp"}: for the bot's runner and the code view, never for a response."""
+        try:
+            value = json.loads(self.cipher.decrypt(c, row))
+        except ValueError:
+            raise Problem('vault_unavailable', 'This login could not be read', 503) from None
+        return {'password': str(value.get('password') or ''), 'totp': value.get('totp') or None}
+
+    def write_login(self, c, who, body, old, cid, member):
+        """A website login, created or changed: the password and 2FA key sealed together as one value, the sites and
+        whether it has 2FA kept beside it in plain columns. A login stays a login: it has no variable to become."""
+        from .totp import parse_totp
+        if body.kind != LOGIN:
+            raise Problem('kind', 'A login stays a login: add the key as a new credential instead', 422)
+        if old and old['kind'] != LOGIN:
+            raise Problem('kind', 'Add a login as a new credential', 422)
+        sites = clean_sites(body.sites) if body.sites is not None else (sites_of(old) if old else [])
+        name = body.name.strip() or (sites[0] if sites else '')
+        if not name:
+            raise Problem('credential', 'Enter a name or the website it is for', 422)
+        if body.env:
+            raise Problem('env', 'A login is typed into a website, never given as a variable: leave the variable empty', 422)
+        given = body.password if body.password is not None else body.secret
+        # An edit form sends the password box empty when the person leaves it alone: that keeps the stored one.
+        password = (given.get_secret_value() if given is not None else '') or None
+        previous = self.open_login(c, old) if old and old['ciphertext'] is not None else None
+        if password is None and previous is None:
+            raise Problem('credential', 'Enter the password', 422)
+        password = previous['password'] if password is None else password
+        totp = (previous or {}).get('totp') if body.totp is None else parse_totp(body.totp.get_secret_value())
+        changed = previous is None or password != previous['password'] or totp != previous.get('totp')
+        cid, now = cid or H.new_id(), H.now()
+        ciphertext, nonce = self.cipher.encrypt(c, cid, json.dumps({'password': password, 'totp': totp}))
+        c.execute('INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,'
+                  'created_by,member_stored,sites,has_totp) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                  'name=excluded.name,username=excluded.username,preview=excluded.preview,ciphertext=excluded.ciphertext,'
+                  'nonce=excluded.nonce,source=excluded.source,sites=excluded.sites,has_totp=excluded.has_totp,'
+                  'revision=credentials.revision+1,updated=excluded.updated,updated_by=excluded.updated_by',
+                  (cid, name, body.username, LOGIN, '', '••••••', ciphertext, nonce, body.source, now, now, who.actor, who.actor,
+                   int(member), json.dumps(sites), int(bool(totp))))
+        H.event(c, who.actor, 'credential.updated' if old else 'credential.created', cid,
+                {'secret_changed': changed, 'kind': LOGIN, 'sites': sites, 'has_totp': bool(totp)})
+        if old:
+            # A bot that already holds it, waiting for a person on a site it now covers, goes on (`Vault.grant` for new ones).
+            from . import reconnects
+            for g in c.execute("SELECT DISTINCT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL "
+                               "AND subject LIKE 'bot:%'", (cid,)).fetchall():
+                if effective_grant(c, cid, g['subject']):
+                    reconnects.site_login_saved(c, H.actor_id(g['subject']), sites)
+        return self.brief(self.row(c, cid))
 
     def manages_bot(self, c, who, subject):
         """Whether `subject` is a bot this person owns or manages (`Auth.bot_manager`)."""
@@ -521,6 +629,10 @@ class Vault:
             # A task waiting for this variable on its reconnect card goes on (backend/reconnects.py).
             from . import reconnects
             reconnects.secret_stored(c,H.actor_id(subject),row['env'])
+        if subject.startswith('bot:') and row['kind']==LOGIN:
+            # A task waiting for a person on one of this login's sites goes on (backend/reconnects.py `site_login_saved`).
+            from . import reconnects
+            reconnects.site_login_saved(c,H.actor_id(subject),sites_of(row))
         return {'id':gid,'subject':subject,'credential':row['name'],'env':row['env']}
 
     def reveal(self,c,who,cid):
@@ -530,6 +642,14 @@ class Vault:
         row=self.row(c,cid)
         if row['ciphertext'] is None:
             raise Problem('not_connected','This connection has no stored password or key',409)
+        if row['kind']==LOGIN:
+            # A login's password is shown to a person signed in themselves, never to a bot, a token or BotOps acting
+            # for them: a model must never read it (the runner takes it from runner-login-credentials). Its 2FA key is
+            # never shown to anyone; Show code gives the current code.
+            if who.role not in ('owner','human') or who.via or getattr(who,'via_token',None):
+                raise Problem('forbidden','Open the password in Tico yourself, signed in',403)
+            H.event(c,who.actor,'credential.revealed',cid,{'attempt':None,'kind':LOGIN})
+            return {'id':cid,'value':self.open_login(c,row)['password']}
         value=self.cipher.decrypt(c,row)
         H.event(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None})
         return {'id':cid,'value':value}
@@ -551,9 +671,50 @@ def last_used(c,cid):
     return {'last_used':row['ts'],'last_used_by':detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')}
 
 
+def create_login(c, who, *, name, username, password, totp=None, sites=(), source='manual', for_bot=None, vault=None):
+    """A new website login, as `who` (a credential administrator, or with `for_bot` a member storing it for a bot they
+    manage). Granted to no one: the caller grants it. `totp` is a 2FA setup key or otpauth:// link, or None. Returns its id."""
+    body = CredentialWrite(name=name, username=username or '', kind=LOGIN, password=SecretStr(password),
+                           totp=SecretStr(totp) if totp else None, sites=list(sites or ()), source=source or '')
+    return (vault or VAULT).write(c, who, body, for_bot=for_bot)['id']
+
+
+def update_login(c, who, cid, *, name=None, username=None, password=None, totp=None, sites=None, for_bot=None, vault=None):
+    """Change a website login: None keeps a field as it is; `totp=''` removes its 2FA. Returns its id."""
+    vault = vault or VAULT
+    row = vault.row(c, cid)
+    if row['kind'] != LOGIN:
+        raise Problem('kind', 'That credential is not a login', 422)
+    body = CredentialWrite(name=name or row['name'], username=row['username'] if username is None else username, kind=LOGIN,
+                           password=SecretStr(password) if password is not None else None,
+                           totp=SecretStr(totp) if totp is not None else None, sites=None if sites is None else list(sites),
+                           source=row['source'], expected_revision=row['revision'])
+    return vault.write(c, who, body, cid, for_bot=for_bot)['id']
+
+
+def code_for(c, vault, who, cid):
+    """The current 2FA code of a login, for a person who may open it (`permitted`), signed in themselves: never a bot,
+    an API token or BotOps acting for them. Recorded (`credential.code`), never with the code."""
+    from . import totp as T
+    validate_identity(c, who)
+    if who.role not in ('owner', 'human') or who.via or getattr(who, 'via_token', None):
+        raise Problem('forbidden', 'Open the code in Tico yourself, signed in', 403)
+    if not permitted(c, who, cid, vault.admins):
+        raise Problem('forbidden', 'You do not have access to this credential', 403)
+    row = vault.row(c, cid)
+    if row['kind'] != LOGIN or row['ciphertext'] is None:
+        raise Problem('not_login', 'Only a login has a 2FA code', 409)
+    secret = vault.open_login(c, row)['totp']
+    if not secret:
+        raise Problem('no_totp', 'This login has no 2FA setup key', 409)
+    H.event(c, who.actor, 'credential.code', cid, {})
+    return {'code': T.code(secret), 'expires_in': T.expires_in(secret)}
+
+
 def install_credentials(app,store,delegate=None,propose=None):
+    global VAULT
     from . import runner_versions
-    vault=app.state.vault=Vault(store,auth=getattr(app.state,'auth',None))
+    vault=app.state.vault=VAULT=Vault(store,auth=getattr(app.state,'auth',None))
     def migration_runner(c,who):
         if who.role!='runner' or not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
             raise Problem('forbidden','Only a registered Computer may migrate its bots\' credentials',403)
@@ -661,6 +822,10 @@ def install_credentials(app,store,delegate=None,propose=None):
                 if not (revealable or mine):continue
                 added|=mine
                 item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
+                if row['kind']==LOGIN:
+                    # Its password is revealed, never its 2FA key: who could reveal it may see its current code instead.
+                    person=not who.via and not getattr(who,'via_token',None)
+                    item|={'can_reveal':revealable and person,'can_code':revealable and person and bool(row['has_totp'])}
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
@@ -682,7 +847,7 @@ def install_credentials(app,store,delegate=None,propose=None):
     @app.post('/api/v2/credentials/{cid}')
     def update(request:Request,cid:str,body:CredentialWrite):
         # On a person's behalf only the name and bot key name may change: never the secret.
-        if body.on_behalf_of and body.secret is not None:
+        if body.on_behalf_of and (body.secret is not None or body.password is not None or body.totp is not None):
             raise Problem('forbidden', 'A stored secret is changed only by a credential administrator', 403)
         who=acting(request,body)
         return vault.change(who,request.url.path,request.headers.get('idempotency-key'),body,
@@ -742,6 +907,11 @@ def install_credentials(app,store,delegate=None,propose=None):
         with store.transaction() as c:
             return vault.reveal(c,request.state.identity,cid)
 
+    @app.get('/api/v2/credentials/{cid}/code')
+    def login_code(request:Request,cid:str):
+        with store.transaction() as c:
+            return code_for(c,vault,request.state.identity,cid)
+
     @app.get('/api/v2/credential-runtime')
     def runtime(request:Request):
         who=request.state.identity
@@ -751,10 +921,43 @@ def install_credentials(app,store,delegate=None,propose=None):
             values=[]
             held=granted(c,who.actor)
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
-                if row['ciphertext'] is not None and row['id'] in held:
-                    values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
+                # Never a login: the turn's own commands hold this token, so a login goes to its runner alone
+                # (runner-login-credentials below), which types it into the page.
+                if row['ciphertext'] is None or row['id'] not in held or row['kind']==LOGIN:
+                    continue
+                values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             return {'credentials':values}
+
+    @app.get('/api/v2/runner-login-credentials')
+    def login_credentials(request:Request,attempt:str):
+        """The website logins granted to the bot of run `attempt`, to the computer running it and to nothing else. The
+        runner keeps them to type into the page (POST {TICO_BROWSER_URL}/fill) and to take out of what the run records;
+        the run itself, and so its model, never holds a password or a 2FA key."""
+        who=request.state.identity
+        if who.role!='runner' or who.via or getattr(who,'via_token',None):
+            raise Problem('forbidden','Only a registered computer may ask for this',403)
+        with store.transaction() as c:
+            if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
+                raise Problem('forbidden','Only a registered computer may ask for this',403)
+            run=c.execute('SELECT bot,runner_id,state FROM attempts WHERE id=?',(attempt,)).fetchone()
+            if not run or run['runner_id']!=who.runner_id:
+                raise Problem('forbidden','That run is not on this Computer',403)
+            if run['state'] not in ('leased','running'):
+                raise Problem('stale_lease','That run has ended',409)
+            if not c.execute("SELECT 1 FROM bots WHERE slug=? AND state='active'",(run['bot'],)).fetchone():
+                raise Problem('forbidden','That bot is not active',403)
+            logins=[]
+            held=granted(c,'bot:'+run['bot'])
+            for row in c.execute('SELECT * FROM credentials WHERE kind=? AND ciphertext IS NOT NULL ORDER BY id',(LOGIN,)):
+                if row['id'] not in held:
+                    continue
+                logins.append({'id':row['id'],'name':row['name'],'username':row['username'],'sites':sites_of(row),
+                               **vault.open_login(c,row)})
+                # A use, for Library > Tools "last used", as every credential sent to a computer is.
+                H.event(c,who.actor,'credential.sent_to_computer',row['id'],
+                        {'bot':run['bot'],'runner':who.runner_id,'attempt':attempt,'use':'browser'})
+            return {'logins':logins}
 
     @app.get('/api/v2/runner-gateway-credentials')
     def gateway_credentials(request:Request,attempt:str):

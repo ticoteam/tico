@@ -74,7 +74,8 @@ Tico's own app uses more of the API than the spec lists. The line:
 - **Internal.** Everything else: the `/api/...` routes without `v2` (the web app's own: `/api/me`, `/api/employees`,
   `/api/meetings`, `/api/status` and others; a custom frontend uses `GET /api/v2/bots/{bot}` and
   `GET /api/v2/bots` where the web app uses `/api/employees`), runner and bot endpoints (`/api/v2/runners`,
-  `/jobs`, `/attempts`, `/agents`), settings, access, credentials, tools, market, routines, `/mcp` and
+  `/jobs`, `/attempts`, `/agents`), settings, access, credentials (website logins and their 2FA codes included,
+  [credential-vault.md](credential-vault.md#website-logins)), tools, market, routines, `/mcp` and
   `/scim`. They change between releases without notice. A route you need that is not in the spec: open an issue to
   have it added to the stable set.
 - **Inside answers.** Fields ending in `_json` (`refs_json`, `participants_json`, `acceptance_json`) are storage

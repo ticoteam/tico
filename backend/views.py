@@ -1686,7 +1686,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # A reconnect card (backend/reconnects.py): its one line is the ask, its fix is on the card.
                 card = reconnect_cards[row["id"]]
                 item["reconnect"] = card
-                item["person_ask"], item["ask_missing"] = reconnects.line(c, card["bot"], card["service"], card["label"]), False
+                item["person_ask"], item["ask_missing"] = reconnects.line(c, card["bot"], card["service"], card["label"], card["fix"]), False
             if row.get('assigned_not_started'):
                 item.update(assigned_not_started=True, note=row['note'])
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)

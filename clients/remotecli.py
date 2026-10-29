@@ -170,6 +170,8 @@ def run(args, who=None):
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
+    if fn == "browser needs-you":
+        return via_tool(client, args)
     if args.cmd == "settings":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):

@@ -7109,6 +7109,8 @@ def create_app(settings=None):
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
+    from .browser_logins import install as install_browser_logins
+    install_browser_logins(app, store, auth)
     from . import company_storage
     company_storage.install(app, store, auth)
     from . import tico_storage

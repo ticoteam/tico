@@ -292,7 +292,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL,
- updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
+ sites TEXT NOT NULL DEFAULT '[]', has_totp INTEGER NOT NULL DEFAULT 0);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -919,6 +920,9 @@ class Store:
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
             c.executescript(_credential_cards.SCHEMA)
+            # A login card's sites and the username it suggests (backend/credential_cards.py, kind "login").
+            H.add_column(c, "credential_requests", "sites_json", "TEXT NOT NULL DEFAULT '[]'")
+            H.add_column(c, "credential_requests", "username", "TEXT NOT NULL DEFAULT ''")
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
             from . import screening as _screening
@@ -1001,6 +1005,10 @@ class Store:
                 # starts at 0: on a server that ran the backfill above, `created_by` named every admin who ever added a
                 # company credential as its owner, and nothing recorded which rows a member stored, so none stay theirs.
                 H.add_column(c, "credentials", "member_stored", "INTEGER NOT NULL DEFAULT 0")
+                # A website login's sites (lowercase hostnames, JSON) and whether it has a 2FA key; the password and
+                # key themselves are in its sealed value (backend/credentials.py `write_login`).
+                H.add_column(c, "credentials", "sites", "TEXT NOT NULL DEFAULT '[]'")
+                H.add_column(c, "credentials", "has_totp", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")
