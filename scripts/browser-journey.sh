@@ -68,7 +68,7 @@ step_relogin() { browser_phase relogin; }
 
 step_needs_you() {
   local card id task key
-  bot_phase needs-you || return 1
+  PHASE_ON=task bot_phase needs-you || return 1
   card="$(python3 "$J" reconnect-id "$HOST_NAME")" || return 1
   [ -n "$card" ] || { say "no open site reconnect for $HOST_NAME in Needs you"; return 1; }
   id="$(printf '%s' "$card" | pick 'd["id"] or "-"')"

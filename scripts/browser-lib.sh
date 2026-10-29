@@ -146,11 +146,33 @@ start_runner() {  # the enrollment code: the runner as docker/runner.compose.yam
 }
 
 attach_chrome_tool() {  # the bot's slug: the bot opts in to Chrome in its bot.yaml in the checkout on the computer
+  # A starter's bot.yaml already says `tools: []`; the entry goes into that list rather than a second `tools:` key.
   docker exec -i -e BOT="$1" "$RUNNER" sh -s <<'SH'
-f=$(find /home/runner -path "*/bot-$BOT/bot.yaml" -not -path '*/node_modules/*' 2>/dev/null | head -n 1)
+f=$(find /home/runner -path "*/bot-$BOT/bot.yaml" -not -path '*/node_modules/*' -not -path '*/worktrees/*' 2>/dev/null | head -n 1)
 [ -n "$f" ] || { echo "no bot.yaml for $BOT" >&2; exit 1; }
-grep -q '^tools:' "$f" || printf '\ntools:\n  - service: chrome\n' >> "$f"
+if ! grep -q '^  - service: chrome$' "$f"; then
+  if grep -q '^tools: *\[\] *\(#.*\)\{0,1\}$' "$f"; then sed -i 's/^tools: *\[\].*$/tools:\n  - service: chrome/' "$f"
+  elif grep -q '^tools: *$' "$f"; then sed -i '/^tools: *$/a\  - service: chrome' "$f"
+  elif grep -q '^tools:' "$f"; then echo "bot.yaml's tools are not a block list: $(grep '^tools:' "$f")" >&2; exit 1
+  else printf '\ntools:\n  - service: chrome\n' >> "$f"; fi
+fi
+echo "chrome tool: $f"
+grep -q '^  - service: chrome$' "$f"
 SH
+}
+
+chrome_diagnose() {  # what the computer says about the bot's Chrome when it did not answer (no values: none exist yet)
+  say "diagnosis: runner log lines about the browser"
+  docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|xvfb|display|devtools' | tail -n 25 | sed 's/^/    /'
+  say "diagnosis: the chrome tool as the computer reports it, and browser_v1"
+  japi GET "/api/v2/bots/$BOT/tools" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+for t in d.get("tools", []):
+    if str(t.get("service","")).lower()=="chrome": print("    tool:", json.dumps({k: t.get(k) for k in ("status","detail","problem","pending")}))' 2>&1
+  japi GET /api/v2/operations | python3 -c 'import json,sys
+m=json.load(sys.stdin)["machines"][0]
+caps=m.get("capabilities") or (m.get("readiness") or {}).get("capabilities") or []
+print("    browser_v1 advertised:", "browser_v1" in json.dumps(caps) or "browser_v1" in json.dumps(m))' 2>&1
 }
 
 bot_phase() {  # the phase's name, then extra KEY=value pairs; one line per check, nonzero when any check fails
@@ -159,8 +181,15 @@ bot_phase() {  # the phase's name, then extra KEY=value pairs; one line per chec
   nonce="$name-$RANDOM$RANDOM"
   out="$WORK/phase-$nonce.json"
   text="journey-run $nonce $name PRACTICE=$PRACTICE HOST=$HOST_NAME OTHER=$OTHER CREDENTIAL=$CREDENTIAL LABEL=$LABEL $*"
-  python3 -c 'import json,sys; sys.stdout.write(json.dumps({"text": sys.argv[1]}))' "$text" > "$WORK/body.json"
-  japi POST "/api/v2/chat/$bot" --body-file "$WORK/body.json" >/dev/null || { say "the chat with $bot did not take the message"; return 1; }
+  # PHASE_ON=task runs the phase as a turn on a new task of the bot's (what waits on a person needs a task); else chat.
+  if [ "${PHASE_ON:-chat}" = task ]; then
+    BOT="$bot" python3 -c 'import json,os,sys; sys.stdout.write(json.dumps({"owner": "bot:" + os.environ["BOT"],
+        "title": "Practice site sign-in", "body": sys.argv[1]}))' "$text" > "$WORK/body.json"
+    japi POST /api/v2/tasks --body-file "$WORK/body.json" >/dev/null || { say "$bot did not take the task"; return 1; }
+  else
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"text": sys.argv[1]}))' "$text" > "$WORK/body.json"
+    japi POST "/api/v2/chat/$bot" --body-file "$WORK/body.json" >/dev/null || { say "the chat with $bot did not take the message"; return 1; }
+  fi
   retry "$PHASE_WAIT" docker exec "$RUNNER" test -s "$RESULTS_DIR/$nonce.json" ||
     { say "the bot did not finish $name in $PHASE_WAIT seconds"; return 1; }
   docker exec "$RUNNER" cat "$RESULTS_DIR/$nonce.json" > "$out" || return 1
@@ -313,7 +342,7 @@ step_bot() {
 }
 
 step_chrome() {
-  bot_phase status || return 1
+  bot_phase status || { chrome_diagnose; return 1; }
   CHROME=1
 }
 

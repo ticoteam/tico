@@ -14,8 +14,9 @@ const env = process.env;
 const practice = env.PRACTICE || '';                   // e.g. http://login.practice.test:8080
 const host = env.HOST || 'login.practice.test';
 const other = env.OTHER || '';                         // another page on another host, for the refused fill
-const credential = env.CREDENTIAL || 'PRACTICE_LOGIN';
-const label = env.LABEL || 'Practice login';
+const label = env.LABEL || 'Practice-login';
+// A login saved from a card is named after the card's label, so the bot fills it by that name.
+const credential = label;
 const checks = [];
 const data = {};
 const check = (name, ok, detail = '') => {
@@ -23,8 +24,9 @@ const check = (name, ok, detail = '') => {
   return Boolean(ok);
 };
 const sleep = ms => new Promise(done => setTimeout(done, ms));
-// Phases that connect to Chrome themselves, once Chrome is up again: the runner may still be starting it at their start.
-const LAZY_BROWSER = new Set(['after-crash']);
+// Phases that only call the hub, or connect to Chrome themselves once it is up again (after-crash): they run whether or
+// not the bot's Chrome answers at their start.
+const NO_BROWSER = new Set(['request-card', 'needs-you', 'after-crash']);
 
 // hub: the CLI's own JSON, whatever its exit code (a refusal prints its reason on stdout).
 function hub(args) {
@@ -33,15 +35,26 @@ function hub(args) {
   } catch (error) {
     let json = null;
     try { json = JSON.parse(String(error.stdout || '')); } catch { /* not JSON: keep the exit status only */ }
-    return {ok: false, json};
+    return {ok: false, json, err: String(error.stderr || '').trim().split('\n').slice(-2).join(' ')};
   }
 }
+const why = r => (r.json && (r.json.error || r.json.problem)) || r.err || '';
 
 // The DevTools endpoint the runner serves for this bot's Chrome (TICO_BROWSER_URL = http://127.0.0.1:<port>/<secret>).
 class Browser {
   async open() {
     const base = (env.TICO_BROWSER_URL || '').replace(/\/$/, '');
-    const version = await (await fetch(base + '/json/version')).json();
+    if (!base) throw new Error('TICO_BROWSER_URL is not set in this turn');
+    // A first start includes Chrome's install, which can outlast one json/version wait (503 until it is up).
+    const end = Date.now() + 300000;
+    let version = null;
+    for (;;) {
+      const reply = await fetch(base + '/json/version');
+      version = await reply.json().catch(() => ({}));
+      if (reply.ok) break;
+      if (reply.status !== 503 || Date.now() > end) throw new Error(`json/version ${reply.status}: ${version.problem || version.error || ''}`);
+      await sleep(5000);
+    }
     this.ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((ok, fail) => { this.ws.onopen = ok; this.ws.onerror = () => fail(new Error('no DevTools socket')); });
     this.id = 0;
@@ -108,9 +121,10 @@ class Tab {
 
 // A secret goes from Tico to the page through the runner's `hub browser fill`, never through this script.
 const fill = (tab, field, selector) => {
-  const args = ['browser', 'fill', '--credential', credential, '--field', field, '--target-id', tab.targetId];
+  const args = ['browser', 'fill', credential, field, '--target', tab.targetId];
   if (selector) args.push('--selector', selector);
-  return hub(args).json || {};
+  const r = hub(args);
+  return r.json || {ok: false, error: r.err};
 };
 
 async function logIn(tab) {
@@ -129,7 +143,8 @@ async function logIn(tab) {
 
 async function status(browser) {
   const r = hub(['browser', 'status']);
-  check('chrome is running for this bot', r.json && r.json.running === true, JSON.stringify(r.json && {running: r.json.running}));
+  check('chrome is running for this bot', r.json && r.json.running === true,
+    JSON.stringify(r.json ? {running: r.json.running, version: r.json.version, problem: r.json.problem, error: r.json.error} : r.err));
 }
 
 const phases = {
@@ -137,9 +152,9 @@ const phases = {
 
   // The bot asks the person for the practice login: a card in the chat, saved by the person (the journey, here).
   async 'request-card'(browser, data) {
-    const r = hub(['credential', 'request', credential, '--kind', 'login', '--sites', host, '--label', label]);
+    const r = hub(['credential', 'request', '--kind', 'login', '--site', host, '--label', label]);
     data.card = (r.json && r.json.id) || '';
-    check('login card requested', Boolean(data.card));
+    check('login card requested', Boolean(data.card), why(r));
   },
 
   // The bot signs up on the practice site: its own inbox takes the emailed code, which the bot reads and types.
@@ -209,9 +224,9 @@ const phases = {
   },
 
   async 'needs-you'(browser, data) {
-    const r = hub(['browser', 'needs-you', '--host', host, '--reason', 'The practice site wants a person to confirm a sign-in']);
+    const r = hub(['browser', 'needs-you', host, '--reason', 'The practice site wants a person to confirm a sign-in']);
     data.needs = (r.json && r.json.id) || '';
-    check('the site needs a person is raised', r.ok === true);
+    check('the site needs a person is raised', r.ok === true, why(r));
   },
 
   // Scenario: the phone rental the owner accepted is an SMS inbox. The bot types its number on the practice site and
@@ -347,7 +362,7 @@ const phases = {
     await tab.go(practice + '/challenge');
     const before = await tab.eval('fetch("/challenge/state", {credentials: "include"}).then(r => r.json()).then(d => d.passed)');
     check('the check is not passed yet', before === false, before);
-    const r = hub(['browser', 'needs-you', '--host', host, '--reason', 'Hold the screen for three seconds to pass the check']);
+    const r = hub(['browser', 'needs-you', host, '--reason', 'Hold the screen for three seconds to pass the check']);
     data.needs = (r.json && r.json.id) || '';
     check('the check asks a person', r.ok === true);
   },
@@ -432,7 +447,7 @@ async function main() {
   } else {
     let browser = null;
     try {
-      if (!LAZY_BROWSER.has(phase)) browser = await new Browser().open();
+      if (!NO_BROWSER.has(phase)) browser = await new Browser().open();
       await phases[phase](browser, data);
     } catch (error) {
       check('phase finished', false, error.message);

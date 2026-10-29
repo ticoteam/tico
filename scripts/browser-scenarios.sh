@@ -128,7 +128,8 @@ sc_attach() {
 # Scenario 7: the bot signs in and asks for a person at the check page. The person holds the bot's screen (control mode,
 # 390x844), the person marks it done, and the next turn reads the check as passed.
 sc_captcha() {
-  browser_phase challenge || return 1
+  # The check's card waits on a person, so the phase runs on a task of the bot's, as the journey's needs-you does.
+  PHASE_ON=task browser_phase challenge || return 1
   local rid card id task key out="$WORK/captcha-person.json" person
   rid="$(runner_id)" || return 1
   send POST "/api/v2/runners/$rid/screen" '{"mode": "view"}' >/dev/null || { say "the screen could not be turned on"; return 1; }
