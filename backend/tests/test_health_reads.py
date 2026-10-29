@@ -2,12 +2,16 @@
 import contextlib
 
 from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
 from backend.tests.test_status_reads import busy, setup
+from backend.tests.test_task_lanes import new_task, task_bot
 
 
-def counted(api, monkeypatch, path, token="ana-test"):
+def counted(api, monkeypatch, path, token="ana-test", trace=None):
     """GET `path` as `token`: the body, and the statements it took on the one snapshot it read."""
     store, seen = api.app.state.store, []
+    if trace is not None:
+        seen = trace
     store.__dict__.pop("roster_rows", None)          # per-store caches start empty, so every count is the same count
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
@@ -15,7 +19,7 @@ def counted(api, monkeypatch, path, token="ana-test"):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(lambda q: seen.append(q))
                         try:
                             yield c
                         finally:
@@ -48,3 +52,32 @@ def test_health_page_reads_the_same_statements_however_many_bots_it_shows(api, m
     few = counted(api, monkeypatch, "/api/v2/health")[1]
     busy(api, machine, 6, 12)
     assert counted(api, monkeypatch, "/api/v2/health")[1] == few
+
+
+def lost_assignments(api, clock, names):
+    """Tasks of one bot whose first start was lost: rewoken once, and still not started two hours on."""
+    for name in names:
+        new_task(api, name)
+    cancel(api)
+    advance(api, clock, 1)
+    sweep(api)
+    advance(api, clock, 3)
+
+
+def overdue_items(body):
+    return next((c["items"] for c in body["checks"] if c["id"] == "assigned_not_started"), [])
+
+
+def test_health_reads_the_same_statements_for_many_overdue_assigned_tasks(api, clock, monkeypatch):
+    # Each overdue assignment of one bot used to read that bot's whole start check again (owner, config, computer,
+    # claim refusal, lanes): about 20 statements a task. The bot's check is read once for all of its tasks now.
+    task_bot(api, lanes=True)
+    lost_assignments(api, clock, [f"Lost {n}" for n in range(3)])
+    counted(api, monkeypatch, "/api/v2/health")
+    body, few = counted(api, monkeypatch, "/api/v2/health")
+    assert len(overdue_items(body)) == 3
+    lost_assignments(api, clock, [f"Lost {n}" for n in range(3, 27)])
+    body, many = counted(api, monkeypatch, "/api/v2/health")
+    assert len(overdue_items(body)) == 27
+    # Each overdue task still reads its own queued job's fences (put-back, check model, attempts): about 9 each, not 47.
+    assert many - few <= 10 * (27 - 3)

@@ -1549,10 +1549,12 @@ def view(c, who, settings, auth, github, config):
     checks = []
     from . import assigned_start
     assigned = []
-    for row in assigned_start.overdue(c, visible=auth.task_sql(c, who)):
-        if not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({auth.task_sql(c, who)})", (row['id'],)).fetchone():
-            continue
-        why = assigned_start.reason(c, row, settings)
+    # Each bot's checks and each task's waits are read once for all the overdue tasks, not once per task.
+    from . import auto_tasks
+    overdue = list(assigned_start.overdue(c, visible=auth.task_sql(c, who)))   # visibility is in its page query
+    suspect, shared = auto_tasks.maybe_waiting(c, overdue), {}
+    for row in overdue:
+        why = assigned_start.reason(c, row, settings, shared, suspect)
         text = assigned_start.description(c, row, settings, why)
         assigned.append({'task': row['id'], 'bot': H.actor_id(row['owner']), 'name': row['title'],
                          'reason': why, 'text': text,

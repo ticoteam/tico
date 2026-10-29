@@ -264,17 +264,18 @@ def counts(c, bot, who=None, tasks=None):
     return {'going': going, 'waiting': queued}
 
 
-def refusal(c, row, config, woken=False, result=False, *, message=None):
+def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=None):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
     that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
-    Waiting task's open subtasks do not hold back (`waiting`)."""
+    Waiting task's open subtasks do not hold back (`waiting`). `suspect`: `maybe_waiting` over the caller's tasks; a
+    task outside it is not asked `waiting` again."""
     if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
                                               or waiting(c, row, starting=True, result=result)):
         return "task_wait"
     if not startable(c, row):
         return None
-    if waiting(c, row, starting=True, include_next_run=False):
+    if (suspect is None or row['id'] in suspect) and waiting(c, row, starting=True, include_next_run=False):
         return 'task_wait'
     if next_run_held(c, row, message=message):
         return 'task_next_run'

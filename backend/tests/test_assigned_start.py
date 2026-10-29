@@ -531,6 +531,8 @@ def test_bad_candidate_does_not_pin_recovery_cursor_or_hide_later_tasks(api, clo
         return original(c, row, *args, **kwargs)
 
     monkeypatch.setattr(A.auto_tasks, 'waiting', one_bad)
+    # Every row is a wait suspect here, so waiting() runs for each one and its failure is what is isolated.
+    monkeypatch.setattr(A.auto_tasks, 'maybe_waiting', lambda c, rows: {row['id'] for row in rows})
     cursor, failures = [''], []
     with api.app.state.store.read() as c:
         assert A.due(c, H.now(), cursor=cursor, failures=failures) == [ordered[1]]

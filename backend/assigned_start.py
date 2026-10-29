@@ -48,6 +48,8 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
                                  (*params, SCAN_LIMIT)))
     earliest = min((row['created'] for row in rows), default=cutoff)
+    # Tasks the page's wait checks can't rule out; the rest of the page skips waiting() (auto_tasks.maybe_waiting).
+    suspect = auto_tasks.maybe_waiting(c, rows)
     for row in rows:
         if scanned is not None:
             scanned[:] = [row['id']]
@@ -65,7 +67,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
                 continue
             if recorded is True and (not saved or saved['rewoken_at'] > H.shift(at, hours=-ESCALATE_HOURS)):
                 continue
-            if auto_tasks.waiting(c, row, starting=True):
+            if row['id'] in suspect and auto_tasks.waiting(c, row, starting=True):
                 continue
             # Include folded inputs and next-run carried work, not just the job's original task.
             bot = H.actor_id(row['owner'])
@@ -169,32 +171,49 @@ def manager(c, row):
     return target if H.actor_kind(target) else H.bot_actor(target) if target else None
 
 
-def reason(c, row, settings):
-    """The queued job's own fences, even beside another claimable lane; never another task's refusal."""
+def _bot_state(c, bot, settings):
+    """What every task of this bot shares: why none of its tasks can start (or None), and what a task's own check needs.
+    Read once per bot per `shared` map in `reason`, not once per overdue task of the bot."""
     from . import execution as E
     from .shared_bots import follow
     from .store import readiness_document
-    bot = H.actor_id(row['owner'])
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
-        return owner['state']
+        return owner['state'], None
     config = c.execute(f"SELECT bc.config_json,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                        "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not runner:
-        return 'no_computer'
+        return 'no_computer', None
     if not config:
-        return 'config'
+        return 'config', None
     if not runner['last_seen'] or runner['last_seen'] < H.shift(H.now(), minutes=-10):
-        return 'computer_offline'
+        return 'computer_offline', None
     ready = readiness_document(runner['readiness_json'])
     held_bots, held_lanes = E.claimed_busy(runner['id'])
     why, declared = E.claim_refusal(c, settings, runner, bot, config['config_json'], config['draining'], ready, held_bots)
     if why:
+        return why, None
+    return None, {'runner': runner, 'ready': ready, 'followed': follow(c, bot, declared),
+                  'busy': set(E.live_lanes(c)) | held_lanes}
+
+
+def reason(c, row, settings, shared=None, suspect=None):
+    """The queued job's own fences, even beside another claimable lane; never another task's refusal.
+    `shared`: a dict the caller keeps across its tasks, so each bot's shared checks are read once for all of them.
+    `suspect`: auto_tasks.maybe_waiting over those tasks."""
+    from . import execution as E
+    bot = H.actor_id(row['owner'])
+    if shared is None:
+        why, state = _bot_state(c, bot, settings)
+    else:
+        if bot not in shared:
+            shared[bot] = _bot_state(c, bot, settings)
+        why, state = shared[bot]
+    if why:
         return why
-    followed = follow(c, bot, declared)
-    busy = set(E.live_lanes(c)) | held_lanes
+    runner, ready, followed, busy = state['runner'], state['ready'], state['followed'], state['busy']
     jobs = c.execute(f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
                      "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                      f"WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created,j.id",
@@ -202,9 +221,10 @@ def reason(c, row, settings):
     if jobs:
         job = jobs[0]
         return ('scoped' if not job['in_scope'] else 'uncertain' if not job['free'] else
-                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner)) or
+                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect) or
                 ('cooling_off' if E.login_refusal(c, settings, runner['id'], bot, followed, job['id']) else 'not_started'))
-    return auto_tasks.refusal(c, row, followed, woken=True) or row.get('rewake_refusal') or 'no_queued_wake'
+    return (auto_tasks.refusal(c, row, followed, woken=True, suspect=suspect) or row.get('rewake_refusal')
+            or 'no_queued_wake')
 
 
 def description(c, row, settings, why=None):

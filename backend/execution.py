@@ -1762,7 +1762,7 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks)."""
@@ -1787,7 +1787,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER and not refs.get("run_now"):
         # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
         # do not hold it back, though a snooze, a person, an approval or a worktree still does.
-        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message):
+        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
@@ -2009,6 +2009,20 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
     return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
 
 
+def _queue_suspects(c, queue):
+    """The queued jobs' tasks that auto_tasks.waiting might hold, read as one set (auto_tasks.maybe_waiting)."""
+    tasks = []
+    for job in queue:
+        message = H.message(c, job["message_id"])
+        if not message:
+            continue
+        task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        if task:
+            tasks.append(task)
+    return auto_tasks.maybe_waiting(c, tasks)
+
+
 def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
     """Each queued job with its own claim reason; common bot fences are read once."""
     from .read_cache import one, rows
@@ -2032,13 +2046,14 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
     busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
+    suspect = _queue_suspects(c, queue)
     for job in queue:
         if not job["in_scope"]:
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         yield job, why
 
