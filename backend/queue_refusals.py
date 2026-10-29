@@ -24,7 +24,8 @@ def current(c, settings, bot):
                     "WHERE a.bot=? AND b.state='active'", (bot,)).fetchone()
     if not row:
         return {}
-    why, created, _, job = E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True)
+    claim = E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True)
+    why, created, job = claim[0], claim[1], claim[-1]          # with_job=True: the job ID is the fourth value
     if not job or not why or why == 'lane_held':
         return {}
     return {'bot': bot, 'runner_id': row['runner_id'], 'name': row['display_name'] or bot,

@@ -149,7 +149,10 @@ def pending(c, at=None):
         if failed and at - failed < OUTAGE_EVERY:
             continue                # a retry that raised waits, whatever refused the move
         if detail.get("outage"):
-            if at - H.parse_ts(detail.get("at") or last["ts"]) < OUTAGE_EVERY:
+            tried = H.parse_ts(detail.get("at") or last["ts"])
+            if tried is None:
+                raise ValueError(f"unreadable retry time: {detail.get('at') or last['ts']!r}")
+            if at - tried < OUTAGE_EVERY:
                 continue
         elif fingerprint(c, row) == detail.get("seen"):
             continue

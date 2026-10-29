@@ -170,6 +170,8 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         reset = H.shift(hit, seconds=CAPACITY_WAIT)
     at = believable(reset, hit)
     hit_at = H.parse_ts(hit)
+    if hit_at is None:
+        raise ValueError(f"unreadable limit time: {hit!r}")
     # A window Try now cut short (`try_now`) still counts as in force for a limit its probe meets.
     end = max(old.get("until") or "", old.get("cut") or "") if old else ""
     if old and end > _iso(hit_at) and (busy or not old.get("capacity")):
@@ -178,7 +180,10 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
         # end too: a busy model says nothing of the plan's reset. A quota notice during a capacity hold starts its own
         # quota hold.
         streak = int(old.get("streak") or (0 if busy else 1))
-        until = max(at or hit_at, H.parse_ts(end))
+        ended = H.parse_ts(end)
+        if ended is None:
+            raise ValueError(f"unreadable hold end: {end!r}")
+        until = max(at or hit_at, ended)
         if busy and not old.get("capacity"):
             busy, at, error, until = False, old.get("reset"), old.get("error") or "", H.parse_ts(end)
     else:
