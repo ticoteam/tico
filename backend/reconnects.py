@@ -29,6 +29,11 @@ keys:
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
   or granted to that bot (backend/credentials.py). Cancelling its credential card ends the wait with a wake that
   says so (`dropped`).
+- `site:<bot>:<host>`: the bot's browser needs a person on a website (`hub browser needs-you`: a login it does not
+  have, a captcha, a code only a person gets; backend/browser_logins.py), or it asked for a login for that site on
+  its credential card (kind `login`). The card links the computer's screen (`computer`) and a login card for the host
+  (`request`); fixed when the person presses Done (`done`), or when a login covering that host (the host or a parent
+  domain) is saved for or granted to the bot (`site_login_saved`).
 
 Anything else (GitHub, an MCP server's OAuth) is a new key with its own fix kind, opened and fixed through the same
 `open` and `fixed`. The person is the bot's operator, else the company owner (usage_limits.recipients), except a
@@ -57,6 +62,11 @@ OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','cancelle
 def secret_key(bot, env):
     """A credential's card key: per bot, since the grant is the bot's (BotOps may ask for two bots' on one task)."""
     return f"secret:{bot}:{env}"
+
+
+def site_key(bot, host):
+    """A website's card key: per bot, since each bot has its own browser and its own logins."""
+    return f"site:{bot}:{host}"
 
 
 def _H():
@@ -116,12 +126,16 @@ def line(c, bot, service, label, fix=None):
         return f"{name} needs {label} to go on."
     if service == "login":
         return f"{name} can't sign in to {label}."
+    if service == "site":
+        reason = str((fix or {}).get("reason") or "").strip()
+        return f"{name} needs you on {label}" + (f": {reason}" if reason else ".")
     return f"{name} can't reach {label}."
 
 
 def view(row):
     """The card as the thread draws it (message refs `reconnect`): status open, fixed, cancelled or retired."""
-    return {"key": row["key"], "service": row["service"], "label": row["label"], "bot": row["bot"],
+    # `id` is the card's message: what POST /api/v2/reconnects/{id}/done names.
+    return {"id": row.get("message_id"), "key": row["key"], "service": row["service"], "label": row["label"], "bot": row["bot"],
             "person": row["person"], "fix": json.loads(row["fix_json"] or "{}"),
             "status": (row.get("ended") or "fixed") if row.get("fixed_at") else "open", "fixed_at": row.get("fixed_at")}
 
@@ -161,6 +175,8 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
                                 H.conversation(c, row["conversation_id"]), "say", {"task": task_id, **card}, None, None,
                                 delivered_at=H.now())
         record["message_id"] = sent["id"] if sent else None
+        if sent:
+            c.execute("UPDATE messages SET refs_json=json_set(refs_json,'$.reconnect.id',?) WHERE id=?", (sent["id"], sent["id"]))
     c.execute("INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix_json,message_id,created) "
               "VALUES(:task_id,:key,:bot,:owner,:service,:label,:person,:fix_json,:message_id,:created)", record)
     _wait(c, row, f"Reconnect {label} so {_bot_name(c, bot)} can go on.")
@@ -296,7 +312,7 @@ def fixed(c, key, bot=None, why=""):
             _retire(c, wait)
         elif standing == "live" and _close(c, wait, "fixed", at):
             done.append(wait)
-    _settle_requests(c, [w for w in done if w["service"] == "secret"], at)
+    _settle_requests(c, [w for w in done if w["service"] in ("secret", "site")], at)
     woken = [t for t in dict.fromkeys(w["task_id"] for w in done) if deliver(c, t, why=why)]
     _release_sign_in_holds(c, {w["bot"] for w in done if w["key"].startswith("login:")})
     return woken
@@ -327,6 +343,8 @@ def _said(c, wait):
     if wait["ended"] == "cancelled":
         from . import task_holds
         return f"{task_holds.name(c, wait['person'])} cancelled the card for {wait['label']}: it was not saved."
+    if wait["service"] == "site":
+        return f"{wait['label']} is ready: try it again."
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
 
@@ -476,6 +494,8 @@ def hold(c, task_id):
     card = pending(c, task_id)
     if not card:
         return None
+    if card["service"] == "site":
+        return {"why": f"a person on {card['label']}", "on": card["person"], "what": "help on " + card["label"]}
     return {"why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
             "on": card["person"], "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"]}
 
@@ -530,14 +550,15 @@ def request_of(c, task_id, key):
     return found
 
 
-def waited_requests(c, bot, env):
-    """The pending credential requests for `bot`'s `env` that a standing card waits on: a newer ask leaves them be."""
+def waited_requests(c, bot, env, key=None):
+    """The pending credential requests for `bot`'s `env` (or card `key`, a login's) that a standing card waits on: a
+    newer ask leaves them be."""
     if not _present(c):
         return set()
     live, args = _live()
     return {r["request"] for r in c.execute(
         f"SELECT json_extract(r.fix_json,'$.request') AS request, r.task_id, r.person FROM task_reconnects r "
-        f"WHERE r.bot=? AND r.key=? AND {live}", (bot, secret_key(bot, env), *args)).fetchall() if _reads(c, r)}
+        f"WHERE r.bot=? AND r.key=? AND {live}", (bot, key or secret_key(bot, env), *args)).fetchall() if _reads(c, r)}
 
 
 # ------------------------------------------------------------------------------------------------ the hooks
@@ -670,6 +691,44 @@ def google_failing(c, accounts):
             if row:
                 opened.append(task_id)
     return opened
+
+
+def site_login_saved(c, bot, sites):
+    """A login for `sites` now reaches `bot` (saved through its card, or granted to it): every open website card of
+    that bot whose host the login covers (that host or a subdomain of a listed one) is fixed."""
+    if not bot or not sites or not _present(c):
+        return []
+    from .credentials import site_matches
+    prefix = site_key(bot, "")
+    keys = [k for (k,) in c.execute("SELECT DISTINCT key FROM task_reconnects WHERE fixed_at IS NULL AND bot=? AND key LIKE ?",
+                                    (bot, prefix.replace("%", "") + "%")).fetchall()
+            if site_matches(sites, k[len(prefix):])]
+    woken = []
+    for key in keys:
+        woken += fixed(c, key, bot=bot, why="login")
+    return woken
+
+
+def card_by_id(c, card_id):
+    """The open card whose message is `card_id`, as a row, or None."""
+    if not card_id or not _present(c):
+        return None
+    row = c.execute("SELECT * FROM task_reconnects WHERE message_id=? AND fixed_at IS NULL", (card_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def done(c, wait):
+    """The person says a website card is done (they logged in on the screen, solved the check): every open card on its
+    key for that bot is fixed, and the login card it carried is no longer asked for. Returns the woken task ids."""
+    H = _H()
+    if _H()._has_table(c, "credential_requests"):
+        for (fix,) in c.execute("SELECT fix_json FROM task_reconnects WHERE key=? AND bot=? AND fixed_at IS NULL",
+                                (wait["key"], wait["bot"])).fetchall():
+            request = json.loads(fix or "{}").get("request")
+            if request:
+                c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=? AND status='pending'",
+                          (H.now(), request))
+    return fixed(c, wait["key"], bot=wait["bot"], why="done")
 
 
 def secret_stored(c, bot, env):

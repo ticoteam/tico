@@ -302,6 +302,11 @@ STABLE = [
      "Do what the bot recommends: answer its ask with what it said it would do, and close the card", None),
     ("/api/v2/needs-you/clarify", "post", "Needs you", "clarifyAsk",
      "Ask the bot behind a stale question whether it still matters, in clearer words", None),
+    ("/api/v2/reconnects/{card_id}/done", "post", "Needs you", "finishWebsiteCard",
+     "Close a website card (`reconnect.service` site, `reconnect.id` its message): the person did what the bot's browser "
+     "needed on that site. Every task of that bot waiting on the same site goes on with one wake; the card's person or "
+     "someone who manages the bot; repeating it answers the card's status. 409 for any other card, which closes by itself "
+     "once the account works", "ReconnectDone"),
     ("/api/v2/stale-review/accept-all", "post", "Needs you", "acceptAllStaleSuggestions",
      "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; "
      "a row whose task changed since is refused on its own and a row added since is left", None),
@@ -1630,6 +1635,7 @@ SCHEMAS.update({
         {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
     ]},
     'InboundCursor': obj({'cursor':'i'}),
+    'ReconnectDone': obj({'id':'s','status':'s','woken':items({'type':'string'})}),
     'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
     'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),

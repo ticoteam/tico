@@ -5,6 +5,10 @@ for, the format it takes and where to get one. The person types the value into t
 `POST /api/v2/credential-requests/{id}/save`, is checked here, stored in the vault under the variable's name and
 granted to that one bot. The bot is told it is saved; the value never enters a message, an event, a log or the model.
 
+A website login is asked for the same way (`kind: "login"` with its `sites`): the card takes a username, a password and
+an optional 2FA setup key, stores them as one login (backend/credentials.py `create_login`) granted to that bot, and
+the bot's browser types them into the site; the model never holds them.
+
 `hub credential set` takes a value a person gave BotOps in chat instead: the same store, as the person, and the
 words they pasted are taken out of the conversation (`redact_value`). What the vault allows is unchanged: only a
 credential administrator, or (team rule "Members store credentials") a person who manages the bot, stores a credential, and
@@ -25,7 +29,8 @@ from fastapi import Request
 from pydantic import Field, SecretStr
 
 from .auth import validate_identity
-from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
+from .credentials import (CredentialWrite, LOGIN, administrator, admin_names as _admin_names, ask_admin_detail, clean_sites,
+                          create_login, owned, sites_of, update_login)
 from .models import Contract, ID
 from . import reconnects
 from .store import H, Problem
@@ -59,17 +64,24 @@ ONLINE_S = 120
 
 
 class CredentialRequest(Contract):
-    env: str = Field(pattern=ENV)
+    # A login (`kind: "login"`) has no variable: it names its `sites` instead, and may suggest the `username`.
+    env: str = Field(default="", pattern=r"^$|" + ENV[1:])
     for_bot: ID | None = None
     label: str = Field(default="", max_length=120)
     format: str = Field(default="", max_length=120)
     help_url: str = Field(default="", max_length=300)
-    kind: Literal["api_key", "password", "token", "connection"] = "api_key"
+    kind: Literal["api_key", "password", "token", "connection", "login"] = "api_key"
+    sites: list[str] = Field(default_factory=list, max_length=50)
+    username: str = Field(default="", max_length=250)
     on_behalf_of: ID | None = None
 
 
 class CredentialSave(Contract):
-    value: SecretStr = Field(max_length=MAX_VALUE)
+    # `value` for a secret; `username`, `password` and an optional 2FA setup key (`totp`) for a login card.
+    value: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
+    username: str = Field(default="", max_length=250)
+    password: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
+    totp: SecretStr | None = Field(default=None, max_length=1000)
 
 
 class CredentialSet(Contract):
@@ -158,6 +170,47 @@ def admin_names(c, vault):
     return _admin_names(c, vault.admins)
 
 
+def store_login_for_bot(c, vault, who, bot, sites, username, password, totp=None, name=""):
+    """A login for `sites` on `bot`, created or replaced, and granted to that bot. The one replaced is a login granted to
+    this bot alone (or to no one) with the same username and a site in common, which `who` may change; else a new one.
+    `totp` None (or empty) keeps a replaced login's 2FA key. `who` is the person."""
+    validate_identity(c, who)
+    row = H.bot(c, bot)
+    admin = administrator(c, who, vault.admins)
+    if not admin and not (row and vault.member_stores(c, who, bot)):
+        names = admin_names(c, vault)
+        raise Problem("forbidden", "Only a credential admin, or someone who manages this bot, can store credentials for it"
+                      + (". Ask " + ", ".join(names[:3]) if names else ""), 403)
+    if not row:
+        raise Problem("not_found", "Bot not found", 404)
+    sites = clean_sites(sites)
+    if not sites:
+        raise Problem("sites", "Name the site this login is for", 422)
+    subject = "bot:" + bot
+    grants = {}
+    for g in c.execute("SELECT credential_id,subject FROM credential_grants WHERE revoked IS NULL"):
+        grants.setdefault(g["credential_id"], set()).add(g["subject"])
+    mine = set() if admin else owned(c, who)
+    same = [r for r in c.execute("SELECT * FROM credentials WHERE kind=? ORDER BY created", (LOGIN,))
+            if (admin or r["id"] in mine) and grants.get(r["id"], set()) <= {subject}
+            and (r["username"] or "").lower() == (username or "").lower() and set(sites_of(r)) & set(sites)]
+    existing = next((r for r in same if subject in grants.get(r["id"], set())), None) or next(iter(same), None)
+    if existing:
+        cid = update_login(c, who, existing["id"], username=username, password=password, totp=totp or None,
+                           sites=list(dict.fromkeys(sites_of(existing) + sites)), for_bot=bot, vault=vault)
+    else:
+        label = (name or "").strip() or sites[0]
+        if c.execute("SELECT 1 FROM credentials WHERE name=?", (label,)).fetchone():
+            label = f"{label} ({row['display_name'] or bot})"
+        cid = create_login(c, who, name=label, username=username, password=password, totp=totp or None, sites=sites,
+                           source="card", for_bot=bot, vault=vault)
+    vault.grant(c, who, cid, subject)
+    saved = vault.row(c, cid)
+    H.event(c, who.actor, "credential.set_for_bot", cid, {"kind": LOGIN, "sites": sites_of(saved), "bot": bot,
+                                                         "replaced": bool(existing)})
+    return {"id": cid, "name": saved["name"], "sites": sites_of(saved), "bot": bot, "replaced": bool(existing)}
+
+
 def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username=""):
     """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person."""
     validate_identity(c, who)
@@ -236,6 +289,12 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     return count
 
 
+def insert_request(c, row):
+    """A credential request row, by column name: a login card's columns were added after the table was."""
+    columns = list(row)
+    c.execute(f"INSERT INTO credential_requests({','.join(columns)}) VALUES({','.join(':' + k for k in columns)})", row)
+
+
 # ------------------------------------------------------------------ routes
 def install_credential_cards(app, store, vault, auth, botops, delegate, manager):
     """`botops` is the built-in bot's slug, `delegate(c, who, ref)` BotOps' acting-as-the-requester check, and
@@ -248,10 +307,15 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         if row["status"] == "pending" and not allowed:
             names = admin_names(c, vault)
             note = "Only a credential admin, or someone who manages this bot, can store this" + (". Ask " + ", ".join(names[:3]) if names else "") + "."
-        return {"id": row["id"], "status": row["status"], "env": row["env"], "bot": row["bot"], "bot_name": name,
-                "label": row["label"], "title": f"{name} needs {row['label'] or row['env']}", "format": row["format"],
-                "help_url": row["help_url"], "kind": row["kind"], "can_save": allowed and row["status"] == "pending",
-                "note": note, "credential_id": row["credential_id"]}
+        out = {"id": row["id"], "status": row["status"], "env": row["env"], "bot": row["bot"], "bot_name": name,
+               "label": row["label"], "title": f"{name} needs {row['label'] or row['env']}", "format": row["format"],
+               "help_url": row["help_url"], "kind": row["kind"], "can_save": allowed and row["status"] == "pending",
+               "note": note, "credential_id": row["credential_id"]}
+        if row["kind"] == LOGIN:
+            sites = json.loads(row["sites_json"] or "[]")
+            out |= {"sites": sites, "username": row["username"] or "",
+                    "title": f"{name} needs {row['label'] or 'a login for ' + (sites[0] if sites else 'a website')}"}
+        return out
 
     def turn_of(c, who):
         row = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
@@ -336,7 +400,14 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("not_found", "Bot not found", 404)
             manager(c, person, target)
             url = clean_help_url(body.help_url)
-            key = reconnects.secret_key(target, body.env)
+            login = body.kind == LOGIN
+            sites = clean_sites(body.sites) if login else []
+            if login and not sites:
+                raise Problem("sites", "Name the site the login is for, like acme.example", 422)
+            if not login and not body.env:
+                raise Problem("env", "Name the variable, like JIRA_BASIC_AUTH", 422)
+            env = "" if login else body.env
+            key = reconnects.site_key(target, sites[0]) if login else reconnects.secret_key(target, env)
             again = reconnects.request_of(c, task["id"], key) if task else None
             if again and again["requester"] != person.actor:
                 # Someone else is to save it now: their card replaces the old one (reconnects.open retires it).
@@ -347,29 +418,33 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 shown = view(c, again, person)
                 return {"id": again["id"], "status": "pending", "message_id": again["message_id"], "title": shown["title"],
                         "detail": "The card is still open in the task. You are told when it is saved: do not ask for the value in words."}
-            # A newer card replaces the person's older one for the same variable, except one another task waits on.
-            waited = reconnects.waited_requests(c, target, body.env)
-            for (old,) in c.execute("SELECT id FROM credential_requests WHERE requester=? AND bot=? AND env=? AND status='pending'",
-                                    (person.actor, target, body.env)).fetchall():
-                if old not in waited:
+            # A newer card replaces the person's older one for the same variable (a login's: the same sites), except one
+            # another task waits on.
+            waited = reconnects.waited_requests(c, target, env, key)
+            for old, old_kind, old_sites in c.execute(
+                    "SELECT id,kind,sites_json FROM credential_requests WHERE requester=? AND bot=? AND env=? AND status='pending'",
+                    (person.actor, target, env)).fetchall():
+                if old not in waited and (old_kind == LOGIN) == login and (not login or json.loads(old_sites or "[]") == sites):
                     c.execute("UPDATE credential_requests SET status='cancelled',updated=? WHERE id=?", (H.now(), old))
             rid = H.new_id()
             row = {"id": rid, "requester": person.actor, "conversation_id": msg["conversation_id"], "bot": target, "asker": asker,
-                   "env": body.env, "label": body.label.strip(), "format": body.format.strip(), "help_url": url,
-                   "kind": body.kind, "status": "pending", "created": H.now(), "updated": H.now(), "credential_id": None, "message_id": None}
-            c.execute("INSERT INTO credential_requests VALUES(:id,:requester,:conversation_id,:bot,:asker,:env,:label,:format,:help_url,"
-                      ":kind,:status,:created,:updated,:credential_id,:message_id)", row)
+                   "env": env, "label": body.label.strip(), "format": "" if login else body.format.strip(), "help_url": url,
+                   "kind": body.kind, "status": "pending", "created": H.now(), "updated": H.now(), "credential_id": None,
+                   "message_id": None, "sites_json": json.dumps(sites), "username": body.username.strip() if login else ""}
+            insert_request(c, row)
             shown = view(c, row, person)
             card = H._write_message(c, "bot:" + asker, person.actor, shown["title"], H.conversation(c, msg["conversation_id"]), "say",
                                     {"credential_request": rid, **({"task": task["id"]} if task else {})}, None, None,
                                     delivered_at=H.now())
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
-            if task and not reconnects.open(c, task["id"], target, key, "secret", body.label.strip() or body.env,
-                                            person.actor, {"kind": "secret", "request": rid}, message_id=card["id"],
-                                            owner=task["owner"]):
+            fix = {"kind": "secret", "request": rid, **({"host": sites[0]} if login else {})}
+            if task and not reconnects.open(c, task["id"], target, key, "secret",
+                                            body.label.strip() or (f"a login for {sites[0]}" if login else env),
+                                            person.actor, fix, message_id=card["id"], owner=task["owner"]):
                 # The task could not wait on it: no card is better than one nobody is told was not made.
                 raise Problem("no_card", "This task cannot wait on a credential card now", 409)
-            H.event(c, who.actor, "credential.requested", rid, {"env": body.env, "bot": target, "for": person.actor})
+            H.event(c, who.actor, "credential.requested", rid, {"env": env, "bot": target, "for": person.actor,
+                                                               **({"kind": LOGIN, "sites": sites} if login else {})})
             return {"id": rid, "status": "pending", "message_id": card["id"], "title": shown["title"],
                     "detail": "A card is open in the chat. You are told when it is saved: do not ask for the value in words."}
 
@@ -398,16 +473,23 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             row = load(c, rid, who)
             if row["status"] != "pending":
                 raise Problem("state", "This card is already " + row["status"], 409)
-            value = check_format(row["format"], body.value.get_secret_value())
             manager(c, auth.identity_for_actor(c, row["requester"]), row["bot"])
-            stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
+            if row["kind"] == LOGIN:
+                password = check_format("", body.password.get_secret_value() if body.password is not None else "")
+                totp = body.totp.get_secret_value().strip() if body.totp is not None else ""
+                stored = store_login_for_bot(c, vault, who, row["bot"], json.loads(row["sites_json"] or "[]"),
+                                             body.username.strip() or row["username"], password, totp or None,
+                                             name=row["label"])
+            else:
+                value = check_format(row["format"], body.value.get_secret_value() if body.value is not None else "")
+                stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute("UPDATE credential_requests SET status='saved',updated=?,credential_id=? WHERE id=?", (H.now(), stored["id"], rid))
             # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. A card in
             # a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])
             if conversation and H.bot(c, row["asker"]) and not reconnects.card_of(c, row["message_id"]):
                 H._write_message(c, row["requester"], "bot:" + row["asker"],
-                                 f"Saved {row['label'] or row['env']}. Test the connection now.", conversation, "say",
+                                 f"Saved {row['label'] or row['env'] or 'the login'}. Test the connection now.", conversation, "say",
                                  {"credential_saved": rid}, None, None)
             return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
 
