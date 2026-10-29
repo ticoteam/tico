@@ -57,7 +57,7 @@ async function check(engine) {
         return reply(fs.readFileSync(uiFile(ui[1]), 'utf8'), ui[1].endsWith('.css') ? 'text/css' : 'application/javascript');
       if (p.endsWith('.js')) return reply('', 'application/javascript');
       if (p === '/') return reply(html, 'text/html');
-      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config: {environment_id: 'fixture-company'}});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
