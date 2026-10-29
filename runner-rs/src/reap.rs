@@ -149,6 +149,7 @@ pub fn statuses(path: &std::path::Path) -> std::collections::HashMap<u32, i32> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::time::{Duration, Instant};
 
     pub const ARGS: &str = "TICO_REAP_TEST_ARGS";
