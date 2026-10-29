@@ -488,6 +488,9 @@ def operation_issues(c, who, auth):
     prime_machines(c, shown)
     queues = pipeline_stats.job_queues(c, who, [b["slug"] for b in bots if b["slug"] in status_inputs
                                                 and b["state"] != "archived"])
+    # Every stopped run of every bot that has one, read together: its checks below read each bot's runs from here.
+    from .execution import prime_readable_held
+    prime_readable_held(c, who, auth, [slug for slug, found in queues.items() if found["uncertain"]])
     for bot in bots:
         slug = bot["slug"]
         if not readable.get(slug, auth.FULL)["read"]:
