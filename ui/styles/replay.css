@@ -24,7 +24,7 @@
 .rp-stage{display:flex;flex-direction:column;gap:var(--s3);min-width:0;flex:1;min-height:0}
 .rp-top{display:flex;align-items:center;gap:var(--s3);min-height:28px}
 .rp-bots{display:flex;gap:6px 14px;flex-wrap:wrap;min-height:28px;flex:1;min-width:0}
-.rp-stamp{display:none;margin-left:auto;font-size:var(--t-md);font-weight:600;white-space:nowrap}
+.rp-stamp{display:none;margin-left:auto;font-size:var(--t-md);font-weight:600;white-space:nowrap;letter-spacing:var(--track-snug)}
 .rp-fade .rp-stamp{display:block}
 .rp-bots[hidden]{display:none}
 .rp-bot{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);transition:color var(--dur) var(--ease)}
@@ -47,7 +47,7 @@
 .rp-day{display:flex;align-items:center;gap:8px;margin:4px 0 0;font-size:var(--t-xs);color:var(--muted);font-weight:600;white-space:nowrap}
 .rp-day::before,.rp-day::after{content:"";flex:1;height:1px;background:var(--line)}
 .rp-empty{margin:auto;color:var(--muted);font-size:var(--t-sm)}
-.rp-line{display:flex;align-items:flex-start;gap:8px;font-size:var(--t-sm);color:var(--muted);line-height:1.4}
+.rp-line{display:flex;align-items:flex-start;gap:8px;font-size:var(--t-sm);color:var(--muted);line-height:var(--lh)}
 .rp-line b{color:var(--ink);font-weight:600}
 .rp-line-text{flex:1;min-width:0;overflow-wrap:anywhere}
 .rp-line-note{display:block;margin:2px 0 0;color:var(--muted)}
@@ -71,7 +71,7 @@
 .rp-ticks i{flex:1 1 0;min-width:0;background:color-mix(in srgb,var(--accent) 45%,transparent);border-radius:1px 1px 0 0}
 .rp-range{position:absolute;left:0;right:0;bottom:0;width:100%;margin:0;accent-color:var(--accent);background:transparent}
 .rp-speeds{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px}
-.rp-speeds button,.rp-skip{border:0;background:none;border-radius:999px;padding:4px 10px;font:600 var(--t-sm)/1.2 var(--sans);color:var(--muted);cursor:pointer;white-space:nowrap}
+.rp-speeds button,.rp-skip{border:0;background:none;border-radius:999px;padding:4px 10px;font:600 var(--t-sm)/var(--lh-tight) var(--sans);color:var(--muted);cursor:pointer;white-space:nowrap}
 .rp-speeds button[aria-pressed=true]{background:var(--raised,var(--bg));color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .rp-skip{border:1px solid var(--line)}
 .rp-skip[aria-pressed=true]{border-color:var(--accent);color:var(--ink)}

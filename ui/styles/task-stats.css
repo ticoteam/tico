@@ -9,7 +9,7 @@
 .flow-tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:86px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink);cursor:pointer;text-align:left}
 .flow-tile:hover{background:var(--surface2)}
 .flow-tile.cur{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.flow-tile-n{font-size:var(--t-xl);font-weight:600;line-height:1.1}
+.flow-tile-n{font-size:var(--t-xl);font-weight:600;line-height:var(--lh-display);letter-spacing:var(--track-tight)}
 .flow-tile-l{font-size:var(--t-sm);color:var(--muted)}
 .flow-tile-d{font-size:var(--t-xs);font-weight:400;color:var(--muted);margin-left:2px;vertical-align:middle}
 .flow-chart-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:var(--t-sm);margin-bottom:4px}

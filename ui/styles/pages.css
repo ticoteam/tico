@@ -24,7 +24,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
 .pg-head{display:flex;align-items:center;gap:6px;min-height:44px}
 .pg-head .spacer{flex:1}
-.pg-title{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere}
+.pg-title{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
 .pg-back{flex:none;width:36px;height:36px;margin-left:-8px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .pg-back .nav-icon{font-size:22px;width:22px;height:22px}
 .pg-archived{flex:none}

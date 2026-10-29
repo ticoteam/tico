@@ -42,13 +42,13 @@ body.native #app-nudge{display:none}
   body.drawer{overflow:hidden}
   #main{padding:18px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);max-width:none}
   #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
-  .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/1.1 var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
+  .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/var(--lh-display) var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
   .mobile-nav-item:hover{text-decoration:none}
   .mobile-nav-item.cur{color:var(--accent)}
   .mobile-nav-icon{
     width:25px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:50%;
     overflow:hidden;user-select:none;font-family:"Material Symbols Outlined";
-    font-weight:200;font-style:normal;font-size:24px;line-height:1;
+    font-weight:200;font-style:normal;font-size:24px;line-height:var(--lh-none);
     letter-spacing:normal;text-transform:none;white-space:nowrap;
     font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
@@ -64,7 +64,7 @@ body.native #app-nudge{display:none}
   .org-fan[hidden]{display:none}
   .org-fan-list{list-style:none;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:12px;max-height:100%;overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;padding:12px 24px 20px 12px;margin:0 0 -20px -12px}
   .org-fan-list>li{margin:0;padding:0;border:0;background:none}
-  .org-fan-item{display:flex;align-items:center;gap:12px;min-height:52px;min-width:180px;padding:8px 20px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-lg)/1.2 var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.22);-webkit-tap-highlight-color:transparent}
+  .org-fan-item{display:flex;align-items:center;gap:12px;min-height:52px;min-width:180px;padding:8px 20px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-lg)/var(--lh-tight) var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.22);-webkit-tap-highlight-color:transparent;letter-spacing:var(--track-tight)}
   .org-fan-item .org-fan-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--wait);color:#111;font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center}
   .org-fan-row{display:flex;align-items:center;gap:10px}
   .org-fan-item.org-fan-menu{min-width:0;width:52px;padding:8px;justify-content:center}
