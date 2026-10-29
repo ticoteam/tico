@@ -361,7 +361,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       return {cmo: box('bot:cmo'), seo: box('bot:seo', '.gt-av'), ana: box('human:ana', '.gt-av')};
     });
     assert(cmo.height >= 44 && cmo.height <= 80, 'name and goal on two lines: ' + cmo.height);
-    assert(seo.x - ana.x <= 22, 'a smaller indent: ' + (seo.x - ana.x));
+    // two levels down: each a half avatar, an elbow and its gap (goals.css), the elbow shorter than on a desktop
+    assert(seo.x - ana.x <= 40, 'a smaller indent: ' + (seo.x - ana.x));
     assert.equal(await row('bot:cmo').locator('.gt-kn').isVisible(), true, 'a count instead of chips');
     await row('bot:sales').locator('.gt-name').click();
     const sheet = await panel.boundingBox();
