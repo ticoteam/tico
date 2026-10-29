@@ -305,6 +305,7 @@ def view(c, auth, who):
     linked = goals_by_bet(c, auth, who, [b["id"] for b in listed])
     # The draft is the owner's: a bot never reads an unpublished "What we won't do".
     return {**({"draft": mine} if editor else {}), "current": published, "bets": listed,
+            "wrong_kpis": wrong_kpis(c, [b.get("wrong_if") for b in listed]),
             "label": guide(gid)["bets_label"], "label_one": guide(gid)["bet_label"], "may_edit": editor,
             "website": website(c),
             "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner", "status")} for g in rows[:GOALS_SHOWN]]
@@ -330,6 +331,18 @@ def wrong_if_text(c, wrong):
     if wrong["kind"] == "thesis":
         return f"the market changes on {wrong['market_id']}{by}"
     return _one_line(wrong.get("text")) + by
+
+
+def wrong_kpis(c, wrongs):
+    """The KPIs the KPI wrong-ifs in `wrongs` name, by id: {kpi_id: {name, unit}}. A card reads a wrong-if from this as
+    the Strategy page does, without a read of its own."""
+    from . import kpis as K
+    out = {}
+    for wrong in wrongs:
+        if isinstance(wrong, dict) and wrong.get("kind") == "kpi" and wrong.get("kpi_id") and wrong["kpi_id"] not in out:
+            record = K.kpi(c, wrong["kpi_id"]) or {}
+            out[wrong["kpi_id"]] = {"name": record.get("name") or wrong["kpi_id"], "unit": record.get("unit") or ""}
+    return out
 
 
 def summary_text(c, published=None):
@@ -816,7 +829,8 @@ def settle_card(c, actor, proposal_id, note):
 
 def card_view(c, proposal):
     """What a strategy card shows beyond its payload: a lens proposal's lens by name (`lens_name`), and a realign
-    card's goals finished, dropped or deleted since it was filed (`closed_goals`), which it lists with no choice."""
+    card's goals finished, dropped or deleted since it was filed (`closed_goals`), which it lists with no choice. A
+    draft's KPI wrong-ifs name their KPIs (`wrong_kpis`)."""
     payload = proposal.get("payload") or {}
     if proposal.get("kind") == "strategy_draft" and payload.get("source") == LENS and payload.get("lens"):
         from . import lenses
@@ -827,6 +841,8 @@ def card_view(c, proposal):
         live = {r[0] for r in c.execute(f"SELECT id FROM goals WHERE id IN ({','.join('?' * len(ids))}) AND "
                                         "coalesce(status,'') NOT IN ('done','dropped')", ids)} if ids else set()
         proposal["closed_goals"] = [i for i in ids if i not in live]
+    if proposal.get("kind") == "strategy_draft":
+        proposal["wrong_kpis"] = wrong_kpis(c, [b.get("wrong_if") for b in payload.get("bets") or [] if isinstance(b, dict)])
     return proposal
 
 
