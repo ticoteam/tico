@@ -353,6 +353,34 @@ def test_a_hold_that_starts_during_a_step_stops_the_run_before_its_next_step(api
     assert [s["id"] for s in finished["state"]["steps"]] == ["one", "two"]
 
 
+@pytest.mark.parametrize("how", ["drop", "off", "delete"])
+def test_a_run_dropped_mid_step_finishes_that_step_and_runs_nothing_after_it(api, monkeypatch, how):
+    aid = make(api, [{"id": "one", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "First"}},
+                     {"id": "two", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Second"}}])
+    rid = queued(api, aid)
+    act, done = automations.HubServices.act, []
+
+    def acting(self, do, args, ctx):
+        out = act(self, do, args, ctx)
+        done.append(args["text"])
+        if args["text"] == "First":   # while step one runs, the guard holds it and a person ends the hold
+            if how == "delete":
+                assert api.delete(f"/api/v2/automations/{aid}", headers=headers()).status_code == 200
+            else:
+                put_on_hold(api, aid)
+                if how == "drop":
+                    assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
+                else:
+                    patch(api, aid, {"enabled": False})
+        return out
+    monkeypatch.setattr(automations.HubServices, "act", acting)
+    hub(api).drain()
+    run = run_row(api, rid)
+    assert run["status"] == "skipped" and run["finished"] and run["claimed_at"] is None
+    assert done == ["First"] and [s["id"] for s in run["state"]["steps"]] == ["one"]   # its step's record is kept
+    assert hub(api).claim() is None
+
+
 def test_a_run_put_on_hold_mid_step_finishes_the_step_and_is_not_queued_again(api, monkeypatch):
     aid = webhook_auto(api)
     rid = queued(api, aid)

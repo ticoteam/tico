@@ -863,10 +863,12 @@ def _unhold(c, aid, actor, how, via=None):
         n = c.execute("UPDATE automation_runs SET status='queued' WHERE automation_id=? AND status='held'", (aid,)).rowcount
         _ring(c)
     else:
-        for run in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status='held'", (aid,)).fetchall():
+        # A run mid-step is dropped too: it finishes that step (`HubServices.on_hold`) and nothing after it runs.
+        for run in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('held','running')",
+                             (aid,)).fetchall():
             _cancel_mail(c, run["id"])
-        n = c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? AND status='held'",
-                      (now, aid)).rowcount
+        n = c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+                      "AND status IN ('held','running')", (now, aid)).rowcount
     c.execute("UPDATE automation_guard_holds SET cleared=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
     if task and task["status"] not in ("closed", "done", "declined"):
@@ -1480,9 +1482,11 @@ class HubServices:
                           idle_hours=idle_hours)
 
     def on_hold(self):
-        """Whether the run guard put the automation on hold since this run was claimed: no further step starts."""
+        """Whether no further step may start: the run guard put the automation on hold since this run was claimed, or
+        the run was dropped meanwhile (it is no longer `running`)."""
         with self.hub.store.read() as c:
-            return _hold_row(c, self.row["id"]) is not None
+            run = c.execute("SELECT status FROM automation_runs WHERE id=?", (self.run_id,)).fetchone()
+            return _hold_row(c, self.row["id"]) is not None or not run or run["status"] != "running"
 
     def checkpoint(self, state):
         """Save the run after a step that did something, before the next one starts."""
@@ -1554,6 +1558,14 @@ class Hub:
                 c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
             c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
             settle_mail(c, state)   # in the same write as the save, so a result reported meanwhile is not lost
+            if c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "skipped":
+                # Dropped (or its automation turned off or deleted) during the step: what the step did is saved, the
+                # run stays skipped, and nothing it queued is sent.
+                state["status"] = "skipped"
+                _cancel_mail(c, rid, state)
+                c.execute("UPDATE automation_runs SET cost=?,state_json=?,claimed_at=NULL WHERE id=?",
+                          (state.get("cost", 0), json.dumps(state, default=str), rid))
+                return
             status = state["status"]
             if any(t.get("state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
                 # Put on hold while a step ran: it finished that step and stopped, and waits held, not queued.
@@ -2050,10 +2062,11 @@ def install(app, store, auth, mutate):
             _unhold(c, aid, who.actor, "drop", _via(who))
             c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
             for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
-                                     "('queued','waiting')", (aid,)).fetchall():
+                                     "('queued','waiting','running')", (aid,)).fetchall():
                 _cancel_mail(c, dropped["id"])
+            # A run mid-step finishes that step and stops there (`HubServices.on_hold`).
             c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
-                      "AND status IN ('queued','waiting')", (H.now(), aid))
+                      "AND status IN ('queued','waiting','running')", (H.now(), aid))
             audit_log.write(c, who.actor, "automation:" + aid, flow_of(row), None, _via(who))
             return {"id": aid, "deleted": True}
         return mutate(request, body, work)
