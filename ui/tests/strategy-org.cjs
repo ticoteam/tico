@@ -3,7 +3,7 @@
 // it, pinch, the zoom toolbar above the frame and a first look that fits the width (or centres the owner) with nothing
 // clipped at either end; a teammate's sheet with its group and Move to…; the owner, and a lead inside the
 // groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no Move to…; no proposals and no
-// approvals; the Strategy Bot's starters ask for org changes. A phone first, then a computer.
+// approvals. A phone first, then a computer.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
@@ -198,12 +198,7 @@ async function chart(page, tag) {
       await shot(page, 'desktop-org-sheet');
       await page.locator('dialog[open] [data-close]').first().click();
       await shot(page, 'desktop-org');
-      // The Strategy Bot beside it offers org starters here, and its usual ones on Goals.
-      const starters = () => page.locator('#sbot [data-gm-starter]').allInnerTexts();
-      await page.locator('#sbot [data-gm-starter]').first().waitFor();
-      assert.deepEqual(await starters(), ['Suggest org changes', 'Who should lead each group?', 'Fix reporting lines'], tag + ': org starters');
-      await page.evaluate(() => { location.hash = '#/strategy/goals'; });
-      await page.waitForFunction(() => document.querySelector('#sbot [data-gm-starter]')?.textContent === 'Set a goal');
+      assert.equal(await page.locator('#sbot').count(), 0, tag + ': no Strategy Bot beside the chart');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

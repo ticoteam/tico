@@ -93,7 +93,7 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.waitForTimeout(200);
       assert.match(page.url(), /#\/automations$/, 'no automation opens by itself');
       assert.equal(await page.locator('.au-rail').isVisible(), true);
-      assert.equal(await page.locator('.au-botp').isVisible(), true);
+      assert.equal(await page.locator('.au-side').isVisible(), false, 'no side panel until an editor opens');
       assert.equal(await page.locator('.au-range [aria-pressed="true"]').innerText(), '1h');
       const runsOf = id => page.locator(`tr.au-row[data-row="${id}"] td.au-n`).first();
       await page.waitForFunction(() => document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n').innerText === '4');

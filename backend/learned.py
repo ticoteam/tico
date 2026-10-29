@@ -1,14 +1,14 @@
 """What a person's chat bot has learned (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Bot v3, section 10.7),
 in two layers.
 
-- The personal layer: how one person likes things ranked and summarised. One per person, whichever bot they talk to (the
-  Strategy Bot for the owner, the Assistant for everyone else), so it goes with them when ownership moves on. Private to
+- The personal layer: how one person likes things ranked and summarised. One per person, kept by their Assistant, so it
+  goes with them when ownership moves on. Private to
   that person: only they read it, change it or delete it, and only a turn in their own chat is handed it. No one else,
   the owner and admins included, reads it, and it is not in SQL (backend/sql.py denies a table it does not name).
-- The company layer: the vision, the company's priorities (its live company goals) and what the owner taught the
-  Strategy Bot about the company. Only the owner reads it and adds to it: on their own click, or in their chat with the
-  Strategy Bot, whose turn there acts as them. The vision and the goals are changed where they live, on Goals. Only the
-  Strategy Bot uses it, in the owner's chat; Assistants never see it.
+- The company layer: the vision, the company's priorities (its live company goals) and what the owner taught it about
+  the company. Only the owner reads it and adds to it: on their own click, or in their own Assistant chat, whose turn
+  there acts as them. The vision and the goals are changed where they live, on Goals. Only the owner's Assistant uses
+  it, in the owner's chat; nobody else's Assistant sees it.
 
 Teaching happens in chat: the bot saves one short line with `hub assistant learn` (POST /api/v2/assistant/learned) and
 says so. The person edits and deletes entries on "What it has learned" (ui/app/learned.js). Nothing is cached: each turn
@@ -41,26 +41,27 @@ CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, perso
 
 
 def _person(who, settings):
-    """The person whose layers these are: a person, on their own or through a turn of their own chat bot (the Assistant,
-    or the Strategy Bot in the owner's chat; backend/auth.py assistant_principal). Never a bot, nor a bot that borrows
-    the person's rights for other work: BotOps doing what they asked is not their chat."""
+    """The person whose layers these are: a person, on their own or through a turn of their own Assistant (backend/auth.py
+    assistant_principal). Never a bot, nor a bot that borrows the person's rights for other work: BotOps doing what they
+    asked is not their chat."""
     own_turn = (who.via == "assistant" and not who.confirmed and bool(who.attempt_id)
-                and who.task_actor in ("bot:" + settings.assistant_bot, "bot:" + strategy_bot.SLUG))
+                and who.task_actor == "bot:" + settings.assistant_bot)
     if who.role not in ("owner", "human") or not H.is_human(who.actor) or (who.via and not own_turn):
         raise Problem("forbidden", "What a chat bot has learned belongs to its person: only they, or their own chat's "
                       "turn, read or change it", 403)
     return who.actor
 
 
-def company_reader(c, who):
-    """The owner, once the company has its Strategy Bot: on their own, or in their Strategy Bot chat. An Assistant's
-    turn never, not even the owner's own from before."""
+def company_reader(c, who, settings):
+    """The owner, once the company has its Strategy Bot: on their own, or in their own Assistant chat. Nobody else's
+    Assistant, and no borrowed rights (BotOps acting for the owner)."""
     if who.role != "owner" or not H.is_human(who.actor):
         return False
     row = H.bot(c, strategy_bot.SLUG)
     if not row or row["state"] in ("archived", "planned"):
         return False
-    return not who.via or who.task_actor == "bot:" + strategy_bot.SLUG
+    return not who.via or (who.via == "assistant" and not who.confirmed and bool(who.attempt_id)
+                           and who.task_actor == "bot:" + settings.assistant_bot)
 
 
 def _view(row):
@@ -89,11 +90,11 @@ def company_layer(c):
 def view(c, who, settings):
     person = _person(who, settings)
     return {"personal": entries(c, "personal", person),
-            "company": company_layer(c) if company_reader(c, who) else None}
+            "company": company_layer(c) if company_reader(c, who, settings) else None}
 
 
 def for_turn(c, settings, conversation, bot):
-    """What a turn in a person's own chat is handed, read now: their personal layer, and in the owner's Strategy Bot
+    """What a turn in a person's own chat is handed, read now: their personal layer, and in the owner's own Assistant
     chat the company layer too. Neither for any other turn (a task, a shared room, the Strategy Bot's goals session).
     Every turn, whoever it is for, also carries the team's published strategy as `strategy` (the text of GET
     /api/v2/strategy/summary, backend/strategy.py) once one is published; None when there is nothing to hand over."""
@@ -110,15 +111,26 @@ def _layers(c, settings, conversation, bot):
     owner = str(conversation.get("owner_actor") or "")
     if conversation.get("scope") != rooms.PERSONAL or not H.is_human(owner) or conversation.get("closed_at"):
         return None
-    key = conversation.get("room_key")
-    if bot == strategy_bot.SLUG and key == rooms.STRATEGY_ROOM:
-        return {"personal": [e["text"] for e in entries(c, "personal", owner)],
-                "company": {**{k: v for k, v in company_layer(c).items() if k != "entries"},
-                            "priorities": [g["title"] for g in priorities(c)],
-                            "taught": [e["text"] for e in entries(c, "company")]}}
-    if bot == settings.assistant_bot and key == rooms.ASSISTANT_ROOM:
-        return {"personal": [e["text"] for e in entries(c, "personal", owner)]}
-    return None
+    if bot != settings.assistant_bot or conversation.get("room_key") != rooms.ASSISTANT_ROOM:
+        return None
+    layers = {"personal": [e["text"] for e in entries(c, "personal", owner)]}
+    if _is_owner(c, settings, owner):
+        layers["company"] = {**{k: v for k, v in company_layer(c).items() if k != "entries"},
+                             "priorities": [g["title"] for g in priorities(c)],
+                             "taught": [e["text"] for e in entries(c, "company")]}
+    return layers
+
+
+def _is_owner(c, settings, actor):
+    """Whether this person is the owner now, with the Strategy Bot there (the company layer's reader, `company_reader`):
+    a turn in a former owner's chat is handed no company layer."""
+    from . import access
+    row = H.bot(c, strategy_bot.SLUG)
+    if not row or row["state"] in ("archived", "planned"):
+        return False
+    owner = access.load_owner(c, settings)["email"]
+    email = str((H.human(c, H.actor_id(actor)) or {}).get("email") or "").strip().lower()
+    return bool(owner) and email == owner
 
 
 def _clean(text):
@@ -132,9 +144,9 @@ def _clean(text):
 
 def _may_write(c, who, layer, settings):
     person = _person(who, settings)
-    if layer == "company" and not company_reader(c, who):
-        raise Problem("forbidden", f"Only the owner teaches the {strategy_bot.name(c)} about the company, on their own "
-                      "or in their chat with it; an admin, a member or an Assistant cannot", 403)
+    if layer == "company" and not company_reader(c, who, settings):
+        raise Problem("forbidden", "Only the owner teaches their " + settings.assistant_name + " about the company, on "
+                      "their own or in their own chat with it; an admin or a member cannot", 403)
     return person if layer == "personal" else ""
 
 
@@ -167,7 +179,7 @@ def _own_entry(c, who, eid, settings):
     person = _person(who, settings)
     row = c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone()
     if not row or (row["layer"] == "personal" and row["person"] != person) \
-            or (row["layer"] == "company" and not company_reader(c, who)):
+            or (row["layer"] == "company" and not company_reader(c, who, settings)):
         raise Problem("not_found", "No such entry", 404)
     return row
 

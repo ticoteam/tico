@@ -1,5 +1,5 @@
 """The Updates chat (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Bot v3, section 10.8): a person's own chat
-bot beside the Updates page, the Strategy Bot for the owner and the Assistant for everyone else.
+bot beside the Updates page: their Assistant, the owner's included.
 
 - It is the same conversation as their menu tab: the page reads and posts through GET /api/v2/assistant and POST
   /api/v2/assistant/messages, which say `place: "updates"` on the message (`refs.updates`). No new room, session, spend
@@ -12,12 +12,12 @@ bot beside the Updates page, the Strategy Bot for the owner and the Assistant fo
   handed, not a rule in its prompt: an update it is not handed it cannot quote or link.
 - Each update comes with a default `rank`: affects a goal (its author has a live goal), then waits on you (its author
   waits on a task of yours, or it names you), then newest. The bot follows what the person taught it, and for the
-  Strategy Bot the company layer, over that order (backend/learned.py).
+  owner the company layer, over that order (backend/learned.py).
 - Each update's `link` (`#/updates?kind=&day=&update=`) scrolls the page to that card and highlights it, switching Daily
   or Weekly and the day as needed (ui/app/updates.js updGoTo)."""
 import re
 
-from . import strategy_bot, rooms
+from . import rooms
 from . import updates as U
 from .store import H, Problem
 
@@ -48,8 +48,7 @@ def from_updates(conversation, message):
 
 def _room_bot(settings, conversation, bot):
     key = (conversation or {}).get("room_key")
-    return ((bot == strategy_bot.SLUG and key == rooms.STRATEGY_ROOM)
-            or (bot == settings.assistant_bot and key == rooms.ASSISTANT_ROOM))
+    return bot == settings.assistant_bot and key == rooms.ASSISTANT_ROOM
 
 
 def opens_all(c, auth, who, text, access=None):
@@ -184,7 +183,7 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
 
 def for_turn(c, auth, settings, conversation, bot, message, attempt_id="", at=None):
     """What a turn is handed about Updates: None unless the person sent this message from the Updates chat into their
-    own chat with their chat bot (the Assistant, or the Strategy Bot in the owner's Strategy Bot chat). Read as that
+    own chat with their Assistant. Read as that
     person, with exactly the rights their turn has (backend/auth.py chat_person), so a private task, chat or bot they
     may not open never reaches the bot."""
     if not from_updates(conversation, message) or not _room_bot(settings, conversation, bot):

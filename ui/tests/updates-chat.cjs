@@ -86,7 +86,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
     // Desktop, a member: their Assistant beside the feed.
     {
       const cara = {id: 'cara', name: 'Cara', email: 'cara@example.test', role: 'member', cloud: true};
-      const chat = chatOf({bot: 'coo', strategy_bot: false, name: 'Assistant', room_id: 'room-cara',
+      const chat = chatOf({bot: 'coo', name: 'Assistant', room_id: 'room-cara',
         messages: [{id: 'm0', conversation_id: 'room-cara', from_actor: 'human:cara', to_actor: 'bot:coo', body: 'Asked from the menu tab', created: iso(-hour), refs: {assistant: true}}]});
       const store = {};
       const {context, page, errors, sent, prefs, trees} = await open(browser, cara, {width: 1400, height: 900}, chat, store);
@@ -162,17 +162,17 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       assert.deepEqual(errors, []);
       await context.close();
     }
-    // Test 27, a phone: the owner's Strategy Bot is not in the menu (it sits beside Strategy); the Updates button opens it
+    // Test 27, a phone: the owner's chat is their Assistant like everyone's, not a menu row; the Updates button opens it
     // full screen; a link closes it.
     {
       const ana = {id: 'ana', name: 'Ana', email: 'ana@example.test', role: 'owner', cloud: true};
-      const chat = chatOf({bot: 'goal-manager', strategy_bot: true, name: 'Chief', room_id: 'room-ana', messages: []});
+      const chat = chatOf({bot: 'coo', name: 'Assistant', room_id: 'room-ana', messages: []});
       const {context, page, errors, sent} = await open(browser, ana, {width: 390, height: 844}, chat);
       await page.goto('http://tico-ui.test/#/updates');
       await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();
       assert.ok(await page.locator('#upd-chat').isHidden(), 'no rail on a phone');
       await page.locator('#mobile-more').click();
-      assert.ok(await page.locator('#nav-assistant').isHidden(), 'the Strategy Bot is not in the menu');
+      assert.ok(await page.locator('#nav-assistant').isHidden(), 'the Assistant is not in the menu');
       await page.keyboard.press('Escape');
       await page.evaluate(() => document.body.classList.remove('drawer'));
       await page.locator('#upd-chat-btn').click();
@@ -180,7 +180,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       await rail.locator('.p-text').waitFor({state: 'visible'});
       const box = await rail.boundingBox();
       assert.deepEqual([box.x, box.y, box.width, box.height], [0, 0, 390, 844], 'full screen');
-      assert.equal(await rail.locator('.updc-head h2').innerText(), 'Chief');
+      assert.equal(await rail.locator('.updc-head h2').innerText(), 'Assistant');
       assert.ok(await page.locator('#mobile-nav').isHidden(), 'over the phone\'s bar');
       if (shots) await page.screenshot({path: `${shots}/updates-chat-phone.png`});
       await rail.locator('[data-updc-hint]').click();               // an empty chat offers the question
@@ -201,7 +201,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
     // The Assistant off: one line with Turn on for whoever may turn it on; for anyone else no rail and no button.
     for (const canTurnOn of [true, false]) {
       const dana = {id: 'dana', name: 'Dana', email: 'dana@example.test', role: canTurnOn ? 'owner' : 'member', cloud: true};
-      const chat = chatOf({available: false, state: 'archived', bot: 'coo', strategy_bot: false, name: 'Assistant', room_id: null, messages: [], can_turn_on: canTurnOn});
+      const chat = chatOf({available: false, state: 'archived', bot: 'coo', name: 'Assistant', room_id: null, messages: [], can_turn_on: canTurnOn});
       const {context, page, errors} = await open(browser, dana, {width: 1400, height: 900}, chat);
       await page.goto('http://tico-ui.test/#/updates');
       await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();

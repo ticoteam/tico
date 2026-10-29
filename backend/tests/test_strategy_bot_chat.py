@@ -1,7 +1,7 @@
-"""The owner talks to the Strategy Bot in place of their Assistant (backend/assistant.py; spec: Strategy Bot v3, section
-10): the owner's own chat is the Strategy Bot's, with an Assistant's rights and the owner's own, and nobody else talks
-to it. The chat belongs to the owner seat: a transfer of ownership hands it to the new owner, and the old owner gets
-their Assistant, and their own Assistant chats, back."""
+"""One Assistant for everyone (backend/assistant.py, docs/assistant.md): the owner's chat is their Assistant like
+everyone else's, and the Strategy Bot, the Librarian and BotOps are helpers it hands cited work to. The owner's earlier
+chat with the Strategy Bot (room_key "ceo") is read-only history under "Earlier chats", and the cards waiting in it
+move to the owner's Assistant room once."""
 
 import uuid
 
@@ -39,83 +39,217 @@ def turn(api, bot, person, text):
     return r, post(api, "jobs/claim", {}, token=r["token"])["attempt"]
 
 
-def test_the_owners_chat_is_the_strategy_bot_and_everyone_elses_the_assistant(api):
-    # Before the Strategy Bot is there, the owner has an Assistant like everyone else.
-    assert get(api, "assistant")["bot"] == "coo"
+def helper(api, slug, name):
+    """Another built-in helper bot (the Librarian), active."""
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES(?,?,'fake','','','','keeper','active',?)", (slug, name, H.now()))
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
+
+
+def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
+    """The owner's chat with the Strategy Bot from before it became a helper: room_key "ceo", the owner's words and its
+    reply."""
+    with api.app.state.store.transaction() as c:
+        room = H.open_conversation(c, owner, [owner, "bot:goal-manager"], kind="chat", subject="Strategy Bot",
+                                   scope=rooms.PERSONAL, owner_actor=owner, room_key=rooms.STRATEGY_ROOM)
+        H._write_message(c, owner, "bot:goal-manager", said[0], room, "say", {"assistant": True}, None, None)
+        H._write_message(c, "bot:goal-manager", owner, said[1], room, "say", {"assistant": True}, None, None,
+                         delivered_at=H.now())
+        return room["id"]
+
+
+def test_the_owners_chat_is_the_assistant_like_everyone_elses(api):
     strategy_bot(api)
+    name = api.app.state.store.settings.assistant_name
+    for token in ("ana-test", "ben-test", "cara-test"):
+        chat = get(api, "assistant", token)
+        assert (chat["bot"], chat["name"], chat["available"], chat["earlier"]) == ("coo", name, True, None)
+        assert "strategy_bot" not in chat
+    said = say(api, "What should the company focus on this week?")["message"]
     mine = get(api, "assistant")
-    assert (mine["bot"], mine["strategy_bot"], mine["name"], mine["available"], mine["can_turn_on"]) == \
-        ("goal-manager", True, "Strategy Bot", True, False)
-    # An admin is not the owner: Ben keeps his Assistant, and so does a member.
-    for token in ("ben-test", "cara-test"):
-        theirs = get(api, "assistant", token)
-        assert (theirs["bot"], theirs["strategy_bot"], theirs["earlier"]) == ("coo", False, None)
-    said = say(api, "What should the company focus on this week?")
-    said = said["message"]
-    assert said["to_actor"] == "bot:goal-manager" and said["conversation_id"] == mine["room_id"]
+    assert said["to_actor"] == "bot:coo" and said["conversation_id"] == mine["room_id"]
     with api.app.state.store.read() as c:
         room = H.conversation(c, mine["room_id"])
     assert (room["owner_actor"], room["room_key"], room["participants"]) == \
-        ("human:ana", rooms.STRATEGY_ROOM, ["human:ana", "bot:goal-manager"])
-    assert get(api, "assistant")["room_id"] == mine["room_id"]          # one chat, however often opened
+        ("human:ana", rooms.ASSISTANT_ROOM, ["human:ana", "bot:coo"])
+    # Its turn acts as the owner, through the Assistant, never the Strategy Bot.
+    r = runner(api)
+    assign(api, r, "coo")
+    ready(api, r, ["coo"])
+    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    who = api.app.state.auth.authenticate({"authorization": "Bearer " + attempt["token"]}, "/api/v2/tasks", "GET")
+    assert (who.actor, who.role, who.via, who.task_actor) == ("human:ana", "owner", "assistant", "bot:coo")
+    card = post(api, "assistant/actions", {"summary": "Archive the Ops bot", "method": "POST",
+                                           "path": "/api/v2/bots/ops/archive", "body": {"expected_revision": 1}},
+                token=attempt["token"])["action"]
+    assert "by_name" not in card and card["conversation_id"] == mine["room_id"]
 
 
-def test_nobody_but_the_owner_talks_to_the_strategy_bot_or_reads_the_chat(api):
+def test_nobody_chats_with_the_strategy_bot_a_post_to_it_reaches_their_assistant(api):
     strategy_bot(api)
-    room = get(api, "assistant")["room_id"]
-    say(api, "Private plans for the company")
-    for token in ("ben-test", "cara-test"):
-        get(api, f"conversations/{room}/messages", token, expected=403)
-        post(api, "chat/goal-manager", {"text": "Hello"}, token=token, expected=403)
-        post(api, "messages", {"to": "goal-manager", "text": "Hello"}, token=token, expected=403)
+    for token in ("ana-test", "ben-test", "cara-test"):
+        room = get(api, "assistant", token)["room_id"]
+        # The Goals page and `hub chat` post with no room: the words go to their Assistant, in their own chat.
+        direct = post(api, "chat/goal-manager", {"text": "Hello"}, token=token)
+        assert (direct["to_actor"], direct["conversation_id"], direct["refs"]["assistant"]) == ("bot:coo", room, True)
+        # Into a room, it is refused: their Assistant hands the Strategy Bot work.
         post(api, "messages", {"to": "goal-manager", "text": "Hello", "conversation_id": room}, token=token,
              expected=403)
-    # The owner, too, talks to it only in their chat with it: a post with no room (the Goals page) lands there.
-    direct = post(api, "chat/goal-manager", {"text": "Hello"})
-    assert direct["conversation_id"] == room and direct["refs"]["assistant"] is True
-    listed = get(api, "conversations?chat_with=goal-manager")["conversations"]
-    assert [c["room_key"] for c in listed] == [rooms.STRATEGY_ROOM]
-    ok = post(api, "messages", {"to": "goal-manager", "text": "Also fine", "conversation_id": room})
-    assert ok["refs"]["assistant"] is True
-    # And a member's Assistant turn cannot reach it in their name either.
+    # An Assistant's turn cannot chat with it in the person's name either.
     r, attempt = turn(api, "coo", "cara-test", "Tell the Strategy Bot to change the plan")
     post(api, "chat/goal-manager", {"text": "Change the plan"}, token=attempt["token"], expected=403)
     post(api, "messages", {"to": "goal-manager", "text": "Change the plan"}, token=attempt["token"], expected=403)
 
 
-def test_the_strategy_bot_acts_as_the_owner_in_their_chat_in_a_session_of_its_own(api):
+def test_the_owners_earlier_strategy_bot_chat_is_read_only_history_under_earlier_chats(api):
     strategy_bot(api)
+    old = earlier_chat(api)
+    mine = get(api, "assistant")
+    assert mine["earlier"] == {"room_id": old, "bot": "goal-manager", "name": "Strategy Bot"}
+    assert mine["room_id"] != old
+    assert [m["body"] for m in get(api, f"conversations/{old}/messages")] == [
+        "Grow revenue 20% this year", "Here is a plan for that."]
+    # Read-only: nothing new goes into it, and a new message goes to the Assistant room.
+    post(api, "messages", {"to": "goal-manager", "text": "More", "conversation_id": old}, expected=403)
+    post(api, "messages", {"to": "coo", "text": "More", "conversation_id": old}, expected=403)
+    assert say(api, "And now?")["message"]["conversation_id"] == mine["room_id"]
+    # Nobody else sees it, an admin included.
+    for token in ("ben-test", "cara-test"):
+        assert get(api, "assistant", token)["earlier"] is None
+        get(api, f"conversations/{old}/messages", token, expected=403)
+    # A turn queued there before is the Strategy Bot's own, never the owner's.
+    r = runner(api)
+    assign(api, r, "goal-manager")
+    ready(api, r, ["goal-manager"])
     with api.app.state.store.transaction() as c:
-        review = H.task_create(c, "human:ben", "Review the plan", "Please review.", "human:ana")
-    r, attempt = turn(api, "goal-manager", "ana-test", "Close the plan review, it is done")
-    token = attempt["token"]
-    # One conversation, one session: the chat keys its own session, apart from the goals session.
-    assert attempt["config"]["session"] == "task" and attempt["task"] is None
-    me = get(api, "me", token)
-    assert me["actor"] == "human:ana"
-    who = api.app.state.auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/tasks", "GET")
-    assert (who.actor, who.role, who.via, who.task_actor) == ("human:ana", "owner", "assistant", "bot:goal-manager")
-    # What an Assistant does directly, as the owner; and what she asked for, cited, with no card.
-    made = post(api, "tasks", {"owner": "human:ana", "title": "Draft the plan", "body": "For Monday."}, token=token)
-    assert made["requester"] == "human:ana"
-    done = asked(api, f"tasks/{review['id']}", {"version": review["version"], "status": "done"}, token, "turn")["task"]
-    assert done["status"] == "done"
+        H.say(c, "human:ana", "bot:goal-manager", "Queued before", conversation_id=old, kind="say",
+              refs={"assistant": True})
+    attempt = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
+    assert get(api, "me", attempt["token"])["actor"] == "bot:goal-manager"
+
+
+def test_cards_waiting_in_the_earlier_chat_move_to_the_assistant_room_once(api):
+    strategy_bot(api)
+    old = earlier_chat(api)
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        owner = Identity("human:ana", "owner", "ana@acme.example")
+        waiting = assistant.create_proposal(c, settings, owner, H.conversation(c, old), "assistant",
+                                            "Archive the Ops bot", "POST", "/api/v2/bots/ops/archive",
+                                            {"expected_revision": 1}, None)["action"]
+        done = assistant.create_proposal(c, settings, owner, H.conversation(c, old), "assistant",
+                                         "Archive the Docs bot", "POST", "/api/v2/bots/docs/archive",
+                                         {"expected_revision": 1}, None)["action"]
+        c.execute("UPDATE assistant_actions SET status='done' WHERE id=?", (done["id"],))
+        assert assistant.migrate(c, settings) == 1
+        assert assistant.migrate(c, settings) == 0            # every start: once moved, nothing is left to move
+    mine = get(api, "assistant")
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY ts DESC LIMIT 1",
-                        (review["id"],)).fetchone()
-        assert (row["actor"], row["via"]) == ("human:ana", "assistant")
-        cited = c.execute("SELECT detail_json FROM events WHERE action='task.update' AND target=? "
-                          "ORDER BY ts DESC LIMIT 1", (review["id"],)).fetchone()
-    assert H._json(cited["detail_json"], {})["delegation"]["cited"] == turn_message(api, attempt)
-    # A card it puts in front of her is the Strategy Bot's, in her chat with it.
-    card = post(api, "assistant/actions", {"summary": "Archive the Ops bot", "method": "POST",
-                                           "path": "/api/v2/bots/ops/archive", "body": {"expected_revision": 1}},
-                token=token)["action"]
-    assert card["by_name"] == "Strategy Bot"
+        rows = {r["id"]: r["conversation_id"] for r in c.execute("SELECT id, conversation_id FROM assistant_actions")}
+        cards = c.execute("SELECT from_actor FROM messages WHERE conversation_id=? AND json_extract(refs_json,"
+                          "'$.action')=?", (mine["room_id"], waiting["id"])).fetchall()
+    assert rows == {waiting["id"]: mine["room_id"], done["id"]: old}
+    assert [r["from_actor"] for r in cards] == ["bot:coo"]
+    assert [a["id"] for a in mine["pending"]] == [waiting["id"]]
+    assert mine["actions"][waiting["id"]]["status"] == "pending"
+
+
+def _assistant_asks(api, r, helper_slug, token="ana-test", said="What should we focus on?", cite="turn",
+                    expected=200):
+    """The person asks their Assistant; its turn files the helper a task citing their words."""
+    assert say(api, said, token)["fast"] is False
+    coo = post(api, "jobs/claim", {"bot": "coo"}, token=r["token"])["attempt"]
+    made = api.post("/api/v2/tasks", json={"owner": helper_slug, "title": "From the Assistant", "body": "They asked.",
+                                           **({"request_id": cite} if cite else {})},
+                    headers=headers(coo["token"]))
+    assert made.status_code == expected, made.text
+    return made.json(), coo
+
+
+def test_the_assistant_hands_the_strategy_bot_and_the_librarian_cited_work(api):
+    strategy_bot(api)
+    helper(api, "librarian", "Librarian")
+    r = runner(api)
+    for slug in ("coo", "goal-manager", "librarian"):
+        assign(api, r, slug)
+    ready(api, r, ["coo", "goal-manager", "librarian"])
+    for slug, said in (("goal-manager", "Is the launch goal on track? Tell me why"),
+                       ("librarian", "Research our three closest competitors")):
+        task, coo = _assistant_asks(api, r, slug, said=said)
+        task = task.get("task", task)
+        assert (task["owner"], task["requester"]) == ("bot:" + slug, "human:ana")
+        with api.app.state.store.read() as c:
+            asked = H._json(c.execute("SELECT detail_json FROM events WHERE action='assistant.asked_helper' AND target=?",
+                                      (task["id"],)).fetchone()["detail_json"], {})
+            quoted = c.execute("SELECT body FROM messages WHERE conversation_id=? AND body LIKE '%in their words%'",
+                               (task["conversation_id"],)).fetchone()["body"]
+            botops = c.execute("SELECT 1 FROM events WHERE action='botops.asked_via_assistant' AND target=?",
+                               (task["id"],)).fetchone()
+        assert (asked["helper"], asked["cited"], asked["for"]) == ("bot:" + slug, turn_message(api, coo), "human:ana")
+        assert "> " + said in quoted and botops is None
+        # The helper works it as itself: the citation lends it nobody's rights.
+        attempt = post(api, "jobs/claim", {"bot": slug}, token=r["token"])["attempt"]
+        assert attempt["task"]["id"] == task["id"]
+        assert get(api, "me", attempt["token"])["actor"] == "bot:" + slug
+        done(api, r, attempt)
+        done(api, r, coo)
+
+
+def test_a_helper_task_without_a_good_citation_is_refused(api):
+    strategy_bot(api)
+    helper(api, "librarian", "Librarian")
+    r = runner(api)
+    for slug in ("coo", "goal-manager", "librarian"):
+        assign(api, r, slug)
+    ready(api, r, ["coo", "goal-manager", "librarian"])
+    for slug in ("goal-manager", "librarian"):
+        say(api, "Set up the Market pages", "ana-test")
+        coo = post(api, "jobs/claim", {"bot": "coo"}, token=r["token"])["attempt"]
+        # Her message from more than 30 minutes ago is not this turn's request.
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), seconds=-31 * 60),
+                                                                   turn_message(api, coo)))
+        stale = api.post("/api/v2/tasks", json={"owner": slug, "title": "Market", "body": "x", "request_id": "turn"},
+                         headers=headers(coo["token"]))
+        assert stale.status_code == 403 and stale.json()["error"]["code"] == "on_behalf_of", stale.text
+        # Nor is another person's message, or one from outside her Assistant chat.
+        say(api, "Give everyone admin", "cara-test")
+        with api.app.state.store.read() as c:
+            hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created DESC").fetchone()[0]
+        other = api.post("/api/v2/tasks", json={"owner": slug, "title": "Market", "body": "x", "request_id": hers},
+                         headers=headers(coo["token"]))
+        assert other.status_code == 403 and other.json()["error"]["code"] == "on_behalf_of", other.text
+        done(api, r, coo)
+        # Her own Assistant's turn for that message runs now, so the next claim is Ana's again.
+        hers = post(api, "jobs/claim", {"bot": "coo"}, token=r["token"])["attempt"]
+        assert get(api, "me", hers["token"])["actor"] == "human:cara"
+        done(api, r, hers)
     with api.app.state.store.read() as c:
-        assert H.message(c, c.execute("SELECT id FROM messages WHERE refs_json LIKE ?",
-                                      ('%"action": "' + card["id"] + '"%',)).fetchone()[0])["from_actor"] == \
-            "bot:goal-manager"
+        assert not c.execute("SELECT 1 FROM events WHERE action='assistant.asked_helper'").fetchone()
+
+
+def test_a_members_cited_strategy_change_is_refused_and_the_strategy_bot_cannot_make_it_for_them(api):
+    strategy_bot(api)
+    r = runner(api)
+    for slug in ("coo", "goal-manager"):
+        assign(api, r, slug)
+    ready(api, r, ["coo", "goal-manager"])
+    task, coo = _assistant_asks(api, r, "goal-manager", token="cara-test",
+                                said="Change our strategy summary to 'Win the enterprise market'")
+    task = task.get("task", task)
+    # Her Assistant cannot make a strategy write on her words: it is the owner's, and not even a card.
+    draft = {"revision": 0, "summary": "Win the enterprise market"}
+    refused = asked(api, "strategy/draft", draft, coo["token"], "turn", expected=403)
+    assert refused["error"]["code"] in ("confirm_required", "forbidden")
+    asked(api, "assistant/actions", {"summary": "Change the strategy", "method": "PUT", "path": "/api/v2/strategy/draft",
+                                     "body": draft}, coo["token"], "turn", expected=422)
+    # The Strategy Bot works her task as itself: the owner's strategy stays the owner's to change.
+    done(api, r, coo)
+    attempt = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
+    assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester"] == "human:cara"
+    api_put = api.put("/api/v2/strategy/draft", json=draft, headers=headers(attempt["token"]))
+    assert api_put.status_code == 403, api_put.text
 
 
 def test_the_strategy_bots_other_work_stays_its_own_in_the_goals_session(api):
@@ -148,33 +282,6 @@ def done(api, r, attempt):
          token=r["token"])
 
 
-def test_the_owners_chat_and_the_goals_session_never_share_a_thread_even_on_one_bot_thread(api):
-    strategy_bot(api)
-    with api.app.state.store.transaction() as c:
-        # A Strategy Bot set to one thread for everything: its goals work keeps that thread, the owner's chat never
-        # joins it.
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='goal-manager'", ('{"session": "bot"}',))
-    r = runner(api)
-    for bot in ("ops", "goal-manager"):
-        assign(api, r, bot)
-    ready(api, r, ["ops", "goal-manager"])
-    post(api, "chat/ops", {"text": "Check the launch goal"})
-    ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
-    post(api, "messages", {"to": "goal-manager", "text": "The launch goal slipped a week",
-                           "needs_action": True}, token=ops["token"])
-    goals = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
-    assert key(goals) == sessions.BOT_THREAD
-    done(api, r, goals)
-    owner = []
-    for text in ("Plan the launch week", "And move the review to Friday"):
-        assert say(api, text, "ana-test")["fast"] is False
-        owner.append(post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"])
-        done(api, r, owner[-1])
-    # The owner's follow-up continues the owner's own chat, on its own thread, apart from the goals session.
-    assert owner[0]["conversation"]["id"] == owner[1]["conversation"]["id"] != goals["conversation"]["id"]
-    assert key(owner[0]) == key(owner[1]) == "conversation:" + owner[0]["conversation"]["id"]
-
-
 def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
     """Spec test 31: a member asks their Assistant to change another person's task; it acts only as them."""
     as_member(api, "ben@acme.example")
@@ -190,8 +297,8 @@ def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
         assert H.task(c, caras["id"])["status"] == "open"
 
 
-def test_the_owners_daily_update_is_drafted_by_the_strategy_bot(api):
-    """Spec test 30: written the same way as everyone's, labelled the Strategy Bot's."""
+def test_the_owners_daily_update_is_drafted_by_their_assistant(api):
+    """Written the same way as everyone's, labelled the Assistant's for the owner too."""
     strategy_bot(api)
     store = api.app.state.store
     with store.transaction() as c:
@@ -199,39 +306,31 @@ def test_the_owners_daily_update_is_drafted_by_the_strategy_bot(api):
             c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) VALUES(?,?,?,?,?,?,?)",
                       (uuid.uuid4().hex, person, "daily", "2026-09-29", 0, "sent", H.now()))
     write = lambda system, user: {"body": "- Shipped the pricing page"}   # noqa: E731
-    assert updates.write_draft(store, "human:ana", write, "coo")["drafted_by"] == "goal-manager"
+    assert updates.write_draft(store, "human:ana", write, "coo")["drafted_by"] == "coo"
     assert updates.write_draft(store, "human:ben", write, "coo")["drafted_by"] == "coo"
 
 
-def test_the_strategy_bot_chat_stays_with_the_owner_seat_and_the_old_owner_gets_their_assistant_back(api):
+def test_the_earlier_strategy_bot_chat_stays_with_the_owner_seat_and_each_keeps_their_assistant(api):
     ana, ben = personal(api, "ana"), personal(api, "ben")
-    say(api, "My week, before the Strategy Bot", ana)                        # Ana's own Assistant chat
-    earlier = get(api, "assistant", ana)["room_id"]
     strategy_bot(api)
-    chat = get(api, "assistant", ana)
-    assert chat["strategy_bot"] and chat["room_id"] != earlier
-    # Her Assistant chats are still there to read, in the Strategy Bot tab.
-    assert chat["earlier"] == {"room_id": earlier, "bot": "coo", "name": api.app.state.store.settings.assistant_name}
-    assert [m["body"] for m in get(api, f"conversations/{earlier}/messages", ana)] == [
-        "My week, before the Strategy Bot"]
-    say(api, "Grow revenue 20% this year", ana)
-    with api.app.state.store.transaction() as c:          # a card waiting on her click, as her
+    say(api, "My week", ana)
+    hers = get(api, "assistant", ana)["room_id"]
+    old = earlier_chat(api)
+    with api.app.state.store.transaction() as c:          # a card waiting on her click in it, as her
         owner = Identity("human:ana", "owner", "ana@acme.example")
-        pending = assistant.create_proposal(c, api.app.state.store.settings, owner, H.conversation(c, chat["room_id"]),
+        pending = assistant.create_proposal(c, api.app.state.store.settings, owner, H.conversation(c, old),
                                             "assistant", "Archive the Ops bot", "POST",
                                             "/api/v2/bots/ops/archive", {"expected_revision": 1}, None)
     owner = get(api, "access", ana)["owner"]
     post(api, "access/owner", {"person": "ben", "expected_revision": owner["revision"], "confirm": True}, token=ana)
-    # The new owner inherits the Strategy Bot chat and its history; nothing of Ana's own Assistant chats comes with it.
+    # The new owner reads the earlier chat under Earlier chats; his own chat is his Assistant.
     his = get(api, "assistant", ben)
-    assert (his["bot"], his["room_id"], his["earlier"]) == ("goal-manager", chat["room_id"], None)
-    assert "Grow revenue 20% this year" in [m["body"] for m in his["messages"]]
-    # Ana talks to her Assistant again, in her own chat with it, and no longer reads the Strategy Bot's.
-    hers = get(api, "assistant", ana)
-    assert (hers["bot"], hers["strategy_bot"], hers["room_id"]) == ("coo", False, earlier)
-    get(api, f"conversations/{chat['room_id']}/messages", ana, expected=403)
-    post(api, "messages", {"to": "goal-manager", "text": "Still mine?", "conversation_id": chat["room_id"]},
-         token=ana, expected=403)
+    assert (his["bot"], his["earlier"]["room_id"]) == ("coo", old) and his["room_id"] not in (old, hers)
+    assert "Grow revenue 20% this year" in [m["body"] for m in get(api, f"conversations/{old}/messages", ben)]
+    # Ana keeps her own Assistant chat and no longer reads the earlier one.
+    mine = get(api, "assistant", ana)
+    assert (mine["bot"], mine["room_id"], mine["earlier"]) == ("coo", hers, None)
+    get(api, f"conversations/{old}/messages", ana, expected=403)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "cancelled"
         assert c.execute("SELECT count(*) FROM events WHERE action='strategy_bot.chat_moved'").fetchone()[0] == 1
@@ -245,75 +344,36 @@ def png():
     return image.getvalue()
 
 
-def test_the_owner_pastes_a_screenshot_into_the_strategy_bot_chat_and_its_turn_reads_it(api, monkeypatch):
-    """Chris, Oct 27: a pasted screenshot attaches in the Strategy Bot chat as in any bot chat; an Assistant takes text
-    only."""
+def test_an_assistant_chat_takes_text_only_for_the_owner_too_and_a_refused_upload_keeps_nothing(api, monkeypatch):
     import hashlib
     from backend.store import Problem
     blobs = api.app.state.blobs
     writes = []
 
     def storage_down(data, content_type="application/octet-stream"):
-        # Storage that is down and counts each write asked of it: a send that must keep nothing never reaches it.
         writes.append(hashlib.sha256(data).hexdigest())
         raise Problem("storage", "Storage is unavailable", 503)
 
     def kept(data):
         return (blobs.directory / blobs.key(hashlib.sha256(data).hexdigest())).exists()
-    strategy_bot(api)
-    data = png()
-    sent = api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
-                    files={"files": ("image.png", data, "image/png")},
-                    headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
-    assert sent.status_code == 200, sent.text
-    message = sent.json()["message"]
-    room = get(api, "assistant")["room_id"]
-    assert (message["to_actor"], message["conversation_id"], message["refs"]["assistant"]) == \
-        ("bot:goal-manager", room, True)
-    attachment, = message["refs"]["attachments"]
-    assert (attachment["name"], attachment["title"], attachment["kind"]) == ("image.png", "Screenshot", "image")
-    assert sent.json()["fast"] is False                      # a picture always goes to the Strategy Bot's turn
+
     def stored(c):
-        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("messages", "message_assets", "bot_files", "blobs")]
-    with api.app.state.store.read() as c:
-        after = stored(c)
-    # The same send again (a retry after a lost answer) gives the same message and keeps nothing twice; other content
-    # under that key is a conflict, refused before anything is stored.
-    def again(picture):
-        return api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
-                        files={"files": ("image.png", picture, "image/png")},
-                        headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
-    assert kept(data)
-    monkeypatch.setattr(blobs, "put", storage_down)
-    replay = again(data)
-    assert replay.status_code == 200 and replay.json() == sent.json(), replay.text
-    changed = again(data + b"\0")
-    assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict", changed.text
-    assert writes == [] and not kept(data + b"\0")
-    with api.app.state.store.read() as c:
-        assert stored(c) == after
-    monkeypatch.undo()
-    # The Strategy Bot's turn for that message can open the picture.
-    r = runner(api)
-    assign(api, r, "goal-manager")
-    ready(api, r, ["goal-manager"])
-    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-    assert turn_message(api, attempt) == message["id"]
-    downloaded = api.get(attachment["url"], headers=headers(attempt["token"]))
-    assert downloaded.status_code == 200, downloaded.text
-    assert downloaded.content == data
-    # Ben (an admin) talks to his Assistant, whose room stays text only: refused, and nothing is said.
+        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                for table in ("messages", "message_assets", "bot_files", "blobs")]
+    strategy_bot(api)
+    get(api, "assistant")
     with api.app.state.store.read() as c:
         before = stored(c)
-    # Refused before a byte is stored, so storage being down changes nothing; the same key again, with the same and with
-    # other content, is refused the same way: no cached success, nothing kept in the database or in storage.
+    # Refused before a byte is stored, so storage being down changes nothing; the same key again, with the same and
+    # with other content, is refused the same way.
     mine, other = png() + uuid.uuid4().bytes, png() + uuid.uuid4().bytes
     monkeypatch.setattr(blobs, "put", storage_down)
-    for text, picture in (("Look", mine), ("Look", mine), ("Look again", other)):
-        refused = api.post("/api/v2/uploads/assistant/messages", data={"text": text},
-                           files={"files": ("image.png", picture, "image/png")},
-                           headers={**headers("ben-test"), "Idempotency-Key": "paste-2"})
-        assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
-        assert writes == [] and not kept(mine) and not kept(other)
-        with api.app.state.store.read() as c:
-            assert stored(c) == before
+    for token in ("ana-test", "ben-test"):
+        for text, picture in (("Look", mine), ("Look", mine), ("Look again", other)):
+            refused = api.post("/api/v2/uploads/assistant/messages", data={"text": text},
+                               files={"files": ("image.png", picture, "image/png")},
+                               headers={**headers(token), "Idempotency-Key": "paste-" + token})
+            assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
+            assert writes == [] and not kept(mine) and not kept(other)
+    with api.app.state.store.read() as c:
+        assert stored(c) == before

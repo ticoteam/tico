@@ -209,22 +209,6 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 }
 
 #goal-body{max-width:1180px}
-.gm-chat{display:flex;flex-direction:column;justify-content:flex-start;gap:6px;min-width:0}
-.gm-chat>.rail-h{margin:0}
-.gm-thread{display:flex;flex-direction:column;min-height:100px;max-height:55vh;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding-right:4px}
-.gm-thread .conv-run.chat{border:0;padding:6px 0}
-.gm-thread .conv-run-head{display:none}
-.gm-thread .bubble{margin:0}
-.gm-thread .bubble.you{border:0}
-.gm-thread .bubble.bot.reply{background:transparent;border-radius:0}
-.gm-thread [data-gm-live]{min-width:0}
-.gm-starters{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
-.gm-starters button{font-size:var(--t-sm)}
-.gm-form{min-width:0}
-.gm-form .ask{margin:0}
-.gm-form .p-chips:empty{display:none}
-.gm-chat .err{margin:0;font-size:var(--t-sm)}
-.gm-on{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
 /* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
    what changes, or one row per goal with its Keep / Retire / Move to. */
 .kpi-prop.strat-prop{align-items:flex-start}

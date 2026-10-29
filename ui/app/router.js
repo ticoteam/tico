@@ -33,10 +33,9 @@ function route() {
   window.TicoObservability?.route(S.route);
   document.body.classList.remove('mobile-composer-focus');
   // Every page starts from a bare #main: a layout class left behind (the bot page's bot-split-layout made #main a
-  // two-column grid) would lay the next page out in that grid. Each page adds its own again; the Librarian's
-  // rail keeps its own class (ui/docs-ask.js re-syncs it after the route).
+  // two-column grid) would lay the next page out in that grid. Each page adds its own again.
   const main = $('#main');
-  main.className = main.classList.contains('librarian-open') ? 'librarian-open' : '';
+  main.className = '';
   // A new page fades in (opacity only); a query change within the same page does not.
   if (from && from.split('?')[0] !== S.route.split('?')[0] && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
@@ -111,7 +110,7 @@ function route() {
   else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { SETTINGS_TAB = 'system'; location.replace(SETTINGS); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
-  // Old links and bookmarks to the Strategy Bot's settings address still open its tab.
+  // Old links and bookmarks to the Strategy Bot's settings address still open its card (Settings > System).
   else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
@@ -144,7 +143,6 @@ function route() {
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2]));
   else if (isAutomationsRoute(S.route)) pageAutomations();
   else location.hash = UPDATES;         // unknown or empty routes land on Updates, home
-  window.syncLibrarianRail?.();
   redesignAfterRoute();
   $('#main').scrollTop = 0;
 }

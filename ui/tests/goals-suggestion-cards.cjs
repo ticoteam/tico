@@ -3,7 +3,7 @@
 // a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button
 // reads "No, leave it", a Flag has one "Got it", and new wording or a new definition reads Now and Proposed.
-// "No, leave it" rejects in one click, then the card reads "Left as it is. Tell the Strategy Bot why? (optional)" with a
+// "No, leave it" rejects in one click, then the card reads "Left as it is. Tell it why? (optional)" with a
 // one-line box and Send: Send saves the reason (POST .../note), a refusal shows beside the box, leaving it does nothing.
 // Fixtures only.
 const {chromium} = require('playwright');
@@ -18,7 +18,7 @@ const bot = (name, display_name, org_parent, over) => ({name, display_name, org_
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
 const GOAL = 'Double organic signups';
-const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(4);
+const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(8);   // long enough to wrap past four lines on Goals' full width (no rail beside it)
 const prop = (id, kind, payload, card, over) => ({id, kind, goal_id: 'g-cmo', kpi_id: null, payload, reason: 'No measure on this goal yet',
   proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), status: 'pending', card: {goal_title: GOAL, ...card}, ...over});
 const measure = (name, over) => ({name, definition: '', source_note: '', unit: '', direction: 'up', existing: false, ...over});
@@ -153,7 +153,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.deepEqual(await decided('p-def'), {decision: 'reject'});
     const left = card('p-def').locator('[data-prop-left]');
     await left.waitFor();
-    assert.match(await card('p-def').innerText(), /^Left as it is\. Tell the Strategy Bot why\? \(optional\)/);
+    assert.match(await card('p-def').innerText(), /^Left as it is\. Tell it why\? \(optional\)/);
     assert.equal(await left.locator('input[type=text][name=note]').count(), 1);
     assert.deepEqual(await left.locator('button').allInnerTexts(), ['Send']);
     assert.equal(await card('p-def').locator('[data-decide]').count(), 0, 'the yes and no buttons are gone');

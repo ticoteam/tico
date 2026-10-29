@@ -109,10 +109,9 @@ async function saved(page, writes, n) {
       await page.waitForSelector('.au-ed:not([hidden]) [data-b="step.prompt"]');
       assert.ok((await page.locator('.au-side').boundingBox()).x > 1000, 'the editor sits on the right');
       assert.equal(await page.locator('.au-scrim').isVisible(), false);
-      assert.equal(await page.locator('.au-botp').isVisible(), false, 'the editor takes the bot’s place');
       await shot(page, 'desktop-edit-llm');
       await page.locator('.au-ed [data-op="close"]').click();
-      assert.equal(await page.locator('.au-botp').isVisible(), true);
+      assert.equal(await page.locator('.au-side').isVisible(), false, 'closed, the flow takes the width');
 
       // Opened and saved untouched, the spend editor keeps the limit (it once drew blank and saved none).
       await page.locator('[data-spend]').click();

@@ -333,7 +333,7 @@ def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
 LEVELS = {
     1: ("Passive",
         "It keeps the regular checks running, KPI readings and the automatic goal colours, and otherwise acts only when "
-        "you talk to it: it suggests KPIs, goals and Why lines when you ask and changes nothing until you accept."),
+        "asked through your Assistant: it suggests KPIs, goals and Why lines and changes nothing until you accept."),
     2: ("Suggests actions",
         "It also asks a goal's owner what's happening when a KPI goes red or stale, proposes Why lines, sends you a "
         "Monday note, and suggests how your bots could recover a goal that falls behind, as items in Needs you that you "

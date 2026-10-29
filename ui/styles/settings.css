@@ -714,7 +714,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .listen-form label{display:grid;gap:4px;min-width:0}.listen-form input,.listen-form select{min-width:0;width:100%}
 .listen-wide{grid-column:1/-1}
 @media (max-width:640px){.listen-list li{grid-template-columns:1fr}.listen-actions{justify-content:flex-start}}
-/* Settings > Strategy Bot (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
+/* Settings > System > Strategy Bot (ui/app/settings-strategy-bot.js): three levels, one sentence each, a Confirm before a
    change. */
 .strategy-levels{display:grid;gap:8px;margin:10px 0}
 .strategy-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}

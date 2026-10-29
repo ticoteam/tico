@@ -295,10 +295,9 @@ edited or logged to.
 
 The goals tree is the main column; the Strategy Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
-last run with the first line of its result. For the owner, the chat box at the bottom of the rail is their one chat with the Strategy Bot,
-the same as their **Strategy Bot** menu tab; everyone else is pointed to their Assistant, since only the owner talks to the Strategy Bot
-(see [the Strategy Bot](strategy-bot.md)): ask it to change a goal and its latest reply shows there, earlier messages under **History**, and the tree is drawn
-again when it answers. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
+last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included: ask your
+[Assistant](assistant.md#helpers-through-the-assistant) to change a goal, and it hands the Strategy Bot the work. A goal
+change stays the owner's to confirm. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
 One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented

@@ -197,13 +197,14 @@ def add_strategy_bot(api):
 
 
 def owners_chat(api):
-    """A Strategy Bot turn in the owner's chat with it: it acts as the owner (backend/assistant.py)."""
+    """An Assistant turn in the owner's chat, which is their Assistant like everyone's (backend/assistant.py chat_bot):
+    it acts as the owner, with the Assistant's rights. The Strategy Bot is a helper it hands work to, never this chat."""
     add_strategy_bot(api)
     machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
+    assign(api, machine, "coo")
+    ready(api, machine, ["coo"])
     post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
-    return claim(api, machine, "goal-manager")["token"]
+    return claim(api, machine, "coo")["token"]
 
 
 def goals_session(api):
@@ -228,7 +229,7 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
-def test_in_the_owners_chat_the_strategy_bot_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+def test_in_the_owners_chat_the_assistant_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
     _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
     token = owners_chat(api)
     assert get(api, "me", token)["actor"] == "human:ana"

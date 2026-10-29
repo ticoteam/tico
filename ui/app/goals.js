@@ -215,20 +215,20 @@ window.addEventListener('hashchange', () => {
   const dlg = document.getElementById('goal-sheet');
   if (dlg?.open && !location.hash.startsWith(goalsBase())) dlg.close();
 });
-// The colour a person sets by hand sticks until they let the Strategy Bot set it again.
+// The colour a person sets by hand sticks until they let it be set automatically again.
 const GOAL_COLOURS = [['green', 'On track'], ['yellow', 'At risk'], ['red', 'Off track'], ['done', 'Done']];
 function goalColourHtml(g) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
   return `<div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
       <select name="status" aria-label="Colour"><option value="">${byHand ? 'Set by hand' : 'Automatic'}</option>${GOAL_COLOURS.map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}</select>
       <input name="note" type="text" maxlength="2000" autocomplete="off" placeholder="One sentence: why" aria-label="Why"></div>
-      ${byHand ? `<button class="linkish goal-auto" type="button" data-goal-auto>Let ${esc(strategyBotName())} set it</button>` : ''}</div>`;
+      ${byHand ? '<button class="linkish goal-auto" type="button" data-goal-auto>Let the Assistant set it</button>' : ''}</div>`;
 }
 function goalNoteHtml(g, may) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
   const said = byHand ? `Set by ${goalActorName(g.status_by)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
   const suggest = byHand && g.suggest_status
-    ? `<div class="goal-note goal-suggest">${esc(strategyBotName())} suggests <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ': ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let ' + esc(strategyBotName()) + ' set it</button>' : ''}</div>` : '';
+    ? `<div class="goal-note goal-suggest">Suggested: <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ', ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let the Assistant set it</button>' : ''}</div>` : '';
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
 }
 // The bets a goal may serve (ui/strategy-page.js): the active ones, and the one it serves now whatever its status, so
@@ -245,7 +245,7 @@ function goalBetHtml(g, may) {
         `<option value="${esc(c.id)}"${c.id === g.bet_id ? ' selected' : ''}>${esc(c.statement)}</option>`).join('')}</select></label>`;
 }
 // A done or dropped goal comes back (backend/goals.py `reopen`): with a colour that sticks, or `auto`, the colour it had,
-// worked out again by the Strategy Bot. The server checks who may, as it does for a colour.
+// worked out again automatically. The server checks who may, as it does for a colour.
 const goalReopenPost = (id, status, note) => post('/v2/goals/' + encodeURIComponent(id) + '/reopen', {status, note});
 // After a removal: the redraw the page needs (the Goals page's tree and panel, else the bot page's cards).
 const goalsAfterChange = () => GOALS_ST && $('#goal-body') ? goalsReload(GOALS_ST) : goalsRefresh();
@@ -261,7 +261,7 @@ function goalRemovedToast(g) {
 }
 // "Finished (N)" under an owner's live goals: their done and dropped goals, closed until opened, newest first, the
 // latest 20 until "Show all". A row opens read only (its KPIs and its updates); whoever may set its colour may reopen
-// it, with a colour (or "Let Strategy Bot set it") and one line why. The open state is kept per owner, so a redraw
+// it, with a colour (or "Let the Assistant set it") and one line why. The open state is kept per owner, so a redraw
 // keeps it.
 const GOAL_FINISHED_CAP = 20;
 const GOAL_FINISHED = {};
@@ -291,7 +291,7 @@ function goalReopenFormHtml(g, goals) {
   const choices = autoOnly ? [] : GOAL_COLOURS.filter(([v]) => v !== 'done').map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
   return `<form class="goal-form goal-reopen" data-fin-reopen-form="${esc(g.id)}" novalidate>
       <div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
-        <select name="status" aria-label="Colour"><option value="">Choose…</option>${choices}<option value="auto">Let ${esc(strategyBotName())} set it</option></select>
+        <select name="status" aria-label="Colour"><option value="">Choose…</option>${choices}<option value="auto">Let the Assistant set it</option></select>
         <input name="note" type="text" maxlength="300" autocomplete="off" placeholder="One line: why it is back" aria-label="Why it is back"></div></div>
       <div class="goal-actions"><button class="primary" type="submit">Reopen</button><button class="ghost" type="button" data-fin-reopen-cancel>Cancel</button></div>
     </form>`;
@@ -472,8 +472,7 @@ function pageGoals() {
   if (was) { was._state = null; if (was.open) was.close(); }
   const sheet = document.getElementById('goal-sheet'); if (sheet?.open) sheet.close();
   const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null};
-  // Goals is a Strategy tab: the tree is the page, the Strategy Bot's panel (ui/app/redesign.js) is beside it and
-  // "+ Goal" heads it.
+  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div></div>`;
   const actions = $('#strat-actions');
@@ -538,161 +537,11 @@ async function goalsRefresh() {
   headGoalsReload();
 }
 
-// The Strategy Bot can be renamed while Goals is open (the owner, in another tab; `refresh` calls this): the panel's
-// names
-// follow and the tree is drawn again, keeping the composer's draft, the chat's stream and a field being typed in.
+// The roster can change while Goals is open (`refresh` calls this): the tree is drawn again when what it is drawn from
+// changed, keeping a field being typed in.
 function goalsFollowRoster() {
-  const state = GOALS_ST, host = document.querySelector('#sbot .sbot-body');
-  if (!state || !host?.isConnected) return;
-  const name = strategyBotName();
-  host.querySelector('[data-gm-thread]')?.setAttribute('aria-label', name + ' conversation');
-  host.querySelector('.gm-form .p-text')?.setAttribute('aria-label', 'Message to the ' + name);
-  host._gmDraw?.();
-  const body = $('#goal-body'), typing = document.activeElement?.matches?.('input, textarea, select') && body?.contains(document.activeElement);
+  const state = GOALS_ST, body = $('#goal-body');
+  if (!state || !body) return;
+  const typing = document.activeElement?.matches?.('input, textarea, select') && body?.contains(document.activeElement);
   if (state.loaded && !typing && state.shape !== goalTreeKey()) goalsRender(state);
-}
-// The Strategy Bot's chat in its panel beside the Strategy tabs (ui/app/redesign.js): the viewer's chat with it, the
-// room its bot page shows. A reply redraws the Goals tree, since it may have just edited a goal.
-const GM = 'goal-manager';
-const GM_STATE = {paused: 'Paused', planned: 'Not set up', archived: 'Off', retired: 'Off', quarantined: 'Paused'};
-const GM_STARTERS = ['Set a goal', 'Fix my goals', 'Go through suggestions'];
-// On the Org tab the starters ask for org changes: it suggests them in words, and makes one when the owner says so.
-const GM_ORG_STARTERS = ['Suggest org changes', 'Who should lead each group?', 'Fix reporting lines'];
-const gmStarters = () => /^#\/strategy\/org(?:$|[/?])/.test(location.hash) ? GM_ORG_STARTERS : GM_STARTERS;
-// `rail`: the panel's host; it lives across tabs, so its stop is its own (`rail.stop`).
-async function goalManagerMount(rail) {
-  rail.stop?.();
-  const host = rail.host;
-  if (!host) return;
-  const bot = (S.emps || []).find(e => e.name === GM);
-  const active = !!bot && !GM_STATE[bot.status];
-  let stopped = false, es = null, poll = null, conversation = null, messages = [], execution = null, sending = false, lastReply, composer = null;
-  const current = () => !stopped && host.isConnected;
-  // `es` is the release of this chat's live events (ui/app/live.js).
-  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  const onHash = () => host._gmDraw?.();                  // the rail stays across tabs; its starters follow the tab
-  const stop = () => { stopped = true; stopStream(); if (composer) PILLS.delete(composer); removeEventListener('hashchange', onHash); };
-  addEventListener('hashchange', onHash);
-  rail.stop = stop;
-  host.innerHTML = '<section class="gm-chat" data-gm-chat></section>';
-  const chat = host.querySelector('[data-gm-chat]');
-  if (!active) {
-    chat.innerHTML = '<h3 class="rail-h" id="gm-chat-h">Chat</h3>' + (S.me?.role === 'owner'
-      ? '<div class="gm-on"><button class="primary" type="button" data-gm-on>Turn on</button><span class="muted" data-gm-status role="status"></span></div>'
-      : '<p class="muted gm-on">The owner can turn it on.</p>');
-    const on = chat.querySelector('[data-gm-on]');
-    if (on) on.onclick = async () => {
-      on.disabled = true;
-      const status = chat.querySelector('[data-gm-status]');
-      status.textContent = '';
-      try {
-        const result = await post('/v2/goal-manager/turn-on', {});
-        if (!current()) return;
-        if (result.state === 'active') { await refresh(true); if (current()) goalManagerMount(rail); return; }
-        status.textContent = 'Needs a computer with a model. See Settings.';
-      } catch (e) { if (current()) status.textContent = e.message; }
-      if (current()) on.disabled = false;
-    };
-  } else if (!meStrategyBot()) {
-    // Of people, only the owner talks to the Strategy Bot (backend/assistant.py); everyone else asks their Assistant.
-    chat.innerHTML = `<h3 class="rail-h" id="gm-chat-h">Chat</h3>
-      <p class="muted gm-on" data-gm-assistant>Only the company's owner talks to ${esc(strategyBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.</p>`;
-  } else {
-    chat.innerHTML = `<h3 class="rail-h" id="gm-chat-h">Chat</h3>
-      <div class="gm-thread" data-gm-thread role="log" aria-label="${esc(strategyBotName())} conversation" tabindex="0"><p class="muted">Loading conversation…</p></div>
-      <div class="gm-form"></div>
-      <p class="err" data-gm-error role="alert" hidden></p>`;
-    const error = chat.querySelector('[data-gm-error]');
-    const fail = text => { if (!current()) return; error.textContent = text || ''; error.hidden = !text; };
-    const isReply = m => m.from_actor === 'bot:' + GM;
-    // With no AI provider nothing can run: say so rather than wait.
-    const noProvider = () => execution?.state === 'queued' && execution.readiness_reason === 'missing_provider';
-    const thread = chat.querySelector('[data-gm-thread]');
-    let rendered = '';
-    host._gmDraw = () => { if (rendered) draw(); };          // a new name, once the thread is drawn (goalsFollowRoster)
-    const draw = () => {
-      if (!current()) return;
-      // Run inspection stays on the full bot page.
-      const rows = messages.map(m => v2MessageHTML({...m, run:null}));
-      const live = execution && execution.state !== 'completed' ? execution.text : '';
-      if (live) rows.push(`<div data-gm-live>${v2MessageHTML({from_actor:'bot:' + GM, body:live})}</div>`);
-      else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(strategyBotName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>');
-      else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
-      // An empty chat offers three starters; a tap sends its words as the owner's message.
-      const html = rows.join('') || `<div class="gm-starters">${gmStarters().map(words =>
-        `<button type="button" class="ghost" data-gm-starter>${esc(words)}</button>`).join('')}</div>`;
-      if (html === rendered) return;
-      // Keep an older message in view while new replies arrive (ui/app/stick-scroll.js).
-      stickScroll(thread).update(() => {
-        thread.innerHTML = html;
-        const reload = snapshot;
-        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload});
-        if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast, reload});
-      }, {fresh: !!rendered});
-      rendered = html;
-    };
-    const apply = async data => {
-      if (!current()) return;
-      messages = data.messages || [];
-      execution = data.execution || null;
-      draw();
-      const reply = messages.filter(isReply).at(-1)?.id;
-      // A new reply after the first look may come with an edited goal: draw the tree again.
-      if (lastReply !== undefined && reply !== lastReply && GOALS_ST && $('#goal-body')) await goalsReload(GOALS_ST);
-      lastReply = reply ?? null;
-    };
-    const snapshot = async () => {
-      if (!conversation || !current()) return;
-      try { await apply(await get(`/v2/conversations/${encodeURIComponent(conversation.id)}/snapshot`)); fail(''); }
-      catch (e) { fail(e.message); }
-    };
-    // The page's live events, as the bot page's chat uses them: a change to this conversation reads its snapshot
-    // again. Without EventSource, a poll.
-    const watch = () => {
-      stopStream();
-      if (!conversation || !current()) return;
-      const fallback = liveFallback(snapshot, 5000);
-      if (fallback) { poll = fallback; return; }
-      const cid = conversation.id, mine = d => d.conversation_id === cid && current();
-      const soon = () => liveSoon('gm:' + cid, () => void snapshot(), 150);
-      const offs = [liveFollow(cid), liveOn('messages', d => { if (mine(d)) soon(); }),
-                    liveOn('runs', d => { if (mine(d)) soon(); }), liveOn('reset', () => { if (current()) soon(); })];
-      es = () => offs.forEach(off => off());
-    };
-    const send = async (P, text) => {
-      if (!text || sending) return;
-      sending = P.sending = true; pillButtons(P); fail('');
-      const scope = sessionScope(pq(P, '.p-text'));
-      try {
-        const out = await cloudCompose('/v2/chat/' + GM, {text, refs: {}});
-        pillAcknowledge(P, text, [], scope);
-        if (!current()) return;
-        const fresh = out.conversation && out.conversation.id !== conversation?.id;
-        conversation = out.conversation || conversation;
-        if (out.message && !messages.some(m => m.id === out.message.id)) messages.push(out.message);
-        if (lastReply === undefined) lastReply = messages.filter(isReply).at(-1)?.id ?? null;
-        stickScroll(thread).toBottom(); draw();
-        if (fresh || !es) watch();
-        await snapshot();
-      } catch (e) { fail(e.message); }
-      finally { sending = P.sending = false; if (current()) pillButtons(P); }
-    };
-    composer = makePill({mode:'chat', files:false, label:'Message to the ' + strategyBotName(), placeholder: 'Ask ' + strategyBotName(), send});
-    pq(composer, '.p-text').maxLength = 4000;
-    thread.addEventListener('click', event => {
-      const starter = event.target.closest('[data-gm-starter]');
-      if (starter) void send(composer, starter.textContent);
-    });
-    chat.querySelector('.gm-form').append(composer.el);
-    void (async () => {
-      try {
-        const list = await get('/v2/conversations?chat_with=' + GM);
-        if (!current() || conversation) return;
-        // The owner's one chat with it, the same as their menu tab's (room_key STRATEGY_ROOM, backend/rooms.py).
-        conversation = (list.conversations || []).find(c => c.room_key === STRATEGY_ROOM && !c.closed_at) || null;
-        if (conversation) { await snapshot(); watch(); }
-        else draw();
-      } catch (e) { fail(e.message); }
-    })();
-  }
 }

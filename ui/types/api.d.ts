@@ -61,7 +61,6 @@ export type Assistant = {
   pending: Array<unknown>;
   room_id: string | null;
   state: string;
-  strategy_bot: boolean;
 };
 
 export type AssistantAction = {

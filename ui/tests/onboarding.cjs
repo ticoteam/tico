@@ -887,7 +887,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
     assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
     assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
-    assert.deepEqual(await status('content'), [1, 'BotOps is setting it up']);                             // not a starter: BotOps builds it
+    assert.deepEqual(await status('content'), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
     assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
     assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
     // Show me around: the tour, once asked for; Skip is remembered.

@@ -1,5 +1,5 @@
 /* ui/app/redesign-market.js — Strategy › Market's Briefing and Listening views with the redesign on (PLAN §6 wave 6).
-   Briefing: the Librarian's latest weekly briefing as a front page (GET /api/v2/market/briefings/latest): masthead,
+   Briefing: the latest weekly briefing as a front page (GET /api/v2/market/briefings/latest): masthead,
    headline, its first lines, then the items by kind; Read opens the whole page (ui/market-briefing.js).
    Listening: posts per day by source over two weeks and the newest posts sent somewhere, one line each
    (GET /api/v2/listening/stats `daily` and `recent`, backend/listening.py timeline), with the destinations folded below.
@@ -41,7 +41,7 @@ function rdbHtml(b) {
     <h2 class="rdb-hl">${esc(b.title)}</h2>
     ${deck ? `<p class="rdb-deck">${esc(deck)}</p>` : ''}
     ${cols ? `<div class="rdb-cols">${cols}</div>` : ''}
-    <div class="rdb-foot"><span>Librarian${bets ? ' · ' + bets : ''}</span><button class="ghost" type="button" data-rdb-read>Read</button></div>
+    <div class="rdb-foot"><span>${bets}</span><button class="ghost" type="button" data-rdb-read>Read</button></div>
   </article>`;
 }
 async function pageRdBriefing() {

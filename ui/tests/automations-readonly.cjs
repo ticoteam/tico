@@ -43,7 +43,7 @@ async function readOnly(page, writes) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A computer: the same, and the bot's proposal card has View diff only.
+    // A computer: the same, and the bot's proposal in Versions has View diff only.
     {
       const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, viewer: 'priya', hash: '#/automations/au_inbox'});
       await readOnly(page, writes);
@@ -53,8 +53,10 @@ async function readOnly(page, writes) {
       await page.waitForSelector('.au-hd .au-name:text("Task triage")');
       assert.match(await page.locator('.au-hd').innerText(), /Built-in: can’t be turned off/);
       await page.evaluate(() => { location.hash = '#/automations/au_inbox'; });
+      // The proposal waits in Versions; a viewer gets View diff only.
+      await page.locator('.au-ver').click();
       await page.waitForSelector('.au-prop[data-n="8"]');
-      assert.deepEqual(await page.locator('.au-prop [data-prop]').evaluateAll(b => b.map(x => x.dataset.prop)), ['diff']);
+      assert.deepEqual(await page.locator('.au-prop [data-op]').evaluateAll(b => b.map(x => x.dataset.op)), ['diff']);
       await shot(page, 'desktop-readonly');
       assert.equal(await sideways(page), false);
       assert.deepEqual(errors, []);

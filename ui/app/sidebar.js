@@ -20,11 +20,11 @@ document.querySelectorAll('[data-section-toggle]').forEach(button => button.oncl
   renderNavSections();
 });
 renderNavSections();
-// The built-ins stay out of the team chart. The Assistant and BotOps have their own rows in the main rail (each
-// person's private Assistant is its own page, ui/app/assistant-page.js); the Strategy Bot is beside the Strategy tabs
-// and the Librarian on Docs and Market. Search, bot pickers and a person's page do not list the Assistant or the Librarian;
-// Settings > Bots manages all four, and #/bot/<slug> opens each.
-const isHiddenBot = slug => slug === assistantBot() || slug === 'librarian';
+// The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
+// ui/app/assistant-page.js); BotOps, the Strategy Bot and the Librarian are its helpers (state.js ASSISTANT_HELPERS),
+// which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
+// and #/bot/<slug> opens each for its settings, runs and logs.
+const isHiddenBot = slug => slug === assistantBot() || isAssistantHelper(slug);
 const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
 // Groups first: a human or a bot hangs in the group its `team` names (backend/groups.py); groups nest by `parent`. Inside
 // a group a teammate hangs under whoever it reports to when that one is in the same group, else at the top of the group.
@@ -168,9 +168,6 @@ function renderInboxNav() {
   const rows = inboxNavRows().filter(row => !INBOX_PLACED.has(row.bot));
   section.hidden = !rows.length;
   patchHTML(list, rows.map(inboxNavLink).join(''));
-}
-function renderLibrarians() {
-  window.syncLibrarianRail?.();   // the Librarian's chat beside Library's pages follows the team as read now
 }
 function mailPersonVisible(person) {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
@@ -539,7 +536,7 @@ $('#org-history').onclick = () => {
   renderTree();
 };
 // Helpers (built-ins and message bots) are off the Team list; they have their own entry points. `reports_to` is untouched,
-// and a bot that reports to one hangs where it would have. The Strategy Bot is one too: its place is the Strategy tabs.
+// and a bot that reports to one hangs where it would have. The Strategy Bot is one too: the Assistant asks it.
 const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
@@ -712,7 +709,6 @@ function renderTree() {
       .map(node => row(node, 0, true)).join('');
   };
   renderOnboardingNav();
-  renderLibrarians();
   const historyOn = orgHistoryOn();
   $('#org-history').setAttribute('aria-pressed', String(historyOn));
   $('#org-mine').setAttribute('aria-pressed', String(orgMineOn()));

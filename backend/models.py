@@ -708,7 +708,7 @@ class LearnedEdit(Contract):
 
 
 class GoalReadBack(Contract):
-    """Up to 20 changes the Strategy Bot reads back in the owner's chat (backend/goal_read_back.py): each one an object
+    """Up to 20 changes the owner's Assistant reads back in their chat (backend/goal_read_back.py): each one an object
     with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."""
     changes: list[dict] = Field(min_length=1, max_length=20)
 
@@ -2501,7 +2501,8 @@ class AssistantMessage(Contract):
 
 
 class AssistantUpload(Contract):
-    """A message with files in the owner's Strategy Bot chat (POST /api/v2/uploads/assistant/messages)."""
+    """A message with files in a person's Assistant chat (POST /api/v2/uploads/assistant/messages), which takes text
+    only: the route refuses it (`text_only`)."""
     text: Annotated[str, Field(min_length=1, max_length=8000)]
     # Each file's caption, in upload order.
     titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
