@@ -151,11 +151,9 @@ function inboxNavRows() {
 // whose bot is not shown there (the recently-viewed list, or "Only bots I can read or write").
 let INBOX_PLACED = new Set();
 function inboxNavLink(row) {
-  const here = messagingParams();
   const href = `${MESSAGING}?bot=${encodeURIComponent(row.bot)}&source=${encodeURIComponent(row.source)}`;
-  const on = S.route.startsWith(MESSAGING) && here.bot === row.bot && here.source === row.source;
   const icon = row.kind === 'slack' ? SLACK_ICON : `<span class="nav-icon inbox-kind" aria-hidden="true">mail</span>`;
-  return `<li><a href="${href}" title="${esc(row.title)}"${on ? ' class="cur" aria-current="page"' : ''}>${icon}<span>${esc(row.label)}</span></a></li>`;
+  return `<li><a href="${href}" title="${esc(row.title)}">${icon}<span>${esc(row.label)}</span></a></li>`;
 }
 function renderInboxNav() {
   const section = $('#nav-inboxes-section'), list = $('#inbox-list');
@@ -168,6 +166,25 @@ function renderInboxNav() {
   const rows = inboxNavRows().filter(row => !INBOX_PLACED.has(row.bot));
   section.hidden = !rows.length;
   patchHTML(list, rows.map(inboxNavLink).join(''));
+  navCurSync(list);
+}
+// Which row is the page you are on is marked in place: the list's markup never depends on the route, so a page change
+// replaces no row (patchHTML keeps them all), and a whole group never redraws because one of its rows became current.
+function navCurSync(root) {
+  const bot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
+  const person = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
+  const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
+  for (const a of root.querySelectorAll('a.dept-label, a.node, a.person-mail-link, .inbox-list a')) {
+    const href = a.getAttribute('href') || '', org = a.dataset.org || '';
+    const q = here && href.startsWith(MESSAGING) ? new URLSearchParams(href.split('?')[1] || '') : null;
+    const on = a.matches('.dept-label') ? S.route === href
+      : a.matches('.person-mail-link') ? !!q && here.bot === q.get('bot')
+      : q ? here.bot === q.get('bot') && here.source === q.get('source')
+      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2) : false;
+    a.classList.toggle('cur', on);
+    // The mail link beside a person marks its bot's mailbox; the person's own row is the page.
+    if (on && !a.matches('.person-mail-link')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
 }
 function mailPersonVisible(person) {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
@@ -596,8 +613,6 @@ function renderTree() {
   if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
   const byParent = orgTreeWithHelpers(orgTreeByParent());
   const myId = mePerson()?.id;
-  const curBot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
-  const curPerson = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
   let needCounts;                                   // counted once per render, on first use
   const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -657,7 +672,7 @@ function renderTree() {
       const renaming = manage && ORG_EDIT?.rename === node.id;
       return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}>
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
-        ${renaming ? orgGroupFieldHTML(node.name) : (here => `<a class="dept-label${here ? ' cur' : ''}" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false"${here ? ' aria-current="page"' : ''}>${esc(node.name)}</a>`)(S.route === TEAM_PAGE + encodeURIComponent(node.id))}
+        ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false">${esc(node.name)}</a>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
         ${manage && ORG_BET === node.id && orgMayBet() ? orgBetPopHTML({id: node.id, bet_id: orgGroupBet(node.id)}) : ''}
@@ -679,12 +694,12 @@ function renderTree() {
       const kids = !flat && !isTop && byParent[key], isCol = kids && collapsed.has(key);
       return `<li class="${kids ? 'dept' : isTop ? 'org-top' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
-        <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+        <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
         ${moveMenu(key, p.name || p.id, at)}
         ${!flat && p.id === myId && MY_AGENT === false ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
-        ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
+        ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     const e = node, key = 'b:' + e.name, st = stateOf(e.name), n = needN(e.name), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
@@ -693,7 +708,7 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.name);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+      <a class="node ${e.status} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}" data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
         ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
@@ -719,6 +734,7 @@ function renderTree() {
   patchHTML($('#tree'), historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + recTop()
       + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : ''));
+  navCurSync($('#tree'));
   renderInboxNav();                                   // after the tree, which places what it can
   orgDragWire($('#tree'));
   orgGroupFieldWire();

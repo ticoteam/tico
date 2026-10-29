@@ -240,6 +240,11 @@ async function reportOrder(browser) {
   await page.keyboard.press('Enter');
   assert.equal(await page.getByRole('menuitem', {name: 'Move down'}).isDisabled(), true, 'the last one goes no lower');
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move up');
+  // The menu shows whole above the rows after it (the list's layout containment clips nothing).
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('#tree .org-order-menu button')].every(b => {
+    const r = b.getBoundingClientRect();
+    return b.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)) && b.contains(document.elementFromPoint(r.left + 4, r.bottom - 3));
+  })), true, 'every Move item is on top where it is drawn');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'b:builder' && !document.querySelector('#tree .org-order-menu'));
   assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:builder', 'bot:analyst']}]);

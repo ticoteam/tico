@@ -305,8 +305,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
    sit in #main's own grid. */
 #main.bot-split-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-right);grid-template-rows:auto auto minmax(0,1fr);padding:0;position:relative}
 #main.bot-split-layout>#bot-work:not([hidden]){display:contents}
-/* An empty top strip (no app nudge) takes no room, so the rail starts at the window's top edge. */
-body:has(#main.bot-split-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
+/* An empty top strip (no app nudge) takes no room (ui/styles/layout.css), so the rail starts at the window's top edge. */
 #main.bot-split-layout>#bot-top{grid-column:1;grid-row:1;margin:18px var(--s4) var(--s3) 28px}   /* 18px: the empty top strip (10px) and #main's 8px it replaces, so the header does not jump between tabs */
 body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8px}
 #main.bot-split-layout>#bot-banners{grid-column:1;grid-row:2;margin:0 var(--s4) 0 28px}

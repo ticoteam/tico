@@ -117,8 +117,15 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
+   alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
+   gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
+::view-transition{pointer-events:none}
+::view-transition-group(root){animation:none}
+::view-transition-old(root),::view-transition-new(root){animation-duration:min(var(--dur),150ms);animation-timing-function:var(--ease)}
 /* Reduced motion: no entrances, no spinners' travel, no smooth scrolling. State still changes, instantly. */
 @media (prefers-reduced-motion:reduce){
+  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
 /* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.js). */

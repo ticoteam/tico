@@ -14,7 +14,12 @@ const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = id => '/v2/automations/' + encodeURIComponent(id);
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
 let AU = null;
-function automationsStop() { AU = null; }
+// Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
+function automationsStop() {
+  if (!AU) return;
+  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range};
+  AU = null;
+}
 
 // #/automations[/<id>[/runs]]; an old #/automations/bot or <id>/bot link opens the list or the flow.
 function auRouteParts(r) {
@@ -91,6 +96,18 @@ async function pageAutomations() {
     automationsStop();
     AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
           ...auOverviewState()};
+    const kept = S.lastRead.automations;
+    if (kept) {
+      Object.assign(AU, {list: kept.list, groups: kept.groups}, kept.range === AU.range ? {stats: kept.stats} : {});
+      // Read again behind the kept copy; only an answer that differs draws the list again.
+      const state = AU;
+      void auLoadList(state).then(() => {
+        if (AU !== state) return;
+        if (state.listError) { state.list = kept.list; state.listError = ''; return; }   // a failed read leaves the list as it was
+        if (sameData(state.list, kept.list) && sameData(state.groups, kept.groups)) return;
+        if (state.id) auFacetsDraw(); else auDrawList();
+      });
+    }
     auShell();
     const q = new URLSearchParams(S.route.split('?')[1] || '').get('q');
     if (q) { AU.f.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }

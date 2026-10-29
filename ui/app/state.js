@@ -37,7 +37,11 @@ const CONFIG_DEFAULTS = {environment_id: '', company_name: '', app_name: 'Tico',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
 const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || UPDATES,
             config: {...CONFIG_DEFAULTS},
-            v2: {on: false, status: {}, needs: []} };
+            v2: {on: false, status: {}, needs: []},
+            // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
+            // return visit paints it in the same task as the page's shell, then reads again and patches what changed,
+            // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.js).
+            lastRead: {} };
 const appName = () => S.config.app_name || CONFIG_DEFAULTS.app_name;
 // The assistant bot's name. Neither the product's name nor the team's is ever the bot's: a config that names it
 // after the app (an older demo did) or the team (the old default) reads as "Assistant". A team's own name for it stays.

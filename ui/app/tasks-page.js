@@ -24,6 +24,19 @@ function pageTasks(forced, openId = '') {
   state.migrate = !hadQuery;
   if (state.migrate && tasksMigrateOldFilters(state, null)) state.migrated = true;
   tasksNormalise(state, forced);
+  // A return visit: the remembered view as the server last answered it, and the list as it was left, painted with the
+  // shell. The reads below still go out and patch what changed.
+  const keptPref = S.lastRead.tasksPref || null, kept = S.lastRead.tasks?.key === activeTasksPath() ? S.lastRead.tasks : null;
+  const prefApply = value => {
+    if (!hadQuery && !state.typeChosen && value.type != null) state.type = String(value.type) || 'general';
+    // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
+    if (!forced && value.view) state.view = value.views === 2 ? String(value.view) : 'foryou';
+    tasksPrefsApply(state, value);
+    tasksNormalise(state, forced);
+    tasksTypeCheck(state);
+  };
+  if (keptPref) { prefApply(keptPref); state.migrate = false; }
+  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true});
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
@@ -159,19 +172,17 @@ function pageTasks(forced, openId = '') {
     const loading = tasksLoad(state);
     const pref = await v2Get('/v2/preferences/' + TASK_PREF);
     if (TASKS_ST !== state) return;
-    if (pref?.value && typeof pref.value === 'object') {
-      if (!hadQuery && !state.typeChosen && pref.value.type != null) state.type = String(pref.value.type) || 'general';
-      // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
-      if (!forced && pref.value.view) state.view = pref.value.views === 2 ? String(pref.value.view) : 'foryou';
-      tasksPrefsApply(state, pref.value);
-      tasksNormalise(state, forced);
-      tasksTypeCheck(state);
-      const migrated = state.migrate && tasksMigrateOldFilters(state, pref.value);
+    const value = pref?.value && typeof pref.value === 'object' ? pref.value : null;
+    // The same answer as the one already applied draws nothing again: the header is painted once.
+    if (value && !sameData(value, keptPref)) {
+      S.lastRead.tasksPref = value;
+      prefApply(value);
+      const migrated = state.migrate && tasksMigrateOldFilters(state, value);
       if (!openId && (hadQuery || state.type !== 'general' || migrated)) tasksURLWrite(state);
       if (migrated) tasksRemember(state);       // the saved value is written again without the old keys
-    }
-    tasksTools(state);
-    tasksRender(state);
+      tasksTools(state);
+      tasksRender(state);
+    } else if (!value && !keptPref) { tasksTools(state); tasksRender(state); }
     tasksDoneEnsure(state);
     await loading;
     // An old Decide link to one item (#/decide?item=<id>): its card over Needs you.
@@ -199,6 +210,7 @@ function tasksNormalise(state, forced) {
 }
 function tasksRemember(state) {
   taskPipelineRemember(state);
+  S.lastRead.tasksPref = {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)};   // the next visit opens as left
   try {
     localStorage.setItem('hub.tasks.view2', state.view);
     localStorage.setItem('hub.tasks.layout', JSON.stringify(tasksPrefsValue(state)));
@@ -206,6 +218,12 @@ function tasksRemember(state) {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(() => { void post('/v2/preferences/' + TASK_PREF,
     {value: {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)}}).catch(() => {}); }, 400);
+}
+// Leaving the page keeps its list for the next visit (S.lastRead), unless the list was never read (a read again under
+// way when leaving still keeps the last one).
+function tasksKeep(state) {
+  if (!state?.read && !state?.kept) return;
+  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered};
 }
 function taskOwnerOptions(selected = '') {
   const people = (S.people || []).filter(p => !p.hidden)
@@ -332,7 +350,8 @@ async function tasksLoad(state, opts = {}) {
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
   const cursor = state.since;
   if (!cursor) state.activeComplete = false;
-  state.loading = !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
+  // A list kept from the last visit is shown, never a skeleton, while it is read again.
+  state.loading = !state.kept && !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/tasks/labels'),
     taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES)];
@@ -363,7 +382,7 @@ async function tasksLoad(state, opts = {}) {
   // A read that failed (offline, the server away) leaves the list as it was rather than empty; the next poll reads again.
   state.labels = lab?.labels || [];
   state.tags = lab?.tags || [];
-  state.loading = false;
+  state.loading = false; state.read = true;
   tasksTypeCheck(state);
   tasksTools(state); tasksRender(state);
   if (tasksNeedsQueue(state)) void askFilteredLoad(state);

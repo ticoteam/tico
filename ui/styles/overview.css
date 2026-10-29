@@ -1,5 +1,9 @@
 #main.overview-layout{padding:0;max-width:none;overflow:hidden;min-height:0}
-body:has(#main.overview-layout) #topbar{display:none}
+/* The campus keeps the empty top strip's room as the Dashboard tab does (ui/styles/layout.css), and its tab row sits
+   where .dash-head puts it there (ui/styles/dashboard.css): switching tabs moves neither the heading nor the tabs. */
+/* A campus left a moment ago waits here, paused and out of sight, until the Overview shows again (ui/app/overview.js). */
+#overview-hold{position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;overflow:hidden;contain:strict;z-index:-1}
+#overview-hold>iframe{width:100%;height:100%;border:0;display:block}
 .overview-page{height:100%;min-height:0;display:flex;flex-direction:column}
 .overview-needs{flex:none;display:flex;gap:var(--s3);align-items:baseline;flex-wrap:wrap;padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);color:inherit;text-decoration:none}
 .overview-needs:hover strong{text-decoration:underline}

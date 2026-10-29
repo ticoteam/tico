@@ -308,6 +308,8 @@ function updDecksBind(state) {
     const track = deck.querySelector('.upd-track');
     const at = state.slide?.[deck.closest('[data-upd]').dataset.upd];
     if (at) track.scrollLeft = at * track.clientWidth;      // a re-render keeps the slide you were on
+    if (track.updBound) continue;               // a card kept by a redraw (patchHTML) keeps its listener
+    track.updBound = true;
     let t = null;
     track.addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(() => updDeckMark(deck, state), 60); }, {passive: true});
   }
@@ -504,8 +506,10 @@ function updRender(state) {
   updSaveDrafts();
   const data = state.data;
   if (!data) { feed.innerHTML = '<div class="upd-skel"></div><div class="upd-skel"></div><div class="upd-skel"></div>'; return; }
+  // Every load draws the feed again (a visit paints the kept copy, then the server's answer): only cards that changed
+  // are replaced (patchHTML), so an unchanged answer moves nothing.
   if (data.tree && updIsTree(state)) {
-    feed.innerHTML = updTreeHTML(state);
+    patchHTML(feed, updTreeHTML(state));
     updDecksBind(state);
     // The badge also counts direct reports' updates from other days, which this day's tree does not show.
     const allRead = $('#upd-allread'); if (allRead) allRead.hidden = !(S.updUnread > 0) && !state.list.some(u => !u.read && !u.quiet);
@@ -528,7 +532,7 @@ function updRender(state) {
     ? '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">archive</span><b>No archived updates.</b></div>'
     : '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b></div>';
   if (data.next_before) html += '<button type="button" class="ghost upd-more" data-upd-more>Load older</button>';
-  feed.innerHTML = html;
+  patchHTML(feed, html);
   updDecksBind(state);
   const allRead = $('#upd-allread'); if (allRead) allRead.hidden = state.view === 'archive' || !items.some(u => !u.read);   // nothing to mark, no button
   updWatch(state);
