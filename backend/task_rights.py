@@ -39,7 +39,9 @@ def subjects(c, actor):
                 out.add(('bot:' if kind == 'bot' else 'human:') + ident)
         return out
 
-    return read_cache.value(c, ('task_rights_subjects', actor), build)
+    # Read only: represents, private_subjects and task_sql take membership and sort copies. A copy per call cost more
+    # than the answer (one call per task a visibility check reads).
+    return read_cache.value(c, ('task_rights_subjects', actor), build, shared=True)
 
 
 def represents(c, actor, party):

@@ -1021,13 +1021,20 @@ _VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
 
 def _prime_person_origins(c, visible_sql, ids):
     """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, read in one query
-    per 500 with that same rule rather than one query per card and ancestor."""
-    if read_cache.cache(c) is None:
-        return
+    per 500 with that same rule rather than one query per card and ancestor. Returns the ids the rule lets this
+    reader see, from the same read, so the caller needs no second check of them."""
+    readable = set()
     for part in H.chunks(sorted({tid for tid in ids if tid})):
-        found = {row["id"]: row for row in c.execute(
-            "SELECT * FROM tasks WHERE id IN (%s) AND (%s)" % (",".join("?" * len(part)), visible_sql), part)}
-        read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+        found = {}
+        for row in c.execute("SELECT *, (%s) AS visible_here FROM tasks WHERE id IN (%s)"
+                             % (visible_sql, ",".join("?" * len(part))), part):
+            row = dict(row)
+            if row.pop("visible_here"):
+                readable.add(row["id"])
+                found[row["id"]] = row
+        if read_cache.cache(c) is not None:
+            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+    return readable
 
 
 def prime_list_origins(c, visible_sql, rows):
@@ -1646,14 +1653,14 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     privacy.prime_messages(c, [m for row in raw["approvals"]
                                if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
-    _prime_person_origins(c, visible, chain)
+    chain_seen = _prime_person_origins(c, visible, chain)     # the chain's visibility, read once with its rows
     pipelines = H.type_list(c)
     asks_of = H.open_tasks_asks(c, cards, actor=privacy.actor(who))
-    can_see = _readable_task_ids(
-        c, visible,
-        [row["id"] for row in cards]
-        + [tid for originals in merged.values() for tid in originals]
-        + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    wanted = ([row["id"] for row in cards]
+              + [tid for originals in merged.values() for tid in originals]
+              + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    elsewhere = _readable_task_ids(c, visible, [tid for tid in wanted if tid not in chain])
+    can_see = {tid for tid in wanted if (tid in chain and tid in chain_seen) or tid in elsewhere}
     from . import reconnects
     reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
@@ -1737,6 +1744,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
+    readable_memo = {}      # a blocker or ancestor shared by many cards is checked once in this snapshot
+
+    def readable(tid):
+        if tid not in readable_memo:
+            readable_memo[tid] = _readable(auth, c, who, tid)
+        return readable_memo[tid]
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
     from . import ask_ingest
@@ -1748,7 +1761,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
-            item["holds_up"] = holds_up(c, row, lambda tid: _readable(auth, c, who, tid))
+            item["holds_up"] = holds_up(c, row, readable)
             if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
                 own = roadmap_entry(c, row)
         if item["kind"] in ("question", "ask"):

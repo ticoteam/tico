@@ -9092,12 +9092,14 @@ def prime_tasks(conn, ids):
     if values is None:
         return
     wanted = {tid for tid in ids if tid}
-    wanted = {tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values
-              or (TASK_TAGS_SQL % "?", (tid,)) not in values}
-    for part in chunks(sorted(wanted)):
+    # A row already read in this snapshot (prime_task_rows) is not read again; only its missing tags are.
+    unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
+    for part in chunks(unread):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
+    for part in chunks(sorted(tid for tid in wanted if (TASK_TAGS_SQL % "?", (tid,)) not in values)):
+        marks = ",".join("?" * len(part))
         tags = {tid: [] for tid in part}
         for row in conn.execute(TASK_TAGS_SQL % marks, part):
             tags[row["task_id"]].append(row)
@@ -9391,12 +9393,22 @@ def needs_you(conn, who):
     # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
     # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
     by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
+    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None)
+    # The rows just read are this snapshot's task rows: a card's task, its ancestors and what they block are primed
+    # from them (prime_tasks), not read again by id. Copies, so nothing the caller adds to a row reaches the cache.
+    prime_task_rows(conn, [*owned, *asked, *waited, *declined])
     return {"actor": actor,
             "tasks": [t for t in asked + owned if t["id"] not in merged],
             "waiting": [t for t in waited if t["id"] not in merged],
             "approvals": pending,
-            "declined": [t for t in tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide",
-                                          limit=None) if (t.get("type_id") or GENERAL_TYPE) not in by_step]}
+            "declined": [t for t in declined if (t.get("type_id") or GENERAL_TYPE) not in by_step]}
+
+
+def prime_task_rows(conn, rows):
+    """Seed the snapshot's task reads (`task`, `prime_tasks`) with rows already read from `tasks` in this snapshot,
+    as stored: the tags `tasks()` hydrated are left out, as a read by id would have them."""
+    from .read_cache import prime
+    prime(conn, TASK_SQL, {(row["id"],): {k: v for k, v in row.items() if k != "tags"} for row in rows})
 
 
 def approval(conn, approval_id):
