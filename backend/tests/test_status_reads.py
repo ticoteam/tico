@@ -265,3 +265,26 @@ def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read
             batched = privacy.status(c, who, row, **privacy.status_inputs(c, ["busy-1"])["busy-1"])
             alone = privacy.status(c, who, row)
         assert batched["focus"] == alone["focus"] == focus
+
+
+def test_a_message_checked_twice_in_one_snapshot_is_read_once_and_a_write_checks_it_again(api, monkeypatch):
+    # The status page checks its open jobs' messages for the job list and again for the queue counts. The second
+    # check reuses the first in the same snapshot; a task turning private in that snapshot is seen at once.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 2)
+    store = api.app.state.store
+    ben = privacy.actor(store.settings.test_identities["ben-test"])
+    with store.read_transaction() as c:
+        task, = c.execute("SELECT id FROM tasks WHERE owner='bot:busy-0' AND private=0 AND title LIKE 'Work busy-0 1'")
+        asks = [{"id": row[0]} for row in c.execute(
+            "SELECT id FROM messages WHERE json_extract(refs_json,'$.task_id')=? OR conversation_id IN "
+            "(SELECT id FROM conversations WHERE task_id=?)", (task[0], task[0]))]
+        assert asks
+        first = privacy.readable_messages(c, ben, asks)
+        assert first == asks
+        # Counted by the checks it runs: a trace hook would itself discard the snapshot's cache.
+        checks, check = [], privacy.message_readable
+        monkeypatch.setattr(privacy, "message_readable", lambda *args, **kw: checks.append(1) or check(*args, **kw))
+        assert privacy.readable_messages(c, ben, asks) == first and checks == []
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task[0],))
+        assert privacy.readable_messages(c, ben, asks) == [] and len(checks) == len(asks)

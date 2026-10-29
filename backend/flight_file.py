@@ -466,6 +466,7 @@ def render(s):
             out.append(f"  {_clock(r.get('ts'))} {r.get('route')} {r.get('ms')}ms status {r.get('status')} "
                        f"sql {r.get('sql_ms')}ms lock wait {r.get('wait_ms')}ms queries {r.get('queries')} "
                        f"bytes {r.get('bytes')}")
+            out += [f"    {t.get('ms')}ms {t.get('n')}x {str(t.get('sql'))[:160]}" for t in r.get("top") or []]
     if s.get("long_holds"):
         out.append("\nWrite lock held longest (who held it):")
         for h in s["long_holds"]:

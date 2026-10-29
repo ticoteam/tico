@@ -62,6 +62,36 @@ def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
     assert process["requests"] == 21 and process["txns"] >= 1
 
 
+def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store, monkeypatch):
+    """A slow page's sample says where its SQL time went: its costliest statement shapes, repeats folded into one with
+    their count, values never kept. A request past STATEMENT_KEYS distinct texts still counts every statement."""
+    monkeypatch.setattr(flight, "STATEMENT_KEYS", 3)
+    rec = store.recorder
+    many = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<?) SELECT sum(x) FROM n"
+    with store.read() as c:                         # a pooled connection, opened before the request
+        cost, token = flight.request_started("GET", None)
+        try:
+            c.execute(many, (300_000,)).fetchone()
+            for task in ("secret-a", "secret-b", "secret-c", "secret-d"):
+                c.execute(f"SELECT * FROM tasks WHERE id='{task}'").fetchall()
+        finally:
+            flight.request_finished(token)
+    assert cost[2] == 5 and len(cost[3]) == 3
+    rec.request("GET /api/status", "human", 200, 1500, 10, "human:ana", cost)
+    rec.request("GET /api/status", "human", 200, 1600, 10, "human:ana", [900.0, 0.0, 40])   # an older-shaped cost
+    rec.drain(MINUTE)
+    taken = rec.take(MINUTE)
+    with store.transaction() as c:
+        flight.write(c, taken)
+        slow = flight.view(c, minutes=10, sections={"slow"}, now=int(time.time()) + 60)["slow"]
+    named = next(r for r in slow if r.get("top"))
+    assert [t["sql"] for t in named["top"]][0] == flight.fingerprint(many)
+    assert {"sql": "SELECT * FROM tasks WHERE id='?'", "n": 2, "ms": named["top"][1]["ms"]} in named["top"]
+    assert "secret" not in json.dumps(slow) and sum(1 for r in slow if "top" not in r) == 1
+    # The flight file, which a stalled server still writes, carries the same names.
+    assert [r["top"] for r in rec.pop_slow() if "top" in r] == [named["top"]]
+
+
 def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, capsys):
     """The write lock is held elsewhere, a writer waits for it, the event loop stops waking: the stall is in the file
     (class `lock`, with the waiting thread's stack) although the recorder's own table write could not get the lock,

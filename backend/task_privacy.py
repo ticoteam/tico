@@ -368,11 +368,17 @@ def readable_messages(c, actor, messages):
     """The messages message_readable passes, each checked against its row as stored, read together in this snapshot
     rather than one query per message. A message not stored is checked as given, as message_readable does."""
     snapshot(c)
-    ids = sorted({dict(m).get("id") for m in messages} - {None, ""})
+    # A page checks the same messages more than once in one snapshot (the status page's job list, then its queue
+    # counts): each stored message's answer for this reader is kept until the snapshot ends or anything is written.
+    values = read_cache.cache(c)
+    known = values.setdefault(("readable_messages", actor), {}) if values is not None else {}
+    ids = sorted({dict(m).get("id") for m in messages} - {None, ""} - set(known))
     stored = H.prime_messages(c, ids)
     prime_messages(c, list(stored.values()))
-    return [m for m in messages if (message_readable(c, actor, stored[mid], current=True)
-                                    if (mid := dict(m).get("id")) in stored else message_readable(c, actor, m))]
+    for mid, row in stored.items():
+        known[mid] = message_readable(c, actor, row, current=True)
+    return [m for m in messages if (known[mid] if (mid := dict(m).get("id")) in known
+                                    else message_readable(c, actor, m))]
 
 
 def require_message(c, who, message):
