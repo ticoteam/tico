@@ -19,8 +19,13 @@ output is ids, counts and PASS or FAIL lines.
                                                 signs in as the person and writes the setup key to OUT
   save-card REQUEST_ID --username U --password-file P [--totp-file T]
                                                 saves a login card for a bot's request
-  reconnect-id HOST                             prints the open site reconnect for HOST in Needs you ('' when none)
-  needles --secret-file S... --password-file P... --start EPOCH --mail FILE --out OUT
+  reconnect-id HOST                             the open site reconnect for HOST in Needs you, as JSON {id, task, key}
+                                                ('' when none)
+  import-file OUT                               a Bitwarden export with two logins (one with 2FA), into OUT (mode 0600)
+  import-logins FILE                            imports FILE as the owner; prints the counts (never the values)
+  code-refused NAME                             the owner's API token asks for the 2FA code of credential NAME: prints
+                                                the HTTP status (403 when a person must open it, signed in)
+  needles --secret-file S... --password-file P... --start EPOCH --mail FILE [--import-file F] --out OUT
                                                 the values the leak check looks for
   leakscan --needles FILE --source LABEL=PATH [...]
                                                 search each source; exit 1 when a needle is found, 2 when there are none
@@ -207,7 +212,7 @@ def cmd_save_card(args):
 def find_reconnect(node, host):
     if isinstance(node, dict):
         if node.get("host") == host and node.get("id"):
-            return node["id"]
+            return node
         for value in node.values():
             found = find_reconnect(value, host)
             if found:
@@ -217,11 +222,49 @@ def find_reconnect(node, host):
             found = find_reconnect(value, host)
             if found:
                 return found
-    return ""
+    return None
 
 
 def cmd_reconnect_id(args):
-    print(find_reconnect(install("GET", "/api/v2/needs-you"), args.host))
+    card = find_reconnect(install("GET", "/api/v2/needs-you"), args.host)
+    print(json.dumps({"id": card.get("id", ""), "task": card.get("task", ""), "key": card.get("key", "")}) if card else "")
+
+
+IMPORT_NAMES = ("Journey import one", "Journey import two")
+
+
+def cmd_import_file(args):
+    # The two logins' passwords, and the 2FA key of the second, are what the leak check looks for in every other source.
+    items = [
+        {"type": 1, "name": IMPORT_NAMES[0], "login": {"username": "import_one", "password": secrets.token_urlsafe(18),
+                                                      "uris": [{"uri": "https://login.practice.test/"}]}},
+        {"type": 1, "name": IMPORT_NAMES[1], "login": {"username": "import_two", "password": secrets.token_urlsafe(18),
+                                                      "totp": totp.new_secret(),
+                                                      "uris": [{"uri": "https://other.practice.test/"}]}},
+    ]
+    write_private(args.out, json.dumps({"encrypted": False, "items": items}))
+    print(json.dumps({"items": len(items)}))
+
+
+def cmd_import_logins(args):
+    reply = install("POST", "/api/v2/credentials/import", {"format": "bitwarden", "content": read(args.file)})
+    print(json.dumps({"imported": reply.get("imported"), "skipped": reply.get("skipped"),
+                      "errors": len(reply.get("errors") or [])}))
+
+
+def cmd_code_refused(args):
+    listed = install("GET", "/api/v2/credentials")
+    found = [item["id"] for item in listed.get("credentials", []) if item.get("name") == args.name]
+    if not found:
+        raise SystemExit(f"journey: no credential named {args.name}")
+    request = urllib.request.Request(f"http://127.0.0.1:{os.environ['TICO_PORT']}/api/v2/credentials/{found[0]}/code",
+                                     headers={"Authorization": "Bearer " + read(os.environ["TOKEN_FILE"])})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as reply:
+            status = reply.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+    print(json.dumps({"status": status}))
 
 
 def cmd_inbox_create(args):
@@ -250,6 +293,14 @@ def cmd_field(args):
 
 def cmd_needles(args):
     needles = []
+    if args.import_file and os.path.exists(args.import_file):
+        # An export's values are expected in the export file itself (its source is exempt), nowhere else.
+        for item in json.loads(read(args.import_file)).get("items", []):
+            login = item.get("login") or {}
+            if login.get("password"):
+                needles.append({"label": "import-password", "value": login["password"], "not_in": ["import"]})
+            if login.get("totp"):
+                needles.append({"label": "import-totp", "value": login["totp"], "not_in": ["import"]})
     for path in args.secret_file:
         if not os.path.exists(path):   # a step that never got a key left no file: nothing to look for
             continue
@@ -336,6 +387,15 @@ def main(argv=None):
     item = sub.add_parser("reconnect-id")
     item.add_argument("host")
     item.set_defaults(fn=cmd_reconnect_id)
+    item = sub.add_parser("import-file")
+    item.add_argument("out")
+    item.set_defaults(fn=cmd_import_file)
+    item = sub.add_parser("import-logins")
+    item.add_argument("file")
+    item.set_defaults(fn=cmd_import_logins)
+    item = sub.add_parser("code-refused")
+    item.add_argument("name")
+    item.set_defaults(fn=cmd_code_refused)
     item = sub.add_parser("inbox-create")
     item.add_argument("--name", required=True)
     item.set_defaults(fn=cmd_inbox_create)
@@ -351,6 +411,7 @@ def main(argv=None):
     item.add_argument("--password-file", action="append", default=[])
     item.add_argument("--start", required=True)
     item.add_argument("--mail")
+    item.add_argument("--import-file")
     item.add_argument("--out", required=True)
     item.set_defaults(fn=cmd_needles)
     item = sub.add_parser("leakscan")

@@ -339,13 +339,35 @@ step_expire_bot() { expire_sessions; }
 step_relogin() { browser_phase relogin; }
 
 step_needs_you() {
-  local rid
+  local card id task key
   bot_phase needs-you || return 1
-  rid="$(python3 "$J" reconnect-id "$HOST_NAME")" || return 1
-  [ -n "$rid" ] || { say "no open site reconnect for $HOST_NAME in Needs you"; return 1; }
-  send POST "/api/v2/reconnects/$rid/done" "{}" >/dev/null || { say "Done did not close the reconnect"; return 1; }
+  card="$(python3 "$J" reconnect-id "$HOST_NAME")" || return 1
+  [ -n "$card" ] || { say "no open site reconnect for $HOST_NAME in Needs you"; return 1; }
+  id="$(printf '%s' "$card" | pick 'd["id"] or "-"')"
+  task="$(printf '%s' "$card" | pick 'd["task"]')"
+  key="$(printf '%s' "$card" | pick 'd["key"]')"
+  # Done finds the card by its id, or by its task and key when the id is not on the card: "-" asks for the latter.
+  send POST "/api/v2/reconnects/$id/done" "{\"task\": \"$task\", \"key\": \"$key\"}" >/dev/null || { say "Done did not close the reconnect"; return 1; }
   [ -z "$(python3 "$J" reconnect-id "$HOST_NAME")" ]
   verdict "needs you: Done closed the reconnect" $?
+}
+
+step_import() {
+  local first again first_ok=0
+  python3 "$J" import-file "$WORK/import.json" >/dev/null || return 1
+  first="$(python3 "$J" import-logins "$WORK/import.json")" || return 1
+  printf '%s' "$first" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["imported"] == 2 and d["errors"] == 0 else 1)' || first_ok=1
+  again="$(python3 "$J" import-logins "$WORK/import.json")" || return 1
+  printf '%s' "$again" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["imported"] == 0 and d["skipped"] == 2 else 1)'
+  local again_ok=$?
+  verdict "import: the owner's export adds two logins; importing it again adds none" $(( first_ok || again_ok ))
+}
+
+step_code_refused() {
+  local status
+  status="$(python3 "$J" code-refused "Journey import two")" || return 1
+  printf '%s' "$status" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["status"] == 403 else 1)'
+  verdict "code: the owner's API token cannot read a 2FA code (a person opens it signed in)" $?
 }
 
 step_screen() {
@@ -378,14 +400,16 @@ step_leaks() {
   dc exec -T practice python -I -c 'import urllib.request; print(urllib.request.urlopen("http://server:8791/_deliveries", timeout=5).read().decode())' \
     > "$WORK/mail.json" 2>/dev/null
   # The leak check only means something when every source was read: an empty source would pass trivially.
-  [ -s "$WORK/db.sql" ] && [ -s "$WORK/server.log" ] && [ -s "$WORK/practice.log" ] && [ -s "$WORK/mail.json" ]
+  [ -s "$WORK/db.sql" ] && [ -s "$WORK/server.log" ] && [ -s "$WORK/practice.log" ] && [ -s "$WORK/mail.json" ] &&
+    [ -s "$WORK/import.json" ]
   verdict "leak check read every source" $? || return 1
   python3 "$J" needles --secret-file "$WORK/person-secret" --secret-file "$WORK/bot-secret" \
     --password-file "$WORK/person-password" --password-file "$WORK/bot-password" --start "$START_EPOCH" \
-    --mail "$WORK/mail.json" --out "$WORK/needles.json" >/dev/null || return 1
+    --mail "$WORK/mail.json" --import-file "$WORK/import.json" --out "$WORK/needles.json" >/dev/null || return 1
   python3 "$J" leakscan --needles "$WORK/needles.json" --source "db=$WORK/db.sql" --source "events=$WORK/server.log" \
     --source "runner=$WORK/runner.log" --source "practice=$WORK/practice.log" \
-    --source "results=$WORK/runner-results.txt" --source "phases=$WORK/phase-results.txt" --source "run=$WORK/run.log"
+    --source "results=$WORK/runner-results.txt" --source "phases=$WORK/phase-results.txt" --source "run=$WORK/run.log" \
+    --source "import=$WORK/import.json"
   verdict "leak check: no password, setup key or code in any source" $?
 }
 
@@ -407,6 +431,8 @@ run_step "runner restart keeps the bot's login" "chrome, creds, runner restart" 
 run_step "practice: /admin/expire ends the bot's sessions" main step_expire_bot
 run_step "bot signs in again with no person" "chrome, creds" step_relogin
 run_step "bot raises a site reconnect; Done closes it" "creds: reconnects, hub browser needs-you" step_needs_you
+run_step "owner imports a password manager export; importing it again adds none" "creds: import" step_import
+run_step "a 2FA code is refused to an API token" "creds: code" step_code_refused
 run_step "computer screen opens at 390x844 and fits the width" "main, screen on computer" step_screen
 run_step "practice page script saw navigator.webdriver false" "chrome" step_beacon
 run_step "leak check: database, events, runner logs, run output, practice log" "main" step_leaks
