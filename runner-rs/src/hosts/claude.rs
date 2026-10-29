@@ -909,9 +909,13 @@ impl ClaudeHost {
                     recovered = true;
                     requeued = followups;
                     // The new session holds none of what the short prompt left out.
-                    if let Some(full) = self.inner().full_prompts.remove(&tid) {
+                    let full = {
+                        let mut inner = self.inner();
+                        inner.refresh.remove(&tid);
+                        inner.full_prompts.remove(&tid)
+                    };
+                    if let Some(full) = full {
                         text = full;
-                        self.inner().refresh.remove(&tid);
                     }
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
