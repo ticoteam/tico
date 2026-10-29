@@ -3114,10 +3114,18 @@ def automation_runs(api, args):
     return _as_person(api).get(f"automations/{args['id']}/runs" + ("?" + query if query else ""))
 
 
+@tool("hub_automation_held", "End an automation's run-guard hold (`hold` on hub_automation_get): `release` queues its "
+      "held runs, oldest first; `drop` skips them. Fix what starts a loop first.",
+      {"id": _s("auto_..."), "action": {"type": "string", "enum": ["release", "drop"]}},
+      required=("id", "action"), writes=True)
+def automation_held(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/held", {"action": args["action"]}, key=_key(args))
+
+
 @tool("hub_automation_recent_runs", "Runs across every automation you may see in the last `range`, newest first: what "
       "started each, its outcome or failing step, steps, time and cost. `trigger: system` is Tico's own jobs.",
       {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"},
-       "status": {"type": "string", "enum": ["done", "failed", "waiting", "running"]},
+       "status": {"type": "string", "enum": ["done", "failed", "waiting", "running", "held"]},
        "trigger": _s("message, task_received, schedule, webhook, listening, event or system; comma-separated"),
        "owner": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
        "before": _s("`next` from the page before")})

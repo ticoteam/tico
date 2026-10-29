@@ -31,6 +31,9 @@ class Services:
     def checkpoint(self, state):
         self.saved.append(len(state["steps"]))
 
+    def on_hold(self):
+        return False
+
     def judge(self, values, questions, label, level):
         if "judge" in self.fail:
             raise RuntimeError("the judge is down")

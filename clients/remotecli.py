@@ -95,6 +95,8 @@ def automation(client, args):
         fields["status"] = "pending"
     elif args.sub in ("restore", "discard"):
         fields["n"] = args.n
+    elif args.sub == "held":
+        fields["action"] = args.action
     return run(tool_name(args.fn), fields)
 
 
