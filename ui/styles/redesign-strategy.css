@@ -4,7 +4,7 @@
 /* ---------------------------------------------------------------- Org: the chart */
 #main.rd-org-layout{display:flex;flex-direction:column}
 .rdo-wrap{position:relative;flex:none}
-.rdo-pane{position:relative;isolation:isolate;overflow:auto;scrollbar-gutter:stable;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.rdo-pane{position:relative;isolation:isolate;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
 /* The sizer is the scaled chart's size (ui/app/redesign-org.js rdoLayout); the chart inside keeps its own layout box and
    is scaled from its top left, so zooming moves only a transform. */
 .rdo-sz{position:relative;min-width:100%}
