@@ -407,6 +407,34 @@ def test_a_turn_that_ends_after_its_run_was_dropped_mid_step_is_still_charged_to
     assert [s["id"] for s in run["state"]["steps"]] == ["draft"]
 
 
+def test_a_run_dropped_mid_step_whose_server_stopped_is_charged_its_turn_and_never_resumed(api, monkeypatch):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    aid = post(api, "automations", draft_then_tell())["id"]
+    start = automations.HubServices.start_turn
+
+    def dropped_then_stopped(self, *args):
+        start(self, *args)
+        put_on_hold(api, aid)
+        assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
+        raise Stop()   # the server stops before the step is saved
+    monkeypatch.setattr(automations.HubServices, "start_turn", dropped_then_stopped)
+    rid = queued(api, aid)
+    with pytest.raises(Stop):
+        hub(api).drain()
+    assert run_row(api, rid)["status"] == "skipped" and run_row(api, rid)["claimed_at"]
+    finish(api, r, "A draft nobody saved")   # parked: the run is still claimed
+    assert len(sql(api, "SELECT * FROM automation_turn_answers")) == 1
+    automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(minutes=automations.STALE_MINUTES + 5))
+    run = run_row(api, rid)
+    priced = sql(api, "SELECT est_cost_usd FROM turns")[0]["est_cost_usd"]
+    assert priced > 0 and run["status"] == "skipped" and run["claimed_at"] is None
+    assert run["cost"] == pytest.approx(priced) and run["state"].get("resumes") is None
+    assert sql(api, "SELECT * FROM automation_turn_answers") == [] and sql(api, "SELECT * FROM automation_holds") == []
+    assert hub(api).claim() is None
+
+
 def test_a_run_put_on_hold_mid_step_finishes_the_step_and_is_not_queued_again(api, monkeypatch):
     aid = webhook_auto(api)
     rid = queued(api, aid)

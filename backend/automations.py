@@ -1191,6 +1191,18 @@ def turn_done(c, attempt, outcome, text):
         _ring(c)
 
 
+def _take_parked(c, rid, state):
+    """Turns that ended while the run was being worked: their answers and costs on its state, their spend holds
+    released."""
+    for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY at", (rid,)).fetchall():
+        if state.get("threads") is not None:
+            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
+        else:
+            state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
+        c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
+    c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
+
+
 def _take(state, ref, text, cost, ok):
     """A turn's end on the run's state: the answer of a waiting step, else the cost of a step it started, else the
     cost on the run. Returns whether a waiting step took it."""
@@ -1550,14 +1562,7 @@ class Hub:
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
-            # Turns that ended while the run was being worked: their answers and costs, then it goes on.
-            for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY at", (rid,)).fetchall():
-                if state.get("threads") is not None:
-                    _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
-                else:
-                    state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
-                c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
-            c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
+            _take_parked(c, rid, state)
             settle_mail(c, state)   # in the same write as the save, so a result reported meanwhile is not lost
             if c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "skipped":
                 # Dropped (or its automation turned off or deleted) during the step: what the step did is saved (with
@@ -1731,6 +1736,15 @@ def tick(store, at=None):
             else:
                 c.execute(f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,state_json=? WHERE id=?",
                           (json.dumps(state, default=str), run["id"]))
+        # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
+        # turns cost meanwhile is charged to it and their holds released.
+        for run in c.execute("SELECT id, state_json FROM automation_runs WHERE status='skipped' "
+                             "AND claimed_at IS NOT NULL AND claimed_at<?",
+                             (H.shift(now, minutes=-STALE_MINUTES),)).fetchall():
+            state = {**json.loads(run["state_json"] or "{}"), "status": "skipped"}
+            _take_parked(c, run["id"], state)
+            c.execute("UPDATE automation_runs SET cost=?,state_json=?,claimed_at=NULL WHERE id=?",
+                      (state.get("cost", 0), json.dumps(state, default=str), run["id"]))
         # A turn (or a mail computer) that never answered would hold the run waiting for ever.
         cutoff = H.shift(now, days=-TURN_WAIT_DAYS)
         for run in c.execute("SELECT id, started, state_json FROM automation_runs WHERE status='waiting' "
