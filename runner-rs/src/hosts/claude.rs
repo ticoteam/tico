@@ -375,6 +375,8 @@ struct Inner {
     compacted: HashSet<String>,
     /// What a resumed thread's turn gives a missing session restarted as new, in place of its prompt.
     full_prompts: HashMap<String, String>,
+    /// What a shortened turn's prompt left out, written into the turn if Claude compacts the session during it.
+    refresh: HashMap<String, String>,
     /// Each thread's context size after its last turn (Host::context_tokens).
     context: HashMap<String, i64>,
     /// Called each time a turn's pipe has just been published (ordering tests).
@@ -559,6 +561,14 @@ impl ClaudeHost {
         match text {
             Some(t) => inner.full_prompts.insert(thread_id.into(), t),
             None => inner.full_prompts.remove(thread_id),
+        };
+    }
+
+    pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
+        let mut inner = self.inner();
+        match text {
+            Some(t) => inner.refresh.insert(thread_id.into(), t),
+            None => inner.refresh.remove(thread_id),
         };
     }
 
@@ -901,6 +911,7 @@ impl ClaudeHost {
                     // The new session holds none of what the short prompt left out.
                     if let Some(full) = self.inner().full_prompts.remove(&tid) {
                         text = full;
+                        self.inner().refresh.remove(&tid);
                     }
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
@@ -1155,8 +1166,16 @@ impl ClaudeHost {
                 }
             }
             "system" if msg["subtype"] == "compact_boundary" => {
-                // Claude summarised the session, manually or on its own: what earlier turns said may be gone.
-                self.inner().compacted.insert(tid.into());
+                // Claude summarised the session, manually or on its own: what earlier turns said may be gone. A turn
+                // whose prompt left out what the session already held is given it again at once, while it runs.
+                let mut inner = self.inner();
+                inner.compacted.insert(tid.into());
+                let running = inner.turn.as_ref().is_some_and(|(t, u)| t == tid && u == turn);
+                if let Some(text) = inner.refresh.remove(tid).filter(|_| running) {
+                    if let Some(p) = inner.pipe.as_mut().filter(|p| p.open && p.limit_at.is_none()) {
+                        p.follow_up(&text);
+                    }
+                }
             }
             "system" if msg["subtype"] == "init" => {
                 let session = msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string();

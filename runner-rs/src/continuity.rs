@@ -153,9 +153,10 @@ pub fn context_key(thread: &str) -> String {
 }
 
 /// Whether a session whose last turn ended at `context` tokens has clear room before it compacts at `compact_at`
-/// (under 60% of it). Unknown is no room.
-pub fn headroom(context: Option<i64>, compact_at: &Value) -> bool {
-    context.is_some_and(|c| c > 0 && c * 10 < crate::hosts::compact_at(compact_at) * 6)
+/// (under 60% of it) with a prompt of `prompt` characters added, at four to a token. Unknown is no room.
+pub fn headroom(context: Option<i64>, prompt: usize, compact_at: &Value) -> bool {
+    let prompt = (prompt / 4) as i64;
+    context.is_some_and(|c| c > 0 && (c + prompt) * 10 < crate::hosts::compact_at(compact_at) * 6)
 }
 
 #[cfg(test)]
@@ -186,12 +187,14 @@ mod tests {
 
     #[test]
     fn only_a_session_well_under_its_compact_at_has_room_for_a_short_prompt() {
-        assert!(headroom(Some(100_000), &Value::Null), "under 60% of the 250k default");
-        assert!(!headroom(Some(150_000), &Value::Null), "at 60%");
-        assert!(!headroom(Some(220_000), &Value::Null));
-        assert!(!headroom(Some(40_000), &json!(60_000)), "a bot's own Compact at");
-        assert!(headroom(Some(40_000), &json!(100_000)));
-        assert!(!headroom(None, &Value::Null) && !headroom(Some(0), &Value::Null), "unknown usage is no room");
+        assert!(headroom(Some(100_000), 0, &Value::Null), "under 60% of the 250k default");
+        assert!(!headroom(Some(150_000), 0, &Value::Null), "at 60%");
+        assert!(!headroom(Some(220_000), 0, &Value::Null));
+        assert!(!headroom(Some(40_000), 0, &json!(60_000)), "a bot's own Compact at");
+        assert!(headroom(Some(40_000), 0, &json!(100_000)));
+        assert!(!headroom(Some(100_000), 200_000, &Value::Null), "the prompt counts too: 100k + 50k is 60%");
+        assert!(headroom(Some(100_000), 100_000, &Value::Null));
+        assert!(!headroom(None, 0, &Value::Null) && !headroom(Some(0), 0, &Value::Null), "unknown usage is no room");
     }
 
     #[test]

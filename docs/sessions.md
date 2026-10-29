@@ -55,10 +55,11 @@ session: the old one wasn't on this computer"), and Health names a bot that lost
 A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
 notices. On a harness that says when it compacts (the `compaction_events` capability, Claude Code), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
-is unchanged, but only while the session's last turn left it under 60% of its Compact at, so a turn cannot compact them
-away before it acts. The whole prompt goes again on a new session, after any compaction (the harness's own or
-`compact_first`, which also sends the repo rules again), after a side session or an interrupted turn, and after a turn
-that did not finish. A resumed session that turns out to be missing starts again with what a replacing session gets: the
+is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
+session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
+again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
+interrupted turn, and after a turn that did not complete; the repo rules go again after a compaction or a turn that did
+not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
 repo rules, the checkpoint and the room since its last turn. Other harnesses get the whole prompt every turn.
 
 A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is

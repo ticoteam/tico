@@ -1582,14 +1582,12 @@ impl Runner {
             // A resumed thread that still holds its standing instructions and its task, both unchanged, is given a
             // line for each instead (crate::prompt::build): only on a host that says when it compacts, and never when
             // anything since may have taken them out (a compaction, a side session, an interruption).
-            // It must also have clear room before the harness compacts it, so this turn cannot compact the short
-            // form's standing lines away before it acts on them: its last turn's context is under 60% of Compact at.
+            // It must also have clear room before the harness compacts it, so this turn is unlikely to compact the
+            // short form's standing lines away before it acts on them: its last turn's context and the whole prompt
+            // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
-            let room = {
-                let context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
-                crate::continuity::headroom(context, config.get("compact_at").unwrap_or(&Value::Null))
-            };
-            let seen = if prompt_turn && resumed && room && !compacted_first && !side_ran && !after_interrupt {
+            let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
+            let seen = if prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
@@ -1597,14 +1595,19 @@ impl Runner {
             } else {
                 crate::prompt::Seen::default()
             };
-            // Until this turn ends with no compaction, the thread may not hold what it is given.
-            for key in [crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
+            // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
+            for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
                 self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
-            let built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
+            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
+            if !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
+                // Sized by the whole prompt: a compaction during the turn gives it the rest too.
+                built.text = built.full.clone();
+                built.restore.clear();
+            }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
                 tail = format!("{tail}\n\n{note}");
@@ -1628,6 +1631,7 @@ impl Runner {
                 replacing["_side_ran"] = json!(false);
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
             }));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
             let t = if let Some(_one) = cold_guard {
@@ -1652,18 +1656,18 @@ impl Runner {
                     let _ = self.state.repo_rules(&key, Some("0"));
                 }
             }
-            if !digest.is_empty() {
-                self.state.repo_rules(&th, Some(&digest))?;
-            }
             turn = Some(t.clone());
             let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
-            if h.compacted(&th) || h.restored(&th) {
-                // The harness compacted the session during the turn, or began a new one in place of a missing one:
-                // the next turn is given everything again, the repo rules included.
-                self.state.repo_rules(&th, Some(""))?;
-            } else if prompt_turn && drove.outcome == "completed" {
+            h.compaction_refresh(&th, None);
+            // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
+            // turn did not complete: the next turn is given everything again, the repo rules included.
+            let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            if kept && !digest.is_empty() {
+                self.state.repo_rules(&th, Some(&digest))?;
+            }
+            if kept && prompt_turn {
                 self.state.repo_rules(&crate::continuity::standing_key(&th), Some(&built.standing))?;
                 self.state.repo_rules(&crate::continuity::task_key(&th), Some(&built.task))?;
                 let context = h.context_tokens(&th).map(|c| c.to_string()).unwrap_or_default();
@@ -3430,12 +3434,15 @@ for line in sys.stdin:
     /// `claude_turns`, with Claude compacting its session on its own (a `compact_boundary`) in each process of
     /// `compacting` (counted from 0, a /compact first being a process of its own).
     async fn claude_turns_compacting(turns: &[Value], compacting: &[usize]) -> (Vec<String>, Vec<String>, Vec<Value>) {
-        claude_rig(turns, compacting, &[], json!({}), |_| ()).await
+        let (threads, prompts, completions, _) = claude_rig(turns, compacting, &[], &[], json!({}), |_| ()).await;
+        (threads, prompts, completions)
     }
 
     /// `claude_turns_compacting`, with the saved session missing in each process of `missing` (Claude answers only
-    /// "No conversation found"), `extra` merged over each attempt, and `ready` called with the projects folder first.
-    async fn claude_rig(turns: &[Value], compacting: &[usize], missing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>) {
+    /// "No conversation found"), each process of `failing` ending in an error after any compaction, `extra` merged
+    /// over each attempt, and `ready` called with the projects folder first. Also returns what each process was
+    /// written after its prompt, while it ran (empty when nothing).
+    async fn claude_rig(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>) {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(true)));
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
@@ -3446,6 +3453,9 @@ for line in sys.stdin:
         for n in missing {
             std::fs::write(dir.join(format!("missing-{n}")), "").unwrap();
         }
+        for n in failing {
+            std::fs::write(dir.join(format!("fails-{n}")), "").unwrap();
+        }
         ready(&dir.join("projects"));
         let script = format!(
             "case \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\n\
@@ -3455,9 +3465,14 @@ for line in sys.stdin:
              if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              if [ -e '{d}/compacts-'$n ]; then echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; fi\n\
+             if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
-             cat >/dev/null\n", d = dir.display());
+             while IFS= read -r more; do printf '%s\\n' \"$more\" >> '{d}/injected-'$n\n\
+               mid=$(printf '%s' \"$more\" | sed 's/.*\"uuid\": \"\\([^\"]*\\)\".*/\\1/')\n\
+               echo '{{\"type\": \"user\", \"isReplay\": true, \"uuid\": \"'$mid'\", \"message\": {{\"role\": \"user\", \"content\": \"again\"}}}}'\n\
+               echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done again.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
+             done\n", d = dir.display());
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "fake".into()]));
         HOST_CLAUDE.with(|on| on.set(true));
         let (url, seen, server) = recording_server().await;
@@ -3479,14 +3494,15 @@ for line in sys.stdin:
         server.abort();
         let threads = std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
             .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id" && *a != "--resume").nth(1).unwrap_or_default().to_string()).collect();
-        let prompts = (0..).map(|n| dir.join(format!("prompt-{n}"))).take_while(|p| p.exists()).map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        let prompts: Vec<String> = (0..).map(|n| dir.join(format!("prompt-{n}"))).take_while(|p| p.exists()).map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        let injected = (0..prompts.len()).map(|n| std::fs::read_to_string(dir.join(format!("injected-{n}"))).unwrap_or_default()).collect();
         let seen = seen.lock().unwrap().clone();
         let completions = (0..turns.len()).map(|n| {
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-claude-{n}/complete"))).map(|(_, _, b)| b).collect();
             found.first().map_or(Value::Null, |b| (*b).clone())
         }).collect();
         std::fs::remove_dir_all(&dir).ok();
-        (threads, prompts, completions)
+        (threads, prompts, completions, injected)
     }
 
     #[tokio::test]
@@ -3526,9 +3542,12 @@ for line in sys.stdin:
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
         // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
         let turns = [json!({}), json!({}), json!({}), json!({}), json!({}), json!({"compact_first": true}), json!({})];
-        let (threads, prompts, _) = claude_turns_compacting(&turns, &[2]).await;
+        let (threads, prompts, _, injected) = claude_rig(&turns, &[2], &[], &[], json!({}), |_| ()).await;
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         assert_eq!(prompts.len(), 8, "{prompts:?}");
+        // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
+        assert!(injected[2].contains(crate::prompt::RESTORED) && injected[2].contains("Use the hub CLI") && injected[2].contains("Read AGENT.md and state.md"), "{}", injected[2]);
+        assert!(injected.iter().enumerate().all(|(n, i)| n == 2 || i.is_empty()), "{injected:?}");
         assert!(full(&prompts[0]), "a new session: {}", prompts[0]);
         for n in [1, 2, 4, 7] {
             assert!(held(&prompts[n]), "turn {n}: {}", prompts[n]);
@@ -3546,10 +3565,12 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
-        // Each fake turn uses 350 tokens: under 60% of a 1,000-token Compact at is room, over 60% of 500 is not.
-        let (_, prompts, _) = claude_turns(&[json!({"compact_at": 1000}), json!({"compact_at": 1000})]).await;
+        // Each fake turn uses 350 tokens. With the whole prompt (well over 3,400 characters, 850 tokens) that is under
+        // 60% of a 100,000-token Compact at, but over 60% of 2,000, though 350 alone is not; a first turn's size is unknown.
+        let (_, prompts, _) = claude_turns(&[json!({"compact_at": 100_000}), json!({"compact_at": 100_000})]).await;
+        assert!(prompts[0].len() > 3_400 && !prompts[0].contains(crate::prompt::STANDING_SEEN), "{}", prompts[0]);
         assert!(prompts[1].contains(crate::prompt::STANDING_SEEN), "{}", prompts[1]);
-        let (_, prompts, _) = claude_turns(&[json!({"compact_at": 500}), json!({"compact_at": 500}), json!({"compact_at": 500})]).await;
+        let (_, prompts, _) = claude_turns(&[json!({"compact_at": 2_000}), json!({"compact_at": 2_000}), json!({"compact_at": 2_000})]).await;
         for p in &prompts {
             assert!(!p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI"), "{p}");
         }
@@ -3564,7 +3585,7 @@ for line in sys.stdin:
             std::fs::write(projects.join("acme-app/AGENTS.md"), "Run make check before every push.").unwrap();
         };
         let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
-        let (threads, prompts, completions) = claude_rig(&[json!({}), json!({}), json!({}), json!({})], &[], &[1], extra, rules).await;
+        let (threads, prompts, completions, _) = claude_rig(&[json!({}), json!({}), json!({}), json!({})], &[], &[1], &[], extra, rules).await;
         assert_eq!(prompts.len(), 5, "{prompts:?}");
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         let rule = "Repo rules for acme/app";
@@ -3578,6 +3599,24 @@ for line in sys.stdin:
         // The restored session is given everything once more, rules included; then it is a resumed one again.
         assert!(prompts[3].contains(rule) && !prompts[3].contains(crate::prompt::STANDING_SEEN) && prompts[3].contains("Question 2"), "{}", prompts[3]);
         assert!(prompts[4].contains(crate::prompt::STANDING_SEEN) && !prompts[4].contains(rule), "{}", prompts[4]);
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_does_not_complete_leaves_its_repo_rules_to_be_given_again() {
+        // Turn 1 compacts and then fails, turn 4 just fails: neither counts as having given the session its rules.
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(projects.join("acme-app/AGENTS.md"), "Run make check before every push.").unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let turns: Vec<Value> = (0..6).map(|_| json!({})).collect();
+        let (threads, prompts, _, _) = claude_rig(&turns, &[1], &[], &[1, 4], extra, rules).await;
+        assert_eq!(prompts.len(), 6, "{prompts:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        let rule = "Repo rules for acme/app";
+        for (n, given) in [(0, true), (1, false), (2, true), (3, false), (4, false), (5, true)] {
+            assert_eq!(prompts[n].contains(rule), given, "turn {n}: {}", prompts[n]);
+        }
     }
 
     #[test]

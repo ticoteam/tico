@@ -705,6 +705,14 @@ impl Host {
         }
     }
 
+    /// What a turn whose prompt left parts out (crate::prompt::Built::restore) is given at once if the harness compacts
+    /// the session during it.
+    pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
+        if let Host::Claude(h) = self {
+            h.compaction_refresh(thread_id, text);
+        }
+    }
+
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
     /// that does not confirm threads.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {

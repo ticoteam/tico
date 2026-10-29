@@ -77,14 +77,19 @@ pub struct Seen {
 }
 
 /// A turn's prompt: `text` is what is sent, `full` the whole prompt (the same unless `Seen` let parts out), and the
-/// digests of its standing and task parts, for the next turn's `Seen`.
+/// digests of its standing and task parts, for the next turn's `Seen`. `restore` is what `text` left out, under
+/// RESTORED, for a compaction during the turn to give back; empty when nothing was left out.
 #[derive(Default, Clone, Debug)]
 pub struct Built {
     pub text: String,
     pub full: String,
     pub standing: String,
     pub task: String,
+    pub restore: String,
 }
+
+/// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
+pub const RESTORED: &str = "Your context was compacted during this turn; here again is what this turn's prompt left out because you already had it.";
 
 pub fn prompt(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool) -> String {
     replayed(attempt, names, after, resumed, "")
@@ -129,6 +134,14 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
     let full = lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n\n");
     let short_standing = !seen.standing.is_empty() && seen.standing == standing;
     let short_task = !seen.task.is_empty() && seen.task == task_digest;
+    let restore = if short_standing || short_task {
+        let left: Vec<&str> = lines.iter()
+            .filter(|(p, _)| (*p == Part::Standing && short_standing) || (*p == Part::Task && short_task))
+            .map(|(_, l)| l.as_str()).collect();
+        format!("{RESTORED}\n\n{}", left.join("\n\n"))
+    } else {
+        String::new()
+    };
     let text = if short_standing || short_task {
         let mut out: Vec<String> = vec![];
         let (mut said_standing, mut said_task) = (false, false);
@@ -154,7 +167,7 @@ fn assemble(attempt: &Value, lines: &[(Part, String)], run: &str, seen: &Seen, c
     } else {
         full.clone()
     };
-    Built { text, full, standing, task: task_digest }
+    Built { text, full, standing, task: task_digest, restore }
 }
 
 /// Every line of the prompt in order, each marked with what it is, and the run id it names.
@@ -569,6 +582,14 @@ mod tests {
         assert!(!t.contains("[m1]"), "only what came after the last turn: {t}");
         assert_eq!(short.full, prompt(&next, &names, Some("m1"), true), "the whole prompt is still at hand for a restored session");
         assert!(short.text.split_whitespace().count() * 3 < short.full.split_whitespace().count(), "{t}");
+        // What a compaction during the turn gives back: every line left out, in order, and none of the turn's own.
+        let r = &short.restore;
+        assert!(r.starts_with(RESTORED) && given.restore.is_empty(), "{r}");
+        for back in ["Use the hub CLI", "Plain English in chat", "\"relations\"", "Check this task’s worktree links", "Work this task as a goal"] {
+            assert!(r.contains(back), "{back} is not given back: {r}");
+        }
+        assert!(!r.contains("Any news?") && !r.contains(STANDING_SEEN), "{r}");
+        assert!(r.find("Use the hub CLI") < r.find("\"relations\""), "{r}");
     }
 
     #[test]
