@@ -482,7 +482,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            when the report runs (business = hourly, weekdays 08:00 to 18:00)
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
-    hub stall-triage [--on|--off]          stalled task check: Decide reads a quiet task's last messages before its stall check
+    hub stall-triage [--on|--off]          stalled task check: Decide reads a stalled task's last messages before its stall check
                                            stays silent (the owner or an admin; on by default)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
@@ -1094,8 +1094,8 @@ def parser():
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
     ways = delivery_flags(s, steer=False)
     # The older words for --defer, kept: a deferred task with the default deadline.
-    ways.add_argument("--next-run", "--quiet", dest="next_run", action="store_true",
-                      help="the older name for --defer")
+    ways.add_argument("--next-run", dest="next_run", action="store_true", help="the older name for --defer")
+    ways.add_argument("--quiet", dest="next_run", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--dry-run", dest="dry_run", action="store_true",
                    help="print the checks a create would fail and write nothing")
     s.add_argument("--request-id", dest="request_id",
@@ -1192,7 +1192,8 @@ def parser():
                         "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
                         "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
-    s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--brief", action="store_true", help="keep the note on the task; chat hears only the title and status")
+    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)     # brief's older name
     s.add_argument("--type", help="task type id or name")
     s.add_argument("--step", help="step id or name; sets status; an empty string clears it")
     s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
@@ -1209,7 +1210,8 @@ def parser():
     s.add_argument("--note", help="the result, in a few plain sentences")
     s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"])
     s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
-    s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--brief", action="store_true", help="keep the note on the task; chat hears only the title and status")
+    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)     # brief's older name
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task done")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
@@ -2567,7 +2569,7 @@ def parser():
     s.add_argument("--capture-stream", choices=("on", "off"),
                    help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not")
     s.add_argument("--subscribe-updates", metavar="templates,tico|none",
-                   help="Subscribe to updates, as quiet notes for its next run: templates (its template's changes), "
+                   help="Subscribe to updates, as deferred messages for its next run: templates (its template's changes), "
                         "tico (Tico releases), both, or none")
     s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
     s.set_defaults(fn="bot update")
@@ -2900,7 +2902,7 @@ def parser():
     s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
-    s = sub.add_parser("stall-triage", help="stalled task check: Decide reads a quiet task before its stall check stays silent (docs/tasks.md)")
+    s = sub.add_parser("stall-triage", help="stalled task check: Decide reads a stalled task before its stall check stays silent (docs/tasks.md)")
     on = s.add_mutually_exclusive_group()
     on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
     on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")

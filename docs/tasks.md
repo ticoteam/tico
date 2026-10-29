@@ -89,7 +89,7 @@ On the engineering board, moving a ticket with a linked open PR into **Review 1*
 
 A failing check refuses the move and names the check. A failed GitHub check attempt still blocks after a green rerun at the same head: fix the failure and push a new head. The server requests all check attempts rather than GitHub's default latest-only results; legacy commit statuses keep the latest status per context and any earlier failure. Pending checks are allowed with a passing written receipt. No checks, or only skipped/neutral checks, also require a written passing receipt naming the current head. At least one successful check and no pending or failed checks are needed to replace that receipt; skipped/neutral companions are allowed. A missing, stale, failed or unrecognised receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
 
-A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, the ticket keeps its current step and Tico tries again every 5 minutes. Timeouts, rate limits, permission errors, missing installation access and other upstream read failures do not file DevOps or manager tasks or wake the ticket owner. Engineering and Health each receive one quiet source notice when access is lost and one when it returns. A PR link Tico cannot resolve, or one with no recorded head, still needs its local record fixed. A remembered move is dropped when the ticket moves elsewhere or after three days.
+A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, the ticket keeps its current step and Tico tries again every 5 minutes. Timeouts, rate limits, permission errors, missing installation access and other upstream read failures do not file DevOps or manager tasks or wake the ticket owner. Engineering and Health each receive one deferred source notice when access is lost and one when it returns. A PR link Tico cannot resolve, or one with no recorded head, still needs its local record fixed. A remembered move is dropped when the ticket moves elsewhere or after three days.
 
 A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Release QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
@@ -131,7 +131,7 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
 | `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
-| `status_hours`, `late_hours` | A ticket quiet this long at the step gets its bot owner one status check; one this long at the step gets its manager one notice. Dev working steps default to 2 and 4. |
+| `status_hours`, `late_hours` | A ticket stalled this long at the step gets its bot owner one status check; one this long at the step gets its manager one notice. Dev working steps default to 2 and 4. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) tells `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot or person. Once every `every_hours` (4) while over. |
 | `can_hold` | `false`: a ticket here is never put on hold; a merged change is reverted or fixed forward. |
@@ -322,8 +322,8 @@ that parks it warns the bot.
 A stall or status check leaves a task alone while its owner has a live session on it (a leased or running attempt)
 or the task waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due
 date, a snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile
-has no stall sweeps is never checked. A task held only by its own quiet subtasks is still checked (below), and the Task
-Manager's quiet-task list does not use these skips, so a task no sweep wakes still reaches its report.
+has no stall sweeps is never checked. A task held only by its own stalled subtasks is still checked (below), and the Task
+Manager's stalled-task list does not use these skips, so a task no sweep wakes still reaches its report.
 
 For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
 24 hours, spaced at least 30 minutes apart. Updating a note does not reset that limit. Repeated
@@ -334,7 +334,7 @@ runs have escalated a public task without progress; an explicit run is still ava
 
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
-an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
+an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, stalled five
 minutes and waiting on nothing of its own (not in review, no run of its own able to start or going, no blocker,
 no unanswered question or person it is waiting on, no future due date, snooze, stored resume or milestone wait),
 the task counts as stalled even while `waiting`, unless it is waiting on a person: its bot is woken with the way out, under
@@ -675,10 +675,10 @@ Until that moment:
   `GET /api/v2/tasks?snoozed=only|all` list it; a read by id or number always finds it.
 - nothing automatic moves it: no stall wake or status check, no stranded or stuck sweep, no
   **Still wanted?** question and no **Due:** reminder. Tico's notices about it reach its owner bot
-  quietly, read on the bot's next run instead of starting one, and so does another bot's comment.
+  deferred, read on the bot's next run instead of starting one, and so does another bot's comment.
   A person's comment still reaches the bot as usual, **Run now** still runs it, and notices to
   anyone else on it (a requester bot it is handed to for review) arrive as usual. A snooze survives
-  reassignment: the new owner hears of the task quietly and is woken when the date comes.
+  reassignment: the new owner gets a deferred notice of the task and is woken when the date comes.
 
 When the date comes, the task is back everywhere and its owner bot gets one **Snooze over** notice,
 which also stands in for a due date that passed during the snooze. **Unsnooze** (the **…** menu, the
@@ -775,7 +775,7 @@ Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
 A person's comment with no way named is a **Steer** when the bot owns the task (see Conversation below), and is never
-quiet on a task with no bot on it. On a task a bot filed and a person owns, a comment is most often a progress note:
+deferred on a task with no bot on it. On a task a bot filed and a person owns, a comment is most often a progress note:
 it is a **Defer** with a 24-hour deadline, reaching the bot that asked on its next turn on the task, or in a day at the
 latest. A comment that @mentions a bot on the task (`@ops`, or its name) is a **Queue**; one from the person the task
 waits on is a Steer. A comment from someone not on the task (not its owner, requester or a mover) is a Defer with no deadline,
@@ -949,7 +949,7 @@ A review verdict on a subtask's comment or final reply takes the same direct pat
 subtask's `verdict` and `verdict_head`. The parent's requester is told in notes, and woken only when the task is
 declined, blocked or done. Its comment,
 Done note and final reply are one delivery for that verdict and review cycle; reopening the
-subtask permits a new review. Completed or closed parents record late results quietly. Private
+subtask permits a new review. Completed or closed parents receive late results deferred: no run starts. Private
 subtask text returns on the parent only when that parent's readers may receive it; otherwise the
 requester receives it on the private subtask as before. Ask and answer messages keep their own routing.
 Subtasks never inherit a human's delegation anchor from a bot's request. BotOps acts with the
@@ -1156,7 +1156,7 @@ wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)
 checks or retries; they resume once its turn ends without progress.
 
 With the team's **Stalled task check** switched on (Settings > System routines, on by default, needs Tico Decide), a
-quiet task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
+stalled task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
 once for that state and answers one of four things. *Waiting on someone*: the wait it names is set (a task the messages
 mention as a blocker, a date they mention as a snooze, or a person they name as the owner's own waiting-on, with a
 one-line ask in a small subtask), and no run starts. *Finished but unmarked*: the task is closed with a note crediting

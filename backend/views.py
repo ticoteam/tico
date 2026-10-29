@@ -247,8 +247,8 @@ def team_services(c, who, auth):
                  "SELECT service,last_success,last_error FROM service_health ORDER BY service")]
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -258,8 +258,8 @@ def _roster(c):
     return P.load({"people": H.humans(c)})
 
 
-def entries(c, github_owner=""):
-    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner))
+def entries(c, github_owner="", shared=False):
+    return read_cache.value(c, ("view_entries", github_owner), lambda: _entries(c, github_owner), shared)
 
 
 def seat_parents(c, settings, auth, who):
@@ -1971,10 +1971,13 @@ def install_views(app, store, auth, mutate, task_view):
                  and access.get(bot["slug"], auth.FULL)["see"]]
         prime_machines(c, [slug for slug in shown if access.get(slug, auth.FULL)["read"]])
         open_tasks = {}
-        for part in H.chunks([slug for slug in shown if access.get(slug, auth.FULL)["read"]]):
+        read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
+        for part in H.chunks(read_now):
             for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
                 open_tasks.setdefault(H.actor_id(task["owner"]), []).append(task)
+        # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
+        task_flow = auto_tasks.counts_many(c, {slug: open_tasks.get(slug, []) for slug in read_now}, who)
         from .shared_bots import _json as config_of
 
         def declared(slug):
@@ -2068,7 +2071,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "keep_tasks_going": auto_tasks.of(config),
                          "turns_at_once": start_places.bot_limit(config),
-                         "task_flow": auto_tasks.counts(c, slug, who, open_tasks.get(slug, [])),
+                         "task_flow": task_flow[slug],
                          "team": P.team_of(slug, configs, people),
                          "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
@@ -2740,8 +2743,16 @@ def runnable_choices(c, who, auth, settings):
             and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
-    for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot"):
+    from . import read_cache
+    from .readiness import CONFIG_SQL, PLACED_SQL, RUNNER_SQL
+    # `can_run` judges a bot once per harness and per computer it may move to: each bot's computer (one row per
+    # computer, shared by its bots) and each bot's config are read once here, not once per check.
+    for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
+        read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
+    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+                     "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
+    read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
+    for row in rows:
         bot = row["bot"]
         if not auth.bot_manager(c, who, bot):
             continue

@@ -81,3 +81,31 @@ def test_health_reads_the_same_statements_for_many_overdue_assigned_tasks(api, c
     assert len(overdue_items(body)) == 27
     # Each overdue task still reads its own queued job's fences (put-back, check model, attempts): about 9 each, not 47.
     assert many - few <= 10 * (27 - 3)
+
+
+def test_employees_read_the_same_statements_however_many_bots_it_lists(api, monkeypatch):
+    # Each bot's task flow (its going and waiting counts) was read with its own wait, step and start checks: nine
+    # statements a bot (571 at 60 bots, about 1,000 at 110 in production's shape). They are read once for all bots now.
+    machine = setup(api, monkeypatch, tasks=2)
+    busy(api, machine, 0, 6)
+    counted(api, monkeypatch, "/api/employees")
+    few = counted(api, monkeypatch, "/api/employees")[1]
+    busy(api, machine, 6, 12)
+    body, many = counted(api, monkeypatch, "/api/employees")
+    assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 18
+    assert many == few, (few, many)
+
+
+def test_health_queue_checks_read_the_suspect_tasks_once_for_all_aged_bots(api, monkeypatch):
+    # Thirty bots, each with two queued jobs past the wait threshold. The suspect tasks of every queue used to be
+    # read bot by bot (about seven statements a bot, 217 at thirty bots); they are read once for all the queues now.
+    # The per-job checks that remain cost about 40 statements a bot (~1,450 here, ~1,700 before).
+    from backend.tests.test_run_backoff import at
+    machine = setup(api, monkeypatch, tasks=2)
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 0, 30)
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
+    counted(api, monkeypatch, "/api/v2/health")
+    body, total = counted(api, monkeypatch, "/api/v2/health")
+    assert any(row["id"] == "waiting" for row in body["checks"])
+    assert total < 1550, total

@@ -47,8 +47,8 @@ def current(c, settings, bot):
             'job': job, 'oldest': created, 'reason': why}
 
 
-def plan(c, settings, bot, at):
-    previous = state(c, bot)
+def plan(c, settings, bot, at, previous=None):
+    previous = state(c, bot) if previous is None else previous
     value = current(c, settings, bot)
     if not value:
         return (bot, previous, {}) if previous else None
@@ -62,9 +62,11 @@ def plan(c, settings, bot, at):
 
 def pending(c, settings, at, failures):
     out = []
-    for bot in targets(c):
+    bots = targets(c)
+    previous_of = states(c, bots)           # one read for every bot, as aged() does, not one per bot
+    for bot in bots:
         try:
-            change = plan(c, settings, bot, at)
+            change = plan(c, settings, bot, at, previous_of.get(bot, {}))
             if change:
                 out.append(change)
         except Exception as exc:

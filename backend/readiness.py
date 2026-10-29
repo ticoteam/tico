@@ -21,7 +21,7 @@ bot's missing key or another profile's sign-in never decides it.
 Callers refuse only on can_run False; None never blocks.
 """
 
-from . import models_preset
+from . import models_preset, read_cache
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
 
@@ -30,6 +30,12 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 
 
 CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+# One computer's row, and the row of the computer a bot is on: read through read_cache, so a page that judges the same
+# bot for many harnesses and moves (backend/health.py runtime_choice) reads each once per snapshot, not once per check.
+RUNNER_SQL = "SELECT id,label,last_seen,revoked_at,readiness_json,capabilities_json FROM runners WHERE id=?"
+PLACED_SQL = ("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
+              "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''"
 
 
 def _config(c, bot):
@@ -74,8 +80,7 @@ def _held(c, bot):
     """The variable names of the stored Credentials granted to `bot` (what its computer is handed)."""
     from .credentials import granted
     held = granted(c, "bot:" + bot)
-    return {r["env"] for r in c.execute("SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
-            if r["id"] in held}
+    return {r["env"] for r in read_cache.rows(c, HELD_SQL) if r["id"] in held}
 
 
 def can_run(c, bot, runtime, runner=None, harness="", model=""):
@@ -84,10 +89,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         return {"can_run": None, "applicable": False, "computer": None, "runtime": runtime,
                 "problem": "An external agent runs this bot outside Tico, so no computer check applies"}
     if runner:
-        row = c.execute("SELECT id,label,last_seen,revoked_at,readiness_json,capabilities_json FROM runners WHERE id=?", (runner,)).fetchone()
+        row = read_cache.one(c, RUNNER_SQL, (runner,))
     else:
-        row = c.execute("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
-                        "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
+        row = read_cache.one(c, PLACED_SQL, (bot,))
     if not row or row["revoked_at"]:
         return {"can_run": None, "applicable": True, "computer": None, "runtime": runtime,
                 "problem": "The bot is not on a computer", "fix": "Put it on a computer from its More tab",

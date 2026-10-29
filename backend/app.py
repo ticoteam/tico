@@ -1035,10 +1035,11 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
-        if c is not None and (quiet := quiet_work.view(c, row)):
-            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
-            value["quiet"] = quiet
-        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        if c is not None and (deferred := quiet_work.view(c, row)):
+            # Deferred work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            # `quiet` is its older name, kept one more release for callers that read it.
+            value["deferred"] = value["quiet"] = deferred
+        # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
         if not value.get("snoozed_note"):
             value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
@@ -1191,7 +1192,7 @@ def create_app(settings=None):
             legacy_owner = H.human_actor(H.default_human(c))
         pipelines = H.type_list(c)
         summaries = H.children_summaries(c, ids, visible_sql)
-        # The rows each row's from_person and quiet state read, read for the whole page first; each row is still
+        # The rows each row's from_person and deferred state read, read for the whole page first; each row is still
         # decided one at a time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
@@ -1212,8 +1213,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
-                if quiet := quiet_work.view(c, row, history=False):
-                    value["quiet"] = quiet
+                if deferred := quiet_work.view(c, row, history=False):
+                    value["deferred"] = value["quiet"] = deferred     # `quiet`: the older name, one more release
             if row["id"] in step_since:
                 value["step_since"] = step_since[row["id"]]
             if row["id"] in routines_by_task:
