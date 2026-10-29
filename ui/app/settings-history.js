@@ -94,13 +94,14 @@ async function renderSettingsLog() {
       <select id="log-who" aria-label="Who">${replayScopeOptions(SETTINGS_LOG.scope)}</select>
       <select id="log-kind" aria-label="Kind"><option value="">Everything</option>${HISTORY_KINDS.map(([k, label]) =>
         `<option value="${k}"${k === SETTINGS_LOG.kind ? ' selected' : ''}>${label}</option>`).join('')}</select>
-      ${settingsIsAdmin() ? `<a class="link log-csv" id="log-csv" href="${API}/v2/history.csv${filters.toString() ? '?' + filters : ''}" download="tico-history.csv">Export CSV</a>` : ''}
+      ${settingsIsAdmin() ? `<button class="linkish log-csv" id="log-csv" type="button">Export CSV</button>` : ''}
     </div><div id="log-rows">${skelRows(3, {card: true, dot: false})}</div>`;
   const change = () => {
     SETTINGS_LOG = {scope: $('#log-who').value, kind: $('#log-kind').value};
     settingsAddress(); void renderSettingsLog();
   };
   $('#log-who').onchange = change; $('#log-kind').onchange = change;
+  const csv = $('#log-csv'); if (csv) csv.onclick = () => settingsLogCsv(csv, filters);
   const rows = $('#log-rows'), drawn = el._logDrawn = {};
   const draw = async (before, shown) => {
     const q = new URLSearchParams(filters); if (before) q.set('before', before);
@@ -117,6 +118,26 @@ async function renderSettingsLog() {
     };
   };
   try { await draw('', {items: [], names: {}}); } catch (e) { if (el._logDrawn === drawn) rows.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+// The Log's filters as one CSV. A page holds 5,000 rows and X-Next says where the next one starts, so every page is
+// fetched in turn and the file is saved whole; the header row is kept once.
+async function settingsLogCsv(button, filters) {
+  button.disabled = true;
+  try {
+    let text = '', before = '';
+    do {
+      const q = new URLSearchParams(filters); if (before) q.set('before', before);
+      const r = await fetch(`${API}/v2/history.csv?${q}`, {cache: 'no-store'}), body = await r.text();
+      if (!r.ok) { let j; try { j = JSON.parse(body); } catch { j = {}; } throw apiFailure(j, r); }
+      text = text ? text + body.slice(body.indexOf('\n') + 1) : body;
+      before = r.headers.get('X-Next') || '';
+    } while (before);
+    const url = URL.createObjectURL(new Blob([text], {type: 'text/csv'})), link = document.createElement('a');
+    link.href = url; link.download = 'tico-history.csv';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 }
 // ----------------------------------------------------------------- Runs
 // Every run this person may see (GET /runs), one line each: the bot's own Runs card keeps runsTable (ui/app/issues.js).

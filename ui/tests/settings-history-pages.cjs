@@ -13,7 +13,7 @@ const {unrouted} = require('./support/routes.cjs');
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [], calls = [], undos = [], logCalls = [];
+    const errors = [], calls = [], undos = [], logCalls = [], csvCalls = [];
     page.on('pageerror', error => errors.push(error.message));
     const at = minutes => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
     // Newest first, as the server sends them. Ana renamed both bots; the owner's list holds both, the card one only.
@@ -69,6 +69,14 @@ const {unrouted} = require('./support/routes.cjs');
         return json(q.before ? {items: [row('m1', 30, 'Wait a week')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: null}
           : {items: [row('m3', 5, 'Send it Monday')], names: {'human:ana': 'Ana', 'bot:ops': 'Ops'}, next: `${at(5)}|decision:m3`});
       }
+      // The CSV: the first page names the rest in X-Next, and each page after it repeats the header row.
+      if (p === '/api/v2/history.csv') {
+        const q = Object.fromEntries(url.searchParams), head = 'time,actor,kind,subject,result,link\r\n';
+        csvCalls.push(q);
+        return route.fulfill({contentType: 'text/csv', body: q.before ? `${head}${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`
+          : `${head}${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n`,
+        headers: q.before ? {} : {'X-Next': `${at(5)}|decision:m3`}});
+      }
       const undo = p.match(/^\/api\/v2\/settings\/history\/([^/]+)\/undo$/);
       if (undo && request.method() === 'POST') {
         const row = CHANGES.find(change => change.id === undo[1]);
@@ -95,8 +103,13 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#log-kind').inputValue(), 'decision');
     assert.equal(await page.locator('#set-log .log-row:not(.log-head) .log-result').innerText(), 'Send it Monday');
     assert.equal(await page.locator('#set-log .log-subject a').getAttribute('href'), '#/task/t1');
-    assert.equal(await page.locator('#log-csv').getAttribute('href'), '/api/v2/history.csv?kind=decision&bot=ops');
     assert.equal(await page.evaluate(() => location.hash), '#/settings/history?kind=decision&bot=ops');
+    // Export CSV walks every page of the same filters and saves one file, with the header row once.
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#log-csv').click()]);
+    assert.equal(download.suggestedFilename(), 'tico-history.csv');
+    assert.equal(fs.readFileSync(await download.path(), 'utf8'), 'time,actor,kind,subject,result,link\r\n'
+      + `${at(5)},human:ana,decision,Ship it,Send it Monday,\r\n${at(30)},human:ana,decision,Ship it,Wait a week,\r\n`);
+    assert.deepEqual(csvCalls, [{kind: 'decision', bot: 'ops'}, {kind: 'decision', bot: 'ops', before: `${at(5)}|decision:m3`}]);
     await page.locator('#set-log [data-log-older]').click();
     await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 2);
     assert.deepEqual(logCalls.at(-1), {bot: 'ops', kind: 'decision', before: `${at(5)}|decision:m3`});
