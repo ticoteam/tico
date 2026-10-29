@@ -548,13 +548,63 @@ def test_the_not_on_the_list_page_names_the_address_and_ends_the_old_session(sig
     assert signin.sessions() == [] and signin.api.cookies.get("tico_session") is None
 
 
-def test_an_address_with_no_roster_row_is_refused_and_not_added_even_at_the_company_domain(signin):
-    signin.start(oidc_allowed_domains=("acme.example",))
-    refused = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
-    assert refused.status_code == 403 and "dan@acme.example" in refused.text
+def _set_access(signin, **fields):
+    with signin.auth.store.transaction() as c:
+        Access._store(c, Access.ACCESS, {**Access._load_json(c, Access.ACCESS), **fields})
+
+
+def _set_owner(signin, **fields):
+    with signin.auth.store.transaction() as c:
+        Access._store(c, Access.OWNER, {**Access._load_json(c, Access.OWNER), **fields})
+
+
+def _humans_with(signin, email):
     with signin.auth.store.read() as c:
-        assert c.execute("SELECT 1 FROM humans WHERE lower(email)='dan@acme.example'").fetchone() is None
+        return c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchall()
+
+
+def test_an_admitted_domain_address_joins_once_and_the_second_sign_in_is_the_same_person(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    joined = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
+    assert joined.status_code == 302
+    assert me(signin.api).json()["actor"] == "human:dan"
+    signin.api.cookies.clear()
+    again = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
+    assert again.status_code == 302
+    assert me(signin.api).json()["actor"] == "human:dan"
+    assert len(_humans_with(signin, "dan@acme.example")) == 1
+    with signin.auth.store.read() as c:
+        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id='dan'").fetchone()
+    assert row["idp_sub"] == "acct-dan" and row["idp_issuer"] == signin.fake.issuer
+
+
+def test_an_address_the_owner_does_not_admit_is_refused_and_not_added(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    refused = signin.login(claims={"email": "dan@other.example", "sub": "acct-dan"})
+    assert refused.status_code == 403 and "dan@other.example" in refused.text
+    assert _humans_with(signin, "dan@other.example") == []
     assert signin.sessions() == []
+
+
+def test_a_retired_address_never_joins_even_at_an_admitted_domain(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    _set_owner(signin, retired=["old@acme.example"])
+    refused = signin.login(claims={"email": "old@acme.example", "sub": "acct-old"})
+    assert refused.status_code == 403
+    assert _humans_with(signin, "old@acme.example") == []
+    assert signin.sessions() == []
+
+
+def test_a_public_mail_domain_is_never_admitted_by_default_with_a_gmail_owner(signin):
+    # The owner signs in with gmail and nothing typed in Settings: no domain is allowed by default.
+    _set_owner(signin, email="ana@gmail.com")
+    with signin.auth.store.read() as c:
+        access = Access.load_access(c, signin.settings)
+        assert access["allowed_domains"] == [] and Access.home_domain("ana@gmail.com", []) == ""
+        assert not Access.admitted(access, "pat@gmail.com")
+    refused = signin.login(claims={"email": "pat@gmail.com", "sub": "acct-pat"})
+    assert refused.status_code == 403
+    assert _humans_with(signin, "pat@gmail.com") == [] and signin.sessions() == []
 
 
 @pytest.mark.parametrize("prompt,sent", [("select_account", "select_account"), ("login", "login"), ("consent", None)])
