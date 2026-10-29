@@ -19,7 +19,12 @@ use crate::state::State;
 use crate::util::{log, mark, text_of};
 use crate::wire::{decode, ClaimAnswer, EventsAnswer, HeartbeatAnswer};
 
+/// The protocol and source version: what the shim matches against runner/version.py and what Health checks (a
+/// semver). Not the release; see RUNNER_RELEASE.
 pub const RUNNER_VERSION: &str = "0.5.4";
+/// The release this binary was built for: build.rs stamps TICO_VERSION ("dev" for a source build). Used where the
+/// runner reports what it is: the startup log, `--release`, and panic reports.
+pub const RUNNER_RELEASE: &str = env!("TICO_RUNNER_RELEASE");
 const CLAIM_EVERY: f64 = 0.25;
 const CLAIM_IDLE_MAX: f64 = 2.0;
 const CLAIM_HINT_S: f64 = 150.0;

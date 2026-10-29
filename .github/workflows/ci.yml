@@ -72,12 +72,17 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ matrix.name }}
+          TICO_VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q musl-tools
           rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
           export CC_x86_64_unknown_linux_musl=musl-gcc CC_aarch64_unknown_linux_musl=musl-gcc
           (cd runner-rs && cargo build --release --locked --target "$TARGET")
           (cd relay-rs && cargo build --release --locked --target "$TARGET")
+          # The binary must report the release it is built for (build.rs stamps TICO_VERSION), or the release stops here.
+          want="${TICO_VERSION#v}"
+          got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
+          [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
@@ -107,6 +112,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ matrix.name }}
+          TICO_VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
           (cd runner-rs && cargo build --release --locked --target "$TARGET")

@@ -59,7 +59,7 @@ fn take() -> Vec<(String, u32)> {
 
 fn body(held: &[(String, u32)]) -> Value {
     let panics: Vec<Value> = held.iter().map(|(file, line)| json!({"file": file, "line": line})).collect();
-    json!({"version": crate::runner::RUNNER_VERSION, "panics": panics})
+    json!({"version": crate::runner::RUNNER_RELEASE, "panics": panics})
 }
 
 /// Send what panicked since the last heartbeat. Best effort: a hub from before this route answers 404 and they are gone.
@@ -96,7 +96,7 @@ mod tests {
         // Tests never install the hook, so nothing else lands in the list meanwhile.
         assert_eq!(body(&held)["panics"], json!([
             {"file": "src/runner.rs", "line": 812}, {"file": "src/hosts/mac.rs", "line": 7}, {"file": "", "line": 0}]));
-        assert_eq!(body(&held)["version"], crate::runner::RUNNER_VERSION);
+        assert_eq!(body(&held)["version"], crate::runner::RUNNER_RELEASE);
         // A seen location stays quiet after it was sent, and a burst of new ones keeps the first five.
         note("src/runner.rs", 812);
         for line in 900..920 {
