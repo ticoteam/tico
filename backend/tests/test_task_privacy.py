@@ -115,8 +115,9 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
         c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester='keeper' WHERE id=?", (routine['id'],))
-        # A database from before task privacy had no change log either (backend/events.py).
-        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'").fetchall():
+        # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
+        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND "
+                                 "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')").fetchall():
             c.execute('DROP TRIGGER ' + name)
         c.execute('DROP INDEX IF EXISTS tasks_private')
         c.execute('DROP INDEX IF EXISTS tasks_private_parties')
