@@ -58,7 +58,26 @@
 @media (max-width:760px){
   .rdo-pane{max-height:none}
   .rdo-zoom button{width:36px;height:36px}
+  /* A phone: narrower cards, one-line names that end in "…", tighter indents and gaps, so a small team fits the
+     frame; a bigger one still pans inside it. */
+  .rdo-cv{padding:18px 6px 20px}
+  .rdo-card{width:96px;min-height:46px;padding:5px 6px 4px}
+  .rdo-card b{display:block;white-space:nowrap;text-overflow:ellipsis}
+  .rdo-card.top{width:128px}
+  .rdo-row>li{padding:14px 2px 0}
+  .rdo-stack{padding:6px 0 0 9px}
+  .rdo-stack>li{--mid:23px}
+  .rdo-stack>li::before{left:-6px;width:6px}
+  .rdo-stack>li:not(:last-child)::after{left:-6px}
+  .rdo-g{min-width:104px;padding:16px 4px 6px}
+  .rdo-g.folded{padding:14px 4px 2px}
+  .rdo-tab{max-width:calc(100% - 8px);padding:0 7px}
+  /* Folded, the outline is as wide as its tab, so the name and count show whole. */
+  .rdo-g.folded{min-width:0}
+  .rdo-g.folded>.rdo-tab{position:relative;top:auto;left:auto;transform:none;display:flex;width:max-content;max-width:none;margin:-25px auto 0}
 }
+/* A long group name ends in "…" on its tab. */
+.rdo-tn{min-width:0;overflow:hidden;text-overflow:ellipsis}
 
 /* ---------------------------------------------------------------- Market › Briefing: a front page */
 /* On a phone the Strategy tabs come first, the view switch under them. */

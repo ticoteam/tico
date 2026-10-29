@@ -24,7 +24,7 @@ async function pageNotes() {
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
+      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-librarian-open aria-label="Ask the Librarian" title="Ask the Librarian"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask the Librarian</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
@@ -359,11 +359,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: offer both ways in.
-const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>' : `<div class="meet-blank"><h2>Connect a source or add a note</h2>
-    <div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div>
-    <div class="meet-or">or</div>
-    <button class="primary" type="button" data-add>Add notes</button></div>`;
+// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// (the header has Add notes).
+const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {
@@ -500,14 +499,13 @@ function meetList(state) {
         <div class="meet-main"><button class="note-title" type="button" data-rec="${esc(r.id)}">${esc(noteTitle(r))}</button><div class="meet-meta">${meta}</div></div>
         <div class="meet-side">${state.review === 'pending' ? `<button class="primary small" type="button" data-review-action="approve" data-send="auto" data-id="${esc(r.id)}" title="Share, then send to ${esc(assistantName())} to file its tasks">Share & send</button><button class="ghost small" type="button" data-review-action="dismiss" data-id="${esc(r.id)}">Dismiss</button>` : state.review === 'dismissed' ? `<button class="ghost small" type="button" data-review-action="restore" data-id="${esc(r.id)}">Restore</button>` : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
     }).join('')}</ul>`
-    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings. New imports wait here for your review.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
+    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
   el.querySelectorAll('[data-note-row]').forEach(b => b.onclick = event => {
     if (event.target.closest('[data-review-check], [data-review-action], a')) return;
     state.selected = b.dataset.noteRow; state.confirmDelete = ''; state.editing = false;
     meetShow(state, true); meetDetail(state, state.selected);
   });
   meetReviewWire(state, el); meetReviewBulk(state);
-  const add = el.querySelector('[data-add]'); if (add) add.onclick = () => meetNotesOpen(state);
   meetPaintTiles(state);
 }
 async function meetDetail(state, id) {

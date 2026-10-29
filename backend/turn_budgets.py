@@ -19,6 +19,7 @@ is not held again by the runs that held it. Raising the budget above the count r
 
 from pydantic import Field
 
+from .batch_work import shared_check
 from .models import Contract
 from .store import H, Problem
 
@@ -52,7 +53,7 @@ class TeamBudgets(Contract):
 
 
 class ReleaseBot(Contract):
-    """Release a bot from every hold Tico put on it (failed runs, run budget)."""
+    """Release a bot from every hold Tico put on it (failed runs, run budget, queued runs it could not start)."""
 
 
 # ---------------------------------------------------------------------------------------------------- the numbers
@@ -126,7 +127,9 @@ def enforce(c, settings, job, message, now=None):
         return True
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     declared = _declared(row["config_json"] if row else None)
-    cap = limits(c, declared)
+    # The team's defaults are read here: one failure there is every bot's, not this one's.
+    with shared_check("team"):
+        cap = limits(c, declared)
     now = now or H.now()
     seen = counts(c, bot, state.get("released_at") or "", now)
     for window, key, _, label in WINDOWS:

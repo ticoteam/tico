@@ -3,6 +3,8 @@
 //    under whoever they report to when that one is in the same group; the Built-in bots stay outside every group;
 //  - owners and admins add a group, rename it, drag a human or a bot into a group (or out, onto "No group") and
 //    nest a group in another; a member has none of those handles.
+//  - the top of the chart (the one person nobody is above) is a plain row, with what reports to them beside it: groups
+//    first, then humans and bots; a drop on it still reports there, and a saved fold of it hides nothing;
 //  - a manager's reports keep the order they are dragged (or moved up and down by keyboard) into, through a reload;
 //    a drop onto a manager the viewer may not put reports under says so and moves nothing; reports nobody placed
 //    follow the server's rule on the chart and a person's page; reports shown in a group move up and down there.
@@ -138,6 +140,12 @@ async function open(browser, me, branches = false) {
       return json({id});
     }
     let m;
+    if ((m = p.match(/^\/api\/v2\/bots\/([^/]+)\/definition$/)) && method === 'POST') {
+      const body = request.postDataJSON(), one = bots.find(b => b.name === m[1]); calls.push(['POST', 'definition', m[1], body]);
+      one.reports_to = body.reports_to;
+      one.org_parent = body.reports_to.startsWith('human:') ? 'p:' + body.reports_to.slice(6) : 'b:' + body.reports_to;
+      return json({});
+    }
     if ((m = p.match(/^\/api\/v2\/groups\/([^/]+)$/)) && method === 'PATCH') {
       const body = request.postDataJSON(); calls.push(['PATCH', m[1], body]); apply(m[1], body);
       return json({id: m[1]});
@@ -181,6 +189,18 @@ const shape = page => page.evaluate(() => {
   });
   return walk(document.querySelector('#tree'));
 });
+// Ana is the top of the chart: the humans and bots that report to her sit beside her row, after the groups.
+const besideTop = async page => {
+  const [top, ...rest] = await shape(page);
+  assert.equal(top, 'Ana', 'the top of the chart is a row of its own');
+  return rest.filter(n => typeof n === 'string');
+};
+// How many rows a node is nested in, its own included: 1 at the top.
+const level = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {
+  let n = 0;
+  for (let li = el.closest('li'); li; li = li.parentElement.closest('li')) n++;
+  return n;
+});
 const row = (page, name) => page.locator('#tree .noderow[data-org^="g:"]', {has: page.locator('.dept-label', {hasText: new RegExp('^' + name + '$')})});
 const node = (page, key) => page.locator(`#tree [data-org="${key}"]`);
 // A real drag, with a pause after it starts: the "No group" row only shows once a drag has begun.
@@ -198,7 +218,7 @@ async function reportOrder(browser) {
   for (const [name, display_name] of [['analyst', 'Analyst'], ['builder', 'Builder']])
     bots.push({...bots.find(b => b.name === 'scout'), name, display_name});
   await page.evaluate(() => refresh(true));
-  const under = async () => (await shape(page))[0].Ana;
+  const under = () => besideTop(page);
   assert.deepEqual(await under(), ['Cara', 'Analyst', 'Builder', 'Scout'], 'nobody placed them: humans, then names');
   // Dragged onto the top of a fellow report, Scout goes above it, and stays there through a reload.
   const analyst = node(page, 'b:analyst');
@@ -260,7 +280,7 @@ async function reportFallback(browser) {
   for (const [name, display_name, order] of [['analyst', 'Analyst', 2], ['builder', 'Builder', 1]])
     bots.push({...bots.find(b => b.name === 'scout'), name, display_name, order});
   await page.evaluate(() => refresh(true));
-  const under = async () => (await shape(page))[0].Ana;
+  const under = () => besideTop(page);
   assert.deepEqual(await under(), ['bea', 'Cara', 'Éli', 'Zoë', 'Builder', 'Analyst', 'Scout']);
   bots.find(b => b.name === 'scout').report_position = 0;
   await page.evaluate(() => refresh(true));
@@ -285,7 +305,8 @@ async function reportFallback(browser) {
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move down');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'p:cara' && !document.querySelector('#tree .org-order-menu'));
-  assert.deepEqual(calls, [['PUT', 'human:ana', {reports: ['bot:scout', 'human:bea', 'human:eli', 'human:zoe', 'bot:analyst', 'bot:builder', 'human:cara']}]]);
+  // Her whole order as the tree shows it: the group (above her other reports at the top) first.
+  assert.deepEqual(calls, [['PUT', 'human:ana', {reports: ['bot:builder', 'human:cara', 'bot:scout', 'human:bea', 'human:eli', 'human:zoe', 'bot:analyst']}]]);
   assert.deepEqual((await shape(page)).find(n => n.Campaigns)?.Campaigns, ['Builder', 'Cara']);
   assert.equal(await page.getByRole('button', {name: 'Move Cara Mendes'}).count(), 1);
   assert.deepEqual(errors, []);
@@ -328,7 +349,7 @@ async function owner(browser) {
   const {page, errors, calls} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
   // Groups nest and hold humans and bots; a member hangs under its manager inside the group; Built-in is outside.
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {Sales: []}]);
+    'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {Sales: []}, 'Cara', 'Scout']);
   // A group collapses.
   await page.locator('#tree .dept-label', {hasText: /^Marketing$/}).click();
   assert.equal(await page.locator('#tree a.node[href="#/bot/writer"]').isVisible(), false);
@@ -397,16 +418,82 @@ async function owner(browser) {
   await page.waitForFunction(() => [...document.querySelectorAll('#tree > li.org-group > .noderow .dept-label')].some(l => l.textContent === 'SEO'));
   assert.deepEqual(calls.shift(), ['PATCH', 'seo', {parent: ''}]);
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara']}, {Marketing: [{Ben: ['CMO']}]}, {SEO: ['Writer']}, {Revenue: ['Scout', {Legal: []}, {EMEA: []}]}]);
+    'Ana', {Marketing: [{Ben: ['CMO']}]}, {SEO: ['Writer']}, {Revenue: ['Scout', {Legal: []}, {EMEA: []}]}, 'Cara']);
   assert.deepEqual(errors, []);
   await page.close();
+}
+
+// The top of the chart is not one more level: Ana, whom nobody is above, is a plain row (no chevron), and the groups and
+// the humans and bots that report to her sit at her level, at desktop and phone widths. Nothing about whom anyone
+// reports to changes: a drop on her row still makes a bot report to her, and her reports keep their Move menu. A fold of
+// her row saved before (hub.collapsed.v3.*) hides nothing. Another person at the top does not undo it; with the owner
+// not at the top and two others there, the chart nests as before.
+async function topOfChart(browser) {
+  const {page, errors, calls, people} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true, owner_id: 'ana'});
+  for (const width of [1300, 390]) {
+    if (width === 390) {
+      await page.setViewportSize({width: 390, height: 844});
+      await page.locator('#mobile-more').click();
+      await node(page, 'p:ana').waitFor({state: 'visible'});
+    }
+    assert.equal(await page.locator('#tree [data-toggle="p:ana"]').count(), 0, `${width}: no chevron on the top row`);
+    assert.equal(await node(page, 'p:ana').evaluate(el => el.closest('li').className), 'org-top');
+    for (const key of ['p:ana', 'g:marketing', 'g:sales', 'p:cara', 'b:scout'])
+      assert.equal(await level(page, key), 1, `${width}: ${key} is at the top level`);
+    assert.equal(await level(page, 'b:cmo'), 3, `${width}: a group's rows still nest`);
+    for (const key of ['p:cara', 'b:scout']) assert.equal(await node(page, key).isVisible(), true);
+    await shot(page, width === 390 ? 'team-top-mobile' : 'team-top-desktop');
+  }
+  await page.setViewportSize({width: 1300, height: 900});
+  assert.deepEqual(await page.locator('#tree [data-org-menu]').evaluateAll(els => els.map(b => [b.dataset.orgMenu, b.dataset.orgIn])),
+    [['p:cara', 'p:ana'], ['b:scout', 'p:ana']], 'her reports keep their Move menu');
+
+  // A drop on the top row makes the bot report to her.
+  await drag(page, node(page, 'b:writer'), node(page, 'p:ana'));
+  await page.waitForFunction(() => S.emps.find(e => e.name === 'writer')?.reports_to === 'human:ana');
+  assert.deepEqual(calls.shift(), ['POST', 'definition', 'writer', {reports_to: 'human:ana', expected_revision: 1}]);
+
+  // A fold of her row saved earlier hides nothing.
+  await page.evaluate(() => localStorage.setItem('hub.collapsed.v3.ana', JSON.stringify(['p:ana'])));
+  await page.reload();
+  await node(page, 'p:ana').waitFor();
+  for (const key of ['p:cara', 'b:scout', 'g:marketing']) assert.equal(await node(page, key).isVisible(), true, `${key} shows`);
+
+  // A second person nobody is above (a leftover test account, say) does not undo it: the owner stays the top, and the
+  // other one is an ordinary row at the top after the owner's reports, with their own report under them.
+  people.push({id: 'dana', name: 'Dana Ruiz', org_parent: '', team: ''},
+              {id: 'eve', name: 'Eve Park', org_parent: 'p:dana', team: '', reports_to: 'dana'});
+  await page.evaluate(() => refresh(true));
+  await page.locator('#tree [data-toggle="p:dana"]').waitFor();
+  assert.deepEqual(await shape(page), [
+    'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {Sales: []}, 'Cara', 'Scout', {Dana: ['Eve']}]);
+  assert.equal(await page.locator('#tree [data-toggle="p:ana"]').count(), 0);
+  assert.equal(await level(page, 'p:dana'), 1);
+  assert.equal(await level(page, 'p:eve'), 2);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(errors, []);
+  await page.close();
+
+  // The owner under someone, with two other people nobody is above: no one is picked as the top, and the chart nests
+  // under each as before.
+  const ben = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member', owner_id: 'ana'});
+  ben.people.find(p => p.id === 'ana').org_parent = 'p:dana';
+  ben.people.find(p => p.id === 'ana').reports_to = 'dana';
+  ben.people.push({id: 'dana', name: 'Dana Ruiz', org_parent: '', team: ''}, {id: 'zed', name: 'Zed Ito', org_parent: '', team: ''});
+  await ben.page.evaluate(() => refresh(true));
+  await ben.page.locator('#tree [data-toggle="p:dana"]').waitFor();
+  assert.deepEqual(await shape(ben.page), [
+    {Dana: [{Ana: ['Cara', 'Scout']}]}, 'Zed', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}]);
+  assert.equal(await ben.page.locator('#tree li.org-top').count(), 0, 'no top row');
+  assert.deepEqual(ben.errors, []);
+  await ben.page.close();
 }
 
 async function member(browser) {
   const {page, errors} = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member'});
   // A member may create bots, but has no group-edit handles; an empty group is not shown.
   assert.deepEqual(await shape(page), [
-    {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}]);
+    'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, 'Cara', 'Scout']);
   await page.locator('#org-add-group').click();
   assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Add bot']);
   await page.keyboard.press('Escape');
@@ -674,6 +761,7 @@ async function personalBranches(browser) {
   try {
     await externalChanges(browser);
     await owner(browser);
+    await topOfChart(browser);
     await member(browser);
     await teamAdd(browser);
     await deleteGroups(browser);

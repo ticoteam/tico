@@ -13,7 +13,7 @@
 .asst-raw{margin:4px 0 8px;font-size:12.5px}
 .asst-raw>summary{cursor:pointer;color:var(--muted);width:max-content}
 .asst-said{margin:6px 0;padding:4px 10px;border-left:3px solid var(--line);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
-.asst-card .asst-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.asst-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .asst-state{font-size:12.5px;color:var(--muted)}
 .asst-off{padding:14px 0}
 .asst-err{color:var(--fail);font-size:12.5px}
@@ -166,8 +166,8 @@
       }));
   }
 
-  // The Assistant page when the assistant is off: the owner is offered the switch, anyone else is told whom to ask.
-  // `after` runs once it is on.
+  // The Assistant page when the assistant is off: one line, with the switch for the owner and whom to ask for anyone
+  // else. `after` runs once it is on.
   function off(host, info, deps) {
     if (!host) return;
     style();
@@ -177,10 +177,8 @@
       host.innerHTML = `<div class="asst-off"><p><strong>${esc(info.name)} is not answering right now.</strong> It answers once it is running again (Settings > Bots).</p></div>`;
       return;
     }
-    host.innerHTML = `<div class="asst-off"><p><strong>The Assistant is off.</strong> ${info.can_turn_on
-      ? `Turn it on to get a private assistant that finds things in ${esc(document.title || 'Tico')} and does them for you.`
-      : `Ask the owner of this team to turn it on.`}</p>
-      ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on the Assistant</button> <span class="asst-state" data-turn-status></span>' : ''}</div>`;
+    host.innerHTML = `<div class="asst-off asst-row"><span>The Assistant is off.${info.can_turn_on ? '' : ' Ask the owner to turn it on.'}</span>
+      ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on</button><span class="asst-state" data-turn-status></span>' : ''}</div>`;
     const on = host.querySelector('[data-turn-on]');
     if (on) on.onclick = async () => {
       on.disabled = true;
@@ -198,9 +196,8 @@
     let info;
     try { info = await get('/v2/assistant'); } catch { host.innerHTML = ''; return; }
     if (info.available || !info.can_turn_on) { host.innerHTML = ''; return; }
-    host.innerHTML = `<section class="card" data-assistant-off><header><h2>The Assistant is off</h2></header>
-      <p>Everyone gets a private Assistant once it is on. It ${info.state === 'archived' ? 'was set aside when this team was set up; turning it on brings it back with its history.' : 'has not been added to this team yet; turning it on adds it from the template.'}</p>
-      <div class="asst-row"><button class="primary" type="button" data-turn-on>Turn on Assistant</button><span class="asst-state" data-turn-status role="status"></span></div></section>`;
+    host.innerHTML = `<section class="card" data-assistant-off><div class="asst-row"><strong>The Assistant is off</strong>
+      <button class="primary" type="button" data-turn-on>Turn on</button><span class="asst-state" data-turn-status role="status"></span></div></section>`;
     const button = host.querySelector('[data-turn-on]'), status = host.querySelector('[data-turn-status]');
     button.onclick = async () => {
       button.disabled = true; status.textContent = 'Turning it on…';

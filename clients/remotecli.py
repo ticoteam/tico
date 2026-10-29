@@ -239,7 +239,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
         found = hubtools.run_export_full(client, args.attempt)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk"):
+    if fn in ("task child create", "task tree", "task bulk", "task model"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -500,6 +500,9 @@ def run(args, who=None):
                 payload["next_run"] = True
             if getattr(args, "request_id", None):
                 payload["request_id"] = args.request_id
+            for field in ("model", "effort", "harness"):
+                if getattr(args, field, None):
+                    payload[field] = getattr(args, field)
             links = s3links.apply(client, payload, ("body",))
             return s3links.annotate(post("tasks", payload), links)
         if sub == "show":
@@ -542,6 +545,8 @@ def run(args, who=None):
                 body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
+            if getattr(args, "delivery", None):
+                body["delivery"] = args.delivery
             if getattr(args, "public", None):
                 body["public"] = True
             if getattr(args, "approval_id", None):
@@ -858,7 +863,8 @@ def bots(client, args):
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
     if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
-                   "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile") or (args.fn == "bot create" and args.record_only):
+                   "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile",
+                   "bot task-model") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()
                   if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])}

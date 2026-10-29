@@ -273,7 +273,15 @@ in the recovery history and shows its ownership in Stopped runs. Within five min
 scheduler re-evaluates the stopped job and records who owns recovery and why.
 When the computer reports a restart, a run resumes on the next scheduler sweep, including one that used a shell or
 edited files. Its recovery note gives the interruption time and tells it to check what already happened first;
-the same computer continues the same provider session. A consumed approval or a named irreversible outside action
+the same computer continues the same provider session. A hub update restarts computers too, often with no restart
+report. A run that ended within the lease plus fifteen minutes of an update finishing (the snapshot and health check
+take minutes) stopped during it: Needs you says so, but that is timing, not proof, so the run is held by the same rule
+as any lapsed run. Needs you groups those runs, two or more within ten minutes, into one row with **Try all again**
+and **Don’t retry** for the people who may decide them; each retry tells the bot to check what already happened
+first. **Try all again** appears only when the review card recommends retrying every one of them; otherwise the row
+says how many ran commands Tico can’t check and leaves retrying each of those to its own line. Each run keeps its own line under Details, and a run that recorded a named outside action or used an approval,
+or one with a choice already saved, keeps its own choices. A stopped run is counted once however many requests were
+folded into it. A consumed approval or a named irreversible outside action
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
 is dismissed and BotOps is told. The computer records fixed operation labels alongside shell events without exposing
 command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
@@ -443,6 +451,23 @@ ended lets every bot it held go again without anyone, while a bot that is really
 fails after more than a minute changes nothing. **Release** (Settings → Bots, `hub bot release <bot>`,
 `POST /api/v2/bots/{bot}/release`, MCP `hub_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
 shows the hold's `next_try`.
+
+**A queued run Tico cannot start is held by itself.** Each claim checks the queued jobs it considers and prepares the
+one it hands out. If an error happens for one job there, the claim rolls back only that job's writes, logs its
+traceback on the server, and holds the job for a wait: a minute at first, doubling with each failed try, up to an
+hour. The held job reads *Couldn't start: an error while preparing this run* on its task, the bot's one Needs-you item
+covers all its held runs, and Health shows `claim_failed`. When the wait ends the run is free and the next claim tries
+it again; a run that starts clears its hold, and one that fails again waits longer. Until its wait ends, a running turn
+of the bot does not take the held run in as a follow-up either. A claim holds at most three jobs and goes on to the
+bot's next job in the same call; the bot's other work is not held. A full disk or a locked database is not one job's
+error: the claim answers with a retryable error and holds nothing. An error in one bot's own check (its budget,
+back-off or login as a whole) passes that bot over for the claim and holds none of its runs. Tico runs that check
+again only after a wait: a minute, doubling with each failure in a row, up to five minutes. Health shows
+`claim_check` until one of its runs starts. A login hold that raises for one job holds that job alone. A team-wide
+check that raises fails the claim. **Release** (Health, `hub
+bot release <bot>`, `POST /api/v2/bots/{bot}/release`) frees the held runs at once, whatever their wait, and one that
+fails again is held again. A held run whose task finished meanwhile is cancelled by the next claim once its wait has
+ended.
 
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the
 team defaults (`GET/POST /api/v2/settings/turn-budgets`, `hub team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps

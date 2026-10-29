@@ -229,7 +229,8 @@ model** for task models keeps each bot's task context length.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
 to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
-A review or check subtask keeps its check model.
+A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
+bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
 #### A warning about a cheaper task model
 

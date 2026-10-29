@@ -53,6 +53,9 @@ function pageTasks(forced, openId = '') {
       <div class="tl-bulk" id="task-bulk" role="toolbar" aria-label="Selected tasks" hidden></div>
     </div></div>
     <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
+  const bar = $('#task-bar');
+  bar.onscroll = () => tasksBarEdge(bar);
+  if (window.ResizeObserver) new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
   $('#task-type').onclick = ev => {
     const button = ev.target.closest('[data-task-type]');
     if (button) taskPipelineSelect(state, button.dataset.taskType);

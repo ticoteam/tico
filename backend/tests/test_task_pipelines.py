@@ -51,7 +51,7 @@ def _hub(tmp_path):
     return c
 
 
-def test_waiting_and_wont_do_steps_are_retired_once_and_their_tasks_keep_their_place(tmp_path):
+def test_wont_do_steps_are_retired_once_and_a_teams_waiting_step_keeps_its_tasks(tmp_path):
     c = _hub(tmp_path)
     c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, status) in enumerate([('deck', 'open'), ('progress', 'doing'), ('review', 'review'),
@@ -69,12 +69,13 @@ def test_waiting_and_wont_do_steps_are_retired_once_and_their_tasks_keep_their_p
     H.migrate(c)
     place = dict(c.execute('SELECT id, step_id || ":" || status FROM tasks').fetchall())
     blocked = next(s['id'] for s in H.type_get(c, 'dev')['steps'] if s['name'] == 'Blocked')
-    assert place == {'was-in-review': blocked + ':waiting', 'no-history': blocked + ':waiting', 'dropped': 'closed:declined',
-                     'general': 'general-open:waiting'}
-    saved = H.task(c, 'was-in-review')
-    assert saved['blocked_from_step'] == 'review'
-    assert saved['blocked_from_status'] == 'review'
-    assert not c.execute("SELECT 1 FROM task_steps s JOIN task_types t ON t.id=s.type_id WHERE s.status IN ('waiting','declined') AND t.id<>'product-roadmap' AND NOT (t.role='engineering' AND s.name='Blocked' AND s.status='waiting')").fetchone()
+    # A waiting step is the team's own column: its tickets stay in it, held as if parked there by hand, never Blocked.
+    assert place == {'was-in-review': 'waiting:waiting', 'no-history': 'waiting:waiting', 'dropped': 'closed:declined',
+                     'general': 'general-waiting:waiting'}
+    assert blocked not in {step.split(':')[0] for step in place.values()}
+    assert {H.task(c, ident)['blocked_kind'] for ident in ('was-in-review', 'no-history')} == {'manual'}
+    assert c.execute("SELECT count(*) FROM task_steps WHERE status='waiting' AND id IN ('waiting','general-waiting')").fetchone()[0] == 2
+    assert not c.execute("SELECT 1 FROM task_steps s JOIN task_types t ON t.id=s.type_id WHERE s.status='declined' AND t.id<>'product-roadmap'").fetchone()
     # The Product roadmap's Declined is public: it stays.
     assert product and c.execute("SELECT id FROM task_steps WHERE type_id='product-roadmap' AND status='declined'").fetchall() == product
     events = c.execute("SELECT count(*) FROM task_events").fetchone()[0]
@@ -85,7 +86,7 @@ def test_waiting_and_wont_do_steps_are_retired_once_and_their_tasks_keep_their_p
     c.close()
 
 
-def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may_hold_either(tmp_path):
+def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may_be_declined(tmp_path):
     c = _hub(tmp_path)
     dev = H.type_create(c, H.KEEPER, 'Dev tickets', [
         {'name': 'On Deck', 'status': 'open'}, {'name': 'Review 1', 'status': 'review'},
@@ -100,10 +101,9 @@ def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may
     assert state('doing') == (steps['Review 1 Fixes'], 'doing'), 'leaving waiting keeps a step of that status'
     c.execute("UPDATE tasks SET status='closed',step_id=? WHERE id='t'", (steps['Closed'],))
     assert state('waiting') == (steps['Blocked'], 'waiting'), 'a finished task brought back waiting enters Blocked'
-    for status in ('waiting', 'declined'):
-        try:
-            H.type_update(c, H.KEEPER, dev['id'], steps=[*dev['steps'], {'name': 'Held', 'status': status}])
-            raise AssertionError('a held step was accepted')
-        except H.Refused as refused:
-            assert f"A step can't be {status}" in str(refused)
+    try:
+        H.type_update(c, H.KEEPER, dev['id'], steps=[*dev['steps'], {'name': 'Dropped', 'status': 'declined'}])
+        raise AssertionError('a declined step was accepted')
+    except H.Refused as refused:
+        assert "A step can't be declined" in str(refused)
     c.close()

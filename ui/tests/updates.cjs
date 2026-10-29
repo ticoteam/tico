@@ -452,6 +452,17 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
+
+    // Nothing yet: one short line, with no sentence under it and no Chat with us (Support is the ? in the sidebar).
+    updates = []; pageTwo = null;
+    const none = await open({width: 1280, height: 900});
+    await none.page.goto('http://tico-ui.test/#/updates');
+    const empty = none.page.locator('#upd-feed .upd-empty');
+    await empty.waitFor();
+    assert.equal(await empty.evaluate(el => [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), 'No updates yet.');
+    assert.equal(await none.page.locator('#main .talk-line, #main [data-chat-with-us]').count(), 0, 'no Chat with us');
+    assert.deepEqual(none.errors, []);
+    await none.page.close();
     console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

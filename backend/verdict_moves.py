@@ -6,7 +6,8 @@ is still at that step, moves the ticket as Tico (`after_verdict` marks it, `afte
 attempt is recorded):
 - approve or pass -> the step's `on_pass`; when that is the merge, the builder is woken to merge once CI is green;
 - changes, fail, or a check finished with no verdict (its comments are the feedback) -> the step's `on_fail`, and the
-  builder is woken once, with the verdict and the head.
+  builder is woken once, with the verdict and the head. A pass at a head that one of those already stands on at the
+  step goes there too: a later round at the same head clears nothing (`_verdict_at`).
 Tico never merges: the builder does, woken once per head (`merge_wake`). The merge moves the ticket to the type's
 `on_merge` step from any earlier step (`merged`), and green CI on a new head at a step with `after_green` moves it on
 to its next check (`checks_done`). A ticket entering a step whose `skip_tag` it carries goes on to the step's
@@ -70,6 +71,14 @@ def at_head(c, row, head):
     """Whether `head` (7 to 40 characters) is the head a pull request on this ticket is at now."""
     head = str(head or "").lower()
     return bool(head) and any(_head(pr).startswith(head) for pr in _prs(c, row) if _head(pr))
+
+
+def _full_head(c, row, head):
+    """The full head of the pull request on the ticket that `head` (7 to 40 characters, as a verdict may write it)
+    starts, lowered; `head` itself when no pull request is at it. Comparisons start from that full SHA, so a verdict's
+    short head and full head of one commit match whichever form the checker wrote."""
+    head = str(head or "").lower()
+    return next((_head(pr) for pr in _prs(c, row) if head and _head(pr).startswith(head)), head)
 
 
 def is_merged(c, row):
@@ -186,19 +195,15 @@ def after_capture(c, check_id, head, attempt_id):
     prior = delivery(c, check)
     if prior and prior.get("consumed"):
         return None
-    name, flow = step["name"], F.of(step)
+    name = step["name"]
     eligible = assess_independence(c, ticket, H.actor_id(check.get("owner") or ""), head=head,
                                    check_id=check["id"], attempt_id=attempt_id)
     # Model company is a routing preference, never a verdict gate. Keep actual builder/checker families
     # alongside the verdict for audit, including fallback runs and unknown provenance.
-    gave = "no verdict (its comments are the feedback)" if verdict == NO_VERDICT else verdict
     if verdict not in GOOD:
-        target = F.step(c, flow.get("on_fail"))
-        moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}")
-        out = {"moved": target["name"] if moved else None, "handoff": "verdict", "quiet": False,
-               "say": (f"Tico moved this ticket to {target['name']}: {name} gave {gave} at head {head}." if moved else
-                       f"{name} gave {gave} at head {head}" + (f"; Tico could not move this ticket to {target['name']}."
-                                                              if target else "."))}
+        out = _failed(c, ticket, step, verdict, head)
+    elif (standing := _verdict_at(c, ticket, step, head)) not in GOOD:
+        out = _failed(c, ticket, step, standing, head, passed=verdict)
     else:
         out = _passed(c, ticket, step, f"{name} gave {verdict} at head {head}")
     out["eligibility"] = eligible  # Historical field name; this is provenance, not a gate.
@@ -231,6 +236,20 @@ def resumed(c, task_id):
                         (last["id"],)).fetchone()
     head = str(last.get("verdict_head") or _judged_head(c, last) or "").lower()
     return after_capture(c, last["id"], head, attempt["id"]) if attempt else None
+
+
+def _failed(c, ticket, step, verdict, head, passed=None):
+    """A check at `step` gave `verdict`, not good, at `head`: the ticket moves to the step's `on_fail`, and the builder
+    hears of it on that hand-off. `passed` is a pass at the same head that the failure still stands against."""
+    name = step["name"]
+    gave = "no verdict (its comments are the feedback)" if verdict == NO_VERDICT else verdict
+    target = F.step(c, F.of(step).get("on_fail"))
+    moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}")
+    said = (f"{name} gave {passed} at head {head}, but {name} already gave {gave} at that head, and only a new head "
+            "clears it" if passed else f"{name} gave {gave} at head {head}")
+    return {"moved": target["name"] if moved else None, "handoff": "verdict", "quiet": False,
+            "say": (f"Tico moved this ticket to {target['name']}: {said}." if moved else
+                    said + (f"; Tico could not move this ticket to {target['name']}." if target else "."))}
 
 
 def _passed(c, ticket, step, why):
@@ -282,19 +301,32 @@ def delivery(c, check):
     return None
 
 
+def _verdict_at(c, row, step, head):
+    """The verdict the checks at `step` hold against `head` (lowered), or None when none judged that head. A fail,
+    changes or comments wins over any pass on the same head, newer or not: a failed head is cleared by a fix at a new
+    head, not by a later round at the same one, as a failed CI attempt or test receipt is (docs/tasks.md)."""
+    head = _full_head(c, row, head)
+    given = [_verdict(check) for check in _checks(c, row, step) if _verdict(check)
+             and head.startswith(str(check.get("verdict_head") or _judged_head(c, check) or "-").lower())]
+    return next((v for v in given if v not in GOOD), given[-1] if given else None)
+
+
 def _skipped(c, row, step, head):
     """Whether the ticket passes `step` without a check at `head`: it carries the step's skip tag, or the step's round
-    was skipped (timed out) at that head."""
+    was skipped (timed out) at that head and no check there failed the head."""
     if F.skip_target(c, row, step):
         return True
-    return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='round_skipped' AND new=? LIMIT 1",
-                          (row["id"], f"{step['id']}:{head}")).fetchone())
+    if not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='round_skipped' AND new=? LIMIT 1",
+                     (row["id"], f"{step['id']}:{head}")).fetchone():
+        return False
+    verdict = _verdict_at(c, row, step, head)
+    return not verdict or verdict in GOOD
 
 
 def merge_ready(c, row):
     """(pull request, head) when the merge is next from the ticket's step (its `on_pass`, or `after_green` on a new
-    head), the step's last check approved the head it is at now (or it is skipped) and CI is green on it. None
-    otherwise."""
+    head) and CI is green on the head it is at now. On `on_pass`, the step's checks must have approved that head or its
+    round was skipped there, and none may have failed it. None otherwise."""
     step = F.step(c, row.get("step_id"))
     flow = F.of(step)
     if not step or F.MERGE not in (flow.get("on_pass"), flow.get("after_green")):
@@ -305,12 +337,8 @@ def merge_ready(c, row):
         return None
     pr, head = prs[0], _head(prs[0])
     if flow.get("on_pass") == F.MERGE:
-        if _skipped(c, row, step, head):
-            return pr, head
-        last = next((t for t in reversed(_checks(c, row, step)) if _verdict(t)), None)
-        if not last or _verdict(last) not in GOOD or not head.startswith(str(last.get("verdict_head") or "-").lower()):
-            return None
-        return pr, head
+        # The same verdict the timeout and the skipped round read: a pass after a fail at this head clears nothing.
+        return (pr, head) if _skipped(c, row, step, head) or _verdict_at(c, row, step, head) in GOOD else None
     judged = _judged_by(c, row, step)
     return (pr, head) if judged and not head.startswith(judged) else None
 
@@ -435,24 +463,28 @@ def timeouts(c, at=None):
                          "AND ts>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
                 continue        # skipped already: the merge, its builder's to do, is what it waits for
             head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
-            # A pass at the head is a usable verdict: the round ends on it, waiting only for what comes after the
-            # check (green CI and the merge), and says so rather than that no verdict came (Dev 646).
-            last = next((t for t in reversed(_checks(c, ticket, step)) if _verdict(t)), None)
-            passed = bool(last and head and _verdict(last) in GOOD
-                          and head.startswith(str(last.get("verdict_head") or "-").lower()))
+            # A verdict at the head is usable whichever way it went. A pass ends the round on it, waiting only for what
+            # comes after the check (green CI and the merge), and says so rather than that no verdict came (Dev 646).
+            # A fail is not skipped over: the ticket goes to the step's on_fail, as when the check gave it.
+            verdict = _verdict_at(c, ticket, step, head)
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
                     H.task_close(c, H.KEEPER, check["id"],
                                  note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.")
-            if passed:
-                note = f"{step['name']}: {_verdict(last)} at head {head[:12]}; round closed after {hours:g} h"
-                why = f"{step['name']} gave {_verdict(last)} at head {head}"
+            if verdict:
+                note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:
                 note = f"{step['name']}: no usable verdict in {hours:g} h"
-                why = f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round"
             H._task_event(c, ticket_id, H.KEEPER, "round_skipped", None, f"{step['id']}:{head}", note)
-            out = _passed(c, H.task(c, ticket_id), step, why)
+            if verdict and verdict not in GOOD:
+                out = _failed(c, H.task(c, ticket_id), step, verdict, head)
+                refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
+            else:
+                why = (f"{step['name']} gave {verdict} at head {head}" if verdict else
+                       f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round")
+                out = _passed(c, H.task(c, ticket_id), step, why)
+                refs = {HANDOFF: out["handoff"]}
             if out.get("handoff"):
-                H._wake(c, ticket, ticket["owner"], out["say"], at_step(c, ticket_id, {HANDOFF: out["handoff"]}))
+                H._wake(c, ticket, ticket["owner"], out["say"], at_step(c, ticket_id, refs))
             skipped.append(ticket_id)
     return skipped

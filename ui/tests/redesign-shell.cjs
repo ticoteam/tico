@@ -156,7 +156,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
       assert.deepEqual(shown, ['Overview', 'Strategy', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Meetings', 'Tools', 'BotOps'], tag + ': the rail, with no Strategy Bot entry');
-      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 1, tag + ': the Strategy Bot stays on the Team list');
+      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
       assert.equal(await page.locator('#side a[data-nav="strategy"].cur').count(), 1, tag + ': Strategy is current');

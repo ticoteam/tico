@@ -3,8 +3,9 @@
 let TASK_TYPES = [];
 let TASK_TYPES_LOADING = null;
 const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
-// A step's status is one of these: waiting is a tag on a task in its step, and declining goes to the closed step.
-const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
+// A step's status is one of these. Waiting is a tag on a task in its step, so a waiting step is a team's own column for
+// parked work that only a move by hand fills; declining goes to the closed step.
+const STEP_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed'];
 // The board shows a type's working steps; its done and closed tasks are under Done and Closed.
 const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';

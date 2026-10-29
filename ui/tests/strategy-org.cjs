@@ -14,9 +14,8 @@ const zoomOf = page => page.locator('#rdo-cv').evaluate(el => Number(el.style.zo
 async function chart(page, tag) {
   await page.locator(card('bot:builder')).waitFor();
   assert.equal(await page.locator('.rdo-card.top').innerText().then(t => t.split('\n')[0]), 'Ana Silva', tag + ': the owner on top');
-  for (const helper of ['bot:botops', 'bot:librarian', 'bot:coo', 'bot:mail-sorter'])
+  for (const helper of ['bot:botops', 'bot:librarian', 'bot:coo', 'bot:mail-sorter', 'bot:goal-manager'])
     assert.equal(await page.locator(card(helper)).count(), 0, `${tag}: ${helper} is off the chart`);
-  assert.equal(await page.locator(card('bot:goal-manager')).count(), 1, tag + ': the Strategy Bot is on it');
   assert.ok(await inGroup(page, 'bot:builder', 'eng'), tag + ': Builder in Engineering');
   assert.equal(await page.locator('[data-rdo-group="eng"] [data-rdo-group="web"]').count(), 1, tag + ': Web nests in Engineering');
   assert.equal(await page.locator('[data-rdo-group="eng"] .rdo-card').first().getAttribute('data-rdo-ref'), 'bot:eng-lead', tag + ': the lead first');
@@ -38,12 +37,22 @@ async function chart(page, tag) {
         const top = document.querySelector('.rdo-card.top').getBoundingClientRect(), box = pane.getBoundingClientRect();
         const bar = document.querySelector('#mobile-nav').getBoundingClientRect().top;
         return {name, off: Math.abs(top.left + top.width / 2 - (box.left + box.width / 2)), gap: bar - box.bottom,
-          wider: pane.scrollWidth > pane.clientWidth, still: document.querySelector('#main').scrollHeight <= document.querySelector('#main').clientHeight + 1};
+          wider: pane.scrollWidth > pane.clientWidth + 1, still: document.querySelector('#main').scrollHeight <= document.querySelector('#main').clientHeight + 1};
       });
       assert.ok(look.name >= 12, `${tag}: names read at ${look.name}px`);
       assert.ok(look.off < 4, `${tag}: centred on the owner (${look.off}px off)`);
       assert.ok(look.gap >= 0 && look.gap <= 24, `${tag}: the frame runs to the tab bar (${look.gap}px short)`);
-      assert.ok(look.wider, tag + ': the chart runs wider than the screen and pans');
+      assert.ok(!look.wider, tag + ': the small team fits the frame across, nothing clipped at the sides');
+      // A long name ends in "…" on one line; its card keeps its width (the name is the card's tooltip).
+      const long = await page.locator(card('bot:builder')).evaluate(el => {
+        const b = el.querySelector('b'), width = el.getBoundingClientRect().width;
+        b.textContent = 'Head of Customer Success Operations';
+        const out = {cut: b.scrollWidth > b.clientWidth, dots: getComputedStyle(b).textOverflow, lines: Math.round(b.getBoundingClientRect().height / parseFloat(getComputedStyle(b).lineHeight)),
+          same: Math.abs(el.getBoundingClientRect().width - width) < 1, title: el.title};
+        b.textContent = 'Builder';
+        return out;
+      });
+      assert.deepEqual(long, {cut: true, dots: 'ellipsis', lines: 1, same: true, title: 'Builder'}, tag + ': a long name ends in an ellipsis');
       assert.ok(look.still, tag + ': the page itself does not scroll');
       await shot(page, 'phone-org');
 

@@ -626,8 +626,9 @@ async function kpiAddBind(form, goal, done) {
 function goalTreeShape() {
   const people = (S.people || []).filter(p => !p.hidden);
   const bots = (S.emps || []).filter(e => !['archived', 'retired'].includes(e.status));
-  // The sidebar's own rule: built-in and message bots stay outside the chart.
-  const placed = bots.filter(e => !isHelperBot(e));
+  // The sidebar's own rule: built-in and message bots stay outside the chart. The Strategy Bot is placed and then lifted
+  // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
+  const placed = bots.filter(e => !isHelperBot(e) || e.name === 'goal-manager');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.name)]);
   const byParent = {}, groupOf = orgGroupOf(people, placed);
   const put = (parent, node) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
@@ -641,7 +642,7 @@ function goalTreeShape() {
     if (parent.startsWith('b:') && !keys.has(parent)) parent = e.operator || e.users?.[0]?.id ? 'p:' + (e.operator || e.users[0].id) : '';
     put(orgHang('b:' + e.name, parent, groupOf), {kind: 'bot', ...e});
   }
-  return {byParent};
+  return {byParent: orgTreeWithHelpers(byParent)};
 }
 // The org chart's order: a group's humans and bots first, then the groups in it; a manager's reports in the order
 // someone put them; then the chart's own order (chartFallback).

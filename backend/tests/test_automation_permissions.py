@@ -20,6 +20,11 @@ class Chart:
             out.append(key)
         return out
 
+    OFF = ()                                   # the bots whose switch to manage their reports is off
+
+    def manages(self, slug):
+        return slug not in self.OFF
+
     def leads(self, gid):
         return self.LEADS.get(gid, [])
 
@@ -101,3 +106,13 @@ def test_a_chat_may_name_only_an_automation_its_writer_can_see(api):
     assert unknown.status_code == 422 and "Unknown automation" in unknown.text, unknown.text
     peer = api.post("/api/v2/chat/ops", json=named, headers=headers("cara-test"))
     assert peer.status_code == 422 and "Unknown automation" in peer.text, peer.text
+
+
+class Off(Chart):
+    OFF = ("lead",)
+
+
+def test_a_bot_whose_switch_is_off_reaches_nothing_below_it_but_its_own_routines():
+    assert not AU.may_change(None, bot("lead"), {"owner": "bot:builder-a"}, Off())
+    assert AU.may_change(None, bot("lead"), {"owner": "bot:lead"}, Off())
+    assert AU.may_change(None, person("chris"), {"owner": "bot:builder-a"}, Off())

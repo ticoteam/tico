@@ -19,6 +19,7 @@ from . import rooms
 from . import service_keys
 from . import team_rules
 from . import read_cache
+from . import report_managers
 from .store import H, Problem, digest
 
 # Loopback sign-in for an environment with no identity proxy in front of it.
@@ -611,6 +612,22 @@ class Auth:
             return False
         from . import botops_act
         return botops_act.own_run(c, self, who.attempt_id)
+
+    def report_manager(self, c, who, slug, scope):
+        """Whether this bot's own run manages `slug` for `scope` as its manager: `slug` is a direct report (its raw
+        `reports_to` names the caller, so a report's report does not count), the caller is not `slug` itself, and it is
+        not a built-in bot. `scope` is one of report_managers.SCOPES. Both switches must be on (report_managers.manages).
+        Never true for a person, for BotOps acting for one, or for any delegated identity: the change is the bot's own."""
+        if (scope not in report_managers.SCOPES or who.role != "bot" or who.via or who.via_token or who.support
+                or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
+            return False
+        me = H.actor_id(who.actor)
+        row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if not row or me == slug:
+            return False
+        declared = json.loads(row["config_json"]) if row["config_json"] else {}
+        parent = row["reports_to"] or (declared or {}).get("reports_to") or ""
+        return parent == me and report_managers.manages(c, me)
 
     @staticmethod
     def member_bot_row(c, slug):

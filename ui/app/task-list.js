@@ -546,7 +546,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
 }
 function tasksEmptyHTML(state, what) {
   const filtered = tasksActiveFilterCount(state) || state.q;
-  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}${window.talkLineHTML?.() || ''}</div>`;
+  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}</div>`;
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
@@ -691,7 +691,10 @@ function tasksTools(state) {
     mode.setAttribute('aria-pressed', String(!!state.selectMode));
     mode.textContent = state.selectMode ? 'Done' : 'Select';
   }
+  tasksBarEdge($('#task-bar'));
 }
+// A phone's filter bar scrolls sideways; while more of it is off to the right, its edge fades (task-list.css .more).
+const tasksBarEdge = bar => bar?.classList.toggle('more', bar.scrollWidth - bar.clientWidth - bar.scrollLeft > 1);
 // One popover for every menu on the page: a filter's values, the fields, Group by, and the bulk actions.
 // ↑/↓ move between its items (and in and out of its find box), Home/End jump, Enter picks, Esc closes.
 function tasksMenu(state, anchor, html, bind, toggle = true) {

@@ -117,8 +117,8 @@ Every colour is stored with who set it: `status_by`, and `status_source` (`auto`
 
 The CEO Bot (`goal-manager`) is a built-in bot, created for every team like the Librarian, and on every install. It
 was called the Goal Manager before; it keeps its slug, so its KPI readings, goal history and old messages stay its own.
-It appears in **Settings** as **Built-in**, at the top of the [team chart](org-chart.md) and in its panel at the top of
-Goals; nobody archives it, and only the team owner edits it. A team from before it existed gets it on update once a
+It appears in **Settings** as **Built-in** and in its panel beside the Strategy tabs, Goals among them; like the other
+built-ins it is not on the [team chart](org-chart.md); nobody archives it, and only the team owner edits it. A team from before it existed gets it on update once a
 computer and a model exist. Its template is `templates/catalog/goal-manager/`; its playbooks are the product.
 
 There is no On/Off switch. How much it does is the [level](ceo-bot.md) the owner picks, and a new install starts at

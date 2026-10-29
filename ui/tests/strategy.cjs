@@ -234,7 +234,21 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('[data-strat-status]').innerText(), 'Not published');
       const publish = page.locator('[data-strat-publish]');
       assert.equal(await publish.isDisabled(), true);
-      assert.equal(await page.locator('[data-strat-why-not]').innerText(), 'Needs an active bet with Rules out and Wrong if');
+      // Why it is off is a (?) beside Publish, not a line of helper text.
+      assert.equal(await page.locator('[data-strat-why-not]').getAttribute('aria-label'), 'Needs an active bet with Rules out and Wrong if');
+      assert.equal(await page.locator('[data-strat-why-not]').innerText(), '?');
+      assert.doesNotMatch(await page.locator('#main').innerText(), /Needs an active bet/, 'no helper line');
+      await page.locator('[data-strat-why-not]').focus();
+      assert.equal(await page.locator('[data-strat-why-not] [role="tooltip"]').isVisible(), true, 'the words show on focus');
+      const pop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(pop.y >= 0 && pop.x >= 0 && pop.x + pop.width <= DESKTOP.width, 'the words open on screen');
+      await shot(page, 'publish-off', ['dark']);
+      await page.setViewportSize(PHONE);
+      await page.locator('[data-strat-why-not]').focus();
+      const phonePop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(phonePop.x >= 0 && phonePop.x + phonePop.width <= PHONE.width, 'the words open on a phone screen');
+      await shot(page, 'publish-off-phone', ['dark']);
+      await page.setViewportSize(DESKTOP);
       assert.match(await page.locator('li[data-bet="b-price"] [data-bet-wrong]').innerText(), /Not yet measurable/);
       await page.locator('li[data-bet="b-price"] [data-bet-edit]').click();
       const form = page.locator('[data-bet-form="b-price"]');
@@ -265,7 +279,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await form.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/bets/b-price'), ['POST', '/bets/b-price', {rules_out: 'Premium add-ons, custom quotes.',
         wrong_if: {kind: 'kpi', kpi_id: 'k-margin', direction: 'below', threshold: 25, check_by: '2027-01-31'}, status: 'active', revision: 1}]);
-      await page.locator('[data-strat-why-not]', {hasText: "Needs What we won't do"}).waitFor();
+      await page.locator(`[data-strat-why-not][aria-label="Needs What we won't do"]`).waitFor();
       assert.equal(await publish.isDisabled(), true);
       await page.locator('[data-section="not"] [data-section-edit]').click();
       await page.locator('[data-section-form] textarea').fill('No deep cleans.');

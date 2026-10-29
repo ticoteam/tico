@@ -12,7 +12,9 @@
 .strat-tabs a.cur{background:var(--surface2);color:var(--ink);font-weight:600}
 .strat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .strat-actions:empty{display:none}
-.strat-why-not{color:var(--muted);font-size:var(--t-sm)}
+/* Why Publish is off: a (?) after it, its words opening below and to the left (it sits at the top right). */
+.strat-actions .rd-help{margin-left:0}
+.strat-actions .rd-help-pop{left:auto;right:-4px;bottom:auto;top:calc(100% + 6px);transform:none}
 .strat-meta{margin:0 0 10px;color:var(--muted);font-size:var(--t-sm)}
 .strat-status{color:var(--ink)}
 .strat-none{margin:8px 0 12px;color:var(--muted);font-size:var(--t-md)}
@@ -124,7 +126,6 @@
   .strat-mini{min-height:32px;padding:4px 10px}
   .strat-field,.strat-sec-form textarea,.strat-publish input{font-size:16px}
   .strat-publish{flex-wrap:wrap}.strat-publish input{flex-basis:100%}
-  .strat-why-not{flex-basis:100%;order:3}
   .strat-bet-lines{margin-left:0}
   .strat-bet-line{grid-template-columns:68px minmax(0,1fr)}
   .strat-wrong-row{flex-wrap:wrap}

@@ -412,3 +412,21 @@ def test_a_folded_input_another_run_already_read_keeps_that_runs_task(api):
                           (privacy.INPUT_MOVED, attempt['id'])).fetchone()[0]
         assert moved == 1
         assert task_id in privacy.attempt_tasks(c, attempt['id'])
+
+
+def test_two_requests_folded_into_one_stopped_run_are_one_run_on_needs_you_and_health(api):
+    """Two requests that rode on one interrupted run are two jobs but one run: one line with its title once, and one
+    count wherever runs are counted (Needs you, the two-hour check on Health)."""
+    from backend.tests.test_execution_review import busy_folded_run, stopped_issue
+    jobs = busy_folded_run(api)
+    [attempt_id] = {job['attempt_id'] for job in jobs}
+    issue = stopped_issue(api)
+    assert issue['title'].endswith('has 1 stopped run holding up work')
+    [run] = issue['runs']
+    assert run['title'] == 'Ship the receipts fix' and len(run['jobs']) == 2
+    stopped_two_hours(api, attempt_id)
+    [check] = [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
+    assert [item['text'] for item in check['items']] == ['ops: 1 stopped run waiting 2 h']
+    late = stopped_issue(api)                                       # the queued follow-up still waits on it
+    assert late['title'] == 'ops has 1 stopped run holding up work'
+    assert late['runs'][0]['title'] == 'Ship the receipts fix'

@@ -218,11 +218,9 @@ function pageSettings() {
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
-        <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
-          <a href="#/settings/system" data-settings-moved>Moved to Settings &gt; System</a></p>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
-          <div><strong>Team icon</strong><p class="settings-cell-note">PNG, JPEG or WebP, up to 1 MB.</p>
+          <div><strong>Team icon</strong>
             <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
             <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>

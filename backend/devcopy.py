@@ -113,7 +113,7 @@ KEEP = frozenset((
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
-    "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
+    "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
 ))

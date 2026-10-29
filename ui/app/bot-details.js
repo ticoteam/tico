@@ -41,12 +41,13 @@ function botInstructionsMount(slug) {
   };
 }
 async function botSettingsHistoryLoad(slug) {
-  const host = $('#bot-settings-history'); if (!host || S.me?.role !== 'owner') return;
+  // The server answers only the owner and the people who manage this bot; the card is drawn for those alone (bot-page.js).
+  const host = $('#bot-settings-history'); if (!host) return;
   try {
-    const history = await get('/v2/settings/history');
+    // The server keeps the page to this bot, so the newest changes on other bots cannot push its own out of it.
+    const history = await get(`/v2/settings/history?bot=${encodeURIComponent(slug)}`);
     if (BOT?.slug !== slug || !host.isConnected) return;
-    renderSettingsHistory(host, {changes: (history.changes || []).filter(c => c.bot === slug),
-      transitions: (history.transitions || []).filter(t => t.bot === slug)});
+    renderSettingsHistory(host, history, before => settingsHistoryOlder(before, slug));
   } catch (error) { if (host.isConnected) host.textContent = error.message; }
 }
 

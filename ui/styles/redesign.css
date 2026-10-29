@@ -2,8 +2,17 @@
    only that code adds. */
 
 /* Sidebar: what moved out of the rail. Library's pages sit under it. */
-html.redesign #nav-inboxes-section,html.redesign #nav-strategy-librarian{display:none!important}
+html.redesign #nav-inboxes-section{display:none!important}
 .rd-lib{display:flex;flex-direction:column}
+.rd-lib[hidden]{display:none}
+/* Library folds: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
+.rd-lib-toggle{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.rd-lib-toggle:hover{background:var(--surface2);color:var(--ink)}
+.rd-lib-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rd-lib-toggle .section-chev{margin:0}
+.rd-lib-toggle[aria-expanded="false"] .section-chev{transform:none}
+body.in-setup .rd-lib{display:none}
+@media (max-width:760px){.rd-lib-toggle{width:40px;height:40px}}
 .rd-lib .nav-link{padding-left:40px;color:var(--muted)}
 .rd-lib .nav-link .nav-icon{display:none}
 .rd-lib .nav-link.cur,.rd-lib .nav-link:hover{color:var(--ink)}

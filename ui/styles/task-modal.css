@@ -17,6 +17,12 @@
 .dragging{opacity:.4}
 .tmeta .linkish{font:inherit;font-size:inherit}
 .tsection{margin:12px 0}
+/* Runs on: the model pickers wrap to as many columns as a phone sheet leaves room for. */
+.task-run-now{margin:0 0 6px;font-size:var(--t-sm);color:var(--ink);overflow-wrap:anywhere}
+.task-run-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end;min-width:0}
+.task-run-form label{display:grid;gap:3px;min-width:0;font-size:var(--t-xs);color:var(--muted)}
+.task-run-form select{min-width:0;max-width:100%}
+.task-run-form button{justify-self:start}
 .tlabels,.tlinks{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .tlabels form.inline,.tlinks form.inline{display:inline-flex;margin:0}
 .tlabels form.inline input,.tlinks form.inline input{font-size:var(--t-sm);padding:2px 6px;width:auto}
@@ -87,5 +93,17 @@
 .task-chat .task-pill .p-send-icon{margin-bottom:1px}
 .task-chat .task-pill [data-task-chat-status]:empty,.task-chat .task-pill [data-task-chat-to]:empty{display:none}
 .task-chat .task-pill [data-task-chat-status],.task-chat .task-pill [data-task-chat-to]{font-size:var(--t-sm);padding:0 12px}
+/* The send, split when a bot gets the comment: the way it reaches the bot in words, and a caret for the other ways.
+   The menu opens upward, over the thread. */
+.task-chat .task-send{position:relative;display:inline-flex;align-items:center;flex:none}
+.task-chat .task-send .p-send-goal{border-radius:17px 0 0 17px}
+.task-chat .task-send .task-send-caret{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:26px;height:34px;margin-bottom:1px;padding:0;border:0;border-radius:0 17px 17px 0;background:var(--accent);color:var(--accent-ink);cursor:pointer;touch-action:manipulation;box-shadow:inset 1px 0 0 color-mix(in srgb,var(--accent-ink) 28%,transparent)}
+.task-chat .task-send .task-send-caret:hover:not(:disabled){filter:brightness(1.06)}
+.task-chat .task-send .task-send-caret:disabled{opacity:.45;cursor:default}
+.task-chat .task-send .task-send-caret[hidden]{display:none}
+/* The font ships expand_more only: turned over, it points the way the menu opens. */
+.task-chat .task-send .task-send-caret .nav-icon{width:18px;height:18px;font-size:18px;transform:rotate(180deg)}
+.task-chat .task-send .p-menu{top:auto;bottom:calc(100% + 8px);right:0;min-width:168px}
+.task-chat .task-send .p-menu button{border:0}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}

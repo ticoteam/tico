@@ -77,6 +77,8 @@ STABLE = [
      "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap", None),
     ("/api/v2/bots/{bot}/turns-at-once", "post", "Bots", "setBotTurnsAtOnce",
      "Set the most turns the bot runs at once on every computer: null is no limit, 1 to 256 otherwise", None),
+    ("/api/v2/bots/{bot}/manages-reports", "post", "Bots", "setBotManagesReports",
+     "Whether the bot's manager bot may change its direct reports: true is on (the default), false is off; the owner's team rule overrides it", None),
     ("/api/v2/computers/{rid}/turns-at-once", "post", "Computers", "setComputerTurnsAtOnce",
      "Set the most turns a computer runs at once: null is automatic (its own capacity)", None),
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
@@ -251,6 +253,11 @@ STABLE = [
     ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
      "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
      "as themselves; a task carrying work is refused (409 has_work)", None),
+    ("/api/v2/tasks/{tid}/model", "post", "Tasks", "setTaskModel",
+     "Set the model this task's runs use, with its effort and harness (backend/task_run_models.py): an absent `model` "
+     "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
+     "again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's "
+     "computer can run it now", "TaskRunModelResult"),
     ("/api/v2/tasks/{tid}/snooze", "post", "Tasks", "snoozeTask",
      "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
      "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover", "TaskResult"),
@@ -842,6 +849,11 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
+    # A task's own model (backend/task_run_models.py `of`); null when its runs use the bot's task model.
+    "TaskRunChoice": obj({"model": "s", "harness": "s", "runtime": "s", "reasoning_effort": "s", "set_by": "n",
+                          "set_at": "n"}),
+    "TaskRunModelResult": obj({"task": "s", "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
+                               "readiness": {"type": ["object", "null"]}, "warning": "s"}),
     "TaskBulkResult": obj({"dry_run": "b", "matched": "i", "cap": "i", "changed": "i", "unchanged": "i", "skipped": "i",
                            "tasks": obj({"changed": items(obj({"id": "s", "number": {"type": ["integer", "null"]}, "title": "s"})),
                                          "skipped": items(obj({"id": "s", "number": {"type": ["integer", "null"]}, "title": "s",
@@ -858,9 +870,13 @@ SCHEMAS = {
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
                              "auto, OpenRouter, an unlisted model, nothing counted). Never the bot's configured model."}}),
     "TaskRun": obj({"run": "s", "bot": "s", "started": "n", "finished": "n", "outcome": "n", "ran_on": ref("RanOn")}),
+    "CommentDelivery": obj({"default": {"type": ["string", "null"], "enum": ["steer", "queue", None]},
+                            "steer": "b", "steers": "b", "goal": "b"}, required=["default", "steer", "steers", "goal"]),
     "TaskDetail": obj({"task": ref("Task"), "events": "a", "children": "a", "comments": items(ref("Message")),
-                       "messages": items(ref("Message")), "has_more": "b", "can_comment": "b", "mover": "b",
-                       "runs": items(ref("TaskRun"))},
+                       "messages": items(ref("Message")), "has_more": "b", "can_comment": "b", "can_set_run_model": "b",
+                       "mover": "b", "runs": items(ref("TaskRun")),
+                       "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
+                       "comment_delivery": {"oneOf": [ref("CommentDelivery"), {"type": "null"}]}},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [
@@ -884,7 +900,7 @@ SCHEMAS = {
     # `warning`: the bot it went to is paused or quarantined; the comment is kept and runs when it is back.
     # `held`: a bot's comment to a bot waits for that bot's next run; it says how to wake it now.
     "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "delivered": "b",
-                          "warning": "s", "held": "s"},
+                          "warning": "s", "held": "s", "goal": "o"},
                          required=["comment", "comments", "woke"]),
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
@@ -1277,7 +1293,8 @@ STABLE.extend([
     ("/api/v2/bots/{bot}/budget", "post", "Bots", "setBotBudget",
      "Set the bot's own runs per hour and per day: null follows the team, 0 is no limit; raising it above the runs that held the bot releases it", "BotBudgetState"),
     ("/api/v2/bots/{bot}/release", "post", "Bots", "releaseBot",
-     "Release a bot Tico stopped for failed runs or too many runs; its queued work starts again", "BotReleased"),
+     "Release a bot Tico stopped for failed runs or too many runs, or for queued runs it could not start; its queued "
+     "work starts again", "BotReleased"),
     ("/api/v2/settings/turn-budgets", "get", "Bots", "getTeamBudgets",
      "The team default runs per hour and per day for bots with no budget of their own (owner and admins)", "TeamBudgetState"),
     ("/api/v2/settings/turn-budgets", "post", "Bots", "setTeamBudgets",

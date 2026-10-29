@@ -42,6 +42,27 @@ const AU_TRIGGER_ICONS = {message: 'mail', task_received: 'task_alt', schedule: 
 const AU_TRIGGER_WORDS = {message: 'Message received', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
   listening: 'Listening match', event: 'Event'};
 const auCap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
+// An event trigger's event in a few words: the catalog's (backend/event_catalog.py, old spellings too) and the
+// built-ins' tico.builtin.* (backend/redesign_migration.py). The dotted name is only ever a chip's tooltip.
+const AU_EVENTS = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task step changed',
+  'task.state_changed': 'Task state changed', 'task.commented': 'Task comment', 'task.done': 'Task finished',
+  'task.declined': 'Task declined', 'task.blocked': 'Task waiting', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
+  'approval.requested': 'Approval asked', 'approval.decided': 'Approval decided', 'approval.withdrawn': 'Approval withdrawn',
+  'needs_you.created': 'Needs you', 'needs_you.answered': 'Needs you answered', 'bot.run_failed': 'Bot run failed',
+  'bot.held': 'Bot held', 'bot.released': 'Bot released', 'release.published': 'Release published', 'meeting.ready': 'Meeting ready',
+  'strategy.published': 'Strategy published', 'market.insight.urgent': 'Urgent insight', 'market.briefing': 'Market briefing',
+  'inbound.received': 'Message received', 'health.finding': 'Health finding', 'webhook.received': 'Webhook received',
+  'tico.notice': 'Notice'};
+const AU_EVENT_MORE = {release_published: 'Release published', 'recording.ready': 'Meeting ready',
+  'tico.builtin.wakes': 'Every event', 'tico.builtin.task_rule': 'Task rule', 'tico.builtin.health': 'Health check'};
+function auEventWords(name) {
+  const n = String(name || '');
+  if (AU_EVENTS[n] || AU_EVENT_MORE[n]) return AU_EVENTS[n] || AU_EVENT_MORE[n];
+  if (n.startsWith('tico.builtin.job.')) return 'System job';
+  // Anything else (custom.<x>, a newer catalog event): its last words, never the dotted name.
+  const words = n.replace(/^(tico\.builtin\.|tico\.|custom\.)/, '').replace(/[._*-]+/g, ' ').trim();
+  return auCap(words) || 'Event';
+}
 // A schedule in words; every hour (or few) on some weekdays reads "every hour, weekdays", not its cron.
 function auCronWords(cron) {
   const f = String(cron || '').trim().split(/\s+/), [mi, hr, dom, mon, dow] = f;
@@ -58,7 +79,7 @@ function auSource(t = {}) {
   if (t.type === 'schedule') return auCap(auCronWords(t.cron));
   if (t.type === 'webhook') return t.name || t.id || '';
   if (t.type === 'listening') return t.destination ? 'Listening · ' + t.destination : 'Listening';
-  if (t.type === 'event') return t.name || '';
+  if (t.type === 'event') return t.name ? auEventWords(t.name) : '';
   return '';
 }
 const auSpendWords = a => a.spend_cap?.per_30m != null ? `$${Number(a.spend_cap.per_30m).toFixed(2)} / 30 min` : 'Bot’s limit';
@@ -113,6 +134,7 @@ function auShell() {
       <aside class="au-side"><div class="au-ed" hidden></div><div class="au-botp"></div></aside>
       <div class="au-scrim" hidden></div>
     </div>
+    <a class="sbot-fab au-botbtn" href="${auHref('', 'bot')}"><span class="nav-icon" aria-hidden="true">smart_toy</span><span>BotOps</span></a>
   </div>`;
   const root = AU.root = $('#au-root');
   root.querySelector('.au-q').addEventListener('input', e => { AU.q = e.target.value.trim().toLowerCase(); auDrawList(); });
@@ -149,7 +171,7 @@ function auGrouped(list) {
   }
   return [['Mine', mine], ...[...groups].map(([g, xs]) => [auGroupName(g), xs]), ['Company', company]].filter(([, xs]) => xs.length);
 }
-const auRowName = a => { const src = auSource(a.trigger); return {name: a.name || 'Untitled', src: src && !String(a.name || '').includes(src) ? src : ''}; };
+const auRowName = a => { const src = auSource(a.trigger); return {name: a.name || 'Untitled', src: src && !String(a.name || '').toLowerCase().includes(src.toLowerCase()) ? src : ''}; };
 // The on/off switch: `can_pause` (a read-only built-in shows it to the top of the org only); older hubs send can_edit.
 const auMayPause = a => a.can_pause ?? !!a.can_edit;
 function auSwitch(on, label, attrs = '') {
@@ -190,7 +212,6 @@ function auDrawHead() {
       <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
     </div>
     <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}</button>
-    <a class="au-icon au-botbtn" href="${auHref(a.id, 'bot')}" aria-label="BotOps"><span class="nav-icon" aria-hidden="true">smart_toy</span></a>
     <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}`;
 }
 

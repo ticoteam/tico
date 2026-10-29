@@ -68,7 +68,9 @@ function updcMount() {
 function updcLayout() {
   const el = UPDC?.el; if (!el?.isConnected) return;
   const phone = updcPhone(), full = phone && document.body.classList.contains('upd-chat-full');
-  const shown = phone ? full : updcShown();
+  // An Assistant that is off and that this person cannot turn on: no rail and no button.
+  const shown = !UPDC.unusable && (phone ? full : updcShown());
+  const button = $('#upd-chat-btn'); if (button) button.hidden = !!UPDC.unusable;
   $('#main').classList.toggle('upd-chat-layout', !phone && shown);
   el.hidden = !shown;
   $('#upd-chat-btn')?.setAttribute('aria-pressed', String(!phone && shown));
@@ -185,6 +187,7 @@ async function updcLoad(chat) {
   el.setAttribute('aria-label', info.name);
   thread.setAttribute('aria-label', info.name + ' conversation');
   if (!info.available) {
+    if (!info.can_turn_on && !info.ceo) { chat.unusable = true; if (updcPhone()) void updcClose(); updcLayout(); return; }
     window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) { chat.mounted = false; void updcLoad(chat); } }});
     return;
   }

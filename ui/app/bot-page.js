@@ -370,7 +370,7 @@ async function pageBot(slug, tab) {
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
       )((S.status?.recent_runs || []).filter(r => r.employee === slug).slice(0, 10))}</section>
 
-    ${S.me?.role === 'owner' ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
+    ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>

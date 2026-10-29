@@ -22,7 +22,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
     hub note delete <id>                   take back a note no run has carried yet
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
-                    [--goal ID] [--dry-run] the checks a create would fail, nothing written
+                    [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
+                    nothing written
+    hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
+                                           the model this task's runs use; --clear puts it back on the bot's task model
                     [--next-run]           for a bot: no wake; its next run carries the task
                                            blocked on a person? --owner <person> --parent <your task>
                                            for a person, the body's first paragraph is the ask (as --note below)
@@ -37,7 +40,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
-    hub task comment <id> "<text>"         on the record with your name
+    hub task comment <id> "<text>" [--steer | --queue | --goal]   on the record with your name
+                                           --steer reaches its bot now, --queue at its next turn, --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
     hub task ask-resolve <id> <question-id> [--quote "<their words>"]
@@ -369,11 +373,13 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            to get its repository and finishes by itself (`--help`: the file's shape)
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
+    hub bot task-model <bot> [<model>] [--effort E] [--harness H] [--clear]
+                                           the model the bot's tasks run on; --clear puts them back on its own
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
     hub bot budget <bot> [--hour N] [--day N] | release
                                            read or set a bot's runs per hour and per day (0 no limit, default follows the
                                            team), or release it after Tico stopped it
-    hub bot release <bot>                  release a bot Tico stopped for failed runs or too many runs
+    hub bot release <bot>                  release a bot Tico stopped (failed runs, budget, or runs it could not start)
     hub bot profile <bot> [doer|reviewer|lead|manager|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
                                            read or set what wakes a bot and which tasks it takes (--sweeps/--pulls/--takes
                                            are for custom; --confirm-drop-rules when leaving custom deletes its own rules)
@@ -953,6 +959,10 @@ def parser():
     s.add_argument("--type", help="task type id or name; defaults to General")
     s.add_argument("--step", help="step id or name in the type")
     s.add_argument("--number", type=int, help="movers: keep an imported ticket's number")
+    s.add_argument("--model", help="the model this bot-owned task's runs use, from `hub bot model`'s list; leave out "
+                                   "for the bot's task model")
+    s.add_argument("--effort", help="the reasoning effort that model takes")
+    s.add_argument("--harness", help="the harness that runs that model")
     s.set_defaults(fn="task create")
     types = task.add_parser("type", help="manage task types (movers only)").add_subparsers(dest="type_sub")
     bots_help = ("what every bot may do with the type's tasks: parties (only the bots on each task), "
@@ -1074,6 +1084,13 @@ def parser():
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
                                            "person needs the what-happens line)")
+    delivery = s.add_mutually_exclusive_group()
+    delivery.add_argument("--steer", dest="delivery", action="store_const", const="steer",
+                          help="reach the task's bot now; a running turn takes it in if its harness can steer")
+    delivery.add_argument("--queue", dest="delivery", action="store_const", const="queue",
+                          help="wait for the task's bot to take its next turn on this task")
+    delivery.add_argument("--goal", dest="delivery", action="store_const", const="goal",
+                          help="make the text the goal of the task's bot session (plain text, no files)")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
@@ -1234,6 +1251,15 @@ def parser():
     s = task.add_parser("run", help="start a bot's task now, as the task")
     s.add_argument("id")
     s.set_defaults(fn="task run")
+    s = task.add_parser("model", help="the model this task's runs use, with its effort and harness; --clear puts it "
+                                      "back on the bot's task model")
+    s.add_argument("id")
+    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
+    s.add_argument("--effort")
+    s.add_argument("--harness")
+    s.add_argument("--clear", action="store_true",
+                   help="clear the task's own model: its runs use the bot's task model again")
+    s.set_defaults(fn="task model")
     s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")
@@ -2457,7 +2483,9 @@ def parser():
     s.add_argument("--confirm-drop-rules", dest="confirm_drop_rules", action="store_true", default=None,
                    help="leaving custom deletes the wake rules it copied into the rules table")
     s.set_defaults(fn="bot profile")
-    s = bot.add_parser("release", help="release a bot Tico stopped (failed runs, or too many runs); its queue starts again")
+    s = bot.add_parser("release",
+                       help="release a bot Tico stopped (failed runs, too many runs, or a run it could not start); "
+                            "its queue starts again")
     s.add_argument("bot")
     s.set_defaults(fn="bot release")
     s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
@@ -2466,6 +2494,15 @@ def parser():
     s.add_argument("--effort")
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
+    s = bot.add_parser("task-model", help="the model the bot's tasks run on, with its effort and harness; --clear puts "
+                                          "them back on the bot's own model")
+    s.add_argument("bot")
+    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
+    s.add_argument("--effort")
+    s.add_argument("--harness")
+    s.add_argument("--clear", action="store_true", help="the bot's tasks run on its own model again")
+    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+    s.set_defaults(fn="bot task-model")
     for verb in ("pause", "resume"):
         s = bot.add_parser(verb, help=f"{verb} a bot (BotOps)")
         s.add_argument("bot")

@@ -22,7 +22,7 @@ chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, 
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
-instead of failing. The owner gets **Turn on Assistant** there and at the top of **Settings > Bots**: one click restores the
+instead of failing. The owner gets **Turn on** there and in **Settings > General**: one click restores the
 archived assistant (same bot, same history, renamed to the team's assistant name) or, if there is none, adds it from
 the template, puts it on the computer BotOps runs on and activates it, and every human's Assistant page starts working
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
@@ -203,7 +203,8 @@ Updates has your chat beside the feed: the same conversation as the menu tab, so
 It is labelled with your bot (the Assistant, or the [CEO Bot](ceo-bot.md#on-the-updates-page) for the owner). On a
 desktop it is a right rail; drag its left edge to resize it, as with other right rails, and the button at the end of the
 page's header shows or hides it. Tico remembers that for you on every device. On a phone the same button opens the chat
-full screen; its close button or Back shuts it.
+full screen; its close button or Back shuts it. While the Assistant is off, whoever may turn it on sees one line with
+**Turn on** there; anyone else gets no chat and no button.
 
 A question asked here is handed the recent updates you can read: the last four days' dailies and the latest week in
 review, chosen by the same rules as your Updates page. Tico leaves out any update that links or names a task, chat or

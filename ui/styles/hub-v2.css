@@ -80,6 +80,7 @@
 .docs-danger{color:var(--fail)!important}
 .docs-settings{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--muted);cursor:pointer;position:relative}
 .docs-settings .nav-icon{font-size:16px}
+a.docs-settings{box-sizing:border-box;text-decoration:none}
 .docs-settings:hover,.docs-settings[aria-expanded="true"],.docs-tool-icon[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 .docs-pop[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
 .docs-pop :is(button,a){display:block;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}

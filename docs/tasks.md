@@ -3,7 +3,7 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status except waiting and declined: no step has those statuses (below).
+each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
@@ -31,8 +31,11 @@ existing scripts can keep setting `status`:
   someone picks a step.
 - Waiting is not a step: a waiting task stays in its working step (or the type's first open or doing
   step) and shows a **Waiting** tag on its card and row. A declined task goes to the type's closed
-  step. A step can't be given status waiting or declined; the Product roadmap keeps its public
-  Declined step.
+  step. A step can't be given status declined; the Product roadmap keeps its public Declined step.
+- A team can add a step with status waiting, a column of its own for parked work such as "Waiting On
+  Dependency". Only a move by hand fills it: a task that starts waiting never lands there by itself.
+  A person's move into it is a hold that stays until someone moves the task on, and updates leave the
+  step and its tasks where they are.
 
 Changing a task's type preserves its status and finds a matching step in the new type. Use an
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
@@ -123,11 +126,11 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 
 | Key | What it does |
 | --- | --- |
-| `on_pass`, `on_fail` | Make the step a check step. A pass or approve moves the ticket to `on_pass` (`merge`: merging is next and the Builder is told once CI is green); changes, a fail, or a check finished with no verdict (its comments) move it to `on_fail`. |
+| `on_pass`, `on_fail` | Make the step a check step. A pass or approve moves the ticket to `on_pass` (`merge`: merging is next and the Builder is told once CI is green); changes, a fail, or a check finished with no verdict (its comments) move it to `on_fail`. A pass at a head where this step already gave a fail, changes or comments moves it to `on_fail` too: only a new head clears that, as a failed CI check or test receipt at a head is cleared only by a new one. |
 | `after_green` | A work step: green CI on a head newer than the one its check judged moves the ticket here (`merge` to merge next). Without it the owner moves the ticket on when its work is done. |
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
-| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments. |
+| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
 | `status_hours`, `late_hours` | A ticket quiet this long at the step gets its bot owner one status check; one this long at the step gets its manager one notice. Dev working steps default to 2 and 4. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) tells `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot or person. Once every `every_hours` (4) while over. |
@@ -623,6 +626,24 @@ digest, a Manager wakes for people, tasks given to it, its own clock and its exc
 
 `GET /api/v2/event-types` (`hub event-types`, `hub_event_types`) lists the named events a rule or automation can use.
 
+## Choosing the model a task runs on
+
+A bot's task runs on the bot's task model, or on its own model while that is not set
+([Run a bot's tasks on another model](harnesses.md#run-a-bots-tasks-on-another-model)). A task can name its own model,
+effort and harness instead. In a bot's task window, **Runs on** picks them and **Apply** saves. When filing, use
+`hub task create --model <id> --effort <effort> --harness <harness>`. To change a task that already exists, use
+`hub task model <id> <model> --effort <effort> --harness <harness>`, or `hub task model <id> --clear` to return it to the
+bot's task model. `hub_task_create`, `hub_task_model` and `POST /api/v2/tasks/{id}/model` (with `{"model": null}` to clear) do
+the same. `hub bot task-model` and `hub_bot_task_model` read or set the bot's task model. `GET /api/v2/tasks/{id}` shows
+the task's own choice as `run_model`, and `can_set_run_model` says whether the reader may change it.
+
+Whoever may change the bot's model may change a task's model. A bot never does, not even on its own task. On a
+[branch](creating-bots.md#branches) that is whoever may change the original's model, since the branch follows it; the
+task's choice is the task's own and leaves the branch's definition as it is. A run uses the task's own model first,
+then the bot's task model, then the bot's own model; a review or check subtask keeps its check model. A task that
+changes owner loses its own model, however it moves: its history records the clear, and the new owner's bot runs it on
+that bot's task model.
+
 ## Snoozing a task
 
 **Snooze** sets a task aside until a date: it tells its bot or person that nobody plans to get to it
@@ -782,6 +803,9 @@ it does not change a task's labels. The owner can select Blocked and write the r
 ```sh
 hub task update <task-id> --step "Blocked" --note "Waiting for a test machine"
 ```
+
+A ticket in a waiting step of the team's own stays there while it is held, and a new hold on another ticket
+puts it in Blocked, never in the team's step.
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
 Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
@@ -1071,18 +1095,32 @@ comments. The bot's updates and replies are messages, and each reply opens to th
 people say shows on the right under their names, as in a bot's chat with several people; your own line has no name.
 Changes to status, type, owner and the like are one-line markers between the messages. Under a message you send, the
 line from the bot's chat shows what happens to it: **Sent**, **Queued** (and why, when the bot is busy or at a limit),
-**Starting**, then **<Bot> is working…** with its newest step, opening to the steps so far, until the reply, or
-**Reply failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot
-asked is that bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever
-manages the bot gets **Stop** beside it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at
-the foot is the chat's composer, and what you type there is a comment: it wakes the bot as before. Before you send,
-the box says when no bot will get the message (everyone on the task is a person), or when it waits for the bot's next
-run on the task; an @mention of the bot that asked wakes it, and the note goes. `GET /v2/tasks/{id}` carries this
-view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own room,
-or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; and
-`comment_to` (`bot`, `wakes`, `mention`) is who your next comment reaches. A task still in a chat room (one filed into
-a chat before task rooms) has no `execution`: that room's runs belong to the chat.
-`hub task comment`, `hub_task_comment` and `POST /v2/tasks/{id}/comments` are unchanged.
+**Starting**, then **<Bot> is working…** with its newest step, opening to the steps so far, until the reply, or **Reply
+failed** when the turn errors. It follows the bot your message went to, which on a task you own that a bot asked is that
+bot, and the owner's own runs as before; a bot's message to another bot does not take it. Whoever manages the bot gets
+**Stop** beside it, the same stop as in the bot's chat (`POST /v2/bots/{slug}/stop`). The box at the foot is the chat's
+composer, and what you type there is a comment. Where a bot gets it, the send says how it arrives: **Steer** (the
+default when your comment would wake the bot, Queue when not) reaches the bot now, and joins a turn already running if
+the bot's harness can steer (otherwise the bot takes it after that turn); **Queue** waits for the bot's next turn on
+this task without waking it now; **Set as goal** makes the text the goal of the bot's session for this task, as `/goal`
+does in a chat (no files, not public; [chat goals](chat-goals.md)). Only someone on the task (its owner, requester or a
+mover) may steer or set the goal; anyone else's comment is queued, as it always was. The caret opens the other two, and
+the choice is kept per task in this browser. Only a choice made there is sent: with none, the comment reads as any
+other does, so an @mention of the bot that filed the task wakes it. Before you send, the box says what the chosen way
+does. With no bot on the task (everyone on it is a person) the send is a plain arrow, and the box says no bot gets the
+message. `GET /v2/tasks/{id}` carries
+this view: each bot reply in `comments` has its `run`; `execution` is the owning bot's newest run in the task's own
+room, or a newer one for a person's message there, shaped as in a conversation snapshot with `from_person`; `comment_to`
+(`bot`, `wakes`, `mention`) is who your next comment reaches; and `comment_delivery` (`default`, `steer`, `steers`,
+`goal`) is how it can reach them: `default` is what a comment without a delivery does (`steer` when it wakes the bot,
+else `queue`), `steer` says you may steer, `steers` says the bot's harness can take a message into a running turn, and
+`goal` says a goal can be set (both null without a bot). A task still in a chat room (one filed into a chat before task
+rooms) has no `execution` and no goal of its own: that room's runs and goal belong to the chat, so `goal` is false.
+`hub task comment <id> "<text>" --steer|--queue|--goal` (one of the three), `hub_task_comment` with `delivery`, and
+`POST /v2/tasks/{id}/comments` with `delivery` choose the same ways. Without one a comment wakes the bot as it always
+has. A question (`ask`) always wakes the one it is for, so it takes no delivery; `needs_action` takes none or `steer`;
+a `goal` takes no files and cannot be public. A refused combination is a 422, a steer or goal by someone not on the task
+a 403, a goal on a task still in a chat room a 409, and nothing is saved.
 
 Tico spot-checks running work. A bot's open or doing task whose own session ran in the last day (or runs now) and
 that has made no progress for 30 minutes (no checkpoint, comment, status change, message from its bot or finished
@@ -1244,8 +1282,13 @@ The bot decides what to do and whether to move the step. Ask once per version an
 answer; attach a new version when the work changes.
 
 The API uses the existing ask/answer protocol (`messages.kind`, `refs.questions`, `refs.target`,
-and `refs.answer`); plain questions and text replies keep working. Plain comments keep structured
-questions open; an older Computer's plain answer closes its target and reads as `{by, text, at}`.
+and `refs.answer`); questions offering only free text still accept ordinary text answers.
+For a question with options, an authorized recipient's reply through `messages/{mid}/answer`
+settles the decision only when it exactly matches one unique option label on a single targeted
+question. It records the same structured answer as a card pick. Unmatched or ambiguous text is
+saved as a note, leaving the options and any person wait open. Repeating the same structured
+answer does not record another decision. Settling a question does not approve or execute a
+separate publish, send, spend or hire action.
 Needs you excludes closed, cancelled, archived and declined tasks, even with an open question.
 The version's metadata points to its ask message. These routes use the usual Idempotency-Key contract:
 
@@ -1254,7 +1297,8 @@ The version's metadata points to its ask message. These routes use the usual Ide
   `file` and `link` fields.
 - `GET /api/v2/tasks/{id}/files` returns files, including archived files, with versions newest first.
 - `PATCH /api/v2/files/{id}/versions/{n}` accepts `note` and `ask`, by the version's uploader.
-- `POST /api/v2/tasks/{id}/comments` accepts `text`, `ask`, and version references in `attachments`.
+- `POST /api/v2/tasks/{id}/comments` accepts `text`, `ask`, version references in `attachments`, and `delivery`
+  (`steer`, `queue` or `goal`, see Conversation above).
   `GET` lists the comments, including `ask` and `answers` on questions, and `answer` on responses.
 - `POST /api/v2/tasks/{id}/answers` accepts `target: {comment: id}` or
   `target: {file: id, version: n}`, `answers: {question_id: [label, ...]}`, optional `other`,

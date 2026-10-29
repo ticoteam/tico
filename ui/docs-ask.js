@@ -1,13 +1,15 @@
-/* Ask the Librarian on Docs (docs/librarian.md): a right rail on desktop, open unless this viewer
-   hid it (remembered in this browser), and a full-screen sheet on a phone.
+/* Ask the Librarian beside Library's pages, Docs, Meetings and Tools (docs/librarian.md): a right rail on desktop, open
+   unless this viewer hid it (remembered in this browser), and a full-screen sheet on a phone. An install without the
+   Librarian (ui/app/state.js librarianBot) shows neither, nor the pages' buttons that open it.
 
    Type a question and matching docs, internal and linked, show at once from the search that comes
    back with POST /api/v2/docs/ask; the Librarian's answer then streams in from the conversation it
    went to (its snapshot, read again as live events say it changed), with clickable citations. Only the person who asked
    can read that conversation.
 
-   window.openDocsAsk(question?) opens it; with a question it asks it straight away. The page's own
-   [data-librarian-open] button opens it again; window.syncLibrarianRail(settled) is called after each route.
+   window.openDocsAsk(question?) opens it; with a question it asks it straight away. A page's
+   [data-librarian-open] button opens it again; window.syncLibrarianRail() is called after each route and when the
+   team is read again (ui/app/sidebar.js renderLibrarians).
 
    The Librarian cites [Internal doc · Title](doc:<id>) and [Linked · host](https://...). `doc:<id>` is
    turned into the Docs page route here and nowhere else (docHref). Its text is bot text: it only ever
@@ -66,17 +68,20 @@ html.demo .dask{top:var(--demo-h)}
 .dask-think i:nth-child(3){animation-delay:.15s}.dask-think i:nth-child(4){animation-delay:.3s}
 @keyframes dask-dot{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .dask-err{color:var(--fail);font-size:13px}
-.dask-form{display:flex;gap:6px;align-items:flex-end;padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface)}
-.dask-form textarea{flex:1 1 auto;min-width:0;min-height:36px;max-height:160px;resize:vertical;font-size:13.5px;line-height:1.4;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
-.dask-form textarea:focus{outline:2px solid var(--accent);outline-offset:0}
-.dask-form .primary{min-height:36px;padding:0 14px}
+html:not(.has-librarian) [data-librarian-open]{display:none}
+/* The composer: one line, send inside on the right, as the Strategy Bot's and BotOps' (ui/styles/redesign.css .sbot-body). */
+.dask-form{display:flex;align-items:flex-end;min-height:42px;margin:6px 12px calc(12px + env(safe-area-inset-bottom));padding:3px 3px 3px 14px;border:1px solid var(--line);border-radius:21px;background:var(--bg)}
+.dask-form:focus-within{border-color:var(--accent)}
+.dask-form textarea{flex:1 1 auto;min-width:0;height:34px;max-height:120px;resize:none;padding:6px 0;border:0;border-radius:0;background:none;font-size:13.5px;line-height:1.4;box-shadow:none}
+.dask-form textarea:focus{outline:0}
+.dask-form .p-send-icon{width:36px;height:36px}
 .dask-off{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
 .dask-cites{display:flex;flex-wrap:wrap;gap:4px 6px;margin:2px 0 0}
 .dask-cites a.dask-cite{display:inline-block;font-size:12px;line-height:1.35;padding:0 7px;border-radius:10px;border:1px solid var(--line);background:var(--bg);text-decoration:none;color:var(--accent)}
 .dask-cites a.dask-cite:hover{background:var(--surface2)}
 @media (max-width:760px){
   .dask{inset:0;width:auto;border-left:0;box-shadow:none;height:100dvh}
-  .dask-form textarea{font-size:16px;min-height:44px}.dask-form .primary{min-height:44px}
+  .dask-form textarea{font-size:16px}
   html.demo .dask{height:calc(100dvh - var(--demo-h))}
   .dask-backdrop{display:none}
 }
@@ -84,6 +89,7 @@ html.demo .dask{top:var(--demo-h)}
 @media(min-width:761px){
   :root{--librarian-w:clamp(280px,24vw,340px)}
   #main.librarian-open{--librarian-width:var(--librarian-w);margin-right:var(--librarian-width);max-width:min(1180px,calc(100% - var(--librarian-width)))}
+  #main.librarian-open.lc-layout{max-width:calc(100% - var(--librarian-width))}
   #main.librarian-open [data-librarian-open]{display:none}
   #main.librarian-open .docs-heading{grid-template-columns:auto minmax(180px,1fr) auto}
   #main.librarian-open .docs-workspace{grid-template-columns:minmax(200px,240px) minmax(0,1fr)}
@@ -107,8 +113,10 @@ html.demo .dask{top:var(--demo-h)}
   // What each page keeps between opening and closing the panel: the conversation, so a follow-up has context,
   // and what was asked and answered, so closing it does not lose the thread.
   const sessions = {docs: {conversationId: '', turns: []}};
+  // Questions an empty chat offers, on Docs only: the Librarian reads docs and public links, not meetings or tools.
   const HINTS = ['How do we handle a refund?', 'Who helps new hires?', 'Where is the pricing?'];
-  const PLACEHOLDER = 'Ask about your docs…';
+  const onDocs = () => /^#\/docs(?:[/?]|$)/.test(location.hash);
+  const PLACEHOLDER = 'Ask the Librarian…';
   const TURN_LIMIT = 50;
   let panel = null, opener = null, es = null, poll = null, busy = false;
   let conversations = [], nextOffset = null, historyRequest = 0, reopenRequest = 0, openingConversation = false;
@@ -194,10 +202,11 @@ html.demo .dask{top:var(--demo-h)}
     document.head.appendChild(el);
   }
 
-  // Desktop on Docs: a rail beside the page. Anywhere else, and on a phone: a sheet over it. The Strategy tabs have the
-  // Strategy Bot's panel instead (ui/app/redesign.js).
+  // Desktop on a Library page: a rail beside it. Anywhere else, and on a phone: a sheet over it. The Strategy tabs have
+  // the Strategy Bot's panel instead (ui/app/redesign.js), Automations BotOps'.
   const desktop = () => matchMedia('(min-width: 761px)').matches;
-  const railPage = () => /^#\/docs(?:[/?]|$)/.test(location.hash);
+  const railPage = () => /^#\/(?:docs|meetings|library)(?:[/?]|$)/.test(location.hash);
+  const hasLibrarian = () => typeof librarianBot === 'function' && !!librarianBot();
   const asRail = () => desktop() && railPage();
   // Hidden or shown, per viewer, in this browser only; a browser that will not store it shows the rail.
   const hiddenKey = () => 'tico.librarian.collapsed.' + (S.me?.id || '');
@@ -254,8 +263,8 @@ html.demo .dask{top:var(--demo-h)}
     // At the bottom the answer is followed as it streams in; scrolled up, nothing moves and a pill says it came.
     stickScroll(body).update(() => {
       body.innerHTML = turns.length ? turns.map(turnHtml).join('')
-        : `<div class="dask-empty">
-            <div class="dask-hints">${HINTS.map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div></div>`;
+        : `<div class="dask-empty">${onDocs()
+            ? `<div class="dask-hints">${HINTS.map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>` : ''}</div>`;
       decorate(body);
       body.querySelectorAll('[data-hint]').forEach(b => { b.onclick = () => ask(b.dataset.hint); });
       body.querySelectorAll('[data-collection]').forEach(select => {
@@ -361,9 +370,9 @@ html.demo .dask{top:var(--demo-h)}
     const note = document.createElement('div');
     note.className = 'dask-off';
     note.dataset.off = '';
-    note.innerHTML = `<p><strong>The Librarian is ${info.state === 'missing' ? 'not set up yet' : esc(info.state)}.</strong> ${info.can_turn_on
-      ? 'Turning it on adds it to a computer and it starts answering.' : 'Ask the owner of this team to turn it on.'}</p>
-      ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on the Librarian</button><span class="dask-empty" data-turn-status role="status"></span>' : ''}`;
+    note.innerHTML = `<p><strong>The Librarian is ${info.state === 'missing' ? 'not set up yet' : esc(info.state)}.</strong>${info.can_turn_on
+      ? '' : ' Ask the owner to turn it on.'}</p>
+      ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on</button><span class="dask-empty" data-turn-status role="status"></span>' : ''}`;
     panel.querySelector('.dask-body').append(note);
     const on = note.querySelector('[data-turn-on]');
     if (on) on.onclick = async () => {
@@ -433,8 +442,8 @@ html.demo .dask{top:var(--demo-h)}
           <button class="dask-close" type="button"></button></header>
         <details class="dask-history"><summary>Previous conversations</summary><div class="dask-history-list"></div></details>
         <div class="dask-body"></div>
-        <form class="dask-form"><textarea rows="2" maxlength="4000" aria-label="Your question" required></textarea>
-        <button class="primary" type="submit">Ask</button></form>`;
+        <form class="dask-form"><textarea rows="1" maxlength="4000" aria-label="Your question" required></textarea>
+        <button class="p-send-icon" type="submit" aria-label="Ask" title="Ask">${typeof ICON_SEND === 'string' ? ICON_SEND : 'Ask'}</button></form>`;
       document.body.append(panel);
       setMode();
       if (asRail()) rememberHidden(false);
@@ -444,11 +453,12 @@ html.demo .dask{top:var(--demo-h)}
         stop(); sessions.docs = {conversationId: '', turns: []}; draw(); void loadHistory(); panel.querySelector('textarea').focus();
       };
       const box = panel.querySelector('textarea');
+      box.oninput = () => { box.style.height = ''; box.style.height = Math.min(box.scrollHeight, 120) + 'px'; };
       box.onkeydown = ev => { if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); panel.querySelector('form').requestSubmit(); } };
       panel.querySelector('form').onsubmit = ev => {
         ev.preventDefault();
         const text = box.value;
-        if (text.trim() && !busy && !openingConversation) { box.value = ''; ask(text); }
+        if (text.trim() && !busy && !openingConversation) { box.value = ''; box.style.height = ''; ask(text); }
       };
       document.addEventListener('keydown', onKey, true);
       resume();
@@ -465,22 +475,22 @@ html.demo .dask{top:var(--demo-h)}
     if (last && last.answer == null && !last.error && last.messageId) { busy = true; draw(); follow(last); }
   }
 
-  // After every route (ui/app/router.js) and when the window is resized. On Docs on a desktop the rail opens unless
-  // this viewer hid it; a phone gets the page's button only. `settled`: the page has drawn, so a page with no button
-  // has no rail.
-  window.syncLibrarianRail = settled => {
-    if (!railPage()) { close(false); return; }
+  // After every route (ui/app/router.js), when the team is read again and when the window is resized. On a Library page
+  // on a desktop the rail opens unless this viewer hid it; a phone gets the page's button only. No Librarian: nothing.
+  window.syncLibrarianRail = () => {
     style();
-    const button = openButton();
-    if (!button) { if (settled === true) close(false); return; }
-    button.onclick = () => open();
+    const has = hasLibrarian();
+    document.documentElement.classList.toggle('has-librarian', has);
+    if (!railPage() || !has) { close(false); return; }
     if (desktop()) {
-      if (panel) setMode();
+      if (panel) { setMode(); if (!session().turns.length && !openingConversation) draw(); }   // the hints follow the page
       else if (!railHidden()) open(undefined, false);
     } else if (panel?.getAttribute('role') === 'complementary') close(false);
   };
   let resizeSoon = 0;                               // once a frame while the window is dragged
   window.addEventListener('resize', () => { cancelAnimationFrame(resizeSoon); resizeSoon = requestAnimationFrame(() => window.syncLibrarianRail()); });
+  // A page's button, drawn whenever that page draws.
+  document.addEventListener('click', ev => { if (ev.target.closest?.('[data-librarian-open]')) open(); });
   window.openDocsAsk = open;
   // The old entry point, until every page that called it says openDocsAsk.
   window.openDocsChat = () => open();

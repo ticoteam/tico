@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#121417">
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=857eb582667d" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -102,14 +102,9 @@
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
     <a class="nav-link" id="nav-assistant" href="#/bot/coo" data-nav="assistant" hidden><span class="nav-icon" aria-hidden="true">assistant</span><span data-nav-name>Assistant</span></a>
     <a class="nav-link" id="nav-botops" href="#/bot/botops" data-nav="botops" hidden><span class="nav-icon" aria-hidden="true">smart_toy</span>BotOps</a>
-    <div class="nav-row">
-      <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
-      <a class="nav-librarian" id="nav-docs-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
-    </div>
-    <div class="nav-row">
-      <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
-      <a class="nav-librarian" id="nav-strategy-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
-    </div>
+    <!-- The Librarian's settings are on the Docs page (ui/docs-page.js), not beside Docs here. -->
+    <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
+    <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
     <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
     <section class="side-section">

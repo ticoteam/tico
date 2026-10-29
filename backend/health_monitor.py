@@ -573,7 +573,7 @@ def _profile_checks(c):
 def _stop_checks(c):
     """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
     released. The signature carries the error class or the window, never the bot."""
-    from . import run_backoff, turn_budgets
+    from . import claim_holds, run_backoff, turn_budgets
     out = []
     for hold in run_backoff.held(c):
         bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
@@ -597,6 +597,31 @@ def _stop_checks(c):
                             f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
                             f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
+    for hold in claim_holds.held(c):
+        bot = hold["bot"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"claim_failed:{bot}", "claim_failed", SETUP,
+                            f"Tico could not start {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} "
+                            f"for {name}",
+                            f"{name} has {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} held, "
+                            f"queued since {str(hold['since'])[:16]} UTC: an error happened while Tico prepared each "
+                            "one to start. "
+                            "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
+                            "up to an hour. The server log has the traceback.",
+                            f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
+                            f"now, release {name} (hub bot release {bot}); one that fails again is held with a longer "
+                            "wait.",
+                            severity=BAD))
+    for failure in claim_holds.check_failures(c):
+        bot, error = failure["bot"], failure["error"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,
+                            f"{name}'s claim check is failing: {error}",
+                            f"Tico could not check {name}'s queued runs for a claim: the check raised {error} at "
+                            f"{str(failure['failed_at'])[:16]} UTC. The claim passes {name} over, so its runs wait "
+                            "while the other bots' runs are unaffected. The server log has the traceback.",
+                            f"Fix the cause in the server log. This finding clears when one of {name}'s runs starts.",
+                            subject=error, severity=BAD))
     return out
 
 

@@ -33,7 +33,8 @@ from . import ask_ingest, ceo_bot, invites, owner_link
 from . import login_holds
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
-from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
+from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
+               topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -45,7 +46,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity, validate_identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name, route as error_route
-from .execution import (Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
+from .execution import (ClaimFaults, Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
                         lift_after_model_change, model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
@@ -65,6 +66,7 @@ from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
 from .providers import MODEL_BY_ID, MODEL_CATALOG
+from . import report_managers
 from .settings_admin import SettingsAdmin, compact_at as compact_at_of, repository_present
 from .readiness import absolute as absolute_link, can_run
 from . import fleet_check as fleet_check_module
@@ -2169,6 +2171,8 @@ def create_app(settings=None):
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                                   task_models.of(declared)),
+                        # Whether it changes its direct reports (backend/report_managers.py): on unless turned off.
+                        "manages_reports": report_managers.switch_on(declared),
                         "wake": wake_presets.effective(declared),
                         "profile": profiles.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
@@ -3059,6 +3063,9 @@ def create_app(settings=None):
                 raise Problem("not_found", "Message not found", 404)
             conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
             lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
+            if H.has_pick_options(msg):
+                from .task_review import answer_text
+                return answer_text(c, auth, who, msg, body.text, unknown=body.unknown)
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -3379,11 +3386,18 @@ def create_app(settings=None):
                                                                           H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
                     "comment_to": comment_to(c, who, row) if can_comment else None,
+                    "comment_delivery": delivery_choices(c, who, row) if can_comment else None,
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
                     "runs": task_runs(c, who, tid),
                     # The model a bot's check subtask runs on (backend/check_models.py), or null.
                     "check_model": H.check_model(c, tid),
+                    # The task's own model (backend/task_run_models.py), or null when its runs use the bot's task model.
+                    "run_model": task_run_models.of(c, tid),
+                    # Whether this reader may set that model: the answer POST /v2/tasks/{id}/model gives, so the task
+                    # page offers its form to whoever the server would accept. A person's task has no model to set.
+                    "can_set_run_model": H.is_bot(row["owner"]) and task_run_models.may_set(
+                        c, auth, who, H.actor_id(row["owner"])),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
     def task_execution(c, who, row):
@@ -3415,6 +3429,27 @@ def create_app(settings=None):
         mention = [] if wakes else [n for n in H.filer_handles(c, row)
                                     if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
         return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
+
+    def delivery_choices(c, who, row):
+        """What a comment's `delivery` can do for this reader on this task (docs/tasks.md): `default`, the choice
+        a comment with none named gets (steer when it wakes its bot, queue when not; null when no bot is on the task);
+        `steer`, whether the reader may steer (chat_goals.may_direct); `steers`, whether that bot's harness writes a
+        steer into its running turn; `goal`, whether the reader may set the task session's goal (chat_goals.own_room
+        and chat_goals.may_set). None for a bot reader."""
+        if who.role == "bot":
+            return None
+        target = H.comment_target(c, who.actor, row)
+        if not H.is_bot(target):
+            return {"default": None, "steer": False, "steers": False, "goal": False}
+        moves = mover(c, who)
+        wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(target),)).fetchone()
+        config = json.loads(config[0] or "{}") if config else {}
+        from .harnesses import steers
+        from .chat_goals import may_direct, may_set, own_room
+        return {"default": "steer" if wakes else "queue", "steer": may_direct(c, who, row),
+                "steers": steers(config, config.get("runtime")),
+                "goal": own_room(c, row) and may_set(c, auth, who, row["conversation_id"])}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
@@ -3498,6 +3533,15 @@ def create_app(settings=None):
             check = check_choice(c, who, body, owner, parent_id)
         else:
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)
+        # The task's own model, checked before anything is written (the same rights as the bot's model, a bot never).
+        run_model = None
+        if body.model is not None or body.effort or body.harness:
+            if not H.is_bot(owner):
+                raise Problem("owner", "Only a task a bot runs has a model to choose", 422)
+            if body.model is None:
+                raise Problem("model", "Choose a model to pick an effort or harness for it", 422)
+            run_model = settings_admin.task_run_choice(c, who, H.actor_id(owner), "set the model a new task runs on",
+                                                       body.model, body.effort, body.harness)
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
@@ -3574,6 +3618,8 @@ def create_app(settings=None):
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if run_model:
+            task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
         task_caps.record(c, row["id"], who.actor, owner)     # a send, counted against the sender's cap for this owner
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
@@ -4030,6 +4076,21 @@ def create_app(settings=None):
             return {"waiver": waiver, "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/tasks/{tid}/model")
+    def task_run_model(request: Request, tid: str, body: M.TaskRunModel):
+        """The model this task's runs use, with its effort and harness (backend/task_run_models.py). An absent
+        `model` keeps it and changes only what is named; a null `model` clears it, so the bot's task model runs
+        the task again.
+        Whoever may change the bot's model may change this, and a bot never does. `readiness` says whether the bot's
+        computer can run it now; `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or
+        writes. It still saves."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return settings_admin.set_task_run_model(c, who, task_id, body)
+        return mutate(request, body, work)
+
     @app.post("/api/v2/tasks/{tid}/snooze")
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
         """Snooze a task until a date: off the board, lists and Needs you, and quiet, until then
@@ -4109,9 +4170,17 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. It wakes the bot on the task when the comment is meant for it
-        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task. A bot's question to a person
-        passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked."""
+        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task. `delivery` overrides that:
+        steer wakes the bot now, queue never does, goal sets the task session's goal to the text
+        (chat_goals.set_goal). A bot's question to a person passes ask ingest first (backend/ask_ingest.py): sent
+        back, it is withdrawn as soon as it is asked."""
         who = request.state.identity
+        if body.delivery and (body.ask or (body.needs_action and body.delivery != "steer")):
+            raise Problem("delivery", "A question always wakes the one it is for, and needs_action is steer: send it "
+                          "without a delivery, or with steer", 422)
+        if body.delivery == "goal" and (body.attachments or body.public):
+            raise Problem("delivery", "A goal is the comment's text: send it without files or as a public comment",
+                          422)
         ingest = None
         if body.ask and ask_ingest.gated(who, settings.assistant_bot):
             with store.read() as c:
@@ -4128,6 +4197,7 @@ def create_app(settings=None):
             mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
+            from .chat_goals import may_direct, own_room, set_goal
             from .task_review import comment_rights, check_ask
             comment_rights(c, auth, who, task_id)
             ask = check_ask(c, task_id, body.ask, auth, who)
@@ -4137,23 +4207,50 @@ def create_app(settings=None):
             # The comment itself is the question to the first one, unless it would wake a bot, which
             # must hear it; everyone else mentioned gets their own copy. A task with no bot on it has
             # no one else to hear the comment, so a copy there would only show it twice.
-            people = [] if ask or who.role == "bot" else H.mentioned_people(c, body.text, row, who.actor)
-            wakes_bot = H.is_bot(H.comment_target(c, who.actor, row)) and H.comment_wakes(
-                c, who.actor, row, body.text, mover=moves)
+            # A goal is the comment's text, so it is not turned into a question to anyone.
+            people = [] if ask or who.role == "bot" or body.delivery == "goal" \
+                else H.mentioned_people(c, body.text, row, who.actor)
+            # Steer reaches the bot on the task (a bot's steer is its needs_action); with no bot on the task it is a
+            # plain comment. Queue and goal never wake it: a goal's own control does (set_goal below).
+            target = H.comment_target(c, who.actor, row)
+            steered = body.delivery == "steer" and H.is_bot(target)
+            if steered and who.role != "bot" and not may_direct(c, who, row):
+                raise Problem("delivery", "Only someone on this task can steer its bot: send it with queue, or "
+                              "@name the bot that filed it", 403)
+            if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
+                raise Problem("delivery", "Only someone on this task can set its goal: send it with queue", 403)
+            # A goal is set in the task's own room only. In a chat the task was filed into, the goal is the chat's
+            # (chat_goals.own_room), so nothing is saved and no control is queued or cancelled there.
+            if body.delivery == "goal" and not own_room(c, row):
+                raise Problem("delivery", "This task has no room of its own: send it with steer or queue", 409)
+            if steered:
+                wakes_bot = True
+            elif body.delivery:
+                wakes_bot = False
+            else:
+                wakes_bot = H.is_bot(target) and H.comment_wakes(c, who.actor, row, body.text, mover=moves)
             if people and not wakes_bot:
                 ask, people = H.mention_ask(body.text, people[0]), people[1:]
-            if ask:
+            if body.delivery in ("queue", "goal"):
+                wake = False
+            elif steered:
+                wake = True
+            elif ask:
                 wake = who.role == "bot" or H.task_participant(c, who.actor, row) or moves
             else:
                 wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
                     who.role == "bot" and body.needs_action)
             extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
-            if body.needs_action:
+            if body.needs_action or (steered and who.role == "bot"):
                 extra["needs_action"] = True
             # Judged against the plate before the question is on it.
             gate = ask_ingest.apply(c, ingest) if ingest and ask else None
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
+            goal = None
+            if body.delivery == "goal":
+                # The task session's goal, set as a chat's is (chat_goals.set_goal): its /goal control wakes the bot.
+                goal = set_goal(c, auth, who, row["conversation_id"], "set", body.text, send)
             if gate and not ask_ingest.matches(ingest, msg.get("to_actor")):
                 gate = None
             if gate:
@@ -4173,7 +4270,8 @@ def create_app(settings=None):
             waits = bot_to_bot.held_reason(msg)
             return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
-                    **({"visuals": report} if report else {}), **ask_ingest.reply(gate)}
+                    **({"visuals": report} if report else {}), **({"goal": goal} if goal else {}),
+                    **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -5302,7 +5400,7 @@ def create_app(settings=None):
                     rooms.archive_shared_room(c, who.actor, bot)
                 reset_bot_sessions(c, bot)
             return result
-        return mutate(request, body, work)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "definition", work))
 
     @app.post("/api/v2/bots/{bot}/status")
     def status_set(request: Request, bot: str, body: M.StatusUpdate):
@@ -6384,7 +6482,7 @@ def create_app(settings=None):
         def work(c):
             from . import ceo_acts
             ceo_acts.gate(c, who.actor, "cost", f"change {bot}'s model to {body.model}")     # the owner's at every level
-            settings_admin._manager(c, who, bot)
+            settings_admin._manager(c, who, bot, report="model")
             from .shared_bots import refuse_copy
             refuse_copy(c, bot)
             choice = MODEL_BY_ID.get(body.model)
@@ -6440,7 +6538,7 @@ def create_app(settings=None):
                      "sessions_reset": reset})
             return {"bot": bot, "model": choice["id"], "runtime": runtime, "harness": harness,
                     "effort": effort, "revision": row["revision"] + 1, "sessions_reset": reset, "readiness": can}
-        return mutate(request, body, work)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "model", work))
 
     @app.post("/api/v2/bots/{bot}/fallback")
     def fallback(request: Request, bot: str, body: M.BotFallback):
@@ -6463,7 +6561,16 @@ def create_app(settings=None):
         """The harness, model and effort the bot's tasks run on, or null for the same as the bot
         (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that.
         `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or writes; it still saves."""
-        return mutate(request, body, lambda c: settings_admin.set_task_model(
+        who = request.state.identity
+        def work(c):
+            return settings_admin.set_task_model(c, who, bot, body)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "task_model", work))
+
+    @app.post("/api/v2/bots/{bot}/manages-reports")
+    def bot_manages_reports(request: Request, bot: str, body: M.BotManagesReports):
+        """Whether this bot changes its direct reports (backend/report_managers.py). A person who manages this bot sets
+        it; with the owner's team rule `managers_manage_reports` off, no bot does, whatever this says."""
+        return mutate(request, body, lambda c: settings_admin.set_manages_reports(
             c, request.state.identity, bot, body))
 
     @app.post("/api/v2/bots/{bot}/compact-at")
@@ -6487,15 +6594,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/bots/{bot}/transitions")
     def begin_transition(request: Request, bot: str, body: M.BotTransitionCreate):
+        who = request.state.identity
         def work(c):
-            who = request.state.identity
             acting = delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who
             result = settings_admin.begin(c, acting, bot, body)
             if acting is not who:
                 H.event(c, who.actor, "bot.transition_delegated", bot,
                         {"on_behalf_of": acting.actor, "message_id": body.on_behalf_of, "kind": body.kind})
             return result
-        return mutate(request, body, work)
+        scope = "model" if body.kind == "model" else None
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, scope, work))
 
     @app.get("/api/v2/settings/transitions/{transition_id}")
     def transition(request: Request, transition_id: str):
@@ -6511,9 +6619,10 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: settings_admin.cancel(c, request.state.identity, transition_id))
 
     @app.get("/api/v2/settings/history")
-    def settings_history(request: Request, limit: int = 100):
-        with store.read() as c:
-            return settings_admin.history(c, request.state.identity, limit)
+    def settings_history(request: Request, limit: int = 100, bot: str = "", before: str = ""):
+        # One snapshot for the bots and the changes, so the people and bot rules it reads are computed once for it.
+        with store.read_transaction() as c:
+            return settings_admin.history(c, request.state.identity, limit, bot=bot, before=before)
 
     @app.post("/api/v2/settings/history/{change_id}/undo")
     def undo_setting(request: Request, change_id: str, body: M.SettingsUndo):
@@ -6585,9 +6694,9 @@ def create_app(settings=None):
     def claim(request: Request, body: M.Claim):
         # A read first: an idle runner asks every fraction of a second and must not take the write lock.
         with store.read() as c:
-            selected = []
+            selected, failed = [], ClaimFaults()
             idle = execution.idle_claim(c, request.state.identity, body,
-                                        request.headers.get("idempotency-key"), selected)
+                                        request.headers.get("idempotency-key"), selected, failed)
             if idle is not None:
                 return idle
             # Only a registered computer's claim cleans up: anyone else is refused before any write.
@@ -6601,16 +6710,19 @@ def create_app(settings=None):
             store.write(request.state.identity, execution.maintain)
             selected.clear()
         with store.read() as c:
-            if not selected:
+            # A job whose checks raised on this snapshot is held by the write below, which takes the next candidate.
+            if not selected and not failed:
                 selected.append(execution.candidate(c, request.state.identity, body,
-                                                    execution.runner(c, request.state.identity)))
+                                                    execution.runner(c, request.state.identity), failed=failed))
             # End any transaction opened during selection before taking the writer lock. The selected
             # job is checked against current policy in that transaction.
             if c.in_transaction:
                 c.rollback()
             def work(write):
+                if not selected:
+                    return execution.claim(write, request.state.identity, body, maintained=True, failed=failed)
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0], prepared=True, maintained=True)
+                                       selected=selected[0], prepared=True, maintained=True, failed=failed)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")

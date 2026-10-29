@@ -27,6 +27,9 @@ function auCondText(c) {
   if (c.op === 'is' && (v === true || v === 'yes') && min) return f + min;
   if (c.op === 'contains') return `${f} has “${v ?? ''}”`;
   if (c.op === 'matches') return `${f} matches /${v ?? ''}/`;
+  // An event a condition names reads as its words ("Task finished"), not its id (task.done).
+  if (['event', 'event.name'].includes(c.field) && typeof v === 'string' && v && [undefined, '', 'is', 'is_not'].includes(c.op))
+    return (c.op === 'is_not' ? '≠ ' : '') + auEventWords(v);
   return `${f} ${AU_OPS[c.op] || c.op || '='} ${v ?? ''}${min}`.trim();
 }
 const auCondsText = (when, match) => (when || []).map(auCondText).join(match === 'any' ? ' or ' : ' and ');
@@ -69,7 +72,7 @@ function auTriggerCard(a) {
   const t = a.trigger, src = auSource(t);
   return `<div class="au-card au-trig${AU.ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger">
     <div class="au-cr"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[t.type] || 'schedule'}</span><span class="au-ct">${esc(AU_TRIGGER_WORDS[t.type] || auCap(t.type))}</span></div>
-    ${src || (t.filters || []).length ? `<div class="au-chips">${src ? `<span class="au-c1">${esc(src)}</span>` : ''}${(t.filters || []).map(c => `<span class="au-c1">${esc(auCondText(c))}</span>`).join('')}</div>` : ''}
+    ${src || (t.filters || []).length ? `<div class="au-chips">${src ? `<span class="au-c1"${t.type === 'event' && t.name ? ` title="${esc(t.name)}"` : ''}>${esc(src)}</span>` : ''}${(t.filters || []).map(c => `<span class="au-c1">${esc(auCondText(c))}</span>`).join('')}</div>` : ''}
   </div>`;
 }
 const auTag = type => `<span class="au-tag${['llm', 'bot_turn', 'paths'].includes(type) ? ' acc' : ''}">${esc(AU_STEP_WORDS[type] || type)}</span>`;
@@ -105,10 +108,17 @@ function auStepCard(s) {
     <div class="au-cr">${auTag(s.type)}<span class="au-ct">${esc(title)}</span>${auStepSwitch(s)}</div>${body}</div>`;
 }
 const auStepSwitch = s => AU.cur?.can_edit ? auSwitch(s.enabled !== false, (AU_STEP_WORDS[s.type] || 'Step') + ' on', `data-step="${esc(s.id)}"`) : '';
-// The "+" between two steps; a viewer without edit rights sees the line only.
-const auIns = (key, i) => `<div class="au-ln">${AU.cur?.can_edit ? `<button class="au-add" type="button" data-add="${esc(key)}|${i}" aria-label="Add step" aria-haspopup="menu">+</button>` : ''}</div>`;
+// Where a step goes in: a small "+" between two steps (a wider hit area than it looks), and an Add step button at the end
+// of a list. A viewer without edit rights sees the line between steps only, and nothing after the last.
+function auIns(key, i, end) {
+  const at = `data-add="${esc(key)}|${i}" aria-haspopup="menu"`;
+  if (!AU.cur?.can_edit) return end ? '' : '<div class="au-ln"></div>';
+  return end ? `<div class="au-ln au-ln-end"><button class="au-add au-add-end" type="button" ${at}><span aria-hidden="true">+</span>Add step</button></div>`
+    : `<div class="au-ln"><button class="au-add" type="button" ${at} aria-label="Add step">+</button></div>`;
+}
 function auStepsHTML(steps, key) {
-  return auIns(key, 0) + (steps || []).map((s, i) => (s.type === 'paths' ? auPathsHTML(s) : auStepCard(s) + auIns(key, i + 1))).join('');
+  const list = steps || [];
+  return auIns(key, 0, !list.length) + list.map((s, i) => (s.type === 'paths' ? auPathsHTML(s) : auStepCard(s) + auIns(key, i + 1, i + 1 === list.length))).join('');
 }
 function auPathsHTML(s) {
   const cols = [...(s.paths || []).map((p, i) => ({p, i, key: `${s.id}:${i}`})), {p: {name: 'Otherwise', steps: s.otherwise?.steps || []}, i: 'other', key: `${s.id}:other`, fb: true}];

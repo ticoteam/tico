@@ -1,6 +1,7 @@
 # Your CEO Bot
 
-Every Tico install has a **CEO Bot**, at the top of the [team chart](org-chart.md). It is the built-in bot that was called
+Every Tico install has a **CEO Bot**, beside the Strategy tabs; like the other built-ins it is not on the
+[team chart](org-chart.md). It is the built-in bot that was called
 the Goal Manager; its slug is still `goal-manager`, so its KPI readings, goal history and old messages stay its own.
 It owns three things, in this order: the team's [strategy](strategy.md), the org changes that follow from it (suggested in its chat, made when you say so),
 and the [goals and KPIs](goals-and-kpis.md) that say whether it is working. This page says how much it does, who

@@ -36,8 +36,6 @@
 .section-body[hidden]{display:none}
 .nav-row{display:flex;align-items:center;gap:2px}
 .nav-row>.nav-link{flex:1;min-width:0}
-button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
-.nav-librarian[hidden]{display:none}
 #mobile-more{position:relative}
 .org-head>.section-toggle{flex:1;min-width:0}
 .org-history{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;cursor:pointer;padding:0}
@@ -45,9 +43,6 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 .org-history .nav-icon{font-size:18px}
 .org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 60%,transparent),0 0 10px color-mix(in srgb,var(--accent) 45%,transparent)}
 .org-history[aria-pressed="true"] .nav-icon{color:var(--accent)}
-.nav-librarian{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;color:var(--muted);text-decoration:none}
-.nav-librarian:hover,.nav-librarian.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.nav-librarian .nav-icon{width:16px;height:16px;font-size:16px}
 .inbox-list{list-style:none;margin:0;padding:0 0 6px}
 .inbox-list a{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 12px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .inbox-list a:hover{background:var(--surface2);text-decoration:none}
@@ -115,6 +110,11 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree ul{margin-left:12px;border-left:1px solid var(--line);padding-left:2px}
 .tree li.dept{margin-top:4px}
 .tree li.dept>.noderow .node{font-weight:600}
+/* The top of the chart (ui/app/sidebar.js renderTree): its row reads as a manager's without the chevron; what reports to it
+   sits beside it, not under it. */
+.tree li.org-top>.noderow .node{font-weight:600}
+/* A bot or human after a group at the top is spaced like the next group, so it does not read as the group's last row. */
+.tree li.org-group+li:not(.org-group){margin-top:8px}
 .tree li.org-group{margin-top:8px}
 .tree li.org-group:first-child{margin-top:2px}
 .org-group-tools{display:none;margin-left:auto;flex:none}

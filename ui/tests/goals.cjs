@@ -121,12 +121,12 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
-    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:goal-manager@1', 'bot:support@1'], JSON.stringify(lines));   // by name: Strategy Bot after Sales
+    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
     // The sidebar leaves the same helper bots off.
-    assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"]').count(), 0);
+    assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);
     const row = owner => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
     assert.equal(await row('bot:sales').locator('.gt-goal').count(), 0, 'no goal: nothing written');
-    assert.equal(await row('bot:goal-manager').locator('.gt-goal').count(), 0, 'existing built-in goals are hidden');
+    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0, 'its built-in goals are hidden, and no line of its own');
     assert.equal(await page.locator('#nav-assistant').getAttribute('href'), '#/assistant');
     assert.equal(await page.locator('#nav-botops').getAttribute('href'), '#/bot/botops');
     await page.locator('.gm-form textarea').fill('Change the revenue goal');
@@ -334,6 +334,9 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     }
     await panel.locator('[data-gp-close]').click();
     await page.goto('http://tico-ui.test/#/goals');
+    // The page settles first: a render still loading would redraw over the goal the link opens.
+    await until(() => page.evaluate(() => location.hash === '#/strategy/goals'), 'goals redirect');
+    await page.locator('#goal-tree .gt-row').first().waitFor();
     // A link to one goal opens its owner's panel on it.
     await page.goto('http://tico-ui.test/#/goals/g-cmo2');
     await page.locator('#goal-panel[open] [data-goal-form="g-cmo2"] input[name=title]').waitFor();
@@ -375,8 +378,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await turned;
     assert.deepEqual(posted.findLast(r => r.path === '/api/v2/goal-manager/turn-on').body, {});
     assert.equal(bots.find(b => b.name === 'goal-manager').status, 'active');
-    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 1, 'still its one line on the tree');
-    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"] .gt-goal').count(), 0);
+    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0, 'still off the tree');
+    assert.equal(await row('bot:cmo').count(), 1, 'and the tree is as it was');
 
     assert.deepEqual(errors, []);
     console.log('PASS: goals tree, helpers off it, panel adds and edits goals and KPIs, truncation, phone.');

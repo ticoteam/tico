@@ -804,9 +804,10 @@ def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, 
     scheduled = claim(api, botops, "botops")
     assert act(api, scheduled, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 200
     finish(api, botops, scheduled)
-    # Someone else rewriting it makes it theirs.
+    # Someone else rewriting it makes it theirs. Its last task is done first: an occurrence while it is open is absorbed.
     from backend import automations
     with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE owner='bot:botops' AND title='Tidy'")
         row = c.execute("SELECT * FROM automations WHERE id=?", (owners,)).fetchone()
         before = automations.flow_of(row)
         steps = [{**before["steps"][0], "prompt": "Open everything."}]

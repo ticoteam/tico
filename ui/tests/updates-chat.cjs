@@ -197,6 +197,27 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       assert.deepEqual(errors, []);
       await context.close();
     }
+    // The Assistant off: one line with Turn on for whoever may turn it on; for anyone else no rail and no button.
+    for (const canTurnOn of [true, false]) {
+      const dana = {id: 'dana', name: 'Dana', email: 'dana@example.test', role: canTurnOn ? 'owner' : 'member', cloud: true};
+      const chat = chatOf({available: false, state: 'archived', bot: 'coo', ceo: false, name: 'Assistant', room_id: null, messages: [], can_turn_on: canTurnOn});
+      const {context, page, errors} = await open(browser, dana, {width: 1400, height: 900}, chat);
+      await page.goto('http://tico-ui.test/#/updates');
+      await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();
+      const rail = page.locator('#upd-chat');
+      if (canTurnOn) {
+        await rail.locator('[data-turn-on]').waitFor();
+        assert.equal(await rail.locator('.asst-off > span').first().innerText(), 'The Assistant is off.', 'one line');
+        assert.equal(await rail.locator('[data-turn-on]').innerText(), 'Turn on');
+        assert.equal(await rail.locator('.asst-off p').count(), 0, 'no paragraph');
+      } else {
+        await page.waitForFunction(() => document.querySelector('#upd-chat')?.hidden && document.querySelector('#upd-chat-btn')?.hidden);
+        assert.ok(!(await page.locator('#main').evaluate(el => el.classList.contains('upd-chat-layout'))), 'the feed has the page');
+        assert.equal(await page.getByText('Ask the owner').count(), 0);
+      }
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
     console.log('updates-chat: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

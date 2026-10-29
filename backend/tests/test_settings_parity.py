@@ -83,6 +83,7 @@ NOT_PROVEN = {
     "bots.create": "422: needs a model", "bot.compact_at": "422: the value's bounds",
     "bot.keep_tasks_going": "422: the body shape", "bot.definition": "422: needs expected_revision",
     "bot.turns_at_once": "422: the body needs expected_revision",
+    "bot.manages_reports": "422: the body needs expected_revision",
     "bot.owners": "422: the entry sends owners without expected_revision",
     "bot.profile": "422: the body shape", "rules.system": "422: the body shape",
     "rules.task_rule": "404: no synthetic task rule yet", "rules.task_rule.create": "422: the body shape",

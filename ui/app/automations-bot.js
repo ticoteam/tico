@@ -125,6 +125,9 @@ function auBotSync() {
   if (!AU?.bot) return;
   const back = AU.root.querySelector('[data-bot-back]');
   if (back) back.href = AU.id ? auHref(AU.id) : AUTOMATIONS;
+  // A phone's way to BotOps from the list or a flow (the Strategy Bot's button, ui/styles/redesign.css .sbot-fab).
+  const fab = AU.root.querySelector('.au-botbtn');
+  if (fab) fab.href = auHref(AU.id, 'bot');
   const blank = AU.root.querySelector('.au-blank');
   if (blank) blank.hidden = !!AU.id;
   void auBotProposals();

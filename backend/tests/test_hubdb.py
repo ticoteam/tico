@@ -80,6 +80,18 @@ class Schema(HubCase):
         names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"rule_task_runs", "rule_task_state"}, names)
 
+    def test_an_install_at_the_last_schema_before_task_run_models_gets_the_table_and_keeps_its_tasks(self):
+        task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
+        self.conn.execute("DROP TABLE task_run_models")
+        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.TASK_RUN_MODELS_SCHEMA)}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("task_run_models", names)
+        self.assertEqual(self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0],
+                         "Prepare packet")
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+
     def test_every_table_and_index_in_the_contract_exists(self):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -326,7 +338,9 @@ class Rule5Tasks(HubCase):
         asked = H.task_comment(self.conn, CMO, row["id"], "Which image?", ask={"questions": [
             {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
              "multi": False, "other": True}], "who": ANA})
-        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"])
+        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"],
+                              extra_refs={"answer": {"target": {"comment": asked["id"]},
+                                                     "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
         self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")

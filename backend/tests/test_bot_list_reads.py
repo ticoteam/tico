@@ -5,7 +5,7 @@ import collections
 import json
 
 from backend import (auto_tasks, agents, execution, lifecycle, pipeline_stats, profiles, rooms, start_places,
-                     update_feeds, views, task_models, wake_presets)
+                     report_managers, update_feeds, views, task_models, wake_presets)
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -64,6 +64,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
+                    "manages_reports": report_managers.switch_on(declared),
                     "wake": wake_presets.effective(declared),
                     "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})

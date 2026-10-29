@@ -159,7 +159,8 @@ function strategyActionsHtml(data, view) {
   if (!view.owner) return versions;
   const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
   const why = refusal || (fresh ? '' : 'Nothing new to publish');
-  return `${versions}${refusal ? `<span class="strat-why-not" data-strat-why-not>${esc(refusal)}</span>` : ''}<button class="primary" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>`;
+  // Why Publish is off sits in a (?) beside it, not a line of its own.
+  return `${versions}<button class="primary" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
 }
 
 function strategyPublishHtml() {

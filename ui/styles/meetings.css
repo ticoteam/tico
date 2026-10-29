@@ -141,11 +141,8 @@
 .msrc-logo svg{width:60%;height:60%}
 .msrc-logo.tint{border-color:transparent;background:color-mix(in srgb,hsl(var(--h) 60% 50%) 20%,var(--surface));color:color-mix(in srgb,hsl(var(--h) 65% 42%) 72%,var(--ink))}
 .msrc-logo .tool-initials{font-size:calc(var(--s,32px) * .36);font-weight:600}
-.meet-blank{display:flex;flex-direction:column;align-items:center;gap:14px;padding:36px 24px 40px;text-align:center}
-.meet-blank h2{margin:0;font-size:var(--t-md)}
+.meet-blank{display:flex;flex-direction:column;align-items:center;padding:20px;text-align:center}
 .meet-blank .meet-tiles{width:100%;max-width:840px}
-.meet-blank .primary{padding:9px 22px}
-.meet-or{font-size:var(--t-sm);color:var(--muted)}
 .meet-list{list-style:none;margin:0;padding:0}
 .meet-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer}
 .meet-row:last-child{border-bottom:0}
@@ -281,7 +278,7 @@
   .notes-detail{padding:12px 14px 18px}
   .note-send select{max-width:none}
 }
-@media (max-width:640px){.meeting-head{align-items:flex-start;flex-direction:column}.notes-head{grid-template-columns:minmax(0,1fr) auto}.notes-head input[type=search]{grid-column:1 / -1;grid-row:2;max-width:none;justify-self:stretch}.note-send select{flex:1 0 100%;max-width:none}.kbd-hint{display:none}.meet-row{padding:12px}.meet-blank{padding:24px 14px 28px}.meet-meta .meet-who{flex-basis:100%;margin-top:1px}.meet-meta .meet-who::before{content:none}.meet-tiles.big{grid-template-columns:1fr 1fr}.meet-tile.big{flex-direction:row;justify-content:flex-start;gap:10px;padding:10px 12px;text-align:left}.meet-tile.big .mt-text{align-items:flex-start}.meet-tile.big .mt-text b{font-size:var(--t-base)}}
+@media (max-width:640px){.meeting-head{align-items:flex-start;flex-direction:column}.notes-head{grid-template-columns:minmax(0,1fr) auto}.notes-head input[type=search]{grid-column:1 / -1;grid-row:2;max-width:none;justify-self:stretch}.note-send select{flex:1 0 100%;max-width:none}.kbd-hint{display:none}.meet-row{padding:12px}.meet-blank{padding:14px}.meet-meta .meet-who{flex-basis:100%;margin-top:1px}.meet-meta .meet-who::before{content:none}.meet-tiles.big{grid-template-columns:1fr 1fr}.meet-tile.big{flex-direction:row;justify-content:flex-start;gap:10px;padding:10px 12px;text-align:left}.meet-tile.big .mt-text{align-items:flex-start}.meet-tile.big .mt-text b{font-size:var(--t-base)}}
 
 /* What a meeting is doing and what it made: a spinner while a bot works, then links to the tasks. */
 .meet-state{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);white-space:nowrap;color:var(--ink)}
@@ -422,7 +419,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-join{margin:12px 0}.live-finalized{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:var(--t-base)}
 .live-status{min-height:1.5em;margin-top:8px;color:var(--muted);font-size:var(--t-sm)}
 @media(max-width:760px){
-  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button{padding:7px 9px;font-size:var(--t-sm)}
+  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:7px 9px;font-size:var(--t-sm)}
   .live-layout{grid-template-columns:1fr}.live-list{max-height:220px}
   .live-connect{align-items:stretch;flex-direction:column}.live-connect input{max-width:none}
   .live-card{padding:12px}.live-card-head{flex-direction:column}.live-controls{justify-content:flex-start}

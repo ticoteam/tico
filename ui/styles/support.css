@@ -1,4 +1,4 @@
-/* ui/styles/support.css — the Support pop-up (ui/support.js), Chat with us and Report this.
+/* ui/styles/support.css — the Support pop-up (ui/support.js) and Report this.
    The cascade runs in the order index.html links these files; keep rules in order. */
 #help-open,#mobile-support{cursor:pointer}
 #help-open{background:none;padding:0}
@@ -88,8 +88,7 @@
   .support-head .support-icon,.support-list-head .support-icon,.support-thread-head .support-icon{width:40px;height:40px}
   .support-write textarea,.support-json{font-size:16px}
 }
-/* Chat with us and Report this (ui/support.js): a quiet line on empty screens, a link beside what failed. */
-.talk-line{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
+/* Report this (ui/support.js): a link beside what failed. */
 .report-this{font-size:var(--t-sm)}
 button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:1;cursor:pointer}button.report-this-icon:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}button.report-this-icon:hover{color:var(--accent)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
 .truns-report{margin:4px 0 0}

@@ -401,7 +401,7 @@ weekly goals review (the Monday note) stays paused until the owner raises the CE
 
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
-Settings > Bots, and one click on **Turn on Assistant** brings the same bot back with its history (or adds it from its
+Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
 template if it is missing), places it on BotOps' computer and activates it. From then on it cannot be archived again.
 While an assistant is off, or paused, what used to fall back to it goes to BotOps or to a human:
 

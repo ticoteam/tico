@@ -3,7 +3,7 @@
 // words survive. The box shows exactly what it will send under Attach details, Enter files the request (Shift+Enter is
 // a new line) or continues the latest one, Your requests lists each request with its status badge and an unread dot,
 // a reply puts a count on the ? and opening the conversation reads it, a failed send says so in place, the trash asks
-// first, and nothing a request says is rendered as HTML. Report this, Chat with us, Want help setting up? and old
+// first, and nothing a request says is rendered as HTML. Report this, Want help setting up? and old
 // #/help links open it; with support off it says so and offers nothing to send.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -718,18 +718,6 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Chat with us (the empty Tasks, Updates, Runs and welcome screens) opens a new request, ready to write, even when
-    // an open request is the latest.
-    v = await visit({seed: [{id: 'sup_0', created: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
-    const line = v.page.locator('#main .talk-line').first();
-    assert.equal(await line.innerText(), 'Stuck or curious? A person at Tico reads every message. Chat with us');
-    await line.getByRole('button', {name: 'Chat with us'}).click();
-    await v.page.locator('#support-pop[open] [data-compose] [name=message]').waitFor();
-    await v.page.waitForFunction(() => document.activeElement?.name === 'message');
-    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
-    assert.equal(await v.page.locator('[data-report]').count(), 0, 'Chat with us attaches nothing');
-    assert.deepEqual(v.errors, []);
-    await v.ctx.close();
 
     // Report this on an error toast: a new request with the error named, attached as diagnostics, shown before sending.
     v = await visit();
@@ -913,11 +901,10 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal((await active(v.page)).inPop, true, 'focus is in the pop-up');
     await v.page.keyboard.press('Escape');
     assert.equal((await active(v.page)).id, 'help-open');
-    // Report this and Chat with us are not offered: an error toast has nothing to report to.
+    // Report this is not offered: an error toast has nothing to report to.
     await v.page.waitForFunction(() => !window.supportOn());
     await v.page.evaluate(() => toast('Could not save', true));
     assert.equal(await v.page.locator('.toast.err button').count(), 0);
-    assert.equal(await v.page.evaluate(() => talkLineHTML()), '');
     assert.ok(!v.calls.some(c => c.startsWith('POST')));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

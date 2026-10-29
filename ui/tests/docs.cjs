@@ -84,7 +84,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(ui, p) : '';
       if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
       if (p === '/api/me') return json(me);
-      if (p === '/api/employees') return json([]);
+      if (p === '/api/employees') return json([{name: 'librarian', display_name: 'Librarian', status: 'active'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -251,6 +251,9 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
+    // The Librarian's settings sit in the page header, not as a gear beside Docs in the sidebar.
+    assert.equal(await page.locator('.docs-actions #docs-librarian-settings').getAttribute('href'), '#/bot/librarian/more');
+    assert.equal(await page.locator('#side .nav-librarian, #nav-strategy-librarian').count(), 0, 'no Librarian gear in the sidebar');
 
     // Desktop rail stays open while reading, streams answers and preserves collapse per viewer.
     assert.equal(await page.locator('[data-docs-ask]').getAttribute('role'), 'complementary');
@@ -342,7 +345,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await research.locator('button', {hasText: 'Close'}).click();
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about your docs…');
+    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask the Librarian…');
 
     // A narrow desktop still reserves space for the rail and lets a doc open.
     await page.setViewportSize({width: 1024, height: 860});

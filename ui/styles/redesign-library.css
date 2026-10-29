@@ -2,8 +2,10 @@
    shows one screen at a time (#lc-root[data-screen]: list, detail). Only the redesign's code adds these classes. */
 #main.lc-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .lc{display:flex;flex-direction:column;height:100%;min-height:0}
-.lc-ph{display:flex;align-items:center;gap:6px;padding:12px 20px;border-bottom:1px solid var(--line)}
-.lc-ph h1{margin:0;font-size:var(--t-lg);font-weight:650}
+/* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
+.lc-ph{display:flex;align-items:center;gap:6px;padding:12px 20px}
+.lc-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.lc-ph .spacer{flex:1}
 .lc-pad{padding:14px 6px}
 .lc-body{flex:1;min-height:0;display:grid;grid-template-columns:340px minmax(0,1fr)}
 
@@ -80,7 +82,7 @@ a.lc-who-row:hover{background:var(--surface2)}
 @media (max-width:760px){
   #main.lc-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .lc{height:auto}
-  .lc-ph{padding:12px;border:0}
+  .lc-ph{padding:12px}
   .lc-body{display:block}
   .lc-list,.lc-pane{display:none;border:0}
   .lc[data-screen="detail"] .lc-ph{display:none}

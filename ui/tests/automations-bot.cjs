@@ -21,9 +21,14 @@ async function ask(page, text) {
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, hash: '#/automations/au_inbox'});
       await page.waitForSelector('.au-card[data-open="f1"]');
       assert.equal(await page.locator('.au-botp').isVisible(), false);
+      // BotOps is a labelled button over the flow, as the Strategy Bot's is, clear of the tab bar.
+      assert.equal((await page.locator('.au-botbtn').innerText()).trim().endsWith('BotOps'), true);
+      const fab = await page.locator('.au-botbtn').boundingBox(), tabs = await page.locator('#mobile-nav').boundingBox();
+      assert.ok(fab.height >= 44 && (!tabs || fab.y + fab.height <= tabs.y), 'a big button above the tab bar');
       await page.locator('.au-botbtn').click();
       await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'bot');
       assert.equal(await page.locator('.au-pane').isVisible(), false);
+      assert.equal(await page.locator('.au-botbtn').isVisible(), false, 'no button on BotOps\' own screen');
       assert.equal(await page.locator('.au-botp').isVisible(), true);
       assert.equal(await page.locator('.au-bh h2').innerText(), 'BotOps');
       const bar = await page.locator('.au-bf').boundingBox();

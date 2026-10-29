@@ -225,6 +225,11 @@ def _check_step(step, where, seen, depth, counts):
         _need(isinstance(step.get("bot"), str) and re.fullmatch(r"(bot:)?[a-z0-9][a-z0-9._-]{0,63}", step["bot"]), where,
               "bot names a bot")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
+        # The model, effort and harness its task runs on (backend/task_run_models.py): checked against the catalog when
+        # the automation is saved (automations._checked), so here only that each is a name.
+        for key in ("model", "effort", "harness"):
+            if step.get(key) is not None:
+                _need(isinstance(step[key], str) and 0 < len(step[key]) <= 200, where, f"{key} is a name")
     elif kind == "action":
         check_action({"do": step.get("do"), "args": step.get("args", {})}, where)
     elif kind == "paths":

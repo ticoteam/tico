@@ -1,8 +1,9 @@
-// The CEO Bot on every install (backend/ceo_bot.py): the built-in bot is on the org chart by its name, the Strategy Bot unless the
-// owner renamed it, with the bots and the Heads' departments the server hangs under it, and Strategy's rail calls it by that name.
-// A bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot; the old names are never shown. There is no
-// switch to flip. A person may hide it from their own chart (Hide from my chart) and bring it back from Settings > Bots.
-// Fixtures only, no network.
+// The Strategy Bot on every install (backend/ceo_bot.py): a built-in bot, like BotOps and the Librarian, so it is not a row
+// on the Team chart. The Heads, their departments and the bots with no manager that the server hangs under it report to
+// the owner instead: on the sidebar they sit at the top beside the owner's row (the top of the chart is not one more
+// level), on Goals under the owner. Strategy's rail calls it by its name, the Strategy Bot unless the owner
+// renamed it; a bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot and the old names are never shown.
+// There is no Hide from my chart any more: a person who once chose it sees the same chart. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,18 +11,18 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-// What the server sends: the Heads, and the Head's department (Marketing), hang under the CEO Bot. For a person who chose
-// Hide from my chart (`hidden`), nothing is moved under it and its row says `chart_hidden` (backend/ceo_bot.py).
+// What the server sends: the Heads, and the Head's department (Marketing), hang under the Strategy Bot. For a person who
+// once chose Hide from my chart (`hidden`), nothing is moved under it and its row says `chart_hidden` (backend/ceo_bot.py).
 const bots = (name, home, hidden, analyst) => [
   bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:coo'), bot('librarian', 'Librarian', 'p:ana'),
   bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
   bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
   bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', operator: 'ana', ...(home ? {team: 'home'} : {})}),
-  // Reports to the CEO Bot itself and runs on Bo's computer: hidden, it hangs from the next row up, the owner.
+  // Reports to the Strategy Bot itself and runs on Bo's computer: it hangs from the next row up, the owner.
   ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', operator: 'bo'})] : []),
 ];
-// With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the CEO Bot.
+// With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the Strategy Bot.
 const groups = (home, hidden) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
   ...(home ? [{id: 'home', name: 'Home', reports_to: '', parent: '', org_parent: '', order: 1}] : [])];
 
@@ -41,10 +42,7 @@ async function open(browser, server, width = 1440) {
     if (p === '/api/employees') return json(bots(server.name ?? 'CEO Bot', home, server.hidden, server.analyst));
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', email: 'ana@example.test', role: 'owner', mover: true, cloud: true, config: {}});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: '', ...(home ? {team: 'home'} : {})}], org_groups: groups(home, server.hidden)});
-    if (p === '/api/v2/preferences/chart.hide_ceo_bot' && req.method() === 'POST') {
-      const body = req.postDataJSON(); (server.saves ||= []).push(body.value); server.hidden = body.value;
-      return json({key: 'chart.hide_ceo_bot', value: body.value});
-    }
+    if (p.startsWith('/api/v2/preferences/') && req.method() === 'POST') (server.saves ||= []).push(p);
     if (p === '/api/v2/models') return json({models: [], harnesses: [], enabled_providers: []});
     if (p === '/api/v2/operations') return json({machines: [], services: [], agents: []});
     if (p === '/api/v2/usage/limits') return json({bots: {}});
@@ -71,21 +69,23 @@ const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().e
       || li.querySelector(':scope > .noderow')?.dataset.org || '');
   return out;
 });
+// The rows at the top level of the Team tree, in order.
+const topRows = page => page.locator('#tree > li > .noderow').evaluateAll(rows => rows.map(row =>
+  (row.querySelector('[data-org]') || row).dataset.org));
 
 async function check(page, name = 'Strategy Bot') {
-  // On the chart, by its name, under the owner, with the Head's department, the Head, its report and the bot with
-  // no manager under it.
-  const ceo = page.locator('#tree a.node[data-org="b:goal-manager"]');
-  assert.equal(await ceo.count(), 1, 'the CEO Bot is on the chart');
-  assert.equal(await ceo.getAttribute('data-helper'), null, 'not set apart with the built-ins');
-  assert.equal((await ceo.locator('.nm').innerText()).trim(), name);
-  assert.deepEqual(await above(page, 'b:goal-manager'), ['p:ana']);
-  assert.deepEqual(await above(page, 'g:marketing'), ['b:goal-manager', 'p:ana']);
-  assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'b:goal-manager', 'p:ana']);
-  assert.deepEqual(await above(page, 'b:scribe'), ['b:goal-manager', 'p:ana']);
+  // Off the Team chart, as the other built-ins are; the Head's department, the Head, its report and the bot with no
+  // manager the server hung under it report to the owner, who is the top of the chart: they sit beside the owner's row,
+  // the department first.
+  assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, 'the Strategy Bot is not on the Team tree');
+  assert.deepEqual(await above(page, 'g:marketing'), [], 'the group the server hangs under it shows at the top, beside the owner');
+  assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
+  assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing']);
+  assert.deepEqual(await above(page, 'b:scribe'), []);
+  assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:scribe']);
   assert.equal(await page.locator('#tree a.node[data-org="b:coo"]').count(), 0, 'the Assistant stays off the chart');
-  // The Goals tab's tree nests it the same way, and Strategy's rail and its labels use its name.
-  assert.deepEqual(await goalLines(page), ['bot:goal-manager@1', 'bot:scribe@2', 'group:Marketing@2', 'bot:cmo@3', 'bot:seo@4']);
+  // The Goals tab's tree nests them the same way, and Strategy's rail and its labels use its name.
+  assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
   assert.equal(await page.locator('#sbot h2').textContent(), name);
   assert.equal(await page.locator('#sbot').getAttribute('aria-label'), name);
   await page.locator('#sbot .p-text').waitFor({state: 'attached'});
@@ -102,63 +102,44 @@ async function check(page, name = 'Strategy Bot') {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The owner in a group of their own, with a bot that has no manager: the CEO Bot still hangs under the owner, and
-    // that bot leaves the owner's group for the CEO Bot's branch, at desktop and phone widths.
+    // The owner in a group of their own, with a bot that has no manager: what hung under the Strategy Bot hangs under
+    // the owner, in the owner's group, at desktop and phone widths.
     for (const width of [1280, 390]) {
       const server = {home: true};
       const {page, errors} = await open(browser, server, width);
-      assert.deepEqual(await above(page, 'b:goal-manager'), ['p:ana', 'g:home'], `${width}: the CEO Bot under the owner`);
-      assert.deepEqual(await above(page, 'b:scribe'), ['b:goal-manager', 'p:ana', 'g:home'], `${width}: Scribe under the CEO Bot`);
-      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'b:goal-manager', 'p:ana', 'g:home']);
-      assert.deepEqual(await goalLines(page), ['group:Home@0', 'bot:goal-manager@2', 'bot:scribe@3', 'group:Marketing@3', 'bot:cmo@4', 'bot:seo@5']);
+      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, `${width}: not on the Team tree`);
+      assert.deepEqual(await above(page, 'b:scribe'), ['p:ana', 'g:home'], `${width}: Scribe under the owner`);
+      assert.deepEqual(await above(page, 'g:marketing'), ['p:ana', 'g:home'], `${width}: Marketing under the owner`);
+      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'p:ana', 'g:home']);
+      assert.deepEqual(await goalLines(page), ['group:Home@0', 'bot:scribe@2', 'group:Marketing@2', 'bot:cmo@3', 'bot:seo@4']);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Hide from my chart, in the CEO Bot's menu on the Team sidebar, by its current name: on this person's chart it is
-    // gone and the bots it headed sit where their own lines put them; Goals still has it. Settings > Bots shows it again,
-    // on its row and in its editor, by the same name.
+    // A person who chose Hide from my chart before it went: nothing was moved for them, and the chart reads the same,
+    // with the bot that reports to the Strategy Bot itself under the owner. No Hide or Show on my chart anywhere: not on
+    // the Team tree, not on its row in Settings > Bots, not in its editor; its row there still opens its page.
     {
-      const server = {name: 'Atlas', analyst: true};
+      const server = {name: 'Atlas', analyst: true, hidden: true};
       const {page, errors} = await open(browser, server);
-      // By keyboard, as for Move: Tab from its row to its menu button, open it, and the first item is Hide from my chart.
-      await page.locator('#tree a.node[data-org="b:goal-manager"]').focus();
-      await page.keyboard.press('Tab');
-      assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'More for Atlas');
-      await page.keyboard.press('Enter');
-      assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Hide from my chart');
-      await page.keyboard.press('Enter');
-      await page.locator('#tree a.node[data-org="b:goal-manager"]').waitFor({state: 'detached'});
-      await page.waitForFunction(() => document.activeElement?.closest('.toast')
-        && document.activeElement.textContent === 'Show on my chart');
-      assert.deepEqual(await above(page, 'b:analyst'), ['p:ana'], 'a bot reporting to it hangs from the next row up');
-      assert.deepEqual(server.saves, [true]);
-      await page.locator('.toast', {hasText: 'Atlas is hidden from your chart. Settings > Bots > Atlas shows it again.'}).waitFor();
+      await page.locator('#tree [data-org="b:cmo"]').waitFor();
+      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0);
+      assert.deepEqual(await above(page, 'b:analyst'), [], 'a bot reporting to it hangs from the next row up, the owner at the top');
+      assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:analyst', 'b:scribe']);
       assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
-      assert.deepEqual(await above(page, 'g:marketing'), []);
-      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing']);
-      assert.equal(await page.locator('#tree a.node[data-org="b:scribe"]').count(), 1);
+      assert.deepEqual(await above(page, 'b:scribe'), []);
       assert.equal(await page.locator('#sbot h2').textContent(), 'Atlas', 'Strategy still has it');
-      assert.ok((await goalLines(page)).includes('bot:goal-manager@1'), 'and its line on the Goals tree');
-      // Settings > Bots: still listed, saying where it is, and Show on my chart brings it back.
       await page.evaluate(() => { location.hash = '#/settings'; });
       await page.waitForFunction(() => typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
       await page.evaluate(() => settingsShow('bots'));
-      const line = page.locator('[data-settings-bot="goal-manager"] [data-ceo-chart]');
-      assert.equal((await line.innerText()).trim(), 'Hidden from your chart · Show on my chart');
-      await line.getByRole('button', {name: 'Show on my chart'}).click();
-      await page.locator('[data-settings-bot="goal-manager"] [data-ceo-chart-toggle="hide"]').waitFor();
-      assert.deepEqual(server.saves, [true, false]);
-      assert.equal((await line.innerText()).trim(), 'Hide from my chart');
-      assert.deepEqual(await above(page, 'b:goal-manager'), ['p:ana']);
-      assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing', 'b:goal-manager', 'p:ana']);
-      // Its editor in Settings > Bots has the same line, saved at once and apart from Save bot.
+      const row = page.locator('[data-settings-bot="goal-manager"]');
+      await row.waitFor();
+      assert.equal(await row.locator('a.sb-name').getAttribute('href'), '#/bot/goal-manager');
+      assert.doesNotMatch(await row.innerText(), /chart/i);
       await page.evaluate(() => { settingsEditBot('goal-manager', true); $('#bot-editor').showModal(); });   // as its settings tab draws it
-      const editor = page.locator('#bot-editor [data-ceo-chart]');
-      await editor.getByRole('button', {name: 'Hide from my chart'}).click();
-      await page.locator('#bot-editor [data-ceo-chart-toggle="show"]').waitFor();
-      assert.deepEqual(server.saves, [true, false, true]);
-      assert.match(await editor.innerText(), /^Atlas is hidden from your chart\./);
-      assert.equal(await page.locator('#tree a.node[data-org="b:goal-manager"]').count(), 0);
+      await page.locator('#bot-editor input[name="display_name"]').waitFor();
+      assert.doesNotMatch(await page.locator('#bot-editor').innerText(), /on your chart|from your chart|my chart/i);
+      assert.equal(await page.locator('body').getByText(/Hide from my chart|Show on my chart/).count(), 0);
+      assert.deepEqual(server.saves || [], [], 'no chart preference is written');
       assert.deepEqual(errors, []);
       await page.close();
     }

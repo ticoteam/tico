@@ -37,7 +37,7 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models")
+             "task_check_models", "task_run_models")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")

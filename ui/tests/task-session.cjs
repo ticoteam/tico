@@ -3,7 +3,8 @@
 // the owner's run works a "Working" line shows its newest step with Stop, which stops that run. Redraws keep an open
 // fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden. On a person's
 // task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
-// then the reply, or Reply failed), and the composer says before sending when no bot will get it.
+// then the reply, or Reply failed), and the composer says before sending when no bot will get it. Where a bot gets the
+// comment, the send says how it arrives (steer, queue or goal), and the choice is kept per task.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -238,11 +239,154 @@ async function answered(viewport, shot) {
   } finally { await browser.close(); }
 }
 
+// The send says how a comment reaches its bot: steer (the default), queue, or goal where its session can take one. The
+// choice is kept per task, a goal the session cannot take falls back to steer, and a task with no bot keeps the arrow.
+async function deliveryChoice(viewport, shot) {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({viewport, serviceWorkers: 'block'});
+    const errors = [];
+    const plan = {id: 't-plan', title: 'Plan the launch', owner: 'human:ana', requester: 'bot:lead', status: 'open',
+      lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-plan'};
+    const said = [{id: 'p1', conversation_id: 'r-plan', from_actor: 'bot:lead', kind: 'say', body: 'What should launch first?', created: at(20)}];
+    const sent = [], posted = [];
+    let to = {bot: 'lead', wakes: true, mention: []}, choices = {default: 'steer', steer: true, steers: true, goal: true};
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('**/*', async route => {
+      const req = route.request(), url = new URL(req.url()), p = url.pathname;
+      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1])))
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
+      if (p === '/api/issues') return json([]);
+      if (p === '/api/v2/conversations') return json({conversations: []});
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      if (p === '/api/v2/tasks') return json({tasks: [plan]});
+      if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
+        const body = JSON.parse(req.postData() || '{}');
+        posted.push(body);
+        sent.push({id: 'p' + (sent.length + 2), conversation_id: 'r-plan', from_actor: 'human:ana', to_actor: 'bot:lead', kind: 'say', body: body.text, created: at(0)});
+        return json({comment: sent.at(-1), comments: [...said, ...sent], woke: false});
+      }
+      if (p === '/api/v2/tasks/t-plan')
+        return json({task: plan, events: [], can_comment: true, children: [], comment_to: to, comment_delivery: choices, comments: [...said, ...sent], execution: null});
+      if (p.endsWith('/files')) return json({files: []});
+      return json(unrouted(p));
+    });
+    await page.goto('https://tico-ui.test/#/tasks');
+    await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
+    await page.evaluate(t => taskModalShow(t), plan);
+    const modal = page.locator('#task-modal'), main = modal.locator('[data-task-main]'), caret = modal.locator('[data-task-caret]');
+    const menu = modal.locator('[data-task-menu]'), hint = modal.locator('[data-task-chat-to]');
+    await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
+
+    // Steer is the default and says what it does; the caret offers the other two, opening upward and inside the width.
+    assert.equal(await main.innerText(), 'Steer');
+    assert.equal(await hint.innerText(), 'Steer: reaches Head of Engineering now.');
+    assert.ok(await caret.isVisible(), 'a bot gets the split send');
+    // Nothing picked, so nothing is sent: the server reads the comment, and the default is what the button shows.
+    await modal.locator('textarea').fill('Which is first?');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Which is first?'}).waitFor();
+    assert.equal('delivery' in posted.at(-1), false);
+    await caret.click();
+    assert.deepEqual(await menu.locator('button').allInnerTexts(), ['Queue', 'Set as goal']);
+    const box = await menu.boundingBox(), arrow = await caret.boundingBox();
+    assert.ok(box.y + box.height <= arrow.y, 'the menu opens upward, over the thread');
+    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `the menu fits the ${viewport.width} px width`);
+    if (shot) { await page.waitForTimeout(300); await page.screenshot({path: shot}); }   // past the menu's fade-in
+
+    // Choosing a way keeps the draft and only sets the way; the comment goes queued, and the choice stays for this task.
+    await menu.locator('[data-deliver="queue"]').click();
+    assert.equal(await menu.isHidden(), true);
+    assert.equal(await main.innerText(), 'Queue');
+    assert.equal(await hint.innerText(), "Queue: saved for Head of Engineering's next turn on this task.");
+    assert.equal(await page.evaluate(() => localStorage.getItem('hub.task.delivery')), '[["t-plan","queue"]]');
+    await modal.locator('textarea').fill('Billing first, then the docs.');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Billing first, then the docs.'}).waitFor();
+    assert.deepEqual(posted.at(-1), {text: 'Billing first, then the docs.', public: false, delivery: 'queue'});
+
+    // A goal is sent as the goal of the task's session, and the menu then offers steer and queue.
+    await caret.click();
+    assert.deepEqual(await menu.locator('button').allInnerTexts(), ['Steer', 'Set as goal']);
+    await menu.locator('[data-deliver="goal"]').click();
+    assert.equal(await main.innerText(), 'Set as goal');
+    assert.match(await hint.innerText(), /^Set as goal: Head of Engineering works toward this text/);
+    await modal.locator('textarea').fill('Finish the billing migration.');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Finish the billing migration.'}).waitFor();
+    assert.equal(posted.at(-1).delivery, 'goal');
+
+    // A session that cannot take a goal: the goal choice reads as steer, the menu offers only queue, and Escape closes the
+    // menu without closing the task.
+    choices = {default: 'steer', steer: true, steers: false, goal: false};
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: 'or after its running turn'}).waitFor();
+    assert.equal(await main.innerText(), 'Steer');
+    assert.equal(await hint.innerText(), 'Steer: reaches Head of Engineering now, or after its running turn if its harness cannot steer.');
+    await caret.click();
+    assert.deepEqual(await menu.locator('button').allInnerTexts(), ['Queue']);
+    await page.keyboard.press('Escape');
+    assert.equal(await menu.isHidden(), true);
+    assert.equal(await modal.isVisible(), true, 'Escape in the menu leaves the task open');
+
+    // Someone not on the task may not steer its bot: the send is Queue, the server's default, with nothing else to pick.
+    choices = {default: 'queue', steer: false, steers: false, goal: false};
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: 'Queue:'}).waitFor();
+    assert.equal(await main.innerText(), 'Queue');
+    assert.equal(await caret.isHidden(), true);
+
+    // A participant's plain comment waits for the bot's next turn, and nothing is picked: the send carries no delivery,
+    // so an @mention of the bot that filed the task wakes it as the server reads the text. The button says so first.
+    await page.evaluate(() => localStorage.removeItem('hub.task.delivery'));
+    choices = {default: 'queue', steer: true, steers: true, goal: true};
+    to = {bot: 'lead', wakes: false, mention: ['lead']};
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: 'Queue: saved'}).waitFor();
+    assert.equal(await main.innerText(), 'Queue');
+    await modal.locator('textarea').fill('Billing first; @lead, is the API page in?');
+    await hint.filter({hasText: 'Steer: reaches'}).waitFor();
+    assert.equal(await main.innerText(), 'Steer');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Billing first; @lead'}).waitFor();
+    assert.equal('delivery' in posted.at(-1), false);
+    // A way the person picks is sent, and the @mention does not change it: the menu keeps the draft and sets the way.
+    await modal.locator('textarea').fill('Also the API page, @lead.');
+    assert.equal(await main.innerText(), 'Steer');
+    await caret.click();
+    await menu.locator('[data-deliver="queue"]').click();
+    assert.equal(await main.innerText(), 'Queue');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Also the API page, @lead.'}).waitFor();
+    assert.equal(posted.at(-1).delivery, 'queue');
+
+    // A task with no bot keeps the plain arrow, and its comment carries no delivery.
+    to = {bot: null, wakes: false, mention: []}; choices = null;
+    await page.evaluate(() => taskChatRead(TASK_CHAT));
+    await hint.filter({hasText: 'No bot gets this message'}).waitFor();
+    assert.equal(await caret.isHidden(), true);
+    assert.ok(await main.isVisible(), 'the plain arrow stays');
+    await modal.locator('textarea').fill('Anyone around?');
+    await main.click();
+    await modal.locator('.task-comments', {hasText: 'Anyone around?'}).waitFor();
+    assert.equal('delivery' in posted.at(-1), false);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+}
+
 (async () => {
   const shot = name => SHOTS ? require('node:path').join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, shot('task-session-desktop.png'));
   await run({width: 390, height: 844}, shot('task-session-phone.png'));
   await answered({width: 1200, height: 800}, shot('task-session-answered.png'));
   await answered({width: 390, height: 844}, shot('task-session-answered-phone.png'));
+  await deliveryChoice({width: 1200, height: 800}, shot('task-session-delivery.png'));
+  await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'));
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });

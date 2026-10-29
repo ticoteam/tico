@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
                pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+from .batch_work import report, storage_error
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -511,6 +512,20 @@ def _fenced_queue_reason(row, refused, first, person):
     return refused, first, person
 
 
+def _claimable(c, settings, runner_id, slug, limits, **kw):
+    """execution.bot_claimable, or None when a check of the claim raised. The claim passes such a bot over or holds the
+    job, and Health names it (claim_holds.check_failures, the held job's item), so the bot is not explained here and
+    the page still renders. A storage error still fails the read."""
+    from .execution import bot_claimable
+    try:
+        return bot_claimable(c, settings, runner_id, slug, limits, **kw)
+    except Exception as exc:
+        if storage_error(exc):
+            raise
+        report("health claim check", slug, exc, logger="tico.health")
+        return None
+
+
 def _waiting(c, online_ids, settings=None, limits=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
@@ -616,13 +631,16 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 (oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff)):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
-            refused, first, person = (('company_limit', None, False) if company_stopped else
-                                      bot_claimable(c, settings, where[0], slug, limits))
+            claimable = (('company_limit', None, False) if company_stopped else
+                         _claimable(c, settings, where[0], slug, limits))
+            if claimable is None:
+                continue        # the claim's check for this bot raised: Health names that check instead
+            refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = bot_claimable(c, settings, where[0], slug, limits, oldest=True)
-                if diagnostic[0] and diagnostic[0] != "lane_held":
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True)
+                if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
             refused, first, person = _fenced_queue_reason(row, refused, first, person)
@@ -1463,11 +1481,16 @@ def _unreviewed_runs(c, who, auth):
     for slug in slugs:
         if not readable.get(slug, auth.FULL)["read"]:
             continue
-        count, oldest = 0, None
+        count, oldest, seen = 0, None, set()
         for row in held.get(slug, []):
             if not (privacy.message_readable(c, privacy.actor(who), row)
                     and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
                 continue
+            # Per stopped run: requests folded into one run share its attempt.
+            key = row["attempt_id"] or row["id"]
+            if key in seen:
+                continue
+            seen.add(key)
             count += 1
             oldest = oldest or row["since"]
         hours = int((H.parse_ts(H.now()) - H.parse_ts(oldest)).total_seconds() // 3600) if oldest else 0

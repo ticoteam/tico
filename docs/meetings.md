@@ -234,7 +234,7 @@ error if a single day exceeds its 5,000-activity page limit, so narrow the windo
 The **Add source** menu beside Settings on the Meetings page lists Close and each importer below, with the worker's
 heartbeat in one word: **Connect** until the worker connects, **Connected** (with the last import) after a recent
 successful pull, **Delayed** when its heartbeat is stale, **Error** after a failed pull (a red dot on the menu).
-With no meetings and nothing connected, the page shows them as large tiles, with **Add notes**. An entry opens that source's setup: Close its tool page,
+With no meetings and nothing connected, the page shows them as large tiles (**Add notes** stays in the header). An entry opens that source's setup: Close its tool page,
 the others a dialog with the same form as Tools > Meeting importers (owners only).
 
 ## Meeting importers

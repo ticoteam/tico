@@ -173,7 +173,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .sb-line{overflow:hidden}
 .sb-line .pill{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-text small{display:block;color:var(--muted);font-size:var(--t-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-text small.sb-ceo-chart{white-space:normal}   /* its Hide / Show on my chart button is never cut off */
 .sb-access-label{display:none}   /* the phone's bot line names it; a computer has the column head */
 .sb-access{display:block;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb-stack{display:inline-flex;align-items:center}

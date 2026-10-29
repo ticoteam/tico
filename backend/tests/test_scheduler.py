@@ -140,9 +140,9 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     def select_again(*args, **kwargs):
         selections.append(1)
         return candidate(*args, **kwargs)
-    def reassign_after_read(*args):
-        result = idle(*args)
-        selected.extend(args[-1])
+    def reassign_after_read(c, who, body, picked, failed):
+        result = idle(c, who, body, picked, failed)
+        selected.extend(picked)
         with store.transaction() as c:
             H.task_update(c, 'human:ana', task['id'], owner='bot:finance')
         return result
@@ -150,7 +150,8 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     monkeypatch.setattr(execution, "candidate", select_again)
     assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is None
     assert selected and selected[0]['bot'] == 'ops'
-    assert selections == [1, 1]
+    # The read's pick, its recheck under the writer, then one more pick that passes over the reassigned job.
+    assert selections == [1, 1, 1]
     with store.read() as c:
         assert H.task(c, task['id'])['private']
         assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1

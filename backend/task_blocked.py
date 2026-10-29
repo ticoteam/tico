@@ -51,14 +51,38 @@ def ensure_steps(c):
 
 
 def backfill(c):
-    """Run after retiring legacy held steps, so the saved resume step still exists."""
+    """Run after retiring legacy held steps, so the saved resume step still exists. A ticket in a team's own waiting
+    step stays there on any board, held as if moved there by hand (hubdb.declared_hold), so no sweep reopens it. The
+    Product roadmap's steps follow its delivery tickets, not holds."""
     from . import hubdb as H
-    for row in H._rows(c.execute("SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
-                                "WHERE ty.role='engineering' AND t.status='waiting' AND t.blocked_since IS NULL")):
-        step = H._one(c, 'SELECT status FROM task_steps WHERE id=?', (row.get('step_id'),))
+    from .roadmap_flow import PRODUCT
+    for row in H._rows(c.execute(
+            "SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id LEFT JOIN task_steps s ON s.id=t.step_id "
+            "WHERE t.status='waiting' AND t.blocked_since IS NULL AND coalesce(ty.role,'')<>? "
+            "AND (ty.role='engineering' OR s.status='waiting')", (PRODUCT,))):
+        step = H._one(c, 'SELECT s.name,s.status,ty.role FROM task_steps s JOIN task_types ty ON ty.id=s.type_id '
+                         'WHERE s.id=?', (row.get('step_id'),))
         H._set_status(c, H.KEEPER, row, 'waiting', note=row.get('note') or 'Waiting on a hold')
         previous = step['status'] if step and step['status'] != 'waiting' else 'open'
         c.execute('UPDATE tasks SET blocked_from_status=? WHERE id=?', (previous, row['id']))
+        if step and step['status'] == 'waiting' and not H.own_blocked_step(step['role'], step):
+            c.execute("UPDATE tasks SET blocked_kind='manual',blocked_reason=? WHERE id=?",
+                      (f"In {step['name']}"[:1000], row['id']))
+
+
+def forget_retired_resumes(c):
+    """A held engineering ticket resumes at On Deck, not at the step it would go back to, when that step is only where
+    retiring its waiting step put it: a step read from its history, often weeks old, that nobody chose. Its last move
+    before Blocked tells: retiring wrote it. Writes only when a ticket needs it, as ensure_steps does."""
+    from . import hubdb as H
+    for task_id, saved, step in c.execute(
+            "SELECT t.id,t.blocked_from_step,t.step_id FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+            "WHERE ty.role='engineering' AND t.blocked_since IS NOT NULL "
+            "AND t.blocked_from_step IS NOT NULL").fetchall():
+        moves = c.execute("SELECT new,note FROM task_events WHERE task_id=? AND field='step' "
+                          "ORDER BY ts DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
+        if len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved and moves[1][1] == H.RETIRED_WAITING:
+            c.execute("UPDATE tasks SET blocked_from_step=NULL,blocked_from_status='open' WHERE id=?", (task_id,))
 
 
 def seconds(start, at):
@@ -98,8 +122,11 @@ def transition(c, row, effective, step_id, note, at, manual=False):
             c.execute('UPDATE tasks SET blocked_since=?,blocked_reason=?,blocked_kind=?,blocked_from_step=?,blocked_from_status=? WHERE id=?',
                       (at, reason, kind, row.get('step_id'), row.get('status') or 'open', row['id']))
             H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason)
-        elif manual and str(note or '').strip():
-            c.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='manual' WHERE id=?", (str(note).strip().splitlines()[0][:1000], row['id']))
+        elif manual and (str(note or '').strip() or row.get('blocked_kind') != 'manual'):
+            # A person's move into a waiting step declares the hold even over one Tico found: the old reason, written
+            # for the hold it replaces, never stays on a ticket parked by hand.
+            text = str(note).strip().splitlines()[0][:1000] if str(note or '').strip() else 'Waiting on a hold'
+            c.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='manual' WHERE id=?", (text, row['id']))
     elif row.get('blocked_since'):
         c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL'
                   + (',holds_cleared_at=NULL' if 'holds_cleared_at' in row else '') + ' WHERE id=?', (row['id'],))

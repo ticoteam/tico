@@ -1,5 +1,5 @@
 /* Support is a pop-up over the current screen, opened by the ? at the foot of the sidebar (the ? tab on a phone), by
-   Report this, Chat with us and Want help setting up?, and by old #/help links. It uses the existing ticket transport.
+   Report this and Want help setting up?, and by old #/help links. It uses the existing ticket transport.
    Drafts stay on this page's account in memory; an attachment is an immutable server preview, never silently replaced
    when Send is pressed. */
 'use strict';
@@ -56,7 +56,7 @@
       detail: clip(c.detail, 600), fix: String(c.fix ?? '').slice(0, 1200), source: c.source === 'health' ? 'health' : 'doctor'}));
     return out;
   }
-  // Chat with us or Report this pressed anywhere: the pop-up opens on a new request, the report attached as diagnostics.
+  // Report this pressed anywhere: the pop-up opens on a new request, the report attached as diagnostics.
   let pending = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const statuses = {open: 'Open', answered: 'Answered', closed: 'Closed', gone: 'Removed'};
@@ -561,13 +561,12 @@
   window.reportThisHTML = (report, icon = false) => icon
     ? `<button type="button" class="report-this report-this-icon" data-report-this="${escape(JSON.stringify(report))}" aria-label="Report this" title="Report this"><span class="nav-icon" aria-hidden="true">bug_report</span></button>`
     : `<button type="button" class="linkish report-this" data-report-this="${escape(JSON.stringify(report))}">Report this</button>`;
-  window.talkLineHTML = () => state.enabled === false ? '' : '<p class="talk-line">Stuck or curious? A person at Tico reads every message. <button type="button" class="linkish" data-chat-with-us>Chat with us</button></p>';
   document.addEventListener('click', e => {
-    const talk = e.target.closest?.('[data-chat-with-us]'), report = e.target.closest?.('[data-report-this]');
-    if (!talk && !report) return;
+    const report = e.target.closest?.('[data-report-this]');
+    if (!report) return;
     e.preventDefault(); e.stopPropagation();
     let value = null;
-    try { value = report ? JSON.parse(report.dataset.reportThis) : null; } catch (_) {}
+    try { value = JSON.parse(report.dataset.reportThis); } catch (_) {}
     window.talkToUs(value);
   });
   // "Want help setting up?" starts a new request from text the person reads, edits and sends themselves.

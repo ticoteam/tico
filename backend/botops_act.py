@@ -315,7 +315,7 @@ ALWAYS = _routes(("POST", r"access/owner"), ("POST", r"system/update"), ("POST",
 # Owner-only: a member or an admin is told so at once, not handed a card that fails (the Gateway connection included).
 OWNER_ONLY = _routes(("POST", r"access/owner")) + GATEWAY
 # Team rules that set BotOps' own powers: a change to one of them is always the person's own tap.
-OWN_POWER_RULES = ("botops_direct", "botops_manages_bots")
+OWN_POWER_RULES = ("botops_direct", "botops_manages_bots", "managers_manage_reports")
 RULES = re.compile(API + r"access/rules")
 
 # Hand a secret's value back to whoever calls: BotOps acting for a person is refused, with where the person does it.

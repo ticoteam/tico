@@ -77,7 +77,10 @@ CREATE TABLE IF NOT EXISTS settings_changes(
  before_json TEXT NOT NULL, after_json TEXT NOT NULL, actor TEXT NOT NULL,
  transition_id TEXT REFERENCES bot_transitions(id), created TEXT NOT NULL,
  undone_by TEXT, undone_at TEXT);
-CREATE INDEX IF NOT EXISTS settings_changes_created ON settings_changes(created);
+-- The history reads newest first by (created, id) (settings_admin._history_rows). An index that ends in id is read in
+-- that order; one that stops at created sorts every same-timestamp tie group.
+CREATE INDEX IF NOT EXISTS settings_changes_created_id ON settings_changes(created,id);
+CREATE INDEX IF NOT EXISTS settings_changes_bot_id ON settings_changes(bot,created,id);
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
@@ -1549,8 +1552,15 @@ class Store:
                                    # but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_parties",
                                     "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   # A person's view of a bot's settings changes (settings_admin.history): the manager
+                                   # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
+                                   # column, added above.
+                                   ("settings_changes_bot_via_id", "settings_changes(bot, via, created, id)"),
                                    ("conversations_id_task", "conversations(id, task_id)")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
+                # The settings_changes indexes these replace, which lack id (the schema above and the list).
+                for name in ("settings_changes_created", "settings_changes_bot", "settings_changes_bot_via"):
+                    c.execute(f"DROP INDEX IF EXISTS {name}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.
                 c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")

@@ -230,9 +230,12 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
     # effect key: a resumed run whose turn already started gets that turn back, never its own hold's refusal.
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
+    # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
+    run_model = ({k: step[k] for k in ("model", "effort", "harness") if step.get(k)}
+                 if step.get("type") == "bot_turn" else {})
     started = services.start_turn(who, F.render_prompt(prompt, values, cap=F.MAX_PROMPT), {
         "values": values, "step": step["id"], "key": str(len(state["steps"])), "cost": state["cost"],
-        "cap": None if cap is None else float(cap), "label": _turn_label(thread)}, wait)
+        "cap": None if cap is None else float(cap), "label": _turn_label(thread), "run_model": run_model or None}, wait)
     if started is None:
         # The cap stops spending, not the run: later filters, decisions and actions still go.
         _record(state, thread, step, "spend_cap")

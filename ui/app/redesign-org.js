@@ -49,7 +49,7 @@ function rdoMoveTargets(from) {
 }
 
 // ----------------------------------------------------------------- the tree
-// The sidebar's chart (orgTreeByParent: groups, reports_to, the CEO Bot's place) without helpers and recruiting seats.
+// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats.
 function rdoTree() {
   const by = orgTreeWithHelpers(orgTreeByParent()), out = {};
   for (const [k, kids] of Object.entries(by)) out[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
@@ -79,7 +79,7 @@ function rdoCard(n, {top = false} = {}) {
   const role = top ? 'Owner' : lead ? 'Lead' : String(bot?.role || '').trim().length <= 24 ? String(bot?.role || '').trim() : '';
   const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.name, 16);
   const cls = ['rdo-card', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
-  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(name)}"><b>${esc(name)}</b>
+  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(name)}" title="${esc(name)}"><b>${esc(name)}</b>
     <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;
 }
 // A teammate and, under it on a rail, whoever reports to it inside the same group.
@@ -96,7 +96,7 @@ function rdoGroupBlock(by, g, ctx, depth) {
   const count = rdoCount(by, 'g:' + g.id);
   const body = kids.map(k => `<div class="rdo-gi${k.kind === 'group' ? ' is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</div>`).join('');
   return `<section class="rdo-g${folded ? ' folded' : ''}" data-rdo-group="${esc(g.id)}">
-    <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}">${esc(g.name)}${folded ? `<span class="rdo-n">${count}</span>` : ''}</button>
+    <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-tn">${esc(g.name)}</span>${folded ? `<span class="rdo-n">${count}</span>` : ''}</button>
     <div class="rdo-gb">${body}</div></section>`;
 }
 function rdoChartHtml() {

@@ -97,7 +97,7 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has ten switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has eleven switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
@@ -105,6 +105,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
+| **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, whatever the bots' own switches say |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
@@ -206,7 +207,8 @@ is the same humans who always have full access to it. A bot owner can:
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
-A member cannot change a bot that is not theirs, through Settings, the API or BotOps.
+A member cannot change a bot that is not theirs, through Settings, the API or BotOps. A bot's manager bot may change
+some of it too, as itself: see [Managers and their reports](#managers-and-their-reports).
 
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
 Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
@@ -219,6 +221,34 @@ credential may also delegate it to a bot they own or run, directly or through Bo
 delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
 and its declared profile and runtime keys. New bots do not inherit the whole environment or `_shared.env`.
+
+## Managers and their reports
+
+A bot's **direct reports** are the bots whose `reports_to` is it. Its manager bot changes four things on each one, acting as
+itself: the manager is the actor, and the change is recorded with `via: report_manager`, so the settings history names the
+manager:
+
+- its **model** (`POST /api/v2/bots/{bot}/model`, `hub bot model`, MCP `hub_bot_model`);
+- its **task model** (`POST /api/v2/bots/{bot}/task-model`, the bot editor; there is no hub or MCP command for it);
+- its **name and description** (`POST /api/v2/bots/{bot}/definition`, `hub bot update`, MCP `hub_bot_update`).
+
+It does not change the report's instructions, status, place on the team chart (`reports_to`), owners, access, computer, or
+whether it is created or archived. A manager reaches only the bots directly under it, and `Auth.report_manager` decides that.
+It does not widen `Auth.bot_manager`: a manager bot owns nothing it did not own before.
+
+Two switches turn it off, and the owner's comes first:
+
+- the team rule **Managers change their direct reports** (`managers_manage_reports`, [Team rules](#team-rules)), on by default. Only
+  the owner changes it; BotOps can only propose a change, as a Confirm card the owner taps;
+- the manager's own **Manages its reports** switch (`manages_reports`, in its bot editor), on by default. A person who manages that
+  bot sets it, and the bot cannot set its own.
+
+Routines follow both. A routine owned by a report can be changed by a bot above it only while every bot on the team chart from
+the report's manager up to that caller has both switches on (`automations.may_change`).
+
+A person who manages the report sees the changes its manager bot made to it, in the bot's **Settings changes** card, and can
+undo them while the bot still holds the value the change set. Only the owner sees every change and every transition. Turning a
+switch off does not undo what the manager already changed.
 
 ## Computers for members' bots
 
@@ -468,7 +498,7 @@ The commands (with MCP tools of the same names):
 | `hub bot create --record-only --name N [<slug>] [--description] [--reports-to] [--template]` | creates the planned server record as the requester, who becomes its owner; the slug is picked from the name (else the template's) unless given, and printed; safe to repeat with the slug. `hub bot create` registers automatically in such a run |
 | `hub bot access <slug> [--see V] [--read V] [--write V]` | show or set who sees, reads, writes (`everyone`, or `ben,group:legal,bot:analyst`) |
 | `hub bot owners <slug> [--add P ...] [--remove P ...]` | the bot's owners |
-| `hub bot update <slug> ...` | name, description, reports-to, status, repository |
+| `hub bot update <slug> ...` | name, description, reports-to, status, repository; a manager bot changes only its direct report's name and description ([Managers and their reports](#managers-and-their-reports)) |
 | `hub bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_onboarding` (its manager may call it for it) |
 | `hub human add <email> [--name] [--title] [--reports-to]`, `hub human list` | the roster |
 | `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human] [--remove-bot]`, `hub group delete <group>` | the groups; create (no group given), rename, move, lead, fill or delete one, owners and admins only (a lead within its groups) |
@@ -476,7 +506,7 @@ The commands (with MCP tools of the same names):
 
 | `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
 | `hub bot go-live <bot> [--computer C]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. |
-| `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
+| `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart; a manager bot may set its direct report's model ([Managers and their reports](#managers-and-their-reports)) |
 | `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
 | `hub bot budget <bot> [--hour N\|default] [--day N\|default]`, `hub bot budget <bot> release`, `hub bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `hub team budget [--hour N] [--day N]` sets the team default (owner and admins) |
 | `hub bot scope <bot> <task>`, `hub bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |

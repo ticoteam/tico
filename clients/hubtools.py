@@ -603,6 +603,10 @@ def tag_update(api, args):
        "roles": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
                  "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
                                 "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several"},
+       "model": _s("A bot-owned task's own model, from hub_bot_model's list: its runs use it, not the bot's task "
+                   "model"),
+       "effort": _s("Reasoning effort that model takes (with model)"),
+       "harness": _s("A harness from that model's harnesses list (with model)"),
        "dry_run": {"type": "boolean", "default": False}},
       required=("owner", "title"), writes=True)
 def task_create(api, args):
@@ -610,8 +614,9 @@ def task_create(api, args):
             "due": args.get("due"), "goal_id": args.get("goal_id") or None}
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
-    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
-                  "public_title", "public_summary", "from_private"):
+    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
+                  "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
+                  "harness"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -1060,10 +1065,16 @@ def task_type_delete(api, args):
        "visuals": VISUALS, "on_behalf_of": ASKED,
        "needs_action": {"type": "boolean", "default": False,
                         "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
-                        "bot's next run, whatever starts it"}},
+                        "bot's next run, whatever starts it"},
+       "delivery": {"type": "string", "enum": ["steer", "queue", "goal"],
+                    "description": "What the comment does to the task's bot. steer: reach it now, folded into a running "
+                    "turn if its harness can steer. queue: wait for its next turn on this task. goal: make the text the "
+                    "goal of its task session (no attachments or visuals; not public, not a question). Omitted, the "
+                    "comment wakes the bot as it always has."}},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
+    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action",
+                                 "delivery") if k in args}
     local = []
     if args.get("visuals"):
         added, local = _visuals(api, args["visuals"], lambda index, name, data: _uploaded(_posted_file(
@@ -2949,7 +2960,8 @@ def inbox_send(api, args):
 
 
 @tool("hub_bot_update", "Change a bot's settings (reports to, name, description, status) with your own rights. "
-      "BotOps acts as the person who asked, citing their message.",
+      "BotOps acts as the person who asked, citing their message. "
+      "A manager bot changes only its direct report's name and description.",
       {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
@@ -2977,7 +2989,7 @@ def bot_set(api, args):
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
     row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == args["slug"]), None)
     if not row or row.get("revision") is None:
-        row = api.get(f"bots/{args['slug']}/access", **({"on_behalf_of": on_behalf} if delegated else {}))
+        row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
@@ -3569,8 +3581,9 @@ def bot_profile(api, args):
     return who.post(path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args))
 
 
-@tool("hub_bot_release", "Release a bot Tico stopped, as the person who asked you: after five failed runs in a row, or "
-      "for starting too many runs. Check its last runs first. Its queued work, kept while it was held, starts again.",
+@tool("hub_bot_release", "Release a bot Tico stopped, as the person who asked you: after five failed runs in a row, "
+      "for starting too many runs, or for queued runs it could not start. Check its last runs first. Its queued work, "
+      "kept while it was held, starts again.",
       {"bot": _s("Bot slug")}, ("bot",), writes=True)
 def bot_release(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/release", {}, key=_key(args))
@@ -3792,7 +3805,7 @@ def task_cap_set(api, args):
 
 
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
-      "run in progress to end.",
+      "run in progress to end. A manager bot may change its direct report's model.",
       {"bot": _s("The bot's slug"), "model": _s("A model id or name from the list; leave out to list them"),
        "effort": _s("Reasoning effort that model supports"), "harness": _s("A harness from that model's harnesses list"),
        "on_behalf_of": ON_BEHALF_OF},
@@ -3807,7 +3820,18 @@ def bot_model(api, args):
                            for m in catalog.get("models", []) if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)],
                 **{k: v for k, v in current.items() if k in ("harness", "effort")},
                 "current": current.get("model")}
-    requested = args.get("model") or current.get("model") or (catalog.get("default") or {}).get("model") or ""
+    model = _model_id(catalog, args.get("model") or current.get("model")
+                      or (catalog.get("default") or {}).get("model") or "")
+    revision = current["revision"]
+    body = {"model": model, "expected_revision": revision, **({"effort": args["effort"]} if args.get("effort") else {})}
+    if args.get("harness"):
+        body["harness"] = args["harness"]
+    return who.post(f"bots/{args['bot']}/model", body, key=_key(args))
+
+
+def _model_id(catalog, requested):
+    """The id of the one current catalog model that `requested` names by id or label (case-blind, an exact match
+    first). Raises ValueError when none, or more than one, match."""
     wanted = str(requested).strip().lower()
     choices = [m for m in catalog.get("models", []) if not m.get("deprecated")]
     hit = [m for m in choices if wanted in (str(m.get("id")).lower(), str(m.get("label")).lower())] or [
@@ -3815,11 +3839,64 @@ def bot_model(api, args):
     if len(hit) != 1:
         raise ValueError(("No model matches " if not hit else "More than one model matches ") + str(requested)
                          + ". Models: " + ", ".join(str(m.get("id")) for m in choices))
-    revision = who.get(f"bots/{args['bot']}/access")["revision"]
-    body = {"model": hit[0]["id"], "expected_revision": revision, **({"effort": args["effort"]} if args.get("effort") else {})}
-    if args.get("harness"):
-        body["harness"] = args["harness"]
-    return who.post(f"bots/{args['bot']}/model", body, key=_key(args))
+    return hit[0]["id"]
+
+
+@tool("hub_task_model", "Set the model one task's runs use, as the person who asked you: a model id or name from the "
+      "list, with its effort and harness. Leave out `model` to change only the effort or harness of the task's own "
+      "model; `clear` puts the task back on the bot's task model. Whoever may change the bot's model may change this; "
+      "a bot never does.",
+      {"id": TASK_ID, "model": _s("A model id or name from hub_bot_model's list; leave out to keep the task's own"),
+       "effort": _s("Reasoning effort that model takes"),
+       "harness": _s("A harness from that model's harnesses list"),
+       "clear": {"type": "boolean", "default": False, "description": "Clear the task's own model"},
+       "on_behalf_of": ON_BEHALF_OF},
+      required=("id",), writes=True)
+def task_model(api, args):
+    who = _as_person(api, args.get("on_behalf_of"))
+    if args.get("clear"):
+        body = {"model": None}
+    else:
+        body = {}
+        if args.get("model"):
+            body["model"] = _model_id(who.get("models"), args["model"])
+        for field in ("effort", "harness"):
+            if args.get(field):
+                body[field] = args[field]
+        if not body:
+            raise ValueError("Name a model, an effort or a harness, or clear the task's model")
+    return who.post(f"tasks/{args['id']}/model", body, key=_key(args))
+
+
+@tool("hub_bot_task_model", "Show, or set, the model a bot's tasks run on, as the person who asked you: a model id or "
+      "name from the list, with its effort and harness. Leave out `model` to change only the effort or harness on the "
+      "bot's own model; `clear` puts the bot's tasks back on its own model. A task's own model (hub_task_model) comes "
+      "before this. Whoever may change the bot's model may change this, and so may a manager bot for its direct "
+      "report.",
+      {"bot": _s("The bot's slug"),
+       "model": _s("A model id or name from hub_bot_model's list; leave out to keep the bot's own"),
+       "effort": _s("Reasoning effort that model takes"),
+       "harness": _s("A harness from that model's harnesses list"),
+       "clear": {"type": "boolean", "default": False, "description": "Clear the bot's task model"},
+       "on_behalf_of": ON_BEHALF_OF},
+      required=("bot",), writes=True)
+def bot_task_model(api, args):
+    who = _as_person(api, args.get("on_behalf_of"))
+    if not any(args.get(k) for k in ("model", "harness", "effort", "clear")):
+        return {"task_model": who.get(f"bots/{args['bot']}").get("task_model")}
+    # The bot row, not its access card: a manager bot reads its report's row but not who may reach it.
+    revision = who.get(f"bots/{args['bot']}")["revision"]
+    if args.get("clear"):
+        body = {"task_model": None, "expected_revision": revision}
+    else:
+        choice = {}
+        if args.get("model"):
+            choice["model"] = _model_id(who.get("models"), args["model"])
+        for field in ("effort", "harness"):
+            if args.get(field):
+                choice[field] = args[field]
+        body = {"task_model": choice, "expected_revision": revision}
+    return who.post(f"bots/{args['bot']}/task-model", body, key=_key(args))
 
 
 def _control(action):
@@ -5432,7 +5509,11 @@ AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
     "hub_bot_branch": REQUESTER,
-    "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
+    # A bot or agent that manages the bot changes its name and description, its model and its task model
+    # (report_managers); the server refuses any other bot.
+    "hub_bot_update": REQUESTER + ("bot", "agent"), "hub_bot_model": REQUESTER + ("bot", "agent"),
+    "hub_bot_task_model": REQUESTER + ("bot", "agent"),
+    "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
@@ -5442,7 +5523,8 @@ AUDIENCE = {
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_bot_turns_at_once",
                                     "hub_computer_turns_at_once", "hub_agent_pair_show", "hub_agent_pair_approve",
-                                    "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model",
+                                    "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live",
+                                    "hub_task_model",
                                     "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",

@@ -11,7 +11,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [];
     page.on('pageerror', error => errors.push(error.message));
-    // No step is waiting or declined (backend retire_held_steps); the board shows only the working steps.
+    // No seeded step is waiting or declined (backend retire_held_steps); the board shows only the working steps.
     const statuses = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
     let types = [
       {id: 'general', name: 'General', steps: statuses.map((status, position) => ({id: 'general-' + status, type_id: 'general', name: status, status, position}))},
@@ -436,7 +436,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     }
     await page.locator('#set-types [data-edit-type=marketing]').click();
     assert.deepEqual(await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('select option').evaluateAll(o => o.map(x => x.value)),
-      ['open', 'doing', 'review', 'ready', 'done', 'closed'], 'no step can be waiting or declined');
+      ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed'], 'a step may be waiting, never declined');
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Campaigns');
     await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[data-up]').click();
     // A step's check pool and each checker's limit of open checks (backend/check_pools.py).

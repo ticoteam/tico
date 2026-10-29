@@ -4,9 +4,12 @@ The team is everyone: humans and bots. A **group** is a sub-team, and groups can
 bot. This page is who is in which group, which bots each group holds, and who each bot is mainly for.
 
 The chart in the app is the **Team** sidebar: each group is a section that opens and closes, holding its humans and bots,
-with the groups inside it below them. A human or bot with no group sits at the top. The built-in bots (the Assistant, BotOps, the
-Librarian) stay out of the chart and the Goals tree. Assistant and BotOps have main rail entries;
-the Librarian is reached from Docs and Market. Settings > Bots lists them with the CEO Bot, the fourth built-in bot.
+with the groups inside it below them. A human or bot with no group sits at the top. The top of the chart is not drawn as
+one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
+row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
+human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
+Librarian, the CEO Bot) stay out of the chart and the Goals tree. Assistant and BotOps have main rail entries;
+the Librarian is reached from Docs and Market, the CEO Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
 whole name. A bot still onboarding has a small amber gear beside its name (**Onboarding**).
@@ -15,8 +18,7 @@ and a **Recruiting** mark where its reporting line puts it: under its bot or hum
 chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job description. It is not dragged and nothing
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
-The built-in **CEO Bot** ([Your CEO Bot](ceo-bot.md)) is on every install, at the top of the chart under the owner. The Heads, each in its department's group, and the bots that report to no one sit under it.
-Anyone can take it off their own chart: **Hide from my chart** in its row's menu (**More**), or on its row in Settings > Bots and in its settings there, each by its current name. On that person's chart the CEO Bot is not shown and the Heads and other bots sit where their own reporting lines and groups put them; everyone else's chart is unchanged. It is a view setting only, kept per person (the `chart.hide_ceo_bot` preference): Goals, Needs you, its chat, Strategy proposals and Settings > Bots still show it and it works as before, and its reporting line, access and level don't change. **Show on my chart** in Settings > Bots brings it back.
+The built-in **CEO Bot** ([Your CEO Bot](ceo-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
 The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and

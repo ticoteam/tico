@@ -526,7 +526,7 @@ function updRender(state) {
   let html = items.map((u, i) => updCard(u, i, state)).join('');
   if (!items.length) html += state.view === 'archive'
     ? '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">archive</span><b>No archived updates.</b></div>'
-    : '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b><span class="muted">The bots report in one at a time each morning.</span>' + (window.talkLineHTML?.() || '') + '</div>';
+    : '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b></div>';
   if (data.next_before) html += '<button type="button" class="ghost upd-more" data-upd-more>Load older</button>';
   feed.innerHTML = html;
   updDecksBind(state);
@@ -813,7 +813,7 @@ async function botHistoryLoad(slug, before) {
       <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div></article>`).join('');
   const more = r.next_before ? `<button type="button" class="ghost upd-more" data-bot-history-more="${esc(r.next_before)}">Load older</button>` : '';
   if (before) { host.querySelector('[data-bot-history-more]')?.remove(); host.insertAdjacentHTML('beforeend', html + more); }
-  else host.innerHTML = (html || '<div class="empty">No updates yet. It reports in each morning.</div>') + more;
+  else host.innerHTML = (html || '<div class="empty">No updates yet.</div>') + more;
   host.onclick = ev => { const b = ev.target.closest('[data-bot-history-more]'); if (b) void botHistoryLoad(slug, b.dataset.botHistoryMore); };
   const unread = items.filter(u => !u.read).map(u => u.id);
   if (unread.length) {

@@ -7,8 +7,9 @@ manages in its own runs and who is a credential administrator (backend/auth.py),
 own bot (backend/credentials.py), the SQL page and personal tokens, whether a bot goes ahead on its own default when
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
 (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
-chat starts fresh when the topic changes (backend/topic_change.py), and whether Decide reads a quiet task before its stall
-check stays silent (backend/stall_triage.py). The stale review and fresh topics are off by default; those two and
+chat starts fresh when the topic changes (backend/topic_change.py), whether Decide reads a quiet task before its stall
+check stays silent (backend/stall_triage.py), and whether a bot manages its direct reports (backend/report_managers.py).
+The stale review and fresh topics are off by default; those two and
 triage an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
 """
 import json
@@ -32,6 +33,7 @@ DEFAULTS = {
     "stale_review": False,          # the hourly stale ticket review suggests updates to owners (backend/stale_review.py)
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
     "stall_triage": True,           # Decide reads a quiet task that nothing has changed on before a stall check stays silent (backend/stall_triage.py)
+    "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
 }
 # Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")

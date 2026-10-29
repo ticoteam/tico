@@ -11,7 +11,8 @@ work each of its tasks as a goal (`task_goal: on`, see [Sessions](sessions.md#ta
 
 Use `/goal <objective>` to set a goal, or `/goal edit <objective>`, `/goal pause`,
 `/goal resume` and `/goal clear`. An objective is 1–4,000 characters. Pause retains its text;
-resume starts it again. Anyone who can chat in the conversation may change its goal. Shared
+resume starts it again. Anyone who can chat in the conversation may change its goal, except in a
+task's own room, where only someone on the task or a mover may ([Tasks](tasks.md)). Shared
 room members see the same goal, and personal rooms retain their usual privacy.
 
 The harness reports Working, Paused, Met or Stopped, with its reason. Met and Stopped add a
@@ -32,6 +33,15 @@ Typing `/` shows Tico's commands (`goal`, `new`, `task`, `branch`, `help`) and t
 commands reported by the computer. Claude Code supports `compact`, `clear` and `model`.
 Codex uses app-server equivalents for `compact` and `review` when its installed protocol
 supports them. Unknown commands remain ordinary messages. Bot skills are not included yet.
+
+A task's comment can set the goal of the task's session as well. **Set as goal** in the task's composer,
+`hub task comment <task-id> "<objective>" --goal`, `hub_task_comment` with `delivery: "goal"`, and
+`POST /v2/tasks/{id}/comments` with `"delivery": "goal"` all set it the way `/goal <objective>` does in that
+conversation. The comment is kept on the task quietly, and the goal line wakes the bot. The same access and harness
+checks apply: 403 without write access, 403 for someone not on the task (a mover may set it), `goal_unsupported` (409)
+for a harness that cannot take goals. A task still in a chat room (one filed into a chat before task rooms) has no goal
+of its own, so a goal comment on it is a 409 and the chat's goal stays as it is. A goal comment
+takes no files and cannot be public (422), and its response carries the `goal` it set. See [Tasks](tasks.md).
 
 The CLI and MCP use the same API and access checks:
 

@@ -30,7 +30,7 @@
 .tl-tabs [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tl-tabs .cnt{font-size:var(--t-xs);color:var(--muted);font-weight:500}
 .tl-tabs .cnt.hot{color:var(--wait-ink);font-weight:600}
-.tl-type-search{display:flex;align-items:center;gap:10px;flex:1 1 auto;max-width:380px;min-width:0}
+.tl-type-search{display:flex;align-items:center;gap:10px;flex:1 1 auto;max-width:480px;min-width:0}
 .tl-types{display:inline-flex;align-items:center;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .tl-types[hidden]{display:none}
 .tl-types button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/1 var(--sans);white-space:nowrap;cursor:pointer}
@@ -268,7 +268,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 @container tasks (max-width:920px){
   .tl-head{flex-wrap:wrap;row-gap:8px}
   .tl-tabs{order:5;flex-basis:100%;max-width:100%;overflow-x:auto}
-  .tl-type-search{flex:0 1 380px}
+  .tl-type-search{flex:0 1 440px}
 }
 @container tasks (max-width:900px){
   .tl-new span{display:none}
@@ -289,6 +289,13 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-type-more span{max-width:80px;min-width:0}
   .tl-tabs{order:5;max-width:100%;overflow-x:auto;scrollbar-width:none}
   .tl-note-text,.tl-due{display:none}
+}
+/* A phone: an empty search is its icon, so the type keeps its words; tapped (or holding words) it covers the type row */
+@media (max-width:760px){
+  .tl-type-search{position:relative}
+  .tl-search:not(:focus-within):has(input:placeholder-shown){flex:none;position:relative;width:32px;margin-left:auto;min-width:0;padding:0;justify-content:center;cursor:pointer}
+  .tl-search:not(:focus-within):has(input:placeholder-shown) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+  .tl-search:focus-within,.tl-search:has(input:not(:placeholder-shown)){position:absolute;inset:0;z-index:1;max-width:none;height:auto}
 }
 
 /* ---- a phone: the peek is a full-screen sheet; rows are dense, the title gets two lines and the note its own
@@ -314,6 +321,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
+  .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}
   .tl-groupchip .k{display:none}
   .tl-addf.tl-ic{width:32px;height:32px}

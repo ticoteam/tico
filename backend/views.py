@@ -630,7 +630,8 @@ def operation_issues(c, who, auth):
                     at = (stamps[0].strftime("%H:%M") if stamps and len(stamps) == len(rows)
                           and (stamps[-1] - stamps[0]).total_seconds() <= 600 else None)
                     when = f" at {at} UTC" if at else ""
-                    why = {"interrupted": f"Its computer interrupted {these}{when}, usually for a restart or update",
+                    why = {"update": f"{these.capitalize()} stopped during Tico's update{when}",
+                           "interrupted": f"Its computer interrupted {these}{when}, usually for a restart",
                            "quota": f"{these.capitalize()} stopped at a usage limit",
                            "capacity": f"{these.capitalize()} stopped because the AI service was busy",
                            "timeout": f"Its computer stopped answering during {these}"}[cause]
@@ -646,12 +647,16 @@ def operation_issues(c, who, auth):
                 newer = uncertain - count
                 more = f" {newer} more stopped since." if newer > 0 else ""
                 operator = auth.operator(c, who, slug)
+                # The same rows as the card above, so Try again / Don't retry act on each run here too.
+                rows, run_count = stopped_rows(c, who, auth, slug)
+                can_review = who.actor == "bot:botops" or operator
+                if not can_review:
+                    rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
                     f"waiting {hours} h",
-                    f"Nobody has decided {them} yet. Tico paused only that request so it will not repeat a possible "
-                    f"outside action.{held_note}{more}{queued_note} Choose Try again or Don't retry.",
+                    f"Nobody has decided {them} yet.{more}{queued_note} Choose Try again or Don't retry.",
                     bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
-                    waiting_hours=hours)
+                    waiting_hours=hours, runs=rows, more_runs=max(0, run_count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
