@@ -256,7 +256,7 @@ STABLE = [
      "follow_up), or take the relation off with remove", "TaskResult"),
     ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
      "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
-     "as themselves; a task carrying work is refused (409 has_work)", None),
+     "as themselves, whatever bots did on it: that work stays in place, hidden until a restore", None),
     ("/api/v2/tasks/{tid}/model", "post", "Tasks", "setTaskModel",
      "Set the model this task's runs use, with its effort and harness (backend/task_run_models.py): an absent `model` "
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "

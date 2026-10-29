@@ -20906,7 +20906,7 @@
     },
     "/api/v2/tasks/{tid}/delete": {
       "post": {
-        "summary": "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in as themselves; a task carrying work is refused (409 has_work)",
+        "summary": "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in as themselves, whatever bots did on it: that work stays in place, hidden until a restore",
         "operationId": "deleteTask",
         "parameters": [
           {

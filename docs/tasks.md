@@ -1601,9 +1601,11 @@ task takes it. Restoring puts the same rows back; a link to a task that is still
 unset, and the answer says which. Whoever deleted the task, its requester, or anyone who may move any
 task can restore it.
 
-A task carrying work is refused (`409 has_work`, close it instead), so deleting never touches what
-someone did: a bot turn, a job, an approval, a bot's own file, a routine occurrence, a meeting
-delivery, or a subtask. Files attached to the task or its comments are not work: they go with the
+A task always deletes, whatever was done on it, because closing it instead would count it as
+finished work. What bots did on it (turns, jobs, approvals, a bot's own files, a routine occurrence,
+a meeting delivery) stays where it is: no one can read the task's conversation while it is in the
+trash, its queued bot jobs are cancelled, its subtasks lose their parent and the tasks it blocked
+are freed. A restore links it all back. Files attached to the task or its comments are not work: they go with the
 task, no one can open them while it is in the trash, and a restore brings them back. The audit log keeps `task.deleted`, `task.restored` and `task.purged` events with who did it
 and the task's title.
 

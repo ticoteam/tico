@@ -4540,10 +4540,10 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/delete")
     def task_delete(request: Request, tid: str, body: M.Empty):
-        """A person deletes a task made by mistake: its human requester, or anyone who may move any
-        task. Bots and delegated sessions close instead. A task carrying work (a bot turn, a bot's own file,
-        an approval, a subtask) is refused, so deleting never takes away what someone did. The task
-        goes to the trash, from which it can be restored."""
+        """A person deletes a task: its human requester, or anyone who may move any task. Bots and
+        delegated sessions close instead. Closing reads as finished work, so a person can always delete,
+        whatever bots did on the task: that work stays in place, unreadable while the task is gone
+        (task_delete.delete_tasks keep_work). The task goes to the trash, from which it can be restored."""
         who = request.state.identity
         person_only(who, "deletes a task; close it instead")
         def work(c):
@@ -4552,7 +4552,7 @@ def create_app(settings=None):
             row = auth.task(c, who, task_id)
             if row["requester"] != who.actor and not mover(c, who):
                 raise Problem("forbidden", "Only the task's requester, or someone who may move any task, deletes it", 403)
-            report = delete_tasks(c, [task_id], apply=True, actor=who.actor)
+            report = delete_tasks(c, [task_id], apply=True, actor=who.actor, keep_work=True)
             if not report["applied"]:
                 reasons = ", ".join(sorted(report["refused"])) or "unknown task"
                 raise Problem("has_work", "This task carries work (" + reasons + "); close it instead", 409)

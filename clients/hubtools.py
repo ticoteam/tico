@@ -1158,7 +1158,7 @@ def task_ask_resolve(api, args):
 
 @tool("hub_task_delete", "Delete a task made by mistake, such as a duplicate: it goes to the trash and can be "
       "restored. Only a person signed in as themselves may: the task's requester, or someone who may move any "
-      "task. A task carrying work (a bot turn, a bot's own file, an approval, a subtask) is refused; close it instead.",
+      "task. It deletes whatever bots did on it; that work stays in place, hidden until a restore.",
       {"id": TASK_ID}, required=("id",), writes=True)
 def task_delete(api, args):
     return api.post(f"tasks/{args['id']}/delete", {}, key=_key(args))
