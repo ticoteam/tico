@@ -2743,8 +2743,16 @@ def runnable_choices(c, who, auth, settings):
             and not model.get("deprecated") and (not enabled or "tico" in enabled)}
     out = {}
     from .harnesses import resolve_harness
-    for row in c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot"):
+    from . import read_cache
+    from .readiness import CONFIG_SQL, PLACED_SQL, RUNNER_SQL
+    # `can_run` judges a bot once per harness and per computer it may move to: each bot's computer (one row per
+    # computer, shared by its bots) and each bot's config are read once here, not once per check.
+    for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
+        read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
+    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+                     "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
+    read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
+    for row in rows:
         bot = row["bot"]
         if not auth.bot_manager(c, who, bot):
             continue
