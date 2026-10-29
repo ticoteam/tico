@@ -572,6 +572,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
+  if (m.refs?.reconnect && typeof m.refs.reconnect === 'object') return reconnectCardHTML(m);
   // a question's text is in its block; a body that only repeats it is left out
   const body = ask && ask.questions.some(q => String(q.question || '').trim() === String(m.body || '').trim()) ? '' : m.body || '';
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
@@ -584,6 +585,38 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     <div class="bubble ${person ? 'you' : 'bot'}">${body ? `<div class="md">${safeMd(body)}</div>` : ''}
     ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.from_actor, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
 }
+// A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
+// can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
+function reconnectCardHTML(m) {
+  const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
+  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>`;
+  const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
+  // A retired card asks nothing: its request is cancelled, so it shows Not needed, never a card to save.
+  if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
+    return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
+  }
+  let act = '';
+  if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
+  else if (status !== 'open') act = `<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`;
+  else if (!mine) act = `<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`;
+  else if (r.service === 'google') act = '<button type="button" class="primary" data-reconnect-google>Reconnect Google</button>';
+  else if (r.service === 'login' && typeof harnessCaps === 'function' && harnessCaps(fix.runtime).browser_sign_in) {
+    act = `<button type="button" class="primary" data-model-login data-runner="${esc(fix.runner || '')}" data-runtime="${esc(fix.runtime || '')}" data-machine="${esc(fix.machine || '')}">Sign in</button>`;
+  } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
+  return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
+}
+// Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
+document.addEventListener('click', async ev => {
+  const button = ev.target.closest('[data-reconnect-google]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const started = await post('/v2/mail/google/connect', {});
+    // Only Google's own sign-in page, never an address from anywhere else.
+    if (!/^https:\/\/accounts\.google\.com\//.test(started.auth_url || '')) throw new Error('Unexpected sign-in address');
+    location.href = started.auth_url;
+  } catch (e) { toast(e.message, true); button.disabled = false; }
+});
 // A reply's run, folded to one line ("6 steps · 4 tool calls · 2m"); opening it reads the steps once (GET
 // /v2/turns/{id}/steps) and they stay open across redraws. `TASK_STEPS` holds what was read, per turn.
 const TASK_STEPS = {html: new Map(), live: new Map(), open: new Set(), reading: new Set()};
@@ -837,6 +870,8 @@ function taskCommentsRender(state, data, sent = '') {
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
     roadmapCommentsBind(state);
+    if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
+      reload: () => taskChatRead(state)});
     state.rendered = html;
   }
 }

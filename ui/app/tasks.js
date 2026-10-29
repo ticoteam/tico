@@ -185,8 +185,10 @@ function taskOlderAsk(t) {
   return !!me && !!t && !taskFinished(t) && t.ask?.to_actor === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
+// Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
 function taskWaitingOn(t) {
-  return t?.status === 'waiting' && actorPerson(t.waiting_on) ? t.waiting_on : '';
+  if (t?.status !== 'waiting') return '';
+  return actorPerson(t.waiting_on) ? t.waiting_on : actorPerson(t.reconnect?.person) ? t.reconnect.person : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {

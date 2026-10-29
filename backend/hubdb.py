@@ -1246,6 +1246,9 @@ def migrate(conn, adopt_legacy=False):
     # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
     from .milestone_waits import ensure as ensure_milestone_waits
     ensure_milestone_waits(conn)
+    # Reconnect cards: a task waits for a person to fix a missing or refused account (backend/reconnects.py).
+    from .reconnects import ensure as ensure_reconnects
+    ensure_reconnects(conn)
     # Recruiting seats: org-chart roles with no bot yet (backend/lifecycle.py).
     from .lifecycle import ensure as ensure_seats
     ensure_seats(conn)
@@ -5196,6 +5199,8 @@ def _made_private(conn, actor, task_id):
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
     _task_event(conn, task_id, actor, "private", 0, 1, "")
     _private_followups(conn, task_id)
+    from .reconnects import access_changed as reconnects_access_changed
+    reconnects_access_changed(conn, task_id)    # a reconnect card's person may not read it now
 
 
 def _private_followups(conn, task_id):
@@ -6494,6 +6499,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     args["updated"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
+    if args.get("private"):
+        # Made private: a reconnect card's person may not read it now (backend/reconnects.py).
+        from .reconnects import access_changed as reconnects_access_changed
+        reconnects_access_changed(conn, task_id)
     if person and status == "waiting":
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     after = task(conn, task_id) or {}
@@ -7075,6 +7084,10 @@ def wait_detail(conn, row, *, children=True):
         return {"why": "an open blocker", "on": (_one(conn, "SELECT owner FROM tasks WHERE id=?", (blocker,)) or {}).get("owner")}
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
         return {"why": "an undecided approval", "on": "person"}
+    from .reconnects import hold as reconnect_hold
+    reconnect = reconnect_hold(conn, row["id"])
+    if reconnect:
+        return {"why": reconnect["why"], "on": reconnect["on"]}
     if row.get("waiting_on"):
         return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
     from .worktree_waits import for_task as worktree_waits
@@ -7209,6 +7222,10 @@ def _task_event(conn, task_id, actor, field, old, new, note=""):
                  (event_id, task_id, now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note,
                   *(v for _, v in extra)))
+    if field in ("status", "owner"):
+        # A reconnect card stands only on its unfinished task with the owner it was opened for (backend/reconnects.py).
+        from .reconnects import moved as reconnects_moved
+        reconnects_moved(conn, task_id, field, old, new)
     if field in ("status", "owner", "step"):
         _task_changed(conn, task_id, actor, field, old, new, event_id)
 
@@ -8306,6 +8323,10 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
         refs = {**(refs or {}), "quiet": True}
     if not target or not _actor_exists(conn, target) or not task_private_readable(conn, target, task_row):
         return None
+    if is_bot(target) and target == task_row.get("owner") and not (refs or {}).get("quiet"):
+        # A reconnect wake still owed on this task rides on this one (backend/reconnects.py): one wake, not two.
+        from .reconnects import fold_into as reconnects_fold
+        body, refs = reconnects_fold(conn, task_row, body, refs)
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(conn, KEEPER, target, body,
                           conversation(conn, task_row["conversation_id"]), "notice",
@@ -9359,6 +9380,10 @@ def needs_you(conn, who):
     # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
     waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
                                             "ORDER BY created", (actor,))) if t["id"] not in seen and not TS.snoozed(t)]
+    # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them.
+    from . import reconnects
+    seen |= {t["id"] for t in waited}
+    waited += [t for t in reconnects.tasks_for(conn, actor) if t["id"] not in seen and not TS.snoozed(t)]
     # What the Strategy Bot merged into one item of its own is that item here, not each original
     # (backend/strategy_merge.py).
     from . import strategy_merge

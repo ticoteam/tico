@@ -43,6 +43,8 @@ EMPTY = (
     "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
+    # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
+    "task_reconnects", "google_signin_refusals",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",

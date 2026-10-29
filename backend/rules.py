@@ -108,6 +108,7 @@ AWAITED_EVENTS = {
     "watcher": ("watcher", "something the bot watches moved or ended"),
     "resume": ("resume", "a deferred task's stored resume condition came true"),
     "milestone": ("milestone", "a pull request it waits for merged or a release it waits for was published"),
+    "reconnected": ("reconnected", "the account or credential its reconnect card waited for works again"),
 }
 # Events that wake under a rule of the same name. Another builder's new event names a `refs.wake` and lands here.
 WAKE_EVENTS = {

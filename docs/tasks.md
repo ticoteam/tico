@@ -229,6 +229,33 @@ deleted task keeps its waits in the trash and gets them back when restored. The 
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
+### Reconnect cards
+
+When a bot's work on a task stops because an account or a credential needs a person, Tico puts one card in the
+task's thread ("Sales Bot can't reach Google (ana@acme.example)."), with the fix for the person who can make it and
+"Waiting on <person>" for everyone else. The task waits on the card: it is in that person's Needs you under connect,
+and no stall check, stranded sweep or news wakes the bot meanwhile. When the account works again the card says
+Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnected. Continue."); the task goes back to
+the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
+another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
+stands only while its task is unfinished and keeps the owner it was opened for, and its bot is not archived; otherwise
+it says Not needed and asks nothing (a credential card's request is cancelled, so it can no longer be saved). The
+person is one who can read the task; on a private task nobody else gets the card. When a task is made private and a
+card's person cannot read it any more, a sign-in card moves to the operator or owner who can. Any other card says Not
+needed, and the task stops waiting on it.
+
+| What stopped | Who fixes it | Fix on the card | Fixed when |
+| --- | --- | --- | --- |
+| The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | every service that refused it (mail, calendar) reports that mailbox working, or the person connects it again |
+| The provider refused a computer's sign-in or key for one profile (`login:<computer>:<runtime>:<profile>`, `_default` for the computer's own login) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports that profile's login ready, or a run on that profile completes (not a fallback's) |
+| A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<bot>:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; cancelling the card ends the wait too |
+
+A bot held for failed sign-ins with a standing login card has no second Needs-you item; the fix releases it, and the
+item comes back if the card is retired unfixed. Each card's
+message carries `refs.reconnect` (`key`, `service`, `label`, `person`, `fix`, `status`). The tables are
+`task_reconnects` and `google_signin_refusals` (each refusing service per mailbox); other accounts (GitHub, an MCP server's sign-in) are new keys through the same path
+(backend/reconnects.py).
+
 When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then
 name the bot with `--on` and give the reason in the note:
 

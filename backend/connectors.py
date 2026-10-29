@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import google_connect, routines
+from . import google_connect, reconnects, routines
 from .store import H, P, Problem, encode
 
 
@@ -340,6 +340,7 @@ def install_connectors(app, store, execution, mutate):
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
                       ("connector:calendar", H.now(), encode({"runner_id": runner["id"], "snapshots": len(seen)})))
+            reconnects.google_good(c, "calendar", seen)      # a published calendar is that account working
             return {"ok": True, "snapshots": len(seen)}
         return mutate(request, body, work)
 
@@ -354,18 +355,22 @@ def install_connectors(app, store, execution, mutate):
                 c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                           "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
                           "detail_json=excluded.detail_json", (service, H.now(), encode({"runner_id": runner["id"]})))
+                reconnects.google_report(c, body.service, [])
                 return {"ok": True}
             label = "Calendar" if body.service == "calendar" else "Mail"
             error = "; ".join(
                 f"{label} can't refresh for {f.account}: "
                 + CONNECTOR_REASON[f.reason].format(domain=f.account.rpartition("@")[2]) for f in body.failing)
             signin = any(f.reason == "signin" for f in body.failing)
-            detail = {"runner_id": runner["id"], "needs_person": signin,
-                      **({"action": "Reconnect the Google account for " + ", ".join(
-                          f.account for f in body.failing if f.reason == "signin")} if signin else {})}
+            refused = [f.account for f in body.failing if f.reason == "signin"]
+            detail = {"runner_id": runner["id"], "needs_person": signin, "signin": refused,
+                      **({"action": "Reconnect the Google account for " + ", ".join(refused)} if signin else {})}
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (service, error[:1000], encode(detail)))
+            # The tasks a refused sign-in stops get a card for the mailbox's person; an account this service no longer
+            # lists works again for it (backend/reconnects.py).
+            reconnects.google_report(c, body.service, refused, [f.account for f in body.failing])
             return {"ok": False}
         return mutate(request, body, work)
 
@@ -605,6 +610,7 @@ def install_connectors(app, store, execution, mutate):
             c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
                       ("connector:mail", now, encode(detail)))
+            reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working
             return {"accepted": accepted}
         return mutate(request, body, work)
 
