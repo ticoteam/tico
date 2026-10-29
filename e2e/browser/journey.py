@@ -66,7 +66,29 @@ def install(method, path, body=None):
         with urllib.request.urlopen(request, timeout=60) as reply:
             return json.loads(reply.read().decode() or "{}")
     except urllib.error.HTTPError as error:
-        raise SystemExit(f"journey: {method} {path} answered {error.code}")
+        raise SystemExit(f"journey: {method} {path} answered {error.code}: {problem_text(error)}")
+
+
+def problem_text(error):
+    # What the server says is wrong, never what was sent back: a validation error can repeat its input, and the input
+    # may be a password.
+    try:
+        data = json.loads(error.read().decode() or "{}")
+    except (ValueError, OSError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("message", "error"):
+        if isinstance(data.get(key), str):
+            return data[key][:160]
+    detail = data.get("detail")
+    if isinstance(detail, str):
+        return detail[:160]
+    if isinstance(detail, list):
+        parts = [".".join(str(p) for p in item.get("loc", [])) + ": " + str(item.get("msg", ""))
+                 for item in detail if isinstance(item, dict)]
+        return "; ".join(parts)[:160]
+    return ""
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -90,8 +112,12 @@ def post_form(opener, url, fields):
 
 
 def get_page(opener, url):
-    with opener.open(url, timeout=30) as reply:
-        return reply.status, reply.read().decode(errors="replace")
+    # A signed-out page redirects to the login page, which the no-redirect opener reports as an error: that is an answer.
+    try:
+        with opener.open(url, timeout=30) as reply:
+            return reply.status, reply.read().decode(errors="replace")
+    except urllib.error.HTTPError as error:
+        return error.code, ""
 
 
 def check(name, ok):

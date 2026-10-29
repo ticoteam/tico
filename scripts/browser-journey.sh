@@ -238,7 +238,7 @@ EOF
 
 step_reach() {
   local ok=0
-  curl -fsS -o /dev/null "http://127.0.0.1:$PRACTICE_PORT/"
+  retry 60 curl -fsS -o /dev/null "http://127.0.0.1:$PRACTICE_PORT/"
   verdict "practice login site answers on the host" $? || ok=1
   dc exec -T server python -I -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8791/_state", timeout=5).read()' >/dev/null 2>&1
   verdict "inbox stub answers in the server's network" $? || ok=1

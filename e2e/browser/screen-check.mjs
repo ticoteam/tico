@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The screen step's host side: opens one computer's screen page the way a phone does (390x844, touch, mobile
-// emulation) and reports what it can see. It prints one JSON object, {ok, checks}, with check names and results only:
-// the page's text is never printed.
+// emulation) and reports what it can see. It prints one JSON object, {ok, checks}, with check names, results and the
+// HTTP statuses of the page's API calls: the page's text is never printed.
 //
 //   node screen-check.mjs <base url> <computer id> <screenshot path>
 //
@@ -18,9 +18,14 @@ try {
     viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, deviceScaleFactor: 2,
   });
   const page = await context.newPage();
+  const statuses = [];
+  page.on('response', response => {
+    if (response.url().includes('/api/v2/')) statuses.push(response.status());
+  });
   await page.goto(`${base}/#/computers/${encodeURIComponent(computer)}/screen`, {waitUntil: 'load', timeout: 60000});
   const shown = await page.waitForSelector('#scr', {timeout: 30000}).then(() => true, () => false);
-  check('the screen element is on the page', shown);
+  const apiSeen = [...new Set(statuses)].sort().join(',') || 'none';
+  check('the screen element is on the page', shown, `api statuses seen: ${apiSeen}`);
   const state = await page.locator('#scr-state').first().textContent({timeout: 5000}).catch(() => null);
   check('the screen state line is shown', typeof state === 'string' && state.trim() !== '');
   const mode = await page.locator('#scr-mode').first().textContent({timeout: 5000}).catch(() => null);
