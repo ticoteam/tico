@@ -717,11 +717,13 @@ def task_run(api, args):
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
       "wakes its bot about it (no stall wake, Still wanted? or Due reminder; a person's comment still does) until "
       "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
-      "Snoozing again moves the date.",
-      {"id": TASK_ID, "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone")},
+      "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
+      "(at most 500 characters).",
+      {"id": TASK_ID, "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
+       "note": _s("What to check when the snooze ends, in a sentence or two")},
       required=("id", "until"), writes=True)
 def task_snooze(api, args):
-    return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"]}, key=_key(args))
+    return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_waive_qa", "A person waives a Dev ticket's current In QA step for one exact pull request head, with a "
@@ -1233,13 +1235,16 @@ def task_relate(api, args):
 
 @tool("hub_task_wait", "Make a task wait on another task (task:<id>, blocked_by), a pull request merging (pr:<url>, "
       "or pr:<task> for the one pull request linked on that task) or a release being published (release:<tag>). The "
-      "owner gets one wake when it happens; the task waited on keeps its own step. The reply's `readback` says what was "
+      "owner gets one wake when it happens; the task waited on keeps its own step. `note` (pr: and release: only) comes "
+      "back in that wake: what to check. The reply's `readback` says what was "
       "stored: check it before reporting the wait as set. `remove` takes it off.",
       {"id": TASK_ID, "on": _s("task:<id>, pr:<url|task> or release:<tag>"),
-       "remove": {"type": "boolean", "default": False}},
+       "remove": {"type": "boolean", "default": False},
+       "note": _s("What to check when the pull request or release wait fires, in a sentence or two")},
       required=("id", "on"), writes=True)
 def task_wait(api, args):
-    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove"))}, key=_key(args))
+    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove")),
+                                                  "note": args.get("note")}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- goals
@@ -3114,10 +3119,18 @@ def automation_runs(api, args):
     return _as_person(api).get(f"automations/{args['id']}/runs" + ("?" + query if query else ""))
 
 
+@tool("hub_automation_held", "End an automation's run-guard hold (`hold` on hub_automation_get): `release` queues its "
+      "held runs, oldest first; `drop` skips them. Fix what starts a loop first.",
+      {"id": _s("auto_..."), "action": {"type": "string", "enum": ["release", "drop"]}},
+      required=("id", "action"), writes=True)
+def automation_held(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/held", {"action": args["action"]}, key=_key(args))
+
+
 @tool("hub_automation_recent_runs", "Runs across every automation you may see in the last `range`, newest first: what "
       "started each, its outcome or failing step, steps, time and cost. `trigger: system` is Tico's own jobs.",
       {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"},
-       "status": {"type": "string", "enum": ["done", "failed", "waiting", "running"]},
+       "status": {"type": "string", "enum": ["done", "failed", "waiting", "running", "held"]},
        "trigger": _s("message, task_received, schedule, webhook, listening, event or system; comma-separated"),
        "owner": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
        "before": _s("`next` from the page before")})

@@ -75,9 +75,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
                                            blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
-    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
                                            wait on a task, a PR merging or a release; one wake when it happens
-    hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
+    hub task snooze <id> --until DATE [--note "..."]
+                                           set it aside until DATE: off the lists and quiet until then
     hub task later <id> --after ID|--at DATE|--next-run|--handled
                                            a deferred task this run carried and will not do now: when to pick it up
                                            (`hub task defer` is the old name)
@@ -267,6 +268,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub automation delete <id>
     hub automation run <id> [--input JSON] run now with a sample trigger output; prints the run
     hub automation runs <id> [--limit N] [--before RUN]
+    hub automation held <id> release|drop  end a run-guard hold: queue its held runs, or skip them
     hub automation recent-runs [--range 5m|1h|24h|7d] [--status S] [--trigger T] [--owner O] [--limit N] [--before B]
                                            runs across every automation you may see, newest first
     hub automation stats [--range 5m|1h|24h|7d]
@@ -1316,6 +1318,7 @@ def parser():
     s.add_argument("--on", dest="wait_on", required=True,
                    help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
                         "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--note", help="what to check when the pr: or release: wait fires, in the wake; one or two sentences")
     s.add_argument("--remove", action="store_true", help="take the wait off instead")
     s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
@@ -1405,6 +1408,8 @@ def parser():
     s.add_argument("id")
     s.add_argument("--until", required=True,
                    help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
+    s.add_argument("--note", help="what to check when the snooze ends, in the owner's wake: what you are waiting for and "
+                                  "where to look (at most 500 characters)")
     s.set_defaults(fn="task snooze")
     # `defer` is its older name: a date makes it a snooze-like hold, not a delivery (backend/delivery.py).
     s = task.add_parser("later", aliases=["defer"],
@@ -1995,9 +2000,13 @@ def parser():
     s.add_argument("--limit", type=int)
     s.add_argument("--before", help="`next` from the page before")
     s.set_defaults(fn="automation runs")
+    s = auto.add_parser("held", help="end a run-guard hold: release queues its held runs, drop skips them")
+    s.add_argument("id")
+    s.add_argument("action", choices=["release", "drop"])
+    s.set_defaults(fn="automation held")
     s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
     s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.add_argument("--status", choices=["done", "failed", "waiting", "running"])
+    s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
     s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event or system")
     s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
     s.add_argument("--limit", type=int)

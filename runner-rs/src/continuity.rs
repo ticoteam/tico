@@ -136,6 +136,29 @@ pub fn interrupted_key(thread: &str) -> String {
     format!("interrupted:{thread}")
 }
 
+/// The key under which the state keeps the digest of the standing lines this thread holds (crate::prompt::Built);
+/// empty while it may not hold them.
+pub fn standing_key(thread: &str) -> String {
+    format!("standing:{thread}")
+}
+
+/// The key under which the state keeps the id and digest of the task this thread holds, the same way.
+pub fn task_key(thread: &str) -> String {
+    format!("standing-task:{thread}")
+}
+
+/// The key under which the state keeps the size of this thread's context after its last completed turn.
+pub fn context_key(thread: &str) -> String {
+    format!("context:{thread}")
+}
+
+/// Whether a session whose last turn ended at `context` tokens has clear room before it compacts at `compact_at`
+/// (under 60% of it) with a prompt of `prompt` characters added, at four to a token. Unknown is no room.
+pub fn headroom(context: Option<i64>, prompt: usize, compact_at: &Value) -> bool {
+    let prompt = (prompt / 4) as i64;
+    context.is_some_and(|c| c > 0 && (c + prompt) * 10 < crate::hosts::compact_at(compact_at) * 6)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +183,18 @@ mod tests {
         for s in [Session::new(NONE_SAVED, None), Session::new(FALLBACK_SIDE, None), Session::resumed(), Session::compacted()] {
             assert_eq!(s.prompt_note(true), None, "{s:?}");
         }
+    }
+
+    #[test]
+    fn only_a_session_well_under_its_compact_at_has_room_for_a_short_prompt() {
+        assert!(headroom(Some(100_000), 0, &Value::Null), "under 60% of the 250k default");
+        assert!(!headroom(Some(150_000), 0, &Value::Null), "at 60%");
+        assert!(!headroom(Some(220_000), 0, &Value::Null));
+        assert!(!headroom(Some(40_000), 0, &json!(60_000)), "a bot's own Compact at");
+        assert!(headroom(Some(40_000), 0, &json!(100_000)));
+        assert!(!headroom(Some(100_000), 200_000, &Value::Null), "the prompt counts too: 100k + 50k is 60%");
+        assert!(headroom(Some(100_000), 100_000, &Value::Null));
+        assert!(!headroom(None, 0, &Value::Null) && !headroom(Some(0), 0, &Value::Null), "unknown usage is no room");
     }
 
     #[test]

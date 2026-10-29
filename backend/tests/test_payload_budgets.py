@@ -234,3 +234,20 @@ def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api)
     assert [row["id"] for row in page["transitions"]] == newest[:3] and page["transitions_truncated"] is True
     page = api.get("/api/v2/settings/history?limit=4", headers=headers()).json()
     assert len(page["transitions"]) == 4 and page["transitions_truncated"] is False
+
+
+def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
+    store = api.app.state.store
+    task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
+    note = "🔔" * 500                                   # 500 characters, 2,000 bytes each
+    with store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
+        clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
+        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_note=? WHERE title LIKE 'Snoozed %'",
+                  (H.shift(H.now(), days=5), note))
+    board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
+    rows = board.json()["tasks"]
+    assert len(rows) == 500
+    assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
+    whole = get(api, "tasks/" + task["id"])["task"]
+    assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"

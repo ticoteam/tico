@@ -1,5 +1,8 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
+- `which-run.md`: which playbook a run needs, by the work it starts from.
+- `levels.md`: what Passive, level 2 and level 3 each allow, and the limit on Needs you items.
+- `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.
 - `draft-the-strategy.md`: a task "Draft the strategy", or the owner asking in chat. From the market pages and the
   default guide, build claims the owner confirms or strikes, propose three to five bets and the four sections as
   one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.

@@ -126,6 +126,13 @@ export type Automation = {
 };
 };
   enabled?: boolean;
+  hold?: {
+  dropped: number;
+  held: number;
+  rule: "flood" | "sustained";
+  since: string;
+  task: string | null;
+};
   id: string;
   kind?: string;
   last_run?: Record<string, unknown> | null;
@@ -154,6 +161,46 @@ export type AutomationDeleted = {
 
 export type AutomationGuide = {
   text: string;
+};
+
+export type AutomationHeld = {
+  batch?: Record<string, unknown> | null;
+  can_edit: boolean;
+  can_pause?: boolean;
+  counts?: {
+  today: {
+  dropped: number;
+  runs: number;
+};
+};
+  enabled?: boolean;
+  hold?: {
+  dropped: number;
+  held: number;
+  rule: "flood" | "sustained";
+  since: string;
+  task: string | null;
+};
+  id: string;
+  kind?: string;
+  last_run?: Record<string, unknown> | null;
+  moved?: number;
+  name?: string;
+  next_run?: string | null;
+  owner?: string;
+  paused?: boolean;
+  pending?: number;
+  problems?: Array<{
+  rule: string;
+  step: string;
+  why: string;
+}>;
+  schedule?: string;
+  spend_cap?: Record<string, unknown> | null;
+  steps?: Array<Record<string, unknown>>;
+  trigger?: Record<string, unknown>;
+  version?: number;
+  warning?: string;
 };
 
 export type AutomationIn = {
@@ -211,7 +258,7 @@ export type AutomationRun = {
   finished?: string | null;
   id: string;
   started?: string;
-  status: "queued" | "running" | "waiting" | "ok" | "failed" | "empty" | "skipped";
+  status: "queued" | "running" | "waiting" | "ok" | "failed" | "empty" | "skipped" | "held";
   steps: Array<Record<string, unknown>> | null;
   summary?: string | null;
   trigger_ref?: string;
@@ -1393,6 +1440,10 @@ export type Health = {
 }>;
   storage?: Storage;
   stuck?: Array<Record<string, unknown>>;
+};
+
+export type HeldAction = {
+  action: string;
 };
 
 export type IfNoAnswer = {
@@ -2924,6 +2975,7 @@ export type Task = {
   roles?: Record<string, Array<string>>;
   size?: number | null;
   snoozed_by?: string | null;
+  snoozed_note?: string | null;
   snoozed_until?: string | null;
   status: string;
   step?: TaskStep | null;
@@ -3234,6 +3286,7 @@ export type TaskRunModelResult = {
 };
 
 export type TaskSnooze = {
+  note?: string | null;
   until: string;
 };
 
@@ -4408,6 +4461,14 @@ export type EnableWebhookParams = {
 };
 export type EnableWebhookBody = Empty;
 export type EnableWebhookResponse = WebhookEnabled;
+
+/** POST /api/v2/automations/{aid}/held */
+export type EndAutomationHoldParams = {
+  "Idempotency-Key": string;
+  aid: string;
+};
+export type EndAutomationHoldBody = HeldAction;
+export type EndAutomationHoldResponse = AutomationHeld;
 
 /** POST /auth/token */
 export type ExchangeCodeParams = Record<string, never>;

@@ -1045,6 +1045,8 @@ def create_app(settings=None):
             value["deferred"] = value["quiet"] = deferred
         # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
+        if not value.get("snoozed_note"):
+            value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
@@ -3271,6 +3273,8 @@ def create_app(settings=None):
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
+                        # A snooze's note is left out of a list row; the task's own view keeps it whole.
+                        row.pop("snoozed_note", None)
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
                 ids = reads.around(c, found[0]) if found else []
@@ -4210,7 +4214,7 @@ def create_app(settings=None):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who))
+            after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who), note=body.note)
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
@@ -4632,6 +4636,9 @@ def create_app(settings=None):
             kind, _, value = body.on.partition(":")
             note = None
             if kind.strip().lower() == "task":
+                if body.note and not body.remove:
+                    H.refuse(c, who.actor, "note", "a note goes with a pr: or release: wait; a task: wait is a blocked_by "
+                                                   "and says nothing of its own")
                 other_id = auth.resolve_task(c, who, value.strip())
                 auth.task(c, who, other_id)
                 changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
@@ -4653,7 +4660,7 @@ def create_app(settings=None):
                     readback = [f"Removed: {TR._name(c, task_id)} waits for {gone}"]
                 else:
                     wait = milestone_waits.add(c, who.actor, row, body.on, release_repo=settings.release_repo,
-                                               resolve_task=resolve)
+                                               resolve_task=resolve, note=body.note)
                     readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
                                 + (" (already happened: woken once)" if wait["woke_at"] else "")]
             return {"readback": readback,

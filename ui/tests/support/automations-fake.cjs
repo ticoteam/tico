@@ -198,6 +198,14 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         const from = before ? all.findIndex(r => r.id === before) + 1 : 0, rows = all.slice(from, from + limit);
         return json({runs: rows, next: from + limit < all.length ? rows.at(-1).id : null});
       }
+      // The run guard's hold: release queues its held runs, drop skips them (backend/automations.py `_unhold`).
+      if (rest === 'held' && method === 'POST') {
+        if (!a.hold) return refuse(409, 'not_on_hold', 'The automation is not on hold');
+        const moved = a.hold.held;
+        delete a.hold;
+        for (const r of db.runs[a.id] || []) if (r.status === 'held') r.status = body.action === 'release' ? 'queued' : 'skipped';
+        return json({...full(a), moved});
+      }
       if (rest === 'versions') {
         const status = url.searchParams.get('status');
         return json({versions: db.versions[a.id].filter(v => !status || v.status === status)});

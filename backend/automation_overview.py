@@ -17,7 +17,7 @@ from .store import H, Problem
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
 KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event", "system")
 STATUSES = {"done": ("ok", "empty", "skipped"), "ok": ("ok", "empty", "skipped"), "failed": ("failed",),
-            "waiting": ("waiting",), "running": ("queued", "running")}
+            "waiting": ("waiting",), "running": ("queued", "running"), "held": ("held",)}
 JOB_PREFIX = "tico.builtin.job."
 SYSTEM_RUN = "sys_"          # a system job's run id, so it never meets an automation run's
 IDS_MAX = 500
@@ -181,6 +181,8 @@ def outcome(status, state, flow):
         return f"Waiting at {_label(at, flow)}" if at else "Waiting"
     if status in ("queued", "running"):
         return "Running"
+    if status == "held":
+        return "Held"
     if status == "empty":
         return "Nothing found"
     if status == "skipped":
@@ -271,7 +273,7 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
             + (f" AND status IN ({','.join('?' * len(states))})" if states else "") + page_at
             + " ORDER BY started DESC, id DESC LIMIT ?",
             (since, json.dumps(list(by_id)), *(states or ()), *marks, limit + 1)).fetchall()]
-    if jobs and status != "waiting" and H._has_table(c, "system_runs"):
+    if jobs and status not in ("waiting", "held") and H._has_table(c, "system_runs"):
         where = {"done": " AND ok=1 AND finished IS NOT NULL", "ok": " AND ok=1 AND finished IS NOT NULL",
                  "failed": " AND ok=0", "running": " AND finished IS NULL"}.get(status, "")
         found += [("s", r) for r in c.execute(
@@ -361,7 +363,7 @@ def install(app, store, auth):
                              owner: str = "", ids: str = "", limit: int = 50, before: str = ""):
         """Runs across every automation you may see, newest first, in the last `range` (5m, 1h, 24h, 7d): what started
         each, its outcome or failing step, its step count, time and cost; no step detail. `status` (done, failed,
-        waiting, running), `trigger` (kinds, comma-separated, `system` for Tico's own jobs), `owner` and `ids` narrow
+        waiting, running, held), `trigger` (kinds, comma-separated, `system` for Tico's own jobs), `owner` and `ids` narrow
         it; `next` is the `before` for the page after."""
         who = request.state.identity
         with store.read() as c:

@@ -123,7 +123,8 @@
 @container (max-width:640px){.au-c .au-hd{flex-wrap:wrap}.au-c .au-hd2{order:10;flex-basis:100%}.au-hd2 .au-sp-phone{display:block;flex:1}}
 .au-hd{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 20px;min-height:53px;border-bottom:1px solid var(--line)}
 /* a long name keeps its line and the controls wrap after it; why a built-in has no switch goes on a line of its own */
-.au-hd>.au-lock,.au-hd>.au-warn{order:20;flex-basis:100%}
+.au-hd>.au-lock,.au-hd>.au-warn,.au-hd>.au-hold{order:20;flex-basis:100%}
+.au-hold{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;color:var(--muted);font-size:var(--t-sm)}
 .au-hd:empty{border:0;padding:0;min-height:0}
 .au-name{margin:0;font-size:var(--t-lg);font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-own{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}

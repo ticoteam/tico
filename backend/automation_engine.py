@@ -101,7 +101,8 @@ def charge(state, ref, cost):
 
 
 def advance(flow, state, services):
-    """Run every ready thread (and every batch wait whose time has come) until it ends or waits."""
+    """Run every ready thread (and every batch wait whose time has come) until it ends or waits, or until the run
+    guard puts its automation on hold (`services.on_hold`, asked before each step): then the rest stays ready."""
     now = services.now()
     for thread in state["threads"]:
         wait = thread.get("wait") or {}
@@ -110,6 +111,8 @@ def advance(flow, state, services):
     threads, n = state["threads"], 0
     while n < len(threads):   # a find puts its items' threads in the place of its own
         if threads[n]["state"] == READY:
+            if services.on_hold():
+                break
             _step(flow, state, threads[n], services)
             services.checkpoint(state)
         else:
@@ -120,6 +123,8 @@ def advance(flow, state, services):
 
 def _status(state):
     states = {t["state"] for t in state["threads"]}
+    if READY in states:   # stopped by a hold with steps still to run
+        return "running"
     if WAITING in states:
         return "waiting"
     if FAILED in states:

@@ -54,6 +54,7 @@ RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another pro
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
+SIGN_IN_RECHECK_SECONDS = 5  # a stream's sign-in is re-checked at most this often (SignIn)
 GATHER_SECONDS = 1.0      # coalesce busy teams' writes before per-viewer hydration
 GATHER_CHAT_SECONDS = 0.25  # a stream following a conversation: its messages and run output stay prompt
 LEAD_SECONDS = 0.02       # a ring after a quiet window waits only this long, for the rest of its request's writes
@@ -792,7 +793,9 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     ids = list(last)
     if not ids:
         return out
-    visible_sql = view.auth.task_sql(c, who)
+    # The viewer's own bot access, read once for the whole read (task_sql would read it again): the same answer.
+    unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
+    visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
     found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
@@ -1060,6 +1063,31 @@ class Beat:
             self.pending.add_done_callback(lambda task: task.cancelled() or task.exception())
 
 
+class SignIn:
+    """A stream's sign-in check, run by each poll and keepalive. Re-authenticating costs several lookups and a parse of
+    the people roster, and a busy team's polls come in bursts, so a check at most SIGN_IN_RECHECK_SECONDS old answers
+    for the next poll. A revoked sign-in or a changed role therefore ends the stream within that many seconds of its
+    next poll, and at the next keepalive at the latest (a quiet stream's check is never skipped that long). A refused
+    check raises Problem and is never remembered."""
+
+    def __init__(self, auth, headers, who, clock=time.monotonic):
+        self.auth, self.headers, self.who, self.clock = auth, headers, who, clock
+        self.checked_at = None
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            now = self.clock()
+            if self.checked_at is not None and now - self.checked_at < SIGN_IN_RECHECK_SECONDS:
+                return
+            fresh = self.auth.authenticate(self.headers)
+            # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
+            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
+            if fresh.actor == self.who.actor and fresh.role != self.who.role:
+                raise Problem("unauthenticated", "Sign in again", 401)
+            self.checked_at = now
+
+
 def install(app, store, auth, task_views, task_view):
     doorbell = bell(store)
 
@@ -1093,12 +1121,7 @@ def install(app, store, auth, task_views, task_view):
                     held.update(needs_baseline(c, auth, who, task_view))
                 return latest(c)
 
-        def check():
-            fresh = auth.authenticate(request.headers)
-            # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
-            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
-            if fresh.actor == who.actor and fresh.role != who.role:
-                raise Problem("unauthenticated", "Sign in again", 401)
+        check = SignIn(auth, request.headers, who)
 
         def poll(cursor):
             check()

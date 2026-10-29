@@ -55,6 +55,8 @@ def _H():
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
+    # What the owner checks when the milestone comes, in the wake (`note`; the task_snooze.clean_note rule).
+    _H().add_column(c, "task_milestone_waits", "note", "TEXT")
 
 
 def _present(c):
@@ -123,15 +125,27 @@ def parse(c, actor, spec, release_repo="", resolve_task=None):
     H.refuse(c, actor, "milestone", "wait on pr:<url|task>, release:<tag> or task:<id>")
 
 
-def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
+def add(c, actor, task_row, spec, release_repo="", resolve_task=None, note=None):
     """Store one milestone wait on `task_row` from `spec` (`pr:<url>`, `pr:<task>`, `release:<tag>`). Returns the
     wait as `waits` lists it, with `added` False when it was already there. Settles it at once when the milestone has
-    already happened."""
+    already happened. `note` goes in the owner's wake when it fires; a repeat with a note replaces the stored one."""
+    from .task_snooze import clean_note
     H = _H()
     ensure(c)
     kind, target, label, url = parse(c, actor, spec, release_repo, resolve_task)
-    added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created) "
-                      "VALUES(?,?,?,?,?,?,?)", (task_row["id"], kind, target, label, url, actor, H.now())).rowcount == 1
+    note = clean_note(c, actor, note)
+    added = c.execute("INSERT OR IGNORE INTO task_milestone_waits(task_id,kind,target,label,url,created_by,created,note) "
+                      "VALUES(?,?,?,?,?,?,?,?)", (task_row["id"], kind, target, label, url, actor, H.now(), note)).rowcount == 1
+    if not added and note:
+        # A changed note is a change to the task: its history shows who changed it, and clients see the new version.
+        was = c.execute("SELECT note FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
+                        (task_row["id"], kind, target)).fetchone()
+        if was and was[0] != note:
+            c.execute("UPDATE task_milestone_waits SET note=? WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
+                      (note, task_row["id"], kind, target))
+            H._task_event(c, task_row["id"], actor, "milestone_wait_note", was[0], note, "")
+            c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+            H.event(c, actor, "task.milestone_wait_note", task_row["id"], {"kind": kind, "target": target})
     if added:
         H._task_event(c, task_row["id"], actor, "milestone_wait", None, f"{kind}:{target}", "")
         c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
@@ -163,7 +177,7 @@ def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
 # ------------------------------------------------------------------------------------------------ reads
 def view(c, row):
     return {"kind": row["kind"], "target": row["target"], "label": row["label"], "url": row.get("url"),
-            "sentence": describe(c, row), "created": row["created"], "woke_at": row.get("woke_at"),
+            "sentence": describe(c, row), "created": row["created"], "woke_at": row.get("woke_at"), "note": row.get("note"),
             "met": bool(row.get("woke_at")) or happened_already(c, row["kind"], row["target"])}
 
 
@@ -216,9 +230,10 @@ def _fire(c, wait, why):
         H._set_status(c, H.KEEPER, row, "open", step=retained, note=why, skip_step_wake=(row["owner"],))
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         row = H.task(c, row["id"])
-    H._wake(c, row, row["owner"], f"Milestone: {row['title']}\n{why}",
-            refs={WAKE_REF: f"{wait['kind']}:{wait['target']}"}, trigger="status_or_relation",
-            source=f"{wait['kind']}:{wait['target']}")
+    note = wait.get("note")
+    H._wake(c, row, row["owner"], f"Milestone: {row['title']}\n{why}" + (f"\nYour note: {note}" if note else ""),
+            refs={WAKE_REF: f"{wait['kind']}:{wait['target']}", **({"note": note} if note else {})},
+            trigger="status_or_relation", source=f"{wait['kind']}:{wait['target']}")
     return row["id"]
 
 

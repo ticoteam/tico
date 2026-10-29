@@ -67,6 +67,23 @@ fold into one row (`count`).
 A prompt can read the trigger's values with `{{...}}`, for example `{{webhook.data}}` for a webhook call's body. Each
 one is passed as quoted data after the prompt, never as instructions.
 
+## On hold
+
+An automation that keeps starting runs for 20 minutes (more than 120, spread over at least 15 of those minutes), or
+starts more than 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
+same, so nothing is lost: its queued runs, any run whose wait ends meanwhile, and up to 500 new ones wait as **Held**
+instead of running (past that a trigger is counted as dropped, and the hold shows how many). A run mid-step finishes
+that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and the Health Monitor
+one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
+queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
+
+```
+hub automation held <id> release|drop
+```
+
+Over MCP this is `hub_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
+or `{"action": "drop"}`. Whoever may change the automation may do either.
+
 ## Events
 
 `hub event-types` (`hub_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an

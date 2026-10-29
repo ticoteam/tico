@@ -1292,6 +1292,10 @@ def migrate(conn, adopt_legacy=False):
             # columns, and the predicate matches its query word for word, so the scan never opens a body.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
                          "id, requester, owner, guest, private) WHERE private IS NOT 0")
+            # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads
+            # beyond the parties: each private row was a body-page read before this.
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
+                         "id, requester, owner, guest, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
             # answered from an index alone: the table's pages hold every body, and these reads need none of them.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
@@ -1326,6 +1330,8 @@ def migrate(conn, adopt_legacy=False):
     # A task snoozed until a date, and who snoozed it (backend/task_snooze.py).
     add_column(conn, "tasks", "snoozed_until", "TEXT")
     add_column(conn, "tasks", "snoozed_by", "TEXT")
+    # What the snoozer wants checked when the snooze ends, shown in the wake (backend/task_snooze.py).
+    add_column(conn, "tasks", "snoozed_note", "TEXT")
     # A review or QA child's verdict (approve|changes|pass|fail) and the pull request head it judged (record_verdict).
     add_column(conn, "tasks", "verdict", "TEXT")
     add_column(conn, "tasks", "verdict_head", "TEXT")

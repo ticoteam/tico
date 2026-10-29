@@ -742,6 +742,7 @@ SCHEMAS = {
                 snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
                                "off lists and Needs you, and quiet, until then"},
                 snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},
+                snoozed_note={"type": ["string", "null"], "description": "What to check when the snooze ends (sent in the owner's wake)"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
                        "chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody "
                        "holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task "
@@ -1423,6 +1424,9 @@ STABLE.extend([
      "The same delete, for clients that only POST", "AutomationDeleted"),
     ("/api/v2/automations/{aid}/run", "post", "Automations", "runAutomation",
      "Run it now with `input` standing in for the trigger's output; answers the run", "AutomationRunNow"),
+    ("/api/v2/automations/{aid}/held", "post", "Automations", "endAutomationHold",
+     "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
+     "AutomationHeld"),
     ("/api/v2/automations/{aid}/runs", "get", "Automations", "listAutomationRuns",
      "Its runs, newest first (limit, before → next), step detail for 30 days, and daily run and drop counts",
      "AutomationRuns"),
@@ -1441,7 +1445,7 @@ STABLE.extend([
      "The bot behind a person's Assistant, or null until it is first used", "PersonAssistant"),
 ])
 _RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started": "s",
-            "finished": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped"]},
+            "finished": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
             "cost": "f", "summary": "n", "steps": {"type": ["array", "null"], "items": {"type": "object"},
                                                    "description": "Each step's status, outputs and cost; null after 30 days"}},
            required=["id", "automation_id", "version", "status", "steps"])
@@ -1457,7 +1461,11 @@ SCHEMAS.update({
                        "problems": {"type": "array", "description": "Wake rules that name a step their task type "
                                     "does not have (they never fire until changed): rule id, the step named and why",
                                     "items": obj({"rule": "s", "step": "s", "why": "s"})},
-                       "paused": {"type": "boolean", "description": "Off because the run guard paused it"},
+                       "paused": {"type": "boolean", "description": "Off because an earlier run guard paused it"},
+                       "hold": {**obj({"rule": {"enum": ["flood", "sustained"]}, "since": "s", "held": "i",
+                                       "dropped": "i", "task": {"type": ["string", "null"]}}),
+                                "description": "Present while the run guard keeps its new runs held, not run, until "
+                                               "someone releases or drops them; `task` is the Needs-you task"},
                        "schedule": {"type": "string", "description": "A system job's schedule in words"}},
                       required=["id", "can_edit"]),
     "AutomationList": obj({"automations": items(ref("Automation")), "next": {"type": ["integer", "null"]}}),
@@ -1490,6 +1498,8 @@ SCHEMAS.update({
     "InboxSwitch": obj({"inbox": "s", "send": "b"}),
     "PersonAssistant": obj({"bot": {"type": ["string", "null"]}}),
 })
+SCHEMAS["AutomationHeld"] = _merge(SCHEMAS["Automation"], moved={"type": "integer", "description": "Runs released or "
+                                                                   "dropped"})
 
 # Bot profiles (backend/profiles.py).
 STABLE.extend([

@@ -307,4 +307,26 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
                                             [*("bot:" + b for b in bots)] * 4)]
     assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status" in line for line in plan), plan
     assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status" in line for line in plan), plan
-    assert not [line for line in plan if line.startswith("SCAN tasks") and "tasks_private_parties" not in line], plan
+    assert not [line for line in plan if line.startswith("SCAN tasks") and "tasks_private_" not in line], plan
+
+
+def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
+    """The private tasks of a bot's status rows come from tasks_private_status, which holds the columns status reads
+    (status, waiting_on). On tasks_private_parties each private row was a table read for them, its body's pages
+    included: on a multi-GB hub that was most of a status page's time, as random reads."""
+    from backend.task_privacy import status_tasks_sql
+    store = api.app.state.store
+    bots = [f"t{n:02d}" for n in range(60)]
+    add_bots(api, {slug: {} for slug in bots})
+    with store.transaction() as c:
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
+                        "done" if n % 9 else "open", H.now(), H.now(), int(n % 5 == 0)) for n in range(4000)])
+        c.execute("ANALYZE")
+    marks = ",".join("?" * len(bots))
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"),
+                                            [*("bot:" + b for b in bots)] * 4)]
+    assert any("COVERING INDEX tasks_private_status" in line for line in plan), plan
+    assert not any("tasks_private_parties" in line for line in plan), plan

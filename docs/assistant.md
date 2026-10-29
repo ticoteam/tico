@@ -270,8 +270,8 @@ Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhe
 
 ## For the assistant bot
 
-Its instructions are `templates/catalog/assistant/AGENT.md` and `playbooks/assistant-chat.md`: how Tico is organised,
-how to route work to the right bot, to answer briefly with links, never to act beyond you, to do the task actions you
+Its instructions are `templates/catalog/assistant/AGENT.md` and its playbooks: `assistant-chat.md` (the chat run),
+`tico-map.md` (how Tico is organised), `acting-for-them.md` and `approvals-for-them.md`. The core rules: how to route work to the right bot, to answer briefly with links, never to act beyond you, to do the task actions you
 ask for (declines and answers included), to decide your approvals on your words when you let it (reading the list
 back once), otherwise to say in one sentence where to turn that on and propose approving, and anything else with a side effect, several
 at once on one card, and to report what it did and what is left. They live in the bot's repository; edit them there or through BotOps.
