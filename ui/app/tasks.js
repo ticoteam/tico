@@ -282,7 +282,7 @@ function snoozeDay(t) {
   return new Date(parseServerTime(t.snoozed_until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 }
 function snoozeChip(t) {
-  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(t.snoozed_until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
+  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(t.snoozed_until))}${t.snoozed_note ? ` · ${esc(t.snoozed_note)}` : ''}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
 }
 function dueChip(t) {
   const due = taskDueInfo(t); if (!due) return '';

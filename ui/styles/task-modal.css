@@ -12,6 +12,7 @@
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
 .tlink.pr.closed{color:var(--muted);border-color:var(--line)}
+.tchip-note{display:inline-block;max-width:min(28ch,40vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .tparts{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 [draggable="true"]{cursor:grab}
 .dragging{opacity:.4}
