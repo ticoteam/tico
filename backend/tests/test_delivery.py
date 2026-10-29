@@ -287,3 +287,27 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
     assert "Billing first." in attempt["deferred"] and "Then the docs." in attempt["deferred"]
     assert {r["how"] for r in rows(api, kind="comment")} == {"carried"}
     assert job_of(api, first["id"])[1] == "cancelled"
+
+
+# The statements the deferral hot paths run on every claim, scheduler pass and stalled-task check (backend/delivery.py).
+# Settled rows are never deleted, so each must reach its rows through an index, not a scan of the whole table.
+HOT_DEFERRAL_QUERIES = (
+    "SELECT DISTINCT d.fired_job FROM deferrals d JOIN jobs j ON j.id=d.fired_job WHERE d.attempt=? "
+    "AND j.state='queued' AND d.fired_job IS NOT ? AND NOT EXISTS(SELECT 1 FROM deferrals x "
+    "WHERE x.fired_job=d.fired_job AND x.settled IS NULL)",
+    "UPDATE deferrals SET settled=?,how='fired' WHERE settled IS NULL AND fired_job IS NOT NULL AND "
+    "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=deferrals.fired_job "
+    "AND j.state IN ('queued','leased','running','input'))",
+    "SELECT 1 FROM deferrals WHERE kind='task' AND item=? AND settled IS NULL LIMIT 1",
+    "UPDATE deferrals SET settled=?,how='carried',attempt=? WHERE bot=? AND kind=? AND "
+    "settled IS NULL AND item IN (?,?)",
+)
+
+
+def test_the_deferral_hot_paths_reach_their_rows_by_index_not_scan(api):
+    with api.app.state.store.read() as c:
+        for sql in HOT_DEFERRAL_QUERIES:
+            params = [None] * sql.count("?")
+            plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, params)]
+            scans = [step for step in plan if step.startswith("SCAN") and step.split()[1] in ("deferrals", "d", "x")]
+            assert scans == [], (sql, plan)
