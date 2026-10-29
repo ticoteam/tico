@@ -1639,6 +1639,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.
                 c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")
+                # Redundant with events_action_target (action, target, ts): every action-and-target read plans on it
+                # (backend/tests/test_events_indexes.py), and no read is target-only. 118 MB on TIDY. An older release
+                # recreates it when it starts; the next start drops it again.
+                c.execute("DROP INDEX IF EXISTS events_target_action")
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
