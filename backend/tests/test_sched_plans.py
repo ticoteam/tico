@@ -73,6 +73,36 @@ def test_worktree_inventory_seeks_one_computers_worktrees(api):
     [sql] = seen
     text = " | ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + sql))
     assert "USING INDEX task_links_worktree_computer" in text, text
+    # The bot join seeks bots' slug key; a scan of bots would repeat for every worktree link the computer kept.
+    assert "SCAN b" not in text, text
+    c.close()
+
+
+def test_worktree_inventory_bot_state_matches_each_owner(api):
+    # The bot join seeks a slug only for an owner that is exactly 'bot:<slug>'; other owners and empty slugs match nothing.
+    import json
+    import sqlite3
+    from backend import worktrees
+    db = str(api.app.state.store.settings.db_path)
+    c = sqlite3.connect(db, isolation_level=None)
+    c.row_factory = sqlite3.Row
+    now = '2026-10-29T00:00:00Z'
+    c.execute("INSERT INTO bots(slug,state,created) VALUES('wt-archived','archived',?),('wt-active','active',?)", (now, now))
+    c.execute("INSERT INTO tasks(id,title,owner,requester,status,created,updated) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)", (now, now))
+    cases = {
+        'detail': ('wt-a', json.dumps({'owner': 'bot:wt-archived'}), 'human:ana'),
+        'added': ('wt-b', '{}', 'bot:wt-archived'),
+        'task': ('wt-c', '{}', 'human:ana'),
+        'empty': ('wt-d', json.dumps({'owner': 'bot:'}), 'human:ana'),
+        'human': ('wt-e', json.dumps({'owner': 'human:ana'}), 'human:ana'),
+    }
+    for key, (link, detail, added) in cases.items():
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,computer_id,detail_json) "
+                  "VALUES(?,'wt-task','worktree','u','present',?,?,'wt-computer',?)", (link, added, now, detail))
+    rows = {r['id']: (r['owner'], r['bot_state']) for r in worktrees.inventory(c, 'wt-computer')}
+    assert rows == {'wt-a': ('bot:wt-archived', 'archived'), 'wt-b': ('bot:wt-archived', 'archived'),
+                    'wt-c': ('bot:wt-active', 'active'), 'wt-d': ('bot:', 'active'),
+                    'wt-e': ('human:ana', 'active')}, rows
     c.close()
 
 
