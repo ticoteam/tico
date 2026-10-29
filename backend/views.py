@@ -1971,10 +1971,13 @@ def install_views(app, store, auth, mutate, task_view):
                  and access.get(bot["slug"], auth.FULL)["see"]]
         prime_machines(c, [slug for slug in shown if access.get(slug, auth.FULL)["read"]])
         open_tasks = {}
-        for part in H.chunks([slug for slug in shown if access.get(slug, auth.FULL)["read"]]):
+        read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
+        for part in H.chunks(read_now):
             for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
                 open_tasks.setdefault(H.actor_id(task["owner"]), []).append(task)
+        # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
+        task_flow = auto_tasks.counts_many(c, {slug: open_tasks.get(slug, []) for slug in read_now}, who)
         from .shared_bots import _json as config_of
 
         def declared(slug):
@@ -2068,7 +2071,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "keep_tasks_going": auto_tasks.of(config),
                          "turns_at_once": start_places.bot_limit(config),
-                         "task_flow": auto_tasks.counts(c, slug, who, open_tasks.get(slug, [])),
+                         "task_flow": task_flow[slug],
                          "team": P.team_of(slug, configs, people),
                          "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),

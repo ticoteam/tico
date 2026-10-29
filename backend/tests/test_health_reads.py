@@ -81,3 +81,16 @@ def test_health_reads_the_same_statements_for_many_overdue_assigned_tasks(api, c
     assert len(overdue_items(body)) == 27
     # Each overdue task still reads its own queued job's fences (put-back, check model, attempts): about 9 each, not 47.
     assert many - few <= 10 * (27 - 3)
+
+
+def test_employees_read_the_same_statements_however_many_bots_it_lists(api, monkeypatch):
+    # Each bot's task flow (its going and waiting counts) was read with its own wait, step and start checks: nine
+    # statements a bot (571 at 60 bots, about 1,000 at 110 in production's shape). They are read once for all bots now.
+    machine = setup(api, monkeypatch, tasks=2)
+    busy(api, machine, 0, 6)
+    counted(api, monkeypatch, "/api/employees")
+    few = counted(api, monkeypatch, "/api/employees")[1]
+    busy(api, machine, 6, 12)
+    body, many = counted(api, monkeypatch, "/api/employees")
+    assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 18
+    assert many == few, (few, many)
