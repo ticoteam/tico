@@ -8,9 +8,10 @@ own bot (backend/credentials.py), the SQL page and personal tokens, whether a bo
 a person leaves its ask unanswered (backend/ask_deadlines.py), whether Tico support may be let in
 (backend/support_access.py), whether the hourly stale ticket review runs (backend/stale_review.py), and whether a direct
 chat starts fresh when the topic changes (backend/topic_change.py), whether Decide reads a quiet task before its stall
-check stays silent (backend/stall_triage.py), and whether a bot manages its direct reports (backend/report_managers.py).
-The stale review and fresh topics are off by default; those two and
-triage an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
+check stays silent (backend/stall_triage.py), whether a bot manages its direct reports (backend/report_managers.py), and
+whether the bots' daily updates are written on the server from their activity (backend/updates.py).
+The stale review and fresh topics are off by default; those two,
+triage and updates from activity an admin may turn too (ADMIN_RULES), and the server's environment may set their default (ENV_DEFAULTS).
 """
 import json
 import os
@@ -34,9 +35,10 @@ DEFAULTS = {
     "topic_fresh": False,           # a direct chat starts fresh when the topic changes (backend/topic_change.py)
     "stall_triage": True,           # Decide reads a quiet task that nothing has changed on before a stall check stays silent (backend/stall_triage.py)
     "managers_manage_reports": True,  # a bot changes its direct reports' model, task model, name and description (backend/report_managers.py)
+    "updates_from_activity": True,  # a bot's update is written on the server from its activity, not in a run of its own (backend/updates.py)
 }
 # Rules an admin may change too, not only the owner (Settings > General).
-ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage")
+ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "updates_from_activity")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
 # server, `TICO_STALL_TRIAGE=0` to start a server with triage off). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
 ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH",

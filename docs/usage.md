@@ -26,6 +26,17 @@ was spent.
 
 The owner and the admins see every bot. Anyone else sees the bots they own. A bot's own credentials cannot read it.
 
+## Spend on Updates
+
+Each update card on **Updates** shows its author's spend for the day it covers, worked out as above: runs, tokens and the
+estimate, with subscription runs as their API-equivalent. A daily covers the 24 hours before 05:00 Pacific on its day, when that
+day's queue starts; a week in review covers the seven days before. The window is fixed by the day, so a card's figure does not move.
+A manager's card adds `team`: the total for itself and every bot below it on the org chart. If a group limit applies, it also shows
+how much of the limit is used, in the period nearest its cap (`team.limit`). The same rules decide who sees it: no figure for a bot
+you may not see, a team total only if you may see every bot in the team, and the group limit only for the owner and admins. Bots
+and external agents see no spend. The API puts it on each update as `spend` (`GET /api/v2/updates`, `/updates/tree`,
+`/updates/{id}`). A Summarize call that writes a bot's update records its Gateway cost on the `update.written` event.
+
 ## Limits
 
 A limit is a cap in estimated USD per 30 minutes, day, week or month, set at three levels.

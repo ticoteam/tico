@@ -355,8 +355,8 @@ class Scheduler:
                                "transactions": len(holds)})))
         # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
-        # A person's draft is written by the company's model in a background thread, so the call never
-        # holds the write lock; its row stays out until the thread posts it (or gives up on it).
+        # A person's draft, and a bot's update from its activity, are written in a background thread, so the
+        # call never holds the write lock; the row stays out until the thread posts it (or gives up on it).
         try:
             # The controlled jobs' saved settings; if they cannot be read, only those jobs wait for the next tick.
             with self.store.read() as c:
@@ -372,10 +372,16 @@ class Scheduler:
             settings = self.store.settings
             with self.store.transaction() as c:
                 writer = updates.writer_for(c, settings, self.store)
-                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None)
+                summarize = updates.summarizer_for(c, settings, self.store)
+                sent = updates.dispatch(c, at, settings.assistant_bot if writer else None, server=bool(writer or summarize))
+                written = bool(sent) and updates.server_written(c, sent)
             if sent and updates.is_person(sent):
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
+            elif written:
+                # A bot's update from its activity: Summarize, else the company's model, else the bot is asked.
+                threading.Thread(target=updates.write_from_activity, args=(self.store, sent, summarize, writer),
+                                 name="update-activity", daemon=True).start()
             run.did("1 asked" if sent else "Nobody due", quiet=not sent)
         # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
         # in a background thread, so the decision model's calls never hold the write lock.

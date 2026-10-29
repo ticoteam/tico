@@ -35,7 +35,10 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     }
     const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
     const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
-                 update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen, {inputs: [{id: 'u-seo', author: 'seo'}]}), children: [seo]};
+                 update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen, {inputs: [{id: 'u-seo', author: 'seo'}], written: 'activity',
+                   spend: {runs: 4, tokens: 1250000, est_cost_usd: 0.5, subscription_equiv_usd: 1.25, low_estimate_runs: 0,
+                           team: {runs: 9, tokens: 3400000, est_cost_usd: 2, subscription_equiv_usd: 0, low_estimate_runs: 0, bots: 2,
+                                  limit: {group: 'Marketing', period: 'daily', spent: 6.5, cap: 20}}}}), children: [seo]};
     if (eight) {      // eight reports, one with no update yet and one with a report of its own
       cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
         update: i === 3 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
@@ -88,6 +91,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // Your card on top (no update yet: write one), your direct report's card under it, open and alerting.
     assert.match(await page.locator('#upd-feed .upd-node[data-depth="0"] > .upd-none').innerText(), /Ana[\s\S]*No update yet/);
     assert.equal(await cmo.locator('.upd-dot').count(), 1, 'a direct report alerts');
+    // A bot's update the server wrote says so, and its card carries one quiet line of spend: its own, then its team's
+    // with the group limit, priced as Usage prices it.
+    assert.equal(await cmo.locator('.upd-pill.upd-draft').innerText(), 'Written from activity');
+    assert.equal(await cmo.locator('[data-upd-spend]').innerText(), '1.25M tokens · $1.75 · team 3.4M tokens · $2.00 · $6.50 of Marketing\'s $20 daily limit');
+    assert.equal(await page.locator('#upd-feed [data-upd-spend]').count(), 1, 'a card the server sent no spend for shows none');
     assert.ok(asked.some(q => q === '?scope=direct'), 'the badge counts direct reports only');
     // The manager's card has an icon that opens its reports' cards; a report's report never alerts.
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');
