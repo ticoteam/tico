@@ -803,13 +803,21 @@ def install_credentials(app,store,delegate=None,propose=None):
         names=providers.MODEL_KEYS.get(runtime)
         if who.role!='runner':raise Problem('forbidden','Only a registered computer may ask for this',403)
         if not names:raise Problem('runtime','That runtime has no key or token to sign in with',422)
-        with store.transaction() as c:
+        from .computer_keys import keys_for
+        def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
                 raise Problem('forbidden','Only a registered computer may ask for this',403)
             # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
             # else the shared one; none once a person cleared it or signed it out (model_login).
-            from .computer_keys import keys_for
-            reply,sent=keys_for(c,vault,who.runner_id,runtime,login)
+            return keys_for(c,vault,who.runner_id,runtime,login)
+        # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,
+        # so the poll never queues for the write lock. Sending a key records it, so that runs in one write transaction.
+        with store.read_transaction() as c:
+            reply,sent=chosen(c)
+        if not sent:
+            return reply
+        with store.transaction() as c:
+            reply,sent=chosen(c)
             for cid in sent:
                 H.event(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id})
             return reply
