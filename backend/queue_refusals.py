@@ -1,4 +1,6 @@
 """Continuous claim observations, evaluated without holding the scheduler's write lock."""
+from typing import Any, cast
+
 from . import execution as E, hubdb as H
 
 EVENT = 'job.refusal-observed'
@@ -24,8 +26,9 @@ def current(c, settings, bot):
                     "WHERE a.bot=? AND b.state='active'", (bot,)).fetchone()
     if not row:
         return {}
-    claim = E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True)
-    why, created, job = claim[0], claim[1], claim[-1]          # with_job=True: the job ID is the fourth value
+    # with_job=True always returns four values; cast, so the unpacking below still fails loudly if that changes.
+    why, created, _, job = cast(tuple[Any, Any, Any, Any],
+                                E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True))
     if not job or not why or why == 'lane_held':
         return {}
     return {'bot': bot, 'runner_id': row['runner_id'], 'name': row['display_name'] or bot,
