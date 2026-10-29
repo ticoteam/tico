@@ -106,10 +106,14 @@ def people_rows(doc, owner=None):
     return people
 
 
+def may_sign_in(person):
+    """Whether a normalised roster row may sign in at all: an address, not hidden, not left the directory, sign-in on."""
+    return bool(person["email"]) and not person["hidden"] and not person["directory_left"] and person["sign_in"]
+
+
 def signed_in_count(doc, owner=None):
     """How many roster people count toward company turn levels: email set, may sign in, not hidden or left."""
-    return sum(1 for p in people_rows(doc, owner)
-               if p["email"] and not p["hidden"] and not p["directory_left"] and p["sign_in"])
+    return sum(1 for p in people_rows(doc, owner) if may_sign_in(p))
 
 
 def load(doc, owner=None):

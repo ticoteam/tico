@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urljoin, urlparse
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -656,3 +657,81 @@ def test_the_account_id_never_leaves_the_database_layer(signin):
 def test_the_people_list_is_sent_only_when_the_account_advertises_it(signin):
     assert people_mirror.push_now(signin.auth) is None
     assert signin.fake.people_calls == []
+
+
+@pytest.mark.parametrize("where", ["admins", "allowed", "owner"])
+def test_a_move_onto_an_admin_owner_or_allowed_address_is_refused(signin, where):
+    signin.login(claims={"sub": "acct-cara"})
+    signin.api.cookies.clear()
+    if where == "owner":
+        _set_owner(signin, email="boss@acme.example")
+    else:
+        with signin.auth.store.read() as c:
+            current = Access.load_access(c, signin.settings)[where]
+        _set_access(signin, **{where: [*current, "boss@acme.example"]})
+    refused = signin.login(claims={"sub": "acct-cara", "email": "boss@acme.example"})
+    assert refused.status_code == 403 and "not on" in refused.text
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+    assert _humans_with(signin, "boss@acme.example") == []
+    assert me(signin.api).status_code == 401
+
+
+def _set_sign_in(signin, pid, on):
+    with signin.auth.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        people = [{**p, "sign_in": on} if p["id"] == pid else p for p in roster["people"]]
+        Access._save_roster(c, {**roster, "people": people})
+
+
+def test_sign_in_off_stops_an_address_move_and_the_account_being_remembered(signin):
+    signin.login(claims={"sub": "acct-cara", "email": "cara@acme.example"})
+    _set_sign_in(signin, "cara", False)
+    signin.api.cookies.clear()
+    moved = signin.login(claims={"sub": "acct-cara", "email": "cara.new@acme.example"})
+    assert moved.status_code == 403
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+    assert me(signin.api).status_code == 401
+    # A new account on the old address is not remembered either.
+    other = signin.login(claims={"sub": "acct-cara-2", "email": "cara@acme.example"})
+    assert other.status_code == 403
+    with signin.auth.store.read() as c:
+        row = c.execute("SELECT idp_sub FROM humans WHERE id='cara'").fetchone()
+    assert row["idp_sub"] == "acct-cara"
+
+
+@pytest.fixture
+def mirror(monkeypatch):
+    """The people mirror's state, reset for one test; any timer it armed is cancelled afterwards."""
+    monkeypatch.setattr(people_mirror, "_auth", None)
+    monkeypatch.setattr(people_mirror, "_timer", None)
+    monkeypatch.setattr(people_mirror, "_next_allowed", 0.0)
+    yield people_mirror
+    if people_mirror._timer is not None:
+        people_mirror._timer.cancel()
+
+
+def test_a_429_with_an_html_body_waits_for_the_retry_after_header(signin, mirror, monkeypatch):
+    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.login()
+    monkeypatch.setattr(mirror, "_auth", signin.auth)
+    limited = httpx.Response(429, headers={"Retry-After": "120"}, content=b"<html>Too many requests</html>")
+    monkeypatch.setattr(oidc.httpx, "post", lambda *a, **k: limited)
+    mirror.send()
+    assert mirror._timer is not None and mirror._timer.interval == 120
+    assert mirror._next_allowed > 0
+
+
+def test_a_change_during_the_wait_does_not_send_early(signin, mirror, monkeypatch):
+    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.login()
+    monkeypatch.setattr(mirror, "_auth", signin.auth)
+    monkeypatch.setattr(oidc.httpx, "post", lambda *a, **k: httpx.Response(429, json={"retry_after": 600}))
+    mirror.send()
+    sent = []
+    monkeypatch.setattr(mirror, "push_now", lambda *a, **k: sent.append(1))
+    mirror.changed()
+    mirror.send()                                 # the daily loop, or a timer, during the wait
+    assert sent == [] and mirror._timer.interval > mirror.DEBOUNCE_SECONDS * 3
+    monkeypatch.setattr(mirror, "_next_allowed", 0.0)
+    mirror.send()                                 # the wait is over: one send, with the newest list
+    assert sent == [1]

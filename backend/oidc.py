@@ -79,6 +79,24 @@ class NotOnRoster(Exception):
         self.email = email
 
 
+def _retry_after(reply):
+    """Seconds to wait after a 429: the JSON `retry_after` if it parses, else the Retry-After header, else 300; at most
+    an hour."""
+    wait = None
+    try:
+        body = reply.json()
+        if isinstance(body, dict) and body.get("retry_after") is not None:
+            wait = float(body["retry_after"])
+    except (ValueError, TypeError):
+        wait = None
+    if wait is None:
+        try:
+            wait = float(reply.headers.get("Retry-After", ""))
+        except ValueError:
+            wait = None
+    return int(min(3600, max(0, 300 if wait is None else wait)))
+
+
 def _loopback(url):
     return (urlparse(url).hostname or "") in LOOPBACK
 
@@ -316,7 +334,7 @@ class Oidc:
             issuer, sub = account
             row = c.execute("SELECT id,email FROM humans WHERE idp_issuer=? AND idp_sub=?", (issuer, sub)).fetchone()
             if row:
-                if self._left(c, row["id"]):
+                if self._refused(c, row["id"]):
                     raise NotOnRoster(email)
                 if str(row["email"] or "").lower() != email:
                     self._move_email(c, row["id"], email)
@@ -327,7 +345,7 @@ class Oidc:
             if email in access.retired_emails(c) or not access.admitted(access.load_access(c, self.settings), email):
                 raise NotOnRoster(email)
             row = {"id": access.join_on_sign_in(c, email)}
-        elif self._left(c, row["id"]):
+        elif self._refused(c, row["id"]):
             raise NotOnRoster(email)
         if account:
             self._remember(c, row["id"], account)
@@ -363,10 +381,13 @@ class Oidc:
             H.event(c, "human:" + pid, "person.account_changed", pid, {"issuer": issuer})
         c.execute("UPDATE humans SET idp_issuer=?, idp_sub=? WHERE id=?", (issuer, sub, pid))
 
-    def _left(self, c, human):
+    def _refused(self, c, human):
+        """Whether the roster refuses this person's sign-in: hidden, left the directory, or sign-in turned off. Checked
+        before any address moves, account is remembered or session issued."""
         from . import views
+        from . import people as P
         person = next((p for p in views.roster(c).get("people", []) if p.get("id") == human), None)
-        return bool(person and person.get("hidden"))
+        return bool(person and not P.may_sign_in(person))
 
     def _exchange(self, doc, code, verifier):
         data = {"grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect_uri,
@@ -514,9 +535,15 @@ class Oidc:
                 "people": json.dumps(rows, separators=(",", ":"), sort_keys=True)}
         try:
             reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
-            answer = reply.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except httpx.HTTPError as exc:
             raise SignInError("people list failed: " + type(exc).__name__, 502) from exc
+        if reply.status_code == 429:
+            # The account may answer in HTML (a proxy's limit page): the wait then comes from its header, if any.
+            return 429, {"retry_after": _retry_after(reply)}
+        try:
+            answer = reply.json()
+        except ValueError:
+            answer = None
         return reply.status_code, answer if isinstance(answer, dict) else {}
 
     def email(self, headers, c):

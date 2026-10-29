@@ -21,9 +21,11 @@ EVERY_SECONDS = 24 * 3600
 RETRY_MIN, RETRY_MAX = 60, 3600
 MAX_PEOPLE = 5000               # the account refuses more (PEOPLE-CONTRACT.md)
 
-_lock = threading.Lock()
+_lock = threading.Lock()        # guards the state below
+_send_lock = threading.Lock()   # one build-and-send at a time, so an older list never lands after a newer one
 _auth = None                    # the process's Auth, once start() found a Tico account sign-in
-_timer = None
+_timer = None                   # the one pending send
+_next_allowed = 0.0             # monotonic time before which the account asked us not to send
 _looping = False
 
 
@@ -48,17 +50,23 @@ def _loop():
         time.sleep(EVERY_SECONDS)
 
 
-def changed():
-    """A roster or access change was saved: send the list again, ten seconds after the last one."""
+def _arm(delay):
+    """Replace the one pending send with one `delay` seconds from now. Call with _lock held."""
     global _timer
+    if _timer is not None:
+        _timer.cancel()
+    _timer = threading.Timer(delay, send)
+    _timer.daemon = True
+    _timer.start()
+
+
+def changed():
+    """A roster or access change was saved: send the list again, ten seconds after the last one. During a 429 wait the
+    send waits for the account's time instead, and it sends whatever the list is by then."""
     with _lock:
         if _auth is None:
             return
-        if _timer is not None:
-            _timer.cancel()
-        _timer = threading.Timer(DEBOUNCE_SECONDS, send)
-        _timer.daemon = True
-        _timer.start()
+        _arm(max(DEBOUNCE_SECONDS, _next_allowed - time.monotonic()))
 
 
 def payload(c, settings):
@@ -98,14 +106,21 @@ def push_now(auth=None):
     from .oidc import Oidc
     if not isinstance(auth.proxy, Oidc):
         return None
-    with auth.store.read() as c:
-        rows = payload(c, auth.settings)
-    return auth.proxy.push_people(rows)
+    with _send_lock:                # the list is built inside the lock: whatever is sent is the newest roster
+        with auth.store.read() as c:
+            rows = payload(c, auth.settings)
+        return auth.proxy.push_people(rows)
 
 
 def send():
-    """The background push: logs the outcome and schedules a retry only for a 429."""
-    global _timer
+    """The background push: logs the outcome. A 429 sets the time before which nothing is sent and schedules the one
+    retry at that time; a send that comes early (the daily loop, a change) waits for it instead."""
+    global _next_allowed
+    with _lock:
+        wait = _next_allowed - time.monotonic()
+        if wait > 0:
+            _arm(wait)
+            return
     try:
         reply = push_now()
     except Exception as exc:
@@ -118,14 +133,10 @@ def send():
         log.info("the sign-in list was sent to the Tico account: %s stored", answer.get("stored"))
         return
     if status == 429:
-        wait = answer.get("retry_after")
-        wait = max(RETRY_MIN, min(RETRY_MAX, int(wait))) if isinstance(wait, (int, float)) else RETRY_MIN
+        wait = max(RETRY_MIN, min(RETRY_MAX, int(answer.get("retry_after", 300))))
         log.warning("the Tico account is limiting the sign-in list; it will be sent again in %d s", wait)
         with _lock:
-            if _timer is not None:
-                _timer.cancel()
-            _timer = threading.Timer(wait, send)
-            _timer.daemon = True
-            _timer.start()
+            _next_allowed = time.monotonic() + wait
+            _arm(wait)
         return
     log.warning("the Tico account refused the sign-in list: HTTP %s", status)

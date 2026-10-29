@@ -588,6 +588,11 @@ def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
         return person
     if _email_taken(c, new, pid):
         raise Problem("conflict", new + " already belongs to someone else on the roster", 409)
+    # An address on the Admins, the owner's or the allow list is never a person's sign-in address: moving there would
+    # hand the person that role (the Admins list) or leave someone else's entry in place.
+    before = load_access(c, settings)
+    if new in before["admins"] or new in before["allowed"] or new == load_owner(c, settings)["email"]:
+        raise Problem("conflict", new + " is on the owner's, Admins or allow list, so it cannot be a sign-in address", 409)
     if old:
         _keep_mailbox(c, person, old)
     row = P._person({**person, "email": new})
@@ -595,8 +600,6 @@ def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
     _sync_human(c, row)
     access = _load_json(c, ACCESS)
     if access is not None and old:
-        before = load_access(c, settings)
-
         def swap(values):
             return emails(new if e == old else e for e in values)
         allowed, admins = swap(before["allowed"]), swap(before["admins"])
