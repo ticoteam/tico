@@ -13,11 +13,12 @@ function check(ok, what, detail) {
 }
 
 // Plain http.request: fetch may add an Origin header, which the endpoint refuses on purpose.
-function call(base, method, path, body, headers = {}) {
+function call(base, method, path, body, headers = {}, chunked = false) {
   const target = new URL(base + path);
   const data = body === undefined ? null : JSON.stringify(body);
   return new Promise((resolve) => {
-    const req = http.request(target, { method, headers: { ...(data ? { 'content-type': 'application/json' } : {}), ...headers } }, (res) => {
+    const sized = data && !chunked ? { 'content-length': Buffer.byteLength(data) } : {};
+    const req = http.request(target, { method, headers: { ...(data ? { 'content-type': 'application/json' } : {}), ...sized, ...headers } }, (res) => {
       let text = '';
       res.on('data', (c) => (text += c));
       res.on('end', () => {
@@ -80,9 +81,9 @@ const { targetInfo } = await session.send('Target.getTargetInfo');
 const target = targetInfo.targetId;
 
 // Fill.
-const fill = (body, base = url) => call(base, 'POST', '/fill', body);
-let r = await fill({ credential: 'Acme', field: 'username', selector: '#email', target_id: target });
-check(r.json?.ok === true, 'fill username', r.json);
+const fill = (body, base = url, chunked = false) => call(base, 'POST', '/fill', body, {}, chunked);
+let r = await fill({ credential: 'Acme', field: 'username', selector: '#email', target_id: target }, url, true);
+check(r.json?.ok === true, 'fill username (a chunked body)', r.json);
 r = await fill({ credential: 'c1', field: 'password', selector: '#pw', target_id: target });
 check(r.json?.ok === true && !JSON.stringify(r.json).includes('correct horse'), 'fill password by id, no value returned', r.json);
 r = await fill({ credential: 'acme', field: 'totp', selector: '#code', target_id: target });
@@ -154,8 +155,9 @@ const text = (reply) => (reply.result?.content || []).map((c) => c.text || '').j
 const pages = await rpc('tools/call', { name: 'list_pages', arguments: {} });
 check(text(pages).includes(`127.0.0.1:${port}`), 'chrome-devtools-mcp sees the bot\'s tabs through the endpoint', text(pages).slice(0, 300) || pages.error);
 const select = /(\d+): http:\/\/127\.0\.0\.1:\d+\/login/.exec(text(pages));
-if (select) await rpc('tools/call', { name: 'select_page', arguments: { pageId: Number(select[1]) } });
-const evaluated = await rpc('tools/call', { name: 'evaluate_script', arguments: { function: '() => String(navigator.webdriver)' } });
+const pageId = select ? Number(select[1]) : 1;
+await rpc('tools/call', { name: 'select_page', arguments: { pageId } });
+const evaluated = await rpc('tools/call', { name: 'evaluate_script', arguments: { pageId, function: '() => String(navigator.webdriver)' } });
 check(/false/.test(text(evaluated)) && !/true/.test(text(evaluated)), 'navigator.webdriver is false through chrome-devtools-mcp', text(evaluated).slice(0, 300) || evaluated.error);
 child.kill('SIGTERM');
 

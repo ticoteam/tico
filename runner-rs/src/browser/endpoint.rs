@@ -164,20 +164,66 @@ async fn serve(stream: TcpStream, port: u16) -> std::io::Result<()> {
         ("GET", t) if t == "/devtools/browser" || t.starts_with("/devtools/browser/") => websocket(io, &req, bot).await,
         ("GET", "/status") => reply(&mut io, 200, &bot.status()).await,
         ("POST", "/fill") => {
-            let length: usize = req.header("content-length").and_then(|l| l.parse().ok()).unwrap_or(0);
-            if length > BODY_LIMIT {
-                return reply(&mut io, 413, &json!({"ok": false, "error": "bad_request"})).await;
-            }
-            let mut body = vec![0u8; length];
-            if tokio::time::timeout(Duration::from_secs(10), io.read_exact(&mut body)).await.is_err() {
-                return Ok(());
-            }
+            let chunked = req.header("transfer-encoding").is_some_and(|t| t.to_ascii_lowercase().contains("chunked"));
+            let read = async {
+                if chunked {
+                    read_chunked(&mut io, BODY_LIMIT).await
+                } else {
+                    let length: usize = req.header("content-length").and_then(|l| l.parse().ok()).unwrap_or(0);
+                    if length > BODY_LIMIT {
+                        return Ok(None);
+                    }
+                    let mut body = vec![0u8; length];
+                    io.read_exact(&mut body).await.map(|_| Some(body))
+                }
+            };
+            let body = match tokio::time::timeout(Duration::from_secs(10), read).await {
+                Ok(Ok(Some(body))) => body,
+                Ok(Ok(None)) => return reply(&mut io, 413, &json!({"ok": false, "error": "bad_request"})).await,
+                _ => return Ok(()),
+            };
             let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             let answer = super::fill::fill(&bot, &aid, &parsed).await;
             reply(&mut io, 200, &answer).await
         }
         ("GET" | "POST", _) => reply(&mut io, 404, &json!({"error": "not_found"})).await,
         _ => reply(&mut io, 405, &json!({"error": "method_not_allowed"})).await,
+    }
+}
+
+/// A chunked request body (Node's http and fetch send one), or None once it passes `limit`.
+async fn read_chunked<R: tokio::io::AsyncBufRead + Unpin>(io: &mut R, limit: usize) -> std::io::Result<Option<Vec<u8>>> {
+    let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "bad chunk");
+    let mut body = Vec::new();
+    loop {
+        let mut line = String::new();
+        if io.read_line(&mut line).await? == 0 || line.len() > 64 {
+            return Err(bad());
+        }
+        let size = usize::from_str_radix(line.trim().split(';').next().unwrap_or("").trim(), 16).map_err(|_| bad())?;
+        if size == 0 {
+            // Trailers, up to the blank line.
+            loop {
+                line.clear();
+                if io.read_line(&mut line).await? == 0 || line.len() > 1024 {
+                    return Err(bad());
+                }
+                if line.trim().is_empty() {
+                    return Ok(Some(body));
+                }
+            }
+        }
+        if body.len() + size > limit {
+            return Ok(None);
+        }
+        let start = body.len();
+        body.resize(start + size, 0);
+        io.read_exact(&mut body[start..]).await?;
+        let mut crlf = [0u8; 2];
+        io.read_exact(&mut crlf).await?;
+        if &crlf != b"\r\n" {
+            return Err(bad());
+        }
     }
 }
 
@@ -232,6 +278,16 @@ async fn websocket(mut io: BufReader<TcpStream>, req: &Request, bot: Arc<Bot>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_chunked_body_is_read_whole_and_held_to_the_limit() {
+        let mut io = BufReader::new(&b"5;x=1\r\n{\"a\":\r\n3\r\n12}\r\n0\r\nX-T: 1\r\n\r\n"[..]);
+        assert_eq!(read_chunked(&mut io, 64).await.unwrap().unwrap(), b"{\"a\":12}");
+        let mut big = BufReader::new(&b"ff\r\n"[..]);
+        assert!(read_chunked(&mut big, 16).await.unwrap().is_none());
+        let mut torn = BufReader::new(&b"zz\r\n"[..]);
+        assert!(read_chunked(&mut torn, 16).await.is_err());
+    }
 
     fn req(headers: &[(&str, &str)]) -> Request {
         Request { method: "GET".into(), path: "/".into(), headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
