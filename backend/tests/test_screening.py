@@ -3,13 +3,16 @@ injection. At the hold line it is a task for a person that handing to the bot re
 with a warning; patterns alone only warn; every failure lets the text through; the audit never keeps the text; and a
 kept verdict is not paid for twice."""
 import json
+import os
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
 from backend import automations, screening as S
 from backend.store import H
+from backend.watchers import WatcherEvent
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_inbound import no_live_inbound, page, seed  # noqa: F401
 from backend.tests.test_judge_spend import spend
@@ -372,3 +375,57 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
         assert c.execute("SELECT count(*) FROM screening_verdicts").fetchone()[0] == 0
         assert c.execute("SELECT actor FROM events WHERE action='judge.call' LIMIT 1").fetchone()[0] == "human:ana"
     assert notes(api) == [] and notes(api, "screening.warned") == []              # a test holds nothing
+
+
+# ---------------------------------------------------------------------------------------------- fail open at the doors
+def broken(*args, **kwargs):
+    raise RuntimeError("the model check broke")
+
+
+def test_a_failing_model_check_still_files_a_webhook_rule_task_with_the_patterns_warning(api, monkeypatch):
+    from backend.tests.test_triggers import hook, rule_row
+    made = post(api, "triggers", {"name": "Shop"})["trigger"]
+    rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})
+    model(api, score=0.97)
+    monkeypatch.setattr(S, "model_ready", broken)
+    assert hook(api, made["url"], body=json.dumps({"note": ATTACK}).encode(),
+                headers={"Idempotency-Key": "d1"}).status_code == 202
+    (filed,) = owned(api, "bot:ops")
+    assert filed["title"] == "Order call" and filed["body"].startswith("Tico screening:") and ATTACK in filed["body"]
+    with api.app.state.store.transaction() as c:
+        waits, body = S.rule_task(c, "r1", "human:ana", "ops", "Order call", "plain body",
+                                  {"payload": {"note": PLAIN}, "trigger": "shop", "delivery": "d2"})
+    assert waits is None and body == "plain body"
+
+
+def test_a_failing_model_check_still_applies_a_watchers_event(api, quiet, monkeypatch):
+    r = hosted(api)
+    monkeypatch.setattr(S, "model_ready", broken)
+    report(api, r, task("gh:9", title="Issue 9", body=ATTACK), name="gh-issues")
+    (filed,) = tasks(api)
+    assert filed["title"] == "Issue 9" and filed["body"].startswith("Tico screening:") and ATTACK in filed["body"]
+    event = WatcherEvent(op="task", key="gh:10", title="Issue 10", body=PLAIN)
+    with api.app.state.store.transaction() as c:
+        assert S.watcher_check(c, "ops", event) is event
+
+
+def test_the_question_set_is_loaded_once_and_again_when_its_file_changes(tmp_path, monkeypatch):
+    path = tmp_path / (S.SET + ".json")
+    path.write_text((Path(J.QUESTIONS_DIR) / path.name).read_text())
+    monkeypatch.setattr(J, "QUESTIONS_DIR", tmp_path)
+    for var in ("TICO_REGISTRY_DIR", "TICO_QUESTIONS_DIR", "HUB_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(S, "_SETS", {})
+    loads, real = [], J.load_set
+
+    def counting(name, *args, **kwargs):
+        loads.append(name)
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(J, "load_set", counting)
+    first = S._qset()
+    assert first is not None and S._qset() is first and S._qset() is first
+    assert loads == [S.SET]
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert S._qset() is not None and loads == [S.SET, S.SET]

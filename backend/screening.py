@@ -28,10 +28,12 @@ left, and anything still waiting after WAIT_HOURS goes to a person.
 """
 import json
 import logging
+import os
 import re
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Literal, Optional
 
 from clients import judge as J
@@ -175,12 +177,41 @@ def _fenced(text):
     return "<outside-text>\n" + text.replace("outside-text>", "outside-text\u200b>") + "\n</outside-text>"
 
 
+_SETS = {}                      # name -> (file stamp, loaded set or None): read again only when the file changes
+
+
+def _set_stamp(name):
+    """The file `load_set` would read for `name` (the registry's copy first, then the shipped one), by its size and mtime;
+    None when there is none. Mirrors load_set's search order, so a changed file is the one that reloads."""
+    candidates = []
+    registry = os.environ.get("TICO_REGISTRY_DIR")
+    if registry:
+        candidates.append(Path(registry) / "questions" / (name + ".json"))
+    candidates.append(Path(J.QUESTIONS_DIR) / (name + ".json"))
+    candidates += [d / (name + ".json") for d in J.question_dirs()]
+    for path in candidates:
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        return (str(path), info.st_size, info.st_mtime_ns)
+    return None
+
+
 def _qset():
+    """The injection-screen set, loaded once per change to its file (the screen runs on every item). A set that does
+    not load is None, and its warning is logged once for that file, not on every item."""
+    stamp = _set_stamp(SET)
+    kept = _SETS.get(SET)
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
     try:
-        return J.load_set(SET)
+        qset = J.load_set(SET)
     except J.JudgeError as exc:
         log.warning("Screening uses patterns only: %s", exc.detail)
-        return None
+        qset = None
+    _SETS[SET] = (stamp, qset)
+    return qset
 
 
 def _primary():
@@ -378,20 +409,29 @@ def rule_task(c, rule_id, by, bot, title, body, ctx):
     mode_ = mode(c, "webhook")
     if mode_ == "off":
         return None, body
-    payload = ctx.get("payload")
-    text = free_text(payload) if isinstance(payload, (dict, list)) else str(ctx.get("content") or "")
-    store = _state["store"]
-    if store is not None and len(text.strip()) >= MIN_CHARS and model_ready(c, store, bot):
-        trigger = str(ctx.get("trigger") or "")
-        key = f"{rule_id}:{trigger}:{ctx.get('delivery') or ''}"
-        people = [p for p in _webhook_person(c, trigger, by) if H.is_human(p)]
-        defer(c, "webhook", bot, key, title, body, text, cache_key=f"{trigger}:{ctx.get('delivery') or ''}",
-              actor=by or H.KEEPER, person=people[0] if people else "")
-        return "waits for screening", None
-    v = verdict(mode_, None, "", _patterns(c, text), "patterns", "short" if len(text.strip()) < MIN_CHARS else "no_model")
-    if v["action"] == "warn":
-        note(c, v, "webhook", str(ctx.get("delivery") or ""), bot=bot, trigger=ctx.get("trigger"))
-        return None, warning_line(v) + "\n\n" + body
+    text, why = "", "no_model"
+    try:
+        payload = ctx.get("payload")
+        text = free_text(payload) if isinstance(payload, (dict, list)) else str(ctx.get("content") or "")
+        store = _state["store"]
+        if store is not None and len(text.strip()) >= MIN_CHARS and model_ready(c, store, bot):
+            trigger = str(ctx.get("trigger") or "")
+            key = f"{rule_id}:{trigger}:{ctx.get('delivery') or ''}"
+            people = [p for p in _webhook_person(c, trigger, by) if H.is_human(p)]
+            defer(c, "webhook", bot, key, title, body, text, cache_key=f"{trigger}:{ctx.get('delivery') or ''}",
+                  actor=by or H.KEEPER, person=people[0] if people else "")
+            return "waits for screening", None
+        why = "short" if len(text.strip()) < MIN_CHARS else "no_model"
+    except Exception as exc:                            # noqa: BLE001 the event's task is filed whatever goes wrong here
+        log.error("Screening failed open (%s)", type(exc).__name__)
+        why = "error"
+    try:
+        v = verdict(mode_, None, "", _patterns(c, text), "patterns", why)
+        if v["action"] == "warn":
+            note(c, v, "webhook", str(ctx.get("delivery") or ""), bot=bot, trigger=ctx.get("trigger"))
+            return None, warning_line(v) + "\n\n" + body
+    except Exception as exc:                            # noqa: BLE001 the patterns are a warning, never a stop
+        log.error("Screening failed open (%s)", type(exc).__name__)
     return None, body
 
 
@@ -419,17 +459,27 @@ def watcher_check(c, bot, event):
     mode_ = mode(c, "watcher")
     if mode_ == "off":
         return event
-    text = f"{event.title}\n\n{event.body}".strip()
-    store = _state["store"]
-    if store is not None and len(text) >= MIN_CHARS and model_ready(c, store, bot):
-        defer(c, "watcher", bot, event.key, event.title or event.key, event.body, text, cache_key=f"{bot}:{event.key}",
-              incident=event.incident)
-        return True
-    v = verdict(mode_, None, "", _patterns(c, text), "patterns", "short" if len(text) < MIN_CHARS else "no_model")
-    if v["action"] != "warn":
+    text, why = "", "no_model"
+    try:
+        text = f"{event.title}\n\n{event.body}".strip()
+        store = _state["store"]
+        if store is not None and len(text) >= MIN_CHARS and model_ready(c, store, bot):
+            defer(c, "watcher", bot, event.key, event.title or event.key, event.body, text, cache_key=f"{bot}:{event.key}",
+                  incident=event.incident)
+            return True
+        why = "short" if len(text) < MIN_CHARS else "no_model"
+    except Exception as exc:                            # noqa: BLE001 the event is applied whatever goes wrong here
+        log.error("Screening failed open (%s)", type(exc).__name__)
+        why = "error"
+    try:
+        v = verdict(mode_, None, "", _patterns(c, text), "patterns", why)
+        if v["action"] != "warn":
+            return event
+        note(c, v, "watcher", event.key, bot=bot)
+        return event.model_copy(update={"body": warning_line(v) + "\n\n" + event.body})
+    except Exception as exc:                            # noqa: BLE001 the patterns are a warning, never a stop
+        log.error("Screening failed open (%s)", type(exc).__name__)
         return event
-    note(c, v, "watcher", event.key, bot=bot)
-    return event.model_copy(update={"body": warning_line(v) + "\n\n" + event.body})
 
 
 def waiting(c, source, bot, key):
@@ -450,9 +500,16 @@ def later(c, source, bot, event):
 
 # ----------------------------------------------------------------------------------------------- waiting items
 def defer(c, source, bot, key, title, body, text, *, cache_key="", actor="", person="", incident=False):
-    c.execute("INSERT INTO screening_pending(source,bot,key,title,body,text,cache_key,actor,person,incident,created) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,bot,key) DO NOTHING",
-              (source, bot, key, title, body, text[:MAX_CHARS], cache_key, actor, person, int(bool(incident)), H.now()))
+    c.execute("SAVEPOINT screening_defer")              # a failure midway leaves no half-written row behind
+    try:
+        c.execute("INSERT INTO screening_pending(source,bot,key,title,body,text,cache_key,actor,person,incident,created) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,bot,key) DO NOTHING",
+                  (source, bot, key, title, body, text[:MAX_CHARS], cache_key, actor, person, int(bool(incident)), H.now()))
+    except BaseException:
+        c.execute("ROLLBACK TO screening_defer")
+        c.execute("RELEASE screening_defer")
+        raise
+    c.execute("RELEASE screening_defer")
     if hasattr(c, "after_commit"):
         c.after_commit.append(lambda: kick())       # looked up when it runs, so a test can hold the thread
 
