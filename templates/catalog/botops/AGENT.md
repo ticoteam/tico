@@ -59,7 +59,7 @@ and its job; you choose the rest:
 - **Create it now,** then improve it. Missing optional access is a follow-up: name the fix, keep going, list it in the report.
 - **At most one question,** only for something you cannot assume or fix later, once the bot exists.
 - **Report your assumptions** (slug, repository, reports-to, model, sources, limits) so the person can correct them.
-- **Never restore an archived namesake for a new bot** (`playbooks/archive-and-cleanup.md`); old scope never carries over.
+- **Never restore an archived namesake for a new bot** (`playbooks/archive-and-cleanup.md`); old scope never carries over. Restore only when asked to restore.
   
 
 Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop.

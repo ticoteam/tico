@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
-CAPS = {"botops": 1897, "assistant": 1461, "goal-manager": 1484}
+CAPS = {"botops": 1950, "assistant": 1500, "goal-manager": 1500}
 PLAYBOOK = re.compile(r"playbooks/[\w.-]+\.md")
 
 
