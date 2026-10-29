@@ -52,7 +52,7 @@ EMPTY = (
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
-    "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
+    "enrollments", "hosting_enrollments", "assignments", "cloud_machines", "cloud_machine_codes", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions", "start_places", "org_turn_waits",
     # human sign-in and service keys

@@ -16,7 +16,8 @@ SETTINGS_FILES = sorted(
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
      "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
-     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js"])
+     "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
+     "cloud-machines.js"])
 
 
 def _card(tab, card=""):
@@ -206,6 +207,9 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
+    # Tico Cloud: its own machine, its size and Always on all spend credit (backend/cloud_machines.py).
+    S("bot.cloud_machine", "Own cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
+      "bots/{bot}/cloud-machine", value="json", card=_card("bots"), words="cloud machine size always on computer"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
@@ -328,7 +332,8 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "bot.budget", "strategy.checks", "strategy.level",
                "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
+               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
+               "bot.cloud_machine")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

@@ -831,6 +831,8 @@ class Onboarding:
                 continue
             if c.execute("SELECT 1 FROM assignments WHERE bot=?", (row["bot"],)).fetchone():
                 continue                     # a bot a person already placed is never moved
+            if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
+                continue                     # it runs on its own cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
                     computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
@@ -1079,6 +1081,15 @@ class Onboarding:
                     c.execute("UPDATE runners SET operator=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
                     H.event(c, actor, "runner.adopted", row["id"], {"operator": self.auth.owner_id(c)})
         if not row:
+            from . import cloud_machines
+            if not cloud_machines.offered(c, self.settings):
+                return []
+            # Tico Cloud with no computer yet: each bot runs on its own cloud machine, made when it has work.
+            for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot LEFT JOIN "
+                                   "assignments a ON a.bot=bc.bot WHERE a.bot IS NULL AND b.state<>'archived' "
+                                   "ORDER BY bc.bot").fetchall():
+                cloud_machines.adopt(c, found["bot"], actor)
+            self._activate_bootstrap(c, actor)
             return []
         placed = self.assign_pending(c, row["id"])
         self._activate_bootstrap(c, actor)
@@ -1094,9 +1105,10 @@ class Onboarding:
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc "
-                             "JOIN assignments a ON a.bot=bc.bot JOIN bots b ON b.slug=bc.bot "
-                             "WHERE b.state='planned' ORDER BY bc.bot").fetchall():
+        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                             "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
+                             "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
+                             "ORDER BY bc.bot").fetchall():
             declared = _json(row["config_json"], {}) or {}
             # A starter is parked (`needs_onboarding`), so activating it lets it answer a person and nothing else.
             if not ((cards.get(declared.get("template")) or {}).get("bootstrap") or declared.get("materialize")):

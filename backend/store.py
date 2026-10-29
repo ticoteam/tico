@@ -913,6 +913,8 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import cloud_machines as _cloud_machines
+            c.executescript(_cloud_machines.SCHEMA)
             from . import screening as _screening
             c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs

@@ -486,15 +486,17 @@ async function settingsSaveTaskModel(e, change, revision, inEditor = false) {
 }
 function settingsMachineSelect(e) {
   if (e.agent) return settingsAgentCell(e);
-  const current = e.machine?.runner_id || '';
-  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
+  // On Tico Cloud the bot's own machine is one choice (`cloud`); a bot's own machine is never offered as a computer.
+  const cloud = e.cloud_machine, current = cloudMachineOwn(e) ? 'cloud' : e.machine?.runner_id || '';
+  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && !machine.cloud_machine &&
     (S.me?.role === 'owner' || machine.operator === S.me?.id));
   const unassigned = `Not assigned · ${settingsPersonName(e.operator)}`;
   const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.operator)}` : unassigned;
   const seen = e.machine?.last_seen ? `last seen ${ago(e.machine.last_seen)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
   return `<select class="settings-inline-select" data-bot-machine="${esc(e.name)}" data-current="${esc(current)}"
-    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && machines.length ? '' : 'disabled'}>
+    aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && (machines.length || cloud) ? '' : 'disabled'}>
       ${current ? '' : `<option value="" selected disabled>${esc(unassigned)}</option>`}
+      ${cloud ? `<option value="cloud" ${current === 'cloud' ? 'selected' : ''}>Own cloud machine</option>` : ''}
       ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('')}
     </select>`;
 }
@@ -503,6 +505,7 @@ function settingsBotProblem(e) {
   if (e.status !== 'active') return '';
   if (e.agent?.synced) return e.online ? '' : 'history not synced';
   if (e.agent) return !e.agent.credential ? 'no credential' : e.online ? '' : 'not reporting';
+  if (cloudMachineOwn(e)) return e.cloud_machine.problem || '';
   return !e.machine ? 'no computer' : e.online && e.ready ? '' : e.online ? (e.readiness?.problems?.[0] || 'Computer not ready') : 'offline';
 }
 // Search lasts while the page is open; selection is trimmed to matching manageable bots.

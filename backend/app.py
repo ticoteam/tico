@@ -320,6 +320,8 @@ def create_app(settings=None):
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes, and only on a hosted server that asked for it.
         sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
+        # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
+        cloud_machines_task = asyncio.create_task(app.state.cloud_machines.loop(stop)) if timers else None
         scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
         directory_task = asyncio.create_task(directory_loop()) if timers else None
         granola_task = asyncio.create_task(app.state.granola.loop(stop)) if timers else None
@@ -358,6 +360,8 @@ def create_app(settings=None):
                 await hook_relay_task
             if sleep_idle_task:
                 await sleep_idle_task
+            if cloud_machines_task:
+                await cloud_machines_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -7221,6 +7225,8 @@ def create_app(settings=None):
     install_hook_relay(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle
     install_sleep_idle(app, settings, store, auth)
+    from .cloud_machines import install as install_cloud_machines
+    install_cloud_machines(app, settings, store, auth, execution, mutate)
     company_server.install(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)

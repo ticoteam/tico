@@ -412,7 +412,7 @@ function renderSettingsMachines() {
     const online = machineOnline(machine);
     const status = [machine.revoked_at ? 'failed' : online ? 'ok' : '', machinePresenceWords(machine)];
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
-    const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
+    const facts = [cloudMachineFacts(machine), settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
       <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
         ${machine.turn_summary ? `<p class="muted machine-turn-counts">${esc(machine.turn_summary)}</p>` : ''}
