@@ -7,7 +7,7 @@
 .pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .page-frame{display:block;width:100%;border:0;background:#fff}
 .pg-tap{position:absolute;inset:0;border-radius:inherit}
-.pg-tap:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.pg-tap:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .pg-small .pg-box{max-height:180px}.pg-medium .pg-box{max-height:320px}.pg-large .pg-box{max-height:520px}
 .pg-open{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
 a.pg-open:hover{background:var(--hover);text-decoration:none}
@@ -48,8 +48,8 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .task-pages[hidden]{display:none}
 
 /* Library › Files */
-.lf{max-width:960px;margin:0 auto;padding:12px 20px 48px}
-.lf-head{display:flex;align-items:center;gap:6px;min-height:40px}
+.lf{max-width:960px;padding:0 0 48px}
+.lf-head{display:flex;align-items:center;gap:6px;min-height:32px}
 .lf-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .lf-head .spacer{flex:1}
 .lf-filters{display:flex;flex-direction:column;gap:8px;padding:6px 0 10px}
@@ -57,12 +57,12 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .lf-frow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .lf-frow select{max-width:180px;font-size:var(--t-sm)}
 .lf-frow select[hidden]{display:none}
-.lf-toggle{flex:none;padding:4px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.lf-toggle{flex:none;height:var(--ctl);padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:transparent;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .lf-toggle[aria-pressed="true"]{color:var(--ink);background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .lf-task{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--line);border-radius:var(--r-ctl);font-size:var(--t-sm)}
 .lf-task[hidden]{display:none}
 .lf-row{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-radius:7px;color:var(--ink);text-decoration:none}
-.lf-row:hover{background:var(--surface);text-decoration:none}
+.lf-row:hover{background:var(--surface2);text-decoration:none}
 .lf-row:hover *{text-decoration:none}
 .lf-row .nav-icon{flex:none;margin-top:1px;font-size:18px;width:18px;height:18px;color:var(--muted)}
 .lf-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -74,8 +74,10 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .lf-pad{padding:14px 6px}
 
 @media (max-width:760px){
-  .pg-view,.lf{padding:8px 16px 40px}
-  .lf-frow{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:0 16px}
+  .pg-view{padding:8px 16px 40px}
+  .lf{padding:0 0 40px}   /* #main already keeps the 12px gutter */
+  .lf-frow{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -12px;padding:0 12px}
+  .lf-toggle{height:40px}
   .lf-frow::-webkit-scrollbar{display:none}
   .lf-frow.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .lf-frow select{flex:none;max-width:150px}
