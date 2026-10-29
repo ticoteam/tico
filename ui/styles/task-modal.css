@@ -114,3 +114,8 @@
 .rc-card button,.rc-card .button{min-height:36px}
 .rc-card:not([data-status="open"]){background:none}
 .rc-done{font-size:12.5px;color:var(--ok);font-weight:600}
+.rc-acts{display:flex;flex-wrap:wrap;gap:8px}
+.rc-card a.button{display:inline-flex;align-items:center;padding:5px 14px;border:1px solid transparent;border-radius:var(--r-ctl);line-height:20px;font-weight:600;text-decoration:none}
+.rc-card a.button.primary{background:var(--accent);color:var(--accent-ink)}
+.rc-form{flex:1 1 100%;min-width:0}.rc-form .cc-card{width:100%;margin:0;padding:0;border:0;background:none}.rc-form .cc-card>b,.rc-form [data-cc-cancel]{display:none}
+@media (max-width:760px){.rc-card button,.rc-card .button{min-height:44px}}

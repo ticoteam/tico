@@ -52,6 +52,13 @@
 #credential-dialog form>button[type=submit]{justify-self:start}
 #credential-dialog .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
 #credential-dialog textarea{width:100%}
+#credential-dialog [data-vault-for][hidden]{display:none}
+#credential-dialog .vault-check{display:flex;align-items:center;gap:8px;font-weight:400}
+/* a login's authenticator code: six digits and the seconds it has left */
+.vault-code{display:flex;align-items:baseline;gap:12px}
+.vault-code output{font-size:32px;font-weight:600;letter-spacing:.08em;font-variant-numeric:tabular-nums}
+.lc-2fa{flex:none;display:inline-block;margin-left:6px;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:var(--t-xs);font-weight:600;line-height:16px;vertical-align:1px}
+.lc-add{display:flex;gap:6px}
 .lc-pane .card>header h2 .muted{font-weight:400;margin-left:4px}
 /* who has it, each under their team */
 .lc-team{border-top:1px solid var(--line)}.lc-team:first-of-type{border-top:0}
