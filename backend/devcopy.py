@@ -59,7 +59,7 @@ EMPTY = (
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
     # credentials
-    "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
+    "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
