@@ -1453,6 +1453,9 @@ def migrate(conn, adopt_legacy=False):
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_links_task ON task_links(task_id)")
+    # A computer's worktrees (worktrees.inventory, on every heartbeat): a seek to its rows, not a scan of every
+    # worktree link ever kept. Partial, so it holds worktree rows only.
+    conn.execute("CREATE INDEX IF NOT EXISTS task_links_worktree_computer ON task_links(computer_id) WHERE kind='worktree'")
     # The Overview's bot hours (backend/bot_hours.py) read the runs still going or finished inside its weeks,
     # however long ago they started.
     conn.execute("CREATE INDEX IF NOT EXISTS turns_finished ON turns(finished)")

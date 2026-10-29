@@ -67,7 +67,20 @@ def key(runner_id, profile, runtime):
 
 def canonical(c, runner_id, profile, runtime):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
-    the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
+    the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile.
+    Inside a transaction it is answered once: a claim scan asks it per bot and per job, and the runner's readiness
+    document is parsed each time. Writes clear the read cache (backend/read_cache.py), so a changed runner is re-read."""
+    from .read_cache import cache
+    values = cache(c)
+    if values is None:
+        return _canonical(c, runner_id, profile, runtime)
+    key = ("login_holds.canonical", runner_id, profile, runtime)
+    if key not in values:
+        values[key] = _canonical(c, runner_id, profile, runtime)
+    return values[key]
+
+
+def _canonical(c, runner_id, profile, runtime):
     from .store import readiness_document
     from .read_cache import one
     row = one(c, "SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,))

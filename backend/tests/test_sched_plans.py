@@ -5,7 +5,7 @@ those stats the planner scans messages and seeks each job, or scans every attemp
 under the write lock. Each statement must name the partial index that keeps it to the live rows."""
 from backend import turn_fixer
 from backend import wake_presets as W
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, post  # noqa: F401  (api is a fixture)
 from backend import views
 
 NOW = "2026-10-29T14:00:00.000Z"
@@ -58,3 +58,36 @@ def test_dead_turn_sweep_walks_live_runs(api):
     text = plan(api, turn_fixer.DEAD_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_created" not in text, text
+
+
+def test_worktree_inventory_seeks_one_computers_worktrees(api):
+    # worktrees.inventory runs on every heartbeat; without a computer index it scanned every worktree link ever kept.
+    import sqlite3
+    from backend import worktrees
+    c = sqlite3.connect(str(api.app.state.store.settings.db_path), isolation_level=None)
+    c.row_factory = sqlite3.Row
+    seen = []
+    c.set_trace_callback(lambda sql: seen.append(sql) if sql.lstrip().startswith("SELECT l.*") else None)
+    worktrees.inventory(c, "computer-1")
+    c.set_trace_callback(None)
+    [sql] = seen
+    text = " | ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + sql))
+    assert "USING INDEX task_links_worktree_computer" in text, text
+    c.close()
+
+
+def test_queue_refusal_scan_reads_every_bots_state_in_one_query(api):
+    # The scheduler's claim observations: one read for the targets, one for all their saved states (not one per bot).
+    from backend import queue_refusals
+    from backend.tests.test_task_lanes import task_bot
+    task_bot(api, lanes=True, others=("finance", "inbox"))
+    for bot in ("ops", "finance", "inbox"):
+        post(api, "chat/" + bot, {"text": "Check the queue."})
+    from backend.store import H
+    store = api.app.state.store
+    seen = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(lambda sql: seen.append(sql))
+        queue_refusals.pending(c, store.settings, H.now(), [])
+        c.set_trace_callback(None)
+    assert len([s for s in seen if "queue-refusal:" in s]) <= 2, seen
