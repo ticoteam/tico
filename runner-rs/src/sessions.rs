@@ -992,6 +992,7 @@ impl Runner {
         }
         let dirs = resolve_rules(&self.config.projects_dir(), &attempt["worktrees"]);
         let (rules, digest) = rules_block(&dirs);
+        eprintln!("DEBUGRULES projects={:?} links={} dirs={:?} rules={}", self.config.projects_dir(), attempt["worktrees"], dirs, rules.len());
         attempt["_repo_rules"] = json!(rules);
         place.rules_digest = digest;
         place.add_dirs = dirs.iter().map(|(_, p)| p.display().to_string()).collect();

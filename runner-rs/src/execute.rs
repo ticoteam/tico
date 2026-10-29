@@ -1604,6 +1604,7 @@ impl Runner {
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = std::fs::read(execution_path.join("AGENT.md")).map(|b| crate::gitrun::sha256_hex(&b)).unwrap_or_default();
             let context = format!("{runtime} {} {agent}", text_of(&config["model"]));
+            eprintln!("DEBUGBUILD resumed={resumed} rules={} changed={}", text_of(&attempt["_repo_rules"]).len(), attempt["_repo_rules_changed"]);
             let built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, "", &seen, &context);
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
