@@ -726,7 +726,7 @@ def _propose(c, row, result):
     payload = merged(c, result["changes"])
     if not payload:
         return None
-    the = lens(row["lens"])
+    lens(row["lens"])
     payload = {**payload, "source": "lens", "lens": row["lens"]}
     c.execute("SAVEPOINT lens_proposal")
     try:

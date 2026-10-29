@@ -419,10 +419,10 @@ class Files:
                 BF.check_size(len(data))
         except BF.Refused as exc:
             raise refused(exc) from exc
-        digest, blob = None, None
+        digest = None
         if not failed:
             digest = hashlib.sha256(data).hexdigest()
-            blob = self.blobs.put(data, mime)
+            self.blobs.put(data, mime)
         body = {**{k: fields.get(k, "") for k in ("bot", "path", "title", "task", "scope", "attempt", "commit", "source")},
                 "name": name, "digest": digest, "identity": identity, "etag": str(fields.get("etag") or ""),
                 "sync": "failed" if failed else ""}

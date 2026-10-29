@@ -146,7 +146,7 @@ def _audit(qset, result, error):
     if result is not None:
         try:
             detail.update(audit_detail(result))
-        except Exception:                                   # noqa: BLE001: the audit row is kept whatever came back
+        except Exception:                                   # noqa: BLE001 the audit row is kept whatever came back
             detail["usage"] = {}
         answers = result.get("answers") if isinstance(result.get("answers"), dict) else {}
         try:
@@ -180,7 +180,7 @@ def ask(store, primary, row):
         found = verdict(qset, result["answers"])
     except J.JudgeError as exc:
         error, why = exc, ("the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}")
-    except Exception as exc:                                # noqa: BLE001: an answer that cannot be read fails open
+    except Exception as exc:                                # noqa: BLE001 an answer that cannot be read fails open
         error, why = exc, "the answer could not be read"
         log.warning("Support triage answer could not be read: %s", type(exc).__name__)
     with store.transaction() as c:
@@ -271,7 +271,7 @@ def sweep(store, at=None):
     for row in rows:
         try:
             hand_over(store, row)
-        except Exception as exc:                            # noqa: BLE001: the next sweep tries again
+        except Exception as exc:                            # noqa: BLE001 the next sweep tries again
             log.error("A waiting support ticket for %s could not be handed over: %s", row["bot"], type(exc).__name__)
 
 
@@ -297,11 +297,11 @@ def drain(store, auth, primary):
             deliver_one(store, auth, row, found, why)
         except H.Refused as exc:                            # names only: a refusal's text can quote the ticket
             log.warning("Support ticket %s for %s waits: refused (%s)", row["key"], row["bot"], exc.rule)
-        except Exception as exc:                            # noqa: BLE001: never leave a ticket waiting on a bug here
+        except Exception as exc:                            # noqa: BLE001 never leave a ticket waiting on a bug here
             log.error("Support triage failed for %s (%s); opening it as before", row["key"], type(exc).__name__)
             try:
                 deliver_one(store, auth, row, None, "triage failed")
-            except Exception as again:                      # noqa: BLE001: `sweep` hands it to a person
+            except Exception as again:                      # noqa: BLE001 `sweep` hands it to a person
                 log.error("Support ticket %s for %s waits (%s)", row["key"], row["bot"], type(again).__name__)
 
 

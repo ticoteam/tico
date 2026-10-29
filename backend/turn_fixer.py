@@ -219,7 +219,7 @@ def tend(c, settings, owner_id='', freed=0, draft=None):
     incident is still active; otherwise this pass rebuilds under the lock so a cleared incident cannot keep a stale
     finding.
     """
-    value = org_turns.observe(c, settings, detailed=False)
+    org_turns.observe(c, settings, detailed=False)
     incident = org_turns.saved(c, org_turns.INCIDENT)
     if not incident.get('id'):
         return incident

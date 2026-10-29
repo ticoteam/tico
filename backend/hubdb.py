@@ -2279,34 +2279,6 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
         quarantine(conn, slug, f"{total} refusals today", refusal=stopped)
 
 
-def task_origin(conn, row):
-    """Trusted origin for a keeper review, including pre-metadata records; never parse titles."""
-    explicit = _one(conn, "SELECT detail_json FROM events WHERE actor=? AND action='task.origin' "
-                         "AND target=? ORDER BY ts DESC LIMIT 1", (KEEPER, row["id"]))
-    if explicit:
-        origin = (_json(explicit["detail_json"], {}) or {}).get("bot")
-        return origin if is_bot(origin) else None
-    if row.get("requester") != KEEPER or row.get("owner") != human_actor(default_human(conn)):
-        return None
-    # Legacy _escalate wrote no foreign key. Require its exact canonical body and a
-    # unique sensitive refusal immediately preceding creation. The actor comes from
-    # the trusted refusal record, not a bot name supplied in the title/body.
-    origins, candidates = set(), set()
-    for refusal in _rows(conn.execute("SELECT actor,detail_json FROM refusals WHERE severity IN ('sensitive','escape') "
-                                      "AND ts>=? AND ts<=?", (shift(row["created"], seconds=-5), row["created"]))):
-        actor = refusal["actor"]
-        if not is_bot(actor):
-            continue
-        candidates.add(actor)
-        detail = (_json(refusal["detail_json"], {}) or {}).get("detail", "")
-        body = (f"{actor_id(actor)} tried a write that touches something you care about and it was "
-                f"turned down: {_clip(detail)}. Tell me whether that is a mistake to fix or a "
-                f"limit to keep.")
-        if row.get("body") == body:
-            origins.add(actor)
-    return next(iter(origins)) if len(origins) == 1 and len(candidates) == 1 else None
-
-
 def _review_exists(conn, title, day):
     return conn.execute("SELECT 1 FROM tasks WHERE title=? AND requester=? AND substr(created,1,10)=?",
                         (title, KEEPER, day)).fetchone() is not None
@@ -5519,7 +5491,7 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
 def task_comment_delete(conn, actor, task_id, message_id):
     """The author takes a comment back. Only its metadata stays for the audit trail, excluded from future comment reads: a run it queued and nobody started is cancelled, the questions it answered
     are open again, and the bot it woke loses the delegation that came with it (`task_delegations`)."""
-    msg = _own_comment(conn, actor, task_id, message_id)
+    _own_comment(conn, actor, task_id, message_id)
     ts = now()
     conn.execute("UPDATE messages SET body='',refs_json=?,deleted_at=? WHERE id=?",
                  (_dump({"task": task_id, "comment": True}), ts, message_id))

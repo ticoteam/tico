@@ -1040,7 +1040,7 @@ def _working(c, who, hook_id):
 def recover_failed(c, who, hook_id, since):
     """Every send that gave up since `since` goes out again, same ids and bodies (a receiver that kept the first one
     still drops the repeat). At most REPLAY_BATCH at a time; `more` says run it again."""
-    hook = _working(c, who, hook_id)
+    _working(c, who, hook_id)
     at = _since(since)
     ids = [r["id"] for r in c.execute("SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt>=? "
                                       "ORDER BY next_attempt LIMIT ?", (hook_id, at, REPLAY_BATCH + 1))]

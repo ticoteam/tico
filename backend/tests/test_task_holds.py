@@ -197,8 +197,8 @@ def test_backfill_puts_every_waiting_task_right_once_with_one_wake_per_bot(api):
 def test_the_third_withdrawal_of_the_same_question_in_a_day_says_so(api):
     """Criterion 13."""
     with api.app.state.store.transaction() as c:
-        for n in range(3):
-            tid = bot_task(c, "Staff Hosting timing") if n == 0 else tid
+        tid = bot_task(c, "Staff Hosting timing")
+        for _ in range(3):
             question = ask(c, tid, "When does Staff Hosting ship?")
             wait(c, tid)
             c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (H.now(), question["id"]))

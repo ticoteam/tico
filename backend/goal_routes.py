@@ -1345,7 +1345,8 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             goal = goal_or_404(c, body.goal_id) if body.goal_id else None
-            record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
+            if body.kpi_id:
+                kpi_or_404(c, who, body.kpi_id)
             if goal and not readable_goals(c, who, [goal]):
                 raise Problem("not_found", "Unknown goal", 404)
             return {"proposal": G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload, body.reason)}

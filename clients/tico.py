@@ -156,7 +156,7 @@ class Client:
                 retryable = exc.code == 429 or 500 <= exc.code < 600
                 failure = APIError(error.get("code", "http_error"), detail, exc.code, retryable, key,
                                    {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")})
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
                 failure = APIError("unavailable", "Tico could not confirm this request; retry with the same operation ID",
                                    retryable=True, operation_id=key)
             except ValueError:
