@@ -1655,6 +1655,8 @@ def create_app(settings=None):
                                                     "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
+        if cloud_access.cell():
+            cloud_access.sync_later(store, vault, settings)  # a Tico Cloud cell's new key: its access answer, now
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 
