@@ -5,27 +5,40 @@
 //
 //   node screen-check.mjs <base url> <computer id> <screenshot path>
 //
+// The page is a signed-in page: the owner token (TOKEN_FILE) goes in as a bearer header, so the browser is the owner
+// on this loopback install, the way the owner's own tools are. The token is never printed.
 // Playwright comes from the repository's node_modules, which the browser setup installs with its Chromium.
+import {readFileSync} from 'node:fs';
 import {chromium} from 'playwright';
 
 const [base, computer, shot] = process.argv.slice(2);
+const token = readFileSync(process.env.TOKEN_FILE, 'utf8').trim();
 const checks = [];
-const check = (name, ok, detail = '') => checks.push({name, ok: Boolean(ok), detail: String(detail).slice(0, 120)});
+const check = (name, ok, detail = '') => checks.push({name, ok: Boolean(ok), detail: String(detail).slice(0, 240)});
 
 const browser = await chromium.launch({args: ['--no-sandbox']});
 try {
   const context = await browser.newContext({
     viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, deviceScaleFactor: 2,
+    extraHTTPHeaders: {Authorization: `Bearer ${token}`},
   });
   const page = await context.newPage();
-  const statuses = [];
+  const seen = [];
+  const errors = [];
   page.on('response', response => {
-    if (response.url().includes('/api/v2/')) statuses.push(response.status());
+    const url = new URL(response.url());
+    if (url.origin === new URL(base).origin) seen.push(`${response.status()} ${url.pathname}`);
   });
-  await page.goto(`${base}/#/computers/${encodeURIComponent(computer)}/screen`, {waitUntil: 'load', timeout: 60000});
+  page.on('console', message => {
+    if (message.type() === 'error') errors.push(message.text().slice(0, 120));
+  });
+  page.on('pageerror', error => errors.push(`page error: ${error.message.slice(0, 120)}`));
+  await page.goto(`${base}/tico/ui/#/computers/${encodeURIComponent(computer)}/screen`, {waitUntil: 'load', timeout: 60000});
   const shown = await page.waitForSelector('#scr', {timeout: 30000}).then(() => true, () => false);
-  const apiSeen = [...new Set(statuses)].sort().join(',') || 'none';
-  check('the screen element is on the page', shown, `api statuses seen: ${apiSeen}`);
+  const apiSeen = [...new Set(seen.filter(line => line.includes('/api/v2/')))].slice(0, 8).join(', ') || 'none';
+  const problems = [...new Set(errors)].slice(0, 4).join(' | ') || 'none';
+  check('the screen element is on the page', shown,
+        `responses: ${[...new Set(seen)].slice(0, 12).join(', ') || 'none'}; api: ${apiSeen}; console: ${problems}`);
   const state = await page.locator('#scr-state').first().textContent({timeout: 5000}).catch(() => null);
   check('the screen state line is shown', typeof state === 'string' && state.trim() !== '');
   const mode = await page.locator('#scr-mode').first().textContent({timeout: 5000}).catch(() => null);

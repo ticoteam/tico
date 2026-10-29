@@ -44,7 +44,9 @@ PRACTICE=http://login.practice.test:8080
 OTHER=http://other.practice.test:8080
 CREDENTIAL=PRACTICE_LOGIN
 LABEL=Practice-login
-BOT=browser-bot
+# The install's Assistant by default: it is built from its template at enrollment, so it has the repository that
+# activation needs. A bot created here has none (only BotOps builds one for it), and activation refuses.
+BOT="${TICO_JOURNEY_BOT:-coo}"
 BOT_NAME="Browser bot"
 RESULTS_DIR=/home/runner/journey-threads/results
 J="$REPO/e2e/browser/journey.py"
@@ -93,7 +95,7 @@ padmin() { curl -fsS -X "$1" -H "Authorization: Bearer $PRACTICE_ADMIN_TOKEN" "h
 healthy() { dc exec -T server curl -fsS --max-time 3 http://127.0.0.1:8765/healthz; }
 runner_online() { japi GET /api/v2/getting-started | pick 'sys.exit(0 if any(i["id"]=="computer" and i["done"] for i in d["items"]) else 1)'; }
 runner_id() { japi GET /api/v2/operations | pick 'd["machines"][0]["id"]'; }
-bot_ready() { japi GET /api/v2/operations | pick 'sys.exit(0 if d["machines"][0]["readiness"]["bots"].get("browser-bot", {}).get("ready") else 1)'; }
+bot_ready() { japi GET /api/v2/operations | BOT="$BOT" python3 -c 'import json,os,sys; d=json.load(sys.stdin); sys.exit(0 if d["machines"][0]["readiness"]["bots"].get(os.environ["BOT"], {}).get("ready") else 1)'; }
 
 run_step() {  # the label, what it needs beyond main, the step's function
   local label=$1 needs=$2 fn=$3 start=$SECONDS
@@ -132,9 +134,9 @@ start_runner() {  # the enrollment code: the runner as docker/runner.compose.yam
 }
 
 attach_chrome_tool() {  # the bot opts in to Chrome in its bot.yaml in the checkout on the computer
-  docker exec -i "$RUNNER" sh -s <<'SH'
-f=$(find /home/runner -path '*browser-bot*' -name bot.yaml -not -path '*/node_modules/*' 2>/dev/null | head -n 1)
-[ -n "$f" ] || { echo "no bot.yaml for browser-bot" >&2; exit 1; }
+  docker exec -i -e BOT="$BOT" "$RUNNER" sh -s <<'SH'
+f=$(find /home/runner -path "*/bot-$BOT/bot.yaml" -not -path '*/node_modules/*' 2>/dev/null | head -n 1)
+[ -n "$f" ] || { echo "no bot.yaml for $BOT" >&2; exit 1; }
 grep -q '^tools:' "$f" || printf '\ntools:\n  - service: chrome\n' >> "$f"
 SH
 }
@@ -277,7 +279,9 @@ step_expire_person() { expire_sessions; }
 step_bot() {
   local rid assignment assigned generation revision
   rid="$(runner_id)" || return 1
-  send POST /api/v2/bots "{\"slug\": \"$BOT\", \"display_name\": \"$BOT_NAME\", \"status\": \"planned\"}" >/dev/null || return 1
+  if ! japi GET "/api/v2/bots/$BOT" >/dev/null 2>&1; then
+    send POST /api/v2/bots "{\"slug\": \"$BOT\", \"display_name\": \"$BOT_NAME\", \"status\": \"planned\"}" >/dev/null || return 1
+  fi
   assignment="$(japi GET "/api/v2/bots/$BOT")" || return 1
   assigned="$(printf '%s' "$assignment" | pick '(d.get("assignment") or {}).get("runner_id", "")')"
   generation="$(printf '%s' "$assignment" | pick '(d.get("assignment") or {}).get("generation", 0)')"
