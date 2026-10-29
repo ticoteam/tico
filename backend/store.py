@@ -1613,6 +1613,12 @@ class Store:
                                    # but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_parties",
                                     "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                   # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
+                                   ("tasks_queue_cover", "tasks(rank, created, id, owner, requester, private, guest)"),
+                                   ("tasks_owner_status_cover",
+                                    "tasks(owner, status, id, requester, private, guest, waiting_on)"),
+                                   ("tasks_requester_status_cover",
+                                    "tasks(requester, status, id, owner, private, guest, waiting_on)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.

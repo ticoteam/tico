@@ -1288,6 +1288,14 @@ def migrate(conn, adopt_legacy=False):
             # columns, and the predicate matches its query word for word, so the scan never opens a body.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
                          "id, requester, owner, guest, private) WHERE private IS NOT 0")
+            # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
+            # answered from an index alone: the table's pages hold every body, and these reads need none of them.
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
+                         "rank, created, id, owner, requester, private, guest)")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_status_cover ON tasks("
+                         "owner, status, id, requester, private, guest, waiting_on)")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
+                         "requester, status, id, owner, private, guest, waiting_on)")
     # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
     # The conversation row holds participants_json, and the primary key scan reads those pages.
     conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
@@ -9080,8 +9088,19 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
                     "created, id")
     else:
         raise ValueError("task order is queue, finished or step")
-    rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
-                              (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))))
+    page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
+    if order == "queue" and limit is not None:
+        # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the
+        # sorter (26 MB of bodies at TIDY's 10.8k tasks) on each list page; tasks_queue_cover answers the ids alone.
+        ids = [row[0] for row in conn.execute("SELECT id" + sql[len("SELECT *"):] + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
+                                              page)]
+        found = {}
+        for part in chunks(ids):
+            found.update((row["id"], row) for row in _rows(conn.execute(
+                f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(part))})", part)))
+        rows = [found[ident] for ident in ids if ident in found]
+    else:
+        rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?", page))
     hydrate_task_tags(conn, rows)
     return rows
 

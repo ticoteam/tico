@@ -1114,7 +1114,7 @@ def status_tasks_sql(match):
     return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner{match} AND {live} "
             f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester{match} AND {live} "
             # `+` keeps the few private tasks on their own index (tasks_private), not the owner's every task.
-            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE private IS NOT 0 "
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0 "
             f"AND (+owner{match} OR +requester{match})")
 
 
