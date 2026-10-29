@@ -598,6 +598,15 @@ def test_a_task_moved_to_a_qm_bot_wakes_it_too_and_a_bot_without_an_address_only
     assert run(api, net) == 1 and json.loads(net.seen[0].content)["task_id"] == moved["id"]
 
 
+def test_a_private_task_moved_to_a_qm_bot_wakes_its_operator_who_reads_it_only_as_the_new_owner(api, net):
+    qm(api)
+    set_wake(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Private handoff", "body": "x", "private": True})
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "qm"})
+    assert [s["type"] for s in sends(api)] == ["task.assigned"]
+    assert run(api, net) == 1 and json.loads(net.seen[0].content)["task_id"] == task["id"]
+
+
 def test_clearing_the_address_stops_the_wake_and_a_bad_secret_or_a_bot_that_is_not_qm_is_refused(api, net):
     qm(api)
     set_wake(api, secret="too short", expected=422)
