@@ -289,8 +289,8 @@ def reset(c, bot):
 
 def fast(row, now):
     """Whether the run failed within FAST seconds of starting (its claim, for a run that never reported a start)."""
-    began = H.parse_ts(row["started"] or row["created"])
-    return bool(began) and (H.parse_ts(now) - began).total_seconds() < FAST
+    began, at = H.parse_ts(row["started"] or row["created"]), H.parse_ts(now)
+    return began is not None and at is not None and (at - began).total_seconds() < FAST
 
 
 def failed(c, settings, row, body, aid, now=None):
@@ -368,10 +368,10 @@ def words(c, bot):
     state = get(c, bot)
     name = bot_stops.name_of(c, bot)
     if state.get("held_at"):
-        cause = CLASS_WORDS.get(state.get("error_class")) or CLASS_WORDS[OTHER]
+        cause = CLASS_WORDS.get(state.get("error_class") or "") or CLASS_WORDS[OTHER]
         return (f"Tico stopped {name}: its last {state.get('fails')} runs failed within a minute ({cause}). "
                 "Tico tries one run on its own at growing intervals and releases it when one completes. "
                 "Check its last runs, or release it now.")
-    left = max(1, int((H.parse_ts(state.get("wait_until")) - H.parse_ts(H.now())).total_seconds())) \
-        if state.get("wait_until") and H.parse_ts(state["wait_until"]) else 0
+    until, at = H.parse_ts(state.get("wait_until")), H.parse_ts(H.now())
+    left = max(1, int((until - at).total_seconds())) if until is not None and at is not None else 0
     return f"{name} is pausing {left} s after a failed run before it tries again" if left else ""
