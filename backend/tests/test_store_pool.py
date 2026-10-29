@@ -253,3 +253,31 @@ def test_sweep_deltas_drops_old_finished_runs_text_pieces_only(tmp_path):
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
     assert left == {("a-old", 3), ("a-old", 4), ("a-old", 5)} | {(a, n) for a in ("b-recent", "c-open") for n in range(1, 6)}
     assert sweep_deltas(s, now) == 0, "the mark moved past what was swept"
+
+
+def test_sweep_events_drops_only_old_bookkeeping_rows_in_bounded_passes(tmp_path):
+    from backend.store import EVENT_RETENTION_DAYS, EVENT_SWEEP_ACTIONS, H, sweep_events
+    s = store(tmp_path)
+    now = H.now()
+    old, recent = H.shift(now, days=-EVENT_RETENTION_DAYS - 5), H.shift(now, days=-2)
+    kept_old = ("task.create", "attempt.limited", "attempt.input.moved", "credential.revealed", "turn.outcome")
+    with s.transaction() as c:
+        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, target TEXT, "
+                  "detail_json TEXT)")
+        c.execute("CREATE INDEX events_ts ON events(ts)")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        rows = [(f"{action}-{when}", when, "keeper", action, "t", None)
+                for action in (*EVENT_SWEEP_ACTIONS, *kept_old) for when in (old, recent)]
+        rows += [(f"extra-{i}", old, "keeper", "message.delivered", "m", None) for i in range(12)]
+        c.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", rows)
+    # 19 old swept rows (7 + 12 extra): the first pass deletes at most `most`, the next one the rest.
+    assert sweep_events(s, now, batch=5, most=10) == 10
+    with s.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE ts=? AND action IN (%s)"
+                         % ",".join("?" * len(EVENT_SWEEP_ACTIONS)), (old, *EVENT_SWEEP_ACTIONS)).fetchone()[0] == 9
+    assert sweep_events(s, now, batch=5, most=10) == 9
+    assert sweep_events(s, now) == 0, "the mark moved past what was swept"
+    with s.read() as c:
+        left = {r[0] for r in c.execute("SELECT id FROM events")}
+    assert left == {f"{action}-{when}" for action in kept_old for when in (old, recent)} | \
+        {f"{action}-{recent}" for action in EVENT_SWEEP_ACTIONS}

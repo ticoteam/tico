@@ -537,6 +537,55 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     return deleted
 
 
+# The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
+# than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
+# and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
+# runtime of an old limited run that kept no limit_source), `credential.revealed` (credentials.last_used reads the
+# newest use of a credential, however old).
+EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
+                       "message.notice")
+EVENT_RETENTION_DAYS = 30
+EVENT_SWEEP_BATCH = 5000     # rows per write transaction, so the one writer waits for a few thousand deletes at a time
+EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger backlog drains over later passes
+
+
+def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
+    """Delete the EVENT_SWEEP_ACTIONS rows older than EVENT_RETENTION_DAYS; returns the count.
+
+    The scan walks the `events_ts` index forward from a mark kept in registry_metadata, so a pass reads only the
+    time since the last one (and not the kept rows before it again). The scan runs outside the write lock; each
+    batch's delete is its own short transaction, like `sweep_idempotency`. Events are only ever written with the
+    current time, so once a pass has reached the cutoff, nothing older than it is left behind."""
+    cutoff = H.shift(now or H.now(), days=-EVENT_RETENTION_DAYS)
+    marks = ",".join("?" * len(EVENT_SWEEP_ACTIONS))
+    with store.read() as c:
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key='events-sweep-mark'").fetchone()
+    mark = json.loads(saved[0]) if saved else ""
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute(f"SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? "
+                             f"AND action IN ({marks}) ORDER BY ts LIMIT ?",
+                             (mark, cutoff, *EVENT_SWEEP_ACTIONS, batch)).fetchall()
+        if not rows:
+            mark = cutoff
+            break
+        with store.transaction() as c:
+            removed = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rows))})",
+                                [row["rowid"] for row in rows]).rowcount
+        deleted += removed
+        mark = rows[-1]["ts"]
+        if len(rows) < batch:
+            mark = cutoff
+            break
+        if not removed:
+            break               # the rows left the table under the scan: the next pass starts again from the mark
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
+                  "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+    return deleted
+
+
 def sweep_mail(store, now=None, batch=5000):
     """Delete mail older than the retention window, including matching FTS rows.
 
