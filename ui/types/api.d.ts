@@ -2408,6 +2408,17 @@ export type RunnerTurnsAtOnce = {
   turns_at_once: number | null;
 };
 
+export type ScreeningModes = {
+  idea?: "off" | "warn" | "hold" | null;
+  mail?: "off" | "warn" | "hold" | null;
+  model?: boolean | null;
+  patterns?: boolean | null;
+  watcher?: "off" | "warn" | "hold" | null;
+  webhook?: "off" | "warn" | "hold" | null;
+};
+
+export type ScreeningTest = Record<string, unknown>;
+
 export type Seat = {
   created?: string;
   description: string;
@@ -4745,6 +4756,11 @@ export type GetRoadmapSettingsParams = Record<string, never>;
 export type GetRoadmapSettingsBody = never;
 export type GetRoadmapSettingsResponse = unknown;
 
+/** GET /api/v2/screening */
+export type GetScreeningParams = Record<string, never>;
+export type GetScreeningBody = never;
+export type GetScreeningResponse = unknown;
+
 /** GET /api/v2/seats/{seat_id} */
 export type GetSeatParams = {
   seat_id: string;
@@ -6299,6 +6315,11 @@ export type SetRoadmapSettingsParams = {
 export type SetRoadmapSettingsBody = RoadmapSettings;
 export type SetRoadmapSettingsResponse = unknown;
 
+/** PUT /api/v2/screening */
+export type SetScreeningParams = Record<string, never>;
+export type SetScreeningBody = ScreeningModes;
+export type SetScreeningResponse = unknown;
+
 /** POST /api/v2/sleep */
 export type SetSleepWhenIdleParams = {
   "Idempotency-Key": string;
@@ -6445,6 +6466,13 @@ export type TakeRecommendationParams = {
 };
 export type TakeRecommendationBody = TakeRecommendation;
 export type TakeRecommendationResponse = unknown;
+
+/** POST /api/v2/screening/test */
+export type TestScreeningParams = {
+  "Idempotency-Key": string;
+};
+export type TestScreeningBody = ScreeningTest;
+export type TestScreeningResponse = unknown;
 
 /** POST /api/v2/health-monitor/turn-off */
 export type TurnOffHealthMonitorParams = {
