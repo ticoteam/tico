@@ -1,11 +1,20 @@
 """The one-time credential-use trim (store.sweep_credential_uses): old audit rows to the grain record_use writes now."""
 import json
+import math
 
+import pytest
+
+from backend import store as store_module
 from backend.config import Settings
-from backend.store import H, Store, sweep_credential_uses
+from backend.store import TRIM_BATCH, TRIM_PAUSE, H, Store, sweep_credential_uses
 
 BASE = "2026-10-01T10:00:00.000000Z"
 REVEAL, SENT = "credential.revealed", "credential.sent_to_computer"
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(store_module, "_sleep", lambda seconds: None)
 
 
 def store(path):
@@ -130,3 +139,22 @@ def test_a_second_full_pass_deletes_nothing(tmp_path):
         c.execute("DELETE FROM registry_metadata WHERE key='credential-use-trim'")
     assert sweep_credential_uses(s, now=at(1440)) == 0         # a full walk of what is left finds nothing to delete
     assert remaining(s) == before
+
+
+def test_each_flush_is_followed_by_one_pause_and_no_batch_is_over_trim_batch(tmp_path, monkeypatch):
+    s = store(tmp_path / "hub.sqlite")
+    add(s, [watcher(f"w{m}", m, "ops") for m in range(500)])        # one a minute: most are inside the hour and go
+    sleeps, sizes, flush = [], [], store_module._trim_flush
+
+    def record_flush(store, rowids):
+        sizes.append(len(rowids))
+        return flush(store, rowids)
+
+    monkeypatch.setattr(store_module, "_sleep", sleeps.append)
+    monkeypatch.setattr(store_module, "_trim_flush", record_flush)
+    deleted = sweep_credential_uses(s, now=at(1440))
+    assert deleted > 2 * TRIM_BATCH
+    assert sum(sizes) == deleted
+    assert max(sizes) <= TRIM_BATCH
+    assert len(sizes) == math.ceil(deleted / TRIM_BATCH)
+    assert [x for x in sleeps if x == TRIM_PAUSE] == [TRIM_PAUSE] * len(sizes)

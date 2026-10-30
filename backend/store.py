@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
@@ -609,9 +610,15 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
 # writes (a reveal with no attempt, a computer send by a model key) is kept and counts as the pair's last write, as it
 # did then. Person reveals are never touched. Rows at or after the first pass's time are not walked: the deploy's rows
 # are already at the new grain. Passes resume from the credential after the last finished one (registry_metadata).
-TRIM_BATCH = 500           # deletes per write transaction
+# Paced, not back to back: a batch of 500 deletes plus the WAL checkpoint it triggers held the writer gate for 5-7 s on
+# TIDY's first pass (scheduler.py:437), so writers waited up to 9 s against the 10 s WRITE_WAIT. 200 rows per write, then
+# a pause, lets writers in between batches.
+TRIM_BATCH = 200           # deletes per write transaction
+TRIM_PAUSE = 0.5           # seconds slept after each write transaction
 TRIM_PAGE = 2000           # rows read per read transaction
+TRIM_READ_PAUSE = 0.05     # seconds slept between read pages
 TRIM_MAX = 50_000          # deletes one hourly pass makes at most
+_sleep = time.sleep        # the pauses go through this so tests can run without waiting
 TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
 TRIM_MARK = "credential-use-trim"
 
@@ -642,6 +649,7 @@ def _trim_stream(store, action, target, before, page):
         yield from fresh
         if len(rows) < limit or not fresh:
             return
+        _sleep(TRIM_READ_PAUSE)
         last = rows[-1]["ts"]
         seen = {row["id"] for row in rows if row["ts"] == last}
 
@@ -680,7 +688,9 @@ def _trim_target(store, target, before, batch, budget, page):
 
 def _trim_flush(store, rowids):
     with store.transaction() as c:
-        return c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+        deleted = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+    _sleep(TRIM_PAUSE)
+    return deleted
 
 
 def _trim_next_target(store, after):
