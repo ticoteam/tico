@@ -133,7 +133,12 @@ async function main() {
   check('the endpoint answers json/version with a DevTools socket', cdp !== null, shown(base));
 
   if (phase === 'status') {
-    const status = hub(['browser', 'status']);
+    // Chrome for a bot starts on its first lease, so the status may be asked before it is up: wait for it, up to a minute.
+    let status = hub(['browser', 'status']);
+    for (let tries = 0; tries < 30 && status.json?.running !== true; tries++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      status = hub(['browser', 'status']);
+    }
     check('hub browser status (CLI) reports Chrome running', status.json?.running === true, status.json?.problem || status.err);
     cdp?.close();
     return;
