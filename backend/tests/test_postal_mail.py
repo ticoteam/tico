@@ -317,3 +317,12 @@ def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
     made = post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, key="order-1")
     assert made["order"]["id"] == "mo_1"
     assert mail.orders == [({"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, "postal-order:order-1")]
+
+
+def test_a_rehearsal_never_orders_a_real_address(api, hq, mail):
+    settings = api.app.state.store.settings
+    settings.rehearsal = True
+    refused = api.post("/api/v2/postal/orders", json={"kind": "shared", "state": "DE", "company_name": "Acme Inc"},
+                       headers=headers("ana-test", "postal-order-rehearsal"))
+    assert refused.status_code == 503 and refused.json()["error"]["code"] == "rehearsal"
+    assert mail.orders == [] and not any(path.startswith("/v1/gateway/mail/") for _, path in mail.calls)
