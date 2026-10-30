@@ -578,10 +578,10 @@ impl ClaudeHost {
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
         if let Some(hub) = hub_mcp_server(&t.settings.env) {
-            servers.insert("hub".into(), hub);
+            servers.insert("hub".into(), env_placeholders(hub, &t.settings.env));
         }
         if let Some(chrome) = super::browser_mcp_server(&t.settings.env) {
-            servers.insert(super::BROWSER_MCP.into(), chrome);
+            servers.insert(super::BROWSER_MCP.into(), env_placeholders(chrome, &t.settings.env));
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
@@ -1546,6 +1546,21 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
 /// The turn's environment (hosts/claude.py _env): the given one, else this process's. No turn keeps Claude's auto
 /// memory: what a bot remembers lives in its repository's memory/, where its owner sees and edits it (Dev 301), never
 /// in a MEMORY.md under this computer's ~/.claude. No turn loads the claude.ai connectors.
+/// The server with each env value the turn's own environment already holds written as `${KEY}`. The Claude process is
+/// started with that environment (`turn_env`), and Claude Code expands `${VAR}` in `--mcp-config` (mcp.rs `claude_config`),
+/// so the value stays out of the argv: every local user can read a process's command line in /proc, but not its environment.
+fn env_placeholders(mut server: Value, env: &crate::env::Env) -> Value {
+    if let Some(vars) = server.get_mut("env").and_then(Value::as_object_mut) {
+        for (key, value) in vars.iter_mut() {
+            let from_turn = env.get(key).is_some_and(|held| !held.is_empty() && value.as_str() == Some(held.as_str()));
+            if from_turn {
+                *value = json!(format!("${{{key}}}"));
+            }
+        }
+    }
+    server
+}
+
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
     env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
@@ -1657,21 +1672,31 @@ mod tests {
     }
 
     #[test]
-    fn a_chrome_bot_turn_gets_the_devtools_server_beside_the_hub() {
+    fn a_turn_puts_no_browser_or_hub_secret_on_the_command_line() {
         crate::browser::set_devtools_ready_for_tests("node", "/opt/chrome-devtools-mcp/index.js");
         let dir = std::env::temp_dir().join(format!("claude-chrome-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
+        let url = "http://127.0.0.1:9222/devtools/browser/0123456789abcdef";
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
         let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
-        settings.env.insert("TICO_BROWSER_URL".into(), "http://127.0.0.1:9222/devtools/browser/0123456789abcdef".into());
+        for (k, v) in [("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-0123456789"), ("HUB_BOT", "acme"), (crate::browser::URL_ENV, url)] {
+            settings.env.insert(k.into(), v.into());
+        }
         let thread = host.start_thread(&settings);
         let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let joined = argv.join("\n");
+        assert!(!joined.contains("0123456789abcdef") && !joined.contains("hub-token-0123456789"), "a secret is on the command line: {joined}");
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         let chrome = &config["mcpServers"]["chrome-devtools"];
         assert_eq!(chrome["command"], "node");
         assert!(chrome["args"].to_string().contains("--browserUrl"), "{chrome}");
-        assert!(chrome["env"]["TICO_BROWSER_URL"].as_str().unwrap_or_default().starts_with("http://127.0.0.1:"));
+        assert_eq!(chrome["env"]["TICO_BROWSER_URL"], "${TICO_BROWSER_URL}");
+        assert_eq!(chrome["env"]["CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"], "1", "a constant stays literal");
+        assert_eq!(config["mcpServers"]["hub"]["env"]["HUB_TOKEN"], "${HUB_TOKEN}");
+        assert_eq!(config["mcpServers"]["hub"]["env"]["HUB_API_URL"], "${HUB_API_URL}");
+        // The Claude process gets the same values, so the placeholders resolve.
+        assert_eq!(turn_env(&settings)[crate::browser::URL_ENV], url);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -8,6 +8,7 @@ the servers exactly as written, and answers the turn with one line. The probe's 
 A prompt holding `harness-run <nonce> <phase> [KEY=value ...]` is a turn; the phase is "request" (open a login card),
 "status" (Chrome answers) or "probe" (the full check). Only the values in ALLOWED reach the probe. Nothing here prints a
 password, a 2FA secret or a code: the probe never has them."""
+import glob
 import json
 import os
 import re
@@ -107,6 +108,50 @@ def read_prompt(argv):
     return " ".join(parts)
 
 
+def secret_needles():
+    """The values no command line may carry: the run's browser secret (the last segment of its endpoint) and the hub
+    token. Read from this process's environment, which is the turn's own."""
+    needles = []
+    url = os.environ.get("TICO_BROWSER_URL", "")
+    if url:
+        needles.append(("the browser secret", url))
+        needles.append(("the browser secret", url.rstrip("/").rsplit("/", 1)[-1]))
+    token = os.environ.get("HUB_TOKEN", "")
+    if token:
+        needles.append(("HUB_TOKEN", token))
+    return [(label, value) for label, value in needles if len(value) >= 8]
+
+
+def command_line_leaks(needles):
+    """The labels of the secrets found in any process's command line, read from /proc as any local user can read it."""
+    found = set()
+    for path in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(path, "rb") as handle:
+                line = handle.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        for label, value in needles:
+            if value in line:
+                found.add(label)
+    return found
+
+
+def record_command_line_check(results_path, leaks):
+    """One more check in the probe's result: no process's command line carried a secret while the run went on."""
+    try:
+        with open(results_path) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {"phase": "", "ok": False, "checks": [], "data": {}}
+    checks = data.setdefault("checks", [])
+    checks.append({"name": "no process command line carries the browser secret or HUB_TOKEN", "ok": not leaks,
+                   "detail": ("on a command line: " + ", ".join(sorted(leaks))) if leaks else ""})
+    data["ok"] = all(item.get("ok") for item in checks)
+    with open(results_path, "w") as handle:
+        json.dump(data, handle)
+
+
 def run_probe(text, servers, argv):
     found = RUN.search(text)
     if not found:
@@ -117,23 +162,39 @@ def run_probe(text, servers, argv):
     os.makedirs(os.path.join(ROOT, "results"), exist_ok=True)
     dump_path = os.path.join(ROOT, "dumps", "%s-%s.json" % (HARNESS, nonce))
     results_path = os.path.join(ROOT, "results", "%s.json" % nonce)
+    needles = secret_needles()
+    # This process is the run's own CLI, so its command line is the argv the real CLI would have been given.
+    leaks = command_line_leaks(needles)
     dump = {"harness": HARNESS, "executable": NAME, "phase": phase, "nonce": nonce, "argv": argv,
             "cwd": os.getcwd(), "env": dict(os.environ), "servers": servers, "files": files_under_home(),
             "prompt": text[:4000]}
     with open(dump_path, "w") as out:
         json.dump(dump, out)
     env = {**os.environ, **{key: value for key, value in values.items() if key in ALLOWED}}
+    ran = ""
     try:
-        done = subprocess.run(["node", PROBE, dump_path, phase, results_path], env=env, capture_output=True,
-                              text=True, timeout=900)
-        ran = "" if done.returncode == 0 else "exit %d" % done.returncode
+        # The probe's own children (the MCP servers it starts from the config) are on the process list while it runs.
+        proc = subprocess.Popen(["node", PROBE, dump_path, phase, results_path], env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        end = time.time() + 900
+        while proc.poll() is None and time.time() < end:
+            leaks |= command_line_leaks(needles)
+            time.sleep(0.2)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+            ran = "timed out"
+        else:
+            ran = "" if proc.returncode == 0 else "exit %d" % proc.returncode
     except (OSError, subprocess.SubprocessError) as exc:
         ran = type(exc).__name__
+    leaks |= command_line_leaks(needles)
     if not os.path.exists(results_path):
         # The probe did not finish: say so in the results, with no output from it (its output is never echoed).
         with open(results_path, "w") as out:
             json.dump({"phase": phase, "ok": False, "checks": [{"name": "probe ran", "ok": False,
                        "detail": ran or "no result"}], "data": {}}, out)
+    record_command_line_check(results_path, leaks)
     return nonce, phase
 
 
