@@ -527,6 +527,12 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     let mut app = app(store, directory.path());
     app.make_default("second");
     assert_eq!(settings::read(directory.path()).unwrap().destinations[0].id, "second");
+    // Connected and never chosen: speech goes through the default Tico, which hasn't said yet
+    // what it can do.
+    assert_eq!(
+        app.status_view()["speech"],
+        json!({"source":"tico","stream":false,"transcribe":false,"tico":"tico.team"})
+    );
     app.save_settings(SettingsForm {
         microphone: "Studio mic".into(),
         meeting_audio: false,
@@ -538,9 +544,14 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
         streaming: Some(true),
         streaming_model: String::new(),
         xai_key: String::new(),
+        speech_source: Some("own".into()),
     });
     settle(&mut app, |app| !app.busy);
     let written = settings::read(directory.path()).unwrap();
+    assert_eq!(written.speech_source, "own");
+    // Own keys without a saved key can't transcribe.
+    assert_eq!(app.status_view()["speech"]["source"], "none");
+    assert_eq!(full_view(&mut app)["settings"]["data"]["speech_source"], "own");
     assert_eq!(written.microphone, "Studio mic");
     assert!(!written.meeting_audio);
     assert_eq!(written.transcription_language, "");
@@ -656,4 +667,37 @@ fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
     assert_eq!(app.update_hold(), Some("After the live meeting ends"));
     app.records[0].live_state = "ended".into();
     assert_eq!(app.update_hold(), None);
+}
+
+#[test]
+fn the_open_meetings_bot_notices_show_with_the_bots_name() {
+    use tico_recorder_native::notices::{self, Notice};
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    assert_eq!(full_view(&mut app)["live"], json!({"notices": []}));
+    notices::remember(
+        "live-notices",
+        12,
+        vec![Notice {
+            id: "waiting:t1".into(),
+            kind: "waiting".into(),
+            bot: "falcon".into(),
+            turn_id: "t1".into(),
+            reason: String::new(),
+            detail: String::new(),
+            at: 1_700_000_000_000,
+        }],
+    );
+    app.context.live_id = "live-notices".into();
+    app.live = json!({"id": "live-notices"});
+    app.roster = vec![("bot:falcon".into(), "Falcon".into())];
+    assert_eq!(
+        full_view(&mut app)["live"]["notices"],
+        json!([{"id":"waiting:t1","kind":"waiting","bot":"Falcon",
+            "text":"Falcon is waiting for its computer","at":1_700_000_000_000_i64}])
+    );
+    // Another meeting open: not its notices.
+    app.context.live_id = "live-other".into();
+    assert_eq!(full_view(&mut app)["live"]["notices"], json!([]));
 }

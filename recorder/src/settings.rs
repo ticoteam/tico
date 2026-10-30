@@ -33,6 +33,9 @@ pub struct Settings {
     pub streaming: Option<bool>,
     pub streaming_url: String,
     pub streaming_model: String,
+    /// Where speech goes (`speech::source`): "tico" through the default Tico, "own" with the
+    /// keys saved here. Empty follows whether a Tico is connected.
+    pub speech_source: String,
 }
 /// Best on the meeting benchmark (`bench/README.md`) and returns word timings, which echo removal
 /// and speaker labels need.
@@ -55,6 +58,7 @@ impl Default for Settings {
             streaming: None,
             streaming_url: crate::stream::DEFAULT_URL.into(),
             streaming_model: crate::stream::DEFAULT_MODEL.into(),
+            speech_source: String::new(),
         }
     }
 }
@@ -101,6 +105,10 @@ pub fn read(root: &Path) -> Result<Settings> {
 }
 pub fn write(root: &Path, settings: &Settings) -> Result<()> {
     safe_url(&settings.transcription_url)?;
+    ensure!(
+        ["", crate::speech::TICO, crate::speech::OWN].contains(&settings.speech_source.as_str()),
+        "Choose Your Tico or Own keys"
+    );
     if settings.streaming != Some(false) {
         safe_stream_url(&settings.streaming_url)?;
     }

@@ -5,9 +5,11 @@
 //! is full, streamed audio is dropped and recorded audio is untouched. Final results are saved
 //! in `live_words`, so a crash keeps them; the changing partial text lives in memory only.
 //! The chunked transcript stays the record: finished chunks replace streamed text for their
-//! time range (`transcript::live_turns`), and nothing streamed is sent to Tico.
+//! time range (`transcript::live_turns`). A live meeting gets each final at once, and the
+//! finished chunks then correct it there (`live`).
 use crate::{
-    settings::{self, Settings},
+    settings::{self, Destination, Settings},
+    speech,
     store::{Store, Word},
     transcript::{self, LiveTurn, Partial},
 };
@@ -57,6 +59,9 @@ pub struct Plan {
     pub language: String,
     /// None reads the key from the keychain when a stream starts.
     pub key: Option<String>,
+    /// Streams through this Tico's relay with the person's sign-in instead of a key ("Your
+    /// Tico"); its token is read again for every connection, since it renews hourly.
+    pub tico: Option<Destination>,
     /// Streaming was switched on explicitly, so a missing key is shown instead of quietly off.
     pub required: bool,
     /// First reconnect delay; it doubles up to 30 s.
@@ -69,22 +74,29 @@ impl std::fmt::Debug for Plan {
             .field("model", &self.model)
             .field("language", &self.language)
             .field("key", &self.key.as_ref().map(|_| "<set>"))
+            .field("tico", &self.tico.as_ref().map(|row| &row.name))
             .field("required", &self.required)
             .finish()
     }
 }
 impl Plan {
-    /// None when streaming is switched off in Settings.
+    /// None when streaming is switched off in Settings, or speech goes through a Tico that
+    /// is not connected.
     pub fn from_settings(config: &Settings) -> Option<Self> {
         if config.streaming == Some(false) {
             return None;
         }
+        let tico = match speech::source(config) {
+            speech::TICO => Some(speech::tico(config)?.clone()),
+            _ => None,
+        };
+        let url = match &tico {
+            Some(destination) => speech::stream_url(destination).ok()?,
+            None if config.streaming_url.trim().is_empty() => DEFAULT_URL.into(),
+            None => config.streaming_url.trim().into(),
+        };
         Some(Self {
-            url: if config.streaming_url.trim().is_empty() {
-                DEFAULT_URL.into()
-            } else {
-                config.streaming_url.trim().into()
-            },
+            url,
             model: if config.streaming_model.trim().is_empty() {
                 DEFAULT_MODEL.into()
             } else {
@@ -92,7 +104,9 @@ impl Plan {
             },
             language: config.transcription_language.trim().into(),
             key: None,
-            required: config.streaming == Some(true),
+            // The Tico says whether it streams; nothing to add here when it does not.
+            required: config.streaming == Some(true) && tico.is_none(),
+            tico,
             retry: Duration::from_secs(1),
         })
     }
@@ -115,9 +129,11 @@ impl Plan {
 }
 
 /// Whether recordings stream by default: on when switched on, or unset with an xAI key saved.
+/// Through a Tico, unset is on; the Tico says whether it can.
 pub fn enabled(config: &Settings) -> bool {
     match config.streaming {
         Some(on) => on,
+        None if speech::source(config) == speech::TICO => true,
         None => settings::secret(KEY_NAME).is_ok_and(|key| !key.is_empty()),
     }
 }
@@ -319,11 +335,25 @@ impl Worker {
     }
     fn run(mut self) {
         crate::qos::utility();
-        let key = match &self.plan.key {
-            Some(key) => key.clone(),
-            None => settings::secret(KEY_NAME).unwrap_or_default(),
+        if let Some(destination) = self.plan.tico.clone() {
+            // A Tico that can't stream leaves live text off; chunks are transcribed all the same.
+            match speech::current(&destination) {
+                Ok(services) if services.stream => {}
+                Ok(_) => return self.set("off", ""),
+                Err(error) => {
+                    return self.set(
+                        "off",
+                        &format!("{:#}", speech::plain(error, "show live text")),
+                    );
+                }
+            }
+        }
+        let key = match (&self.plan.key, &self.plan.tico) {
+            (Some(key), _) => key.clone(),
+            (None, Some(_)) => String::new(),
+            (None, None) => settings::secret(KEY_NAME).unwrap_or_default(),
         };
-        if key.is_empty() {
+        if key.is_empty() && self.plan.tico.is_none() {
             let error = if self.plan.required {
                 "Add an xAI key in Settings to see live text"
             } else {
@@ -343,7 +373,12 @@ impl Worker {
                 "",
             );
             let opened = Instant::now();
-            let end = match self.open(&key) {
+            // Through a Tico the person's token is read for each connection; it renews hourly.
+            let key = match (&self.plan.tico, key.is_empty()) {
+                (Some(destination), true) => crate::signin::token(&destination.id),
+                _ => Ok(key.clone()),
+            };
+            let end = match key.and_then(|key| self.open(&key)) {
                 Ok(socket) => {
                     self.set("live", "");
                     self.session(socket)
@@ -357,6 +392,11 @@ impl Worker {
                         wait = self.plan.retry;
                     }
                     self.reconnects += 1;
+                    let error = if self.plan.tico.is_some() {
+                        tico_words(&error)
+                    } else {
+                        error
+                    };
                     self.set("retrying", &short(&error));
                     if !self.idle(wait) {
                         break;
@@ -391,7 +431,7 @@ impl Worker {
         let url = self.plan.endpoint(self.channel != "me")?;
         let mut request = url.as_str().into_client_request()?;
         let mut bearer = HeaderValue::from_str(&format!("Bearer {key}"))
-            .context("The xAI key contains characters a header cannot hold")?;
+            .context("The live text credential contains characters a header cannot hold")?;
         bearer.set_sensitive(true);
         request.headers_mut().insert("Authorization", bearer);
         let uri = request.uri().clone();
@@ -658,6 +698,18 @@ fn describe(error: &tungstenite::Error) -> String {
             "The streaming service closed the session".into()
         }
         other => short(&format!("Live text: {other}")),
+    }
+}
+
+/// A connection error through the Tico relay, in its words: the Tico refused the sign-in, or
+/// can't stream right now.
+fn tico_words(error: &str) -> String {
+    if error.contains("refused the xAI key") {
+        return "Your Tico refused live text. Sign in again in Settings.".into();
+    }
+    match error.split_once("answered HTTP ") {
+        Some((_, code)) => format!("Your Tico can't show live text right now — HTTP {code}"),
+        None => error.replace("The streaming service", "Your Tico's live text"),
     }
 }
 
