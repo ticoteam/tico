@@ -145,6 +145,15 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
+def asked_to_read(c, who, row):
+    """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py): Counsel reads that one file,
+    whichever bot's it is. The person had to be able to read it when they asked. Nothing else widens Counsel's view."""
+    if who.role != "bot" or H.actor_id(who.actor) != "counsel":
+        return False
+    return c.execute("SELECT 1 FROM events WHERE action='rules.read_requested' AND target=? "
+                     "AND json_extract(detail_json,'$.bot')='counsel' LIMIT 1", (row["id"],)).fetchone() is not None
+
+
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened."""
@@ -152,6 +161,8 @@ def file_visible(c, auth, who, row, cache):
         return False
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
+    if asked_to_read(c, who, row):
+        return True
     # `cache` lives for one read: a run's tasks are read once, however many files it made.
     for version in read_cache.rows(c, VERSIONS_SQL, (row["id"],)):
         if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):

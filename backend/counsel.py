@@ -42,6 +42,9 @@ NAME = "Counsel"
 NOT_ADVICE = "Not legal advice. For real exposure, ask a lawyer."
 QUESTION_MAX = 500
 NOTE_MAX = 2000
+# A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
+# named by file and version, and Counsel reads it with `hub file read`.
+TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
 STOP_WORDS = frozenset("the and for with that this from are can our your you any all not does into over under about "
                        "what when which will may must".split())
@@ -184,28 +187,31 @@ def read(c, auth, who, files, blobs, body, fetched=None):
             else "Departments holding this From's access: none granted (leave Who to the owner)")
     lines = ["Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
              f"From: {source['name']} ({source['kind']})",
-             f"Document: {title} (file {file_id}, version {number})",
+             f"Document: {file_id} version {number}",
              hint]
     if note:
         lines += ["", "The person's note (their words, not the document's):", note]
-    lines += ["", fence(text)]
+    if len(text) <= TEXT_INLINE_MAX:
+        lines += ["", fence(f"Title: {title}\n\n{text}")]
+    else:
+        lines += ["", f"The document is {len(text)} characters, too long for this task. Its title and text are not here.",
+                  "Read the whole of this version with `hub file read " + file_id + " --version " + str(number) + "` and",
+                  "work from that. The title, read from the document, is:", fence(title)]
     task = _task(c, who, f"Read: {title}"[:180] + f" (v{number})", "\n".join(lines))
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
-                                                          "task": task["id"]})
+                                                          "task": task["id"], "bot": SLUG})
     return {"task_id": task["id"], "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
             "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint}
 
 
 def check_cite(c, auth, who, blobs, cite):
-    """A suggestion's cite, checked: the file exists, the version exists, and the quote is in its text. A person may
-    cite a file they can read. A bot (Counsel) may cite only a file someone asked Counsel to read: the read was checked
-    when it was asked, and a bot cannot probe the text of files it was never given. Returns the cite to store, or None
-    when the quote is not in the source (the drop is counted as an event; the caller writes no rule)."""
+    """A suggestion's cite, checked: the file exists, the version exists, and the quote is in its text. A person or any
+    bot other than Counsel cites a file it can read (F.file_visible). Counsel cites only a file someone asked it to read
+    (F.asked_to_read: the read event names Counsel). Returns the cite to store, or None when the quote is not in the
+    source (the drop is counted as an event; the caller writes no rule)."""
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite["file_id"],)).fetchone()
-    if who.role == "bot":
-        asked = c.execute("SELECT 1 FROM events WHERE action='rules.read_requested' AND target=?",
-                          (cite["file_id"],)).fetchone()
-        if not row or not asked:
+    if who.role == "bot" and H.actor_id(who.actor) == SLUG:
+        if not row or not F.asked_to_read(c, who, row):
             raise Problem("not_found", "Counsel cites only a document someone asked it to read", 404)
     elif not row or not F.file_visible(c, auth, who, row, {}):
         raise Problem("not_found", "That file is not one you can read", 404)

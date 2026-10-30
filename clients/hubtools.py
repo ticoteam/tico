@@ -2512,6 +2512,20 @@ def files_search(api, args):
     return api.get("files/search", q=args["q"], limit=args.get("limit"))
 
 
+@tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
+      "current version unless a version is given. The whole text comes back, however long it is.",
+      {"id": _s("File id"), "version": {"type": "integer", "minimum": 1}}, required=("id",))
+def files_read(api, args):
+    fid, number = args["id"], args.get("version")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", str(fid)):
+        raise ValueError("Use an opaque Tico file ID, not a URL or path")
+    path = f"/api/v2/files/{fid}/versions/{number}" if number else f"/api/v2/files/{fid}"
+    client = api.api if isinstance(api, _Requester) else api
+    data = client.request("GET", path, binary=True)
+    text = data.decode("utf-8", errors="replace")
+    return {"id": fid, "version": number, "characters": len(text), "text": text}
+
+
 @tool("hub_file_delete", "Delete a file for good, the owner only: every version's bytes leave storage and only the "
       "fact that it was deleted stays. For a file that holds something it should not; archive anything else.",
       {"id": _s("File id")}, required=("id",), writes=True)

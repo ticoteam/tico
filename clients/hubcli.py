@@ -100,6 +100,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub file import s3://bucket/key [--title T] [--task ID]  copy an object with this computer's credentials
     hub file list [--bot X] [--limit N]    what is on the page, newest activity first
     hub file search "<words>" [--limit N]  every file you may read, by title and text, with an excerpt
+    hub file read <id> [--version N]       one version of a file you may read, as text, in full
     hub file delete <id>                   the owner deletes a file for good: its bytes leave storage
     hub page publish <file.html> [--title T] [--cadence none|daily|weekly|monthly] [--as-of YYYY-MM-DD]
                   [--task ID] [--replaces PAGE]
@@ -905,6 +906,10 @@ def parser():
     s.add_argument("q")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="file search")
+    s = files.add_parser("read", help="one version of a file you may read, as text, in full (default: the current one)")
+    s.add_argument("id")
+    s.add_argument("--version", type=int)
+    s.set_defaults(fn="file read")
     s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
     s.add_argument("id")
     s.set_defaults(fn="file delete")

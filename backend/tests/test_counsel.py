@@ -194,3 +194,99 @@ def test_a_can_i_question_gets_the_rules_that_apply_cited_and_a_task(api):
     assert answer["task_id"]
     assert answer["disclaimer"] == "Not legal advice. For real exposure, ask a lawyer."
     assert [m["id"] for m in answer["matches"]] == [created.json()["id"]]
+
+
+def test_a_long_document_is_named_not_pasted_and_counsel_reads_the_whole_version(api):
+    org(api)
+    counsel_on(api)
+    big = (CONTRACT + "\n\n" + "Filler clause, nothing to suggest. " * 10000)[:300_000]
+    assert len(big) == 300_000
+    file_id, version = store_file(api, big)
+    read = read_document(api, file_id)
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert len(body) < 2_000
+    assert "Filler clause" not in body and "Keep a record of each consent" not in body
+    assert f"hub file read {file_id} --version {version}" in body
+    assert "UNTRUSTED DOCUMENT" in body
+    # Counsel reads the version it was asked about, in full.
+    got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=headers("counsel-test"))
+    assert got.status_code == 200, got.text
+    assert len(got.content) == 300_000
+
+
+def test_a_short_document_is_fenced_inside_the_task(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert "Keep a record of each consent for five years." in body
+    assert "hub file read" not in body
+
+
+def test_counsel_reads_only_a_file_someone_asked_it_to_read(api):
+    org(api)
+    counsel_on(api)
+    asked, _ = store_file(api, CONTRACT)
+    unasked, unasked_version = store_file(api, "Nothing to see here.", title="Other terms")
+    read_document(api, asked)
+    assert api.get(f"/api/v2/files/{asked}/versions/1", headers=headers("counsel-test")).status_code == 200
+    assert api.get(f"/api/v2/files/{unasked}/versions/{unasked_version}",
+                   headers=headers("counsel-test")).status_code != 200
+
+
+def test_counsel_cannot_cite_a_file_nobody_asked_it_to_read(api):
+    org(api)
+    counsel_on(api)
+    store_file(api, CONTRACT)
+    unasked, _ = store_file(api, CONTRACT, title="Unasked terms")
+    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+        "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
+        "cite": {"file_id": unasked, "quote": "Keep a record of each consent for five years."}})
+    assert r.status_code == 404, r.text
+
+
+def test_the_read_event_must_name_counsel(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    with api.app.state.store.transaction() as c:
+        H.event(c, "human:ana", "rules.read_requested", file_id, {"bot": "ops"})
+    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+        "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
+        "cite": {"file_id": file_id, "quote": "Keep a record of each consent for five years."}})
+    assert r.status_code == 404, r.text
+
+
+def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    read_document(api, file_id)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('scout', 'Scout', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('scout','{}','','ana')")
+    as_bot(api, "scout", "scout-test")
+    r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
+        "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
+        "cite": {"file_id": file_id, "quote": "Keep a record of each consent for five years."}})
+    assert r.status_code == 404, r.text
+
+
+def test_hub_file_read_returns_the_whole_text_of_one_version():
+    from clients import hubtools
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, path, binary=False, **kw):
+            self.calls.append((method, path, binary))
+            return ("Whole text. " * 25000).encode("utf-8")
+
+    client = Client()
+    out = hubtools.files_read(client, {"id": "abc123", "version": 2})
+    assert client.calls == [("GET", "/api/v2/files/abc123/versions/2", True)]
+    assert out["characters"] == len("Whole text. " * 25000) and out["text"].startswith("Whole text.")
