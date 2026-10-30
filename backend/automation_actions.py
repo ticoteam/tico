@@ -202,8 +202,15 @@ def _create_task(c, auto, run_id, args, values):
                                         ("human:" + owner) if owner else actor)
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
-    row = H.task_create(c, actor, title, _text(args, "body") or title, owner, lint=False, deduplicate=False,
-                        wake_refs={"automation": auto["id"], **_chain_refs(auto)})
+    # A due-date run's task is due on its due day unless the step says otherwise, and its refs name that occurrence.
+    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
+    due = str(args.get("due") or occurrence.get("due_on") or "") or None
+    refs = {"automation": auto["id"], **_chain_refs(auto)}
+    if occurrence.get("due_on"):
+        refs.update(due_on=occurrence["due_on"], **({"rule_due_id": str(occurrence["rule_due_id"])}
+                                                   if occurrence.get("rule_due_id") else {}))
+    row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
+                        deduplicate=False, wake_refs=refs, occurrence=occurrence.get("due_on"))
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
 
 

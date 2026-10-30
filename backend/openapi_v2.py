@@ -1413,7 +1413,7 @@ STABLE.extend([
     ("/api/v2/automations/question-sets", "get", "Automations", "listQuestionSets",
      "The saved question sets a Decide step may name (`set`), each with its questions", "QuestionSets"),
     ("/api/v2/automations/{aid}", "get", "Automations", "getAutomation",
-     "One automation with set questions filled in, today's counts and, for a schedule, next_run", "Automation"),
+     "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)", "Automation"),
     ("/api/v2/automations/{aid}", "patch", "Automations", "updateAutomation",
      "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets "
      "`pending`, a proposal a person restores", "Automation"),
@@ -1454,7 +1454,10 @@ SCHEMAS.update({
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
-                       "next_run": {"type": ["string", "null"]}, "pending": "i", "warning": "s",
+                       "next_run": {"type": ["string", "null"]},
+                       "next_due": {"type": ["string", "null"], "description": "A due-date trigger's next due day "
+                                    "(YYYY-MM-DD); next_run is when its run starts"},
+                       "pending": "i", "warning": "s",
                        "kind": {"type": "string", "description": "The trigger as the overview groups it; system for "
                                 "Tico's own jobs"},
                        "problems": {"type": "array", "description": "Wake rules that name a step their task type "
@@ -1476,7 +1479,7 @@ SCHEMAS.update({
     "AutomationOverviewRuns": obj({
         "runs": items(obj({"id": "s", "automation_id": "s", "automation_name": "s",
                            "trigger": {"enum": ["message", "task_received", "schedule", "webhook", "listening", "event",
-                                                "system"]},
+                                                "due", "system"]},
                            "owner": "s", "started": "s", "finished": {"type": ["string", "null"]}, "status": "s",
                            "cost": "f", "started_by": "s", "outcome": "s", "step_count": {"type": ["integer", "null"]},
                            "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"}},

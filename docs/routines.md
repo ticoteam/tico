@@ -1,8 +1,8 @@
 # Routines (now Automations)
 
 A routine is now an automation: a trigger and steps. A bot's routine is an automation whose trigger is a
-**Schedule** (a five-field cron in a time zone), an **Event** from Tico's catalog, or an incoming **Webhook**, and whose
-step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
+**Schedule** (a five-field cron in a time zone), an **Event** from Tico's catalog, an incoming **Webhook** or a
+**Before a due date** trigger (below), and whose step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
 runs on its own, see [System routines](system-routines.md).
 
 An install that had routines moved them once, on the upgrade to Automations; see
@@ -27,6 +27,27 @@ An install that had routines moved them once, on the upgrade to Automations; see
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
   `{"type": "webhook", "id": "<trigger id>"}` (`hub trigger list` shows the ids). A new automation is saved off
   unless the flow sends `"enabled": true`.
+
+## Before a due date
+
+A due-date trigger runs its steps for each occurrence of a date that repeats, a few days before it falls due, so a
+payroll run, a renewal or a board report gets its task in time:
+
+```
+{"type": "due", "first_due": "2027-01-31", "repeats": "yearly", "open_days": 14, "tz": "America/Los_Angeles"}
+```
+
+- `first_due` is the first due day; `repeats` is `once`, `weekly`, `monthly`, `quarterly` or `yearly`. Occurrences
+  are counted from `first_due`, and a month too short for the day falls on its last day (a monthly routine from Jan 31
+  is due Feb 28 or 29, then Mar 31).
+- `open_days` (default 14) is how many days before the due day the run starts, at 00:00 in `tz` (default the company's
+  zone).
+- A `create_task` step opens its task due on that day (its `due` argument overrides it). The task's notice carries the
+  occurrence as `due_on`, and `rule_due_id` when one is set.
+- Each occurrence runs once, however often the scheduler passes. A missed day (the server was down) catches up on the
+  next pass. An overdue occurrence stays open and never holds back the next one.
+- The Automations list shows the next due day (`next_due`) and when its run starts (`next_run`). Changing the trigger
+  restarts the count from the next due day on; a rename or cap change does not.
 
 ## Seeing them all
 

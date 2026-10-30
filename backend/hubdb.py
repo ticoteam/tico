@@ -5817,7 +5817,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False, routine=False, same=None):
+                quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5834,6 +5834,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
     (backend/blocker_asks.py) wakes when that ask is done.
     `routine` is an automation's own run (a routine's, before the move): a Monitor or Reviewer takes it as its own work.
+    `occurrence` is a due-date routine's due day: each day's task is its own, so an open one with the same title (an
+    overdue day's) does not count as a duplicate of it.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5931,6 +5933,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                     " ORDER BY created,id",
             (requester, target, parent_id or "", *ACTIVE_STATUSES, *(turn[k] for k in AUTOMATION_TURN))))
         dup = twins[0] if twins else None
+    elif occurrence:
+        dup = None
     else:
         dup = _same_title(conn, scope + " ORDER BY created,id",
                           (requester, target, parent_id or "", *ACTIVE_STATUSES), title, keep=same)

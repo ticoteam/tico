@@ -39,12 +39,13 @@ import json
 import logging
 import threading
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
 from . import automation_actions as A
+from . import automation_due as D
 from . import automation_engine as E
 from . import automation_flow as F
 from . import people as P
@@ -164,6 +165,11 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
     if flow["trigger"]["type"] == "schedule":
         out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
+    if flow["trigger"]["type"] == "due":
+        # next_due is the next due day (a date); next_run is when its run starts.
+        day = _due_day(row["next_due"])
+        out["next_due"], out["next_run"] = (None, None) if not day else (
+            day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
@@ -232,8 +238,10 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
                int(flow["builtin"]), json.dumps(flow, sort_keys=True), n, now)
     # A new schedule is due at its next time after now, set here, so the time GET shows as next_run is the one the
     # scheduler runs even when its first pass comes after it.
-    due = _iso(_due(flow["trigger"], datetime.fromisoformat(now.replace("Z", "+00:00")))) \
-        if flow["trigger"]["type"] == "schedule" else None
+    at = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
+    if flow["trigger"]["type"] == "due":
+        due = _cursor(D.start(flow["trigger"], at))
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
         # schedule, or one turned back on, starts from the next time after now.
@@ -477,6 +485,9 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
         flow = F.check(flow)
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
+    if flow["trigger"]["type"] == "due":
+        # Stored on the flow, so a later change to the company's zone does not move the routine.
+        flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
     if flow.get("wakes"):   # a converted "What wakes" automation: only edits its wake rules can carry out
         from .redesign_migration import check_wakes
         check_wakes(flow, c if wake_steps else None, saved, aid)
@@ -945,6 +956,11 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         _count(c, row["id"], "dropped")
         return None
     if not manual and _absorbed(c, row):
+        return None
+    if str(ref).startswith("due:") and c.execute(
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
+            (row["id"], str(ref)[:200])).fetchone():
+        # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
     if str(ref).startswith("slack:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
@@ -1726,6 +1742,9 @@ def tick(store, at=None):
                 fire(c, "schedule", {"schedule": {"at": row["next_due"], "cron": trigger["cron"], "tz": zone}},
                      f"schedule:{row['next_due']}", only=row["id"])
             c.execute("UPDATE automations SET next_due=? WHERE id=?", (_iso(next_due(trigger["cron"], at, zone)), row["id"]))
+        for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 "
+                             "AND trigger_type='due'").fetchall():
+            _due_pass(c, row, at)
         c.execute(f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?",
                   (now,))
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
@@ -1761,6 +1780,36 @@ def tick(store, at=None):
             H.event(c, H.KEEPER, "automation.hold_swept", hold["automation_id"],
                     {"run": hold["run_id"], "turn": hold["ref"], "amount": hold["amount"], "held_since": hold["at"]})
     return hub.drain() if hub else 0
+
+
+def _due_day(value):
+    """The cursor's due day as a date, or None (none left, or not yet set)."""
+    return date.fromisoformat(value) if value else None
+
+
+def _cursor(day):
+    """A due day as the cursor is stored: its ISO date, or "" once none is left (NULL means not yet set)."""
+    return day.isoformat() if day else ""
+
+
+def _due_pass(c, row, at):
+    """A routine's due days whose run time has come: one run each, keyed by its due day (`queue` refuses a second),
+    then the cursor moves on. The cursor is written in the same transaction, so a repeated or concurrent pass runs
+    nothing new, and a missed day catches up on the next pass. Each occurrence is independent of the one before."""
+    flow = flow_of(row)
+    trigger = flow["trigger"]
+    day = _due_day(row["next_due"]) if row["next_due"] is not None else D.start(trigger, at)
+    zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
+    passed = 0
+    while day and passed < D.MAX_CATCH_UP and D.fire_at(day, open_days, zone) <= at:
+        fire(c, "due", {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"],
+                                "repeats": trigger["repeats"], "open_days": open_days, "tz": zone,
+                                "rule_due_id": trigger.get("rule_due_id"),
+                                "run_at": _iso(D.fire_at(day, open_days, zone))}},
+             f"due:{day.isoformat()}", only=row["id"])
+        day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
+        passed += 1
+    c.execute("UPDATE automations SET next_due=? WHERE id=?", (_cursor(day), row["id"]))
 
 
 def _fail(c, rid, state, now, why):
