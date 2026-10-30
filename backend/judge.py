@@ -196,13 +196,40 @@ def cost_usd(settings, model, usage):
     return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
 
 
+# The month's total per (database file, month): (total, rowid of the newest judge.spend row counted, that row's id). A call
+# sums only the rows after that rowid. judge.spend rows are never deleted or changed, and a new row always gets a higher
+# rowid than every row kept, so the total stays exact. If the newest counted row is gone or renumbered (a VACUUM), the
+# month is summed again. The `+` keeps SQLite on the rowid range: without it the planner takes events_action_ts and
+# reads the whole month again.
+_SPEND, _SPEND_LOCK = {}, threading.Lock()
+MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+                   "WHERE ts>=? AND action='judge.spend'")
+NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+                 "WHERE rowid>? AND +ts>=? AND +action='judge.spend'")
+
+
 def spent_this_month(c, at=None):
     """USD the team's decision calls have cost since the 1st of this UTC month: the sum of the `judge.spend` rows
     `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.)"""
     month = (at or H.now())[:7]
-    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]
-    return round(float(total or 0), 6)              # a float sum of cents can land a hair under the cap
+    since, path = month + "-01T00:00:00", next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
+    with _SPEND_LOCK:
+        total, last, last_id = _SPEND.get((path, month), (0.0, 0, None))
+        if last:
+            held = c.execute("SELECT id FROM events WHERE rowid=?", (last,)).fetchone()
+            if held is None or held[0] != last_id:
+                total, last = 0.0, 0
+        if last:
+            added, newest = c.execute(NEW_SPEND_SQL, (last, since)).fetchone()
+            total += float(added or 0)
+        else:
+            added, newest = c.execute(MONTH_SPEND_SQL, (since,)).fetchone()
+            total = float(added or 0)
+        if newest is not None:
+            last = newest
+            last_id = c.execute("SELECT id FROM events WHERE rowid=?", (last,)).fetchone()[0]
+        _SPEND[path, month] = (total, last, last_id)
+    return round(total, 6)                          # a float sum of cents can land a hair under the cap
 
 
 def over_spend_cap(c, settings, at=None):
