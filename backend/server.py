@@ -11,8 +11,6 @@ import threading
 
 
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
-    import uvicorn
-    from .app import create_app
     from .config import Settings
     from .screen_binary import prepare
 
@@ -36,13 +34,19 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     threading.Thread(target=output, daemon=True).start()
     server = None
     previous_signals = {}
+    stopping = threading.Event()
     def stop(signum, frame):
+        stopping.set()      # a stop before the server exists is kept, not lost (see below)
         if server:
             server.should_exit = True
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_signals[signum] = signal.signal(signum, stop)
     try:
+        # Imported after the relay is spawned, so its start overlaps the import instead of following it; inside this
+        # try, so a failed import still stops the relay.
+        import uvicorn
+        from .app import create_app
         line = lines.get(timeout=15)
         if not line.startswith("screen relay listening on "):
             raise RuntimeError("Rust screen relay could not start")
@@ -65,6 +69,8 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         server = uvicorn.Server(uvicorn.Config(create_app(settings), log_level=log_level, access_log=False,
             proxy_headers=False, timeout_graceful_shutdown=2,
             timeout_keep_alive=5))  # longer than the Rust relay's 4 s pool idle timeout
+        if stopping.is_set():
+            server.should_exit = True    # asked to stop while starting: uvicorn starts, then stops at once
         def watch():
             process.wait()
             server.should_exit = True

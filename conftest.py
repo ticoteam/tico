@@ -8,6 +8,9 @@ os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fix
 os.environ["TICO_UPDATE_CHECK"] = "off"
 # A runner readiness call would otherwise start real containers on whoever's computer runs the suite.
 os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
+# The start jobs a server runs beside itself once it serves (backend/app.py start_jobs) run before it serves instead, so
+# a test that starts an app sees their result at once. backend/tests/test_start_jobs.py checks the served way.
+os.environ["TICO_START_JOBS"] = "inline"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
 # A test that misses a stub must fail, not act in whoever's AWS account runs the suite: one already
