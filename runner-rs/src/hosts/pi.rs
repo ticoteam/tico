@@ -4,7 +4,9 @@
 //!     pi --mode json -p --provider openrouter --model deepseek/deepseek-v4.1-flash --thinking low
 //!        --tools read,bash,edit,write,grep,find,ls --session-id <uuid> --session-dir <dir> --approve
 //!
-//! Pi has no MCP and no permission prompts (the bot uses the hub CLI over bash); `steer` is refused.
+//! The turn's MCP servers (the hub, the bot's streamable HTTP servers and the repository's `.mcp.json`) are its agent
+//! directory's `mcp.json` (`mcp_json`), with `--tools` naming no `mcp__` entry so they stay callable. There are no
+//! permission prompts (the bot also reaches Tico with the hub CLI over bash); `steer` is refused.
 //! OPENROUTER_API_KEY reaches the process from the bot's granted credential.
 //!
 //! The Tico AI Gateway's models (a department tier such as `tico-marketing-medium-1.0`, or an old id such as
@@ -17,7 +19,7 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use super::oneshot::{base_env, int_of, OneShot, Thread, Turn, Wire};
-use super::Settings;
+use super::{hub_mcp_server, Settings};
 use crate::env::Env;
 use crate::util::{text_of, truthy};
 
@@ -105,37 +107,99 @@ pub fn gateway_models_json_for(url: &str, model: Option<&str>, inputs: &Value) -
     }}})
 }
 
-/// The agent directory a Gateway turn's pi reads its `models.json` from: the turn's own (GATEWAY_DIR_ENV, removed with
-/// its relay), else `<workspace>/runtime/pi-gateway`.
+/// The agent directory a pi turn reads its configuration from: the turn's own (GATEWAY_DIR_ENV, removed with its relay),
+/// else `<workspace>/runtime/pi-agent/<bot>`. Every turn's holds its `mcp.json` (`mcp_json`); a Gateway turn's holds
+/// `models.json` and `settings.json` too (`gateway_models_json_for`, the turn's own pi settings).
 pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
-    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
-    let dir = env.get(GATEWAY_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(root).join("runtime").join("pi-gateway"));
     let models = gateway_models_json_for(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default(), settings.model.as_deref(), &settings.gateway_inputs);
     let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
+    write_agent_dir(settings, env, json!({"models.json": models, "settings.json": settings_json}))
+}
+
+/// The agent directory of a turn on another provider: its `mcp.json` only.
+fn agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
+    write_agent_dir(settings, env, json!({}))
+}
+
+/// Writes `files` (name -> JSON) and the turn's `mcp.json` into the turn's agent directory; the directory's path, or None.
+fn write_agent_dir(settings: &Settings, env: &Env, mut files: Value) -> Option<PathBuf> {
+    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
+    let bot = if settings.slug.is_empty() { "pi" } else { settings.slug.as_str() };
+    let dir = env.get(GATEWAY_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(root).join("runtime").join("pi-agent").join(bot));
+    files["mcp.json"] = mcp_json(settings, env);
     // The agent directory can be changed by the turn. Prepare it as that unprivileged user;
     // no privileged open or write may follow a link planted by a harness or a sibling. Isolated (-I): with no HOME,
     // Python finds the passwd home, the shared one, and would run a sibling's user site as the turn user.
     let mut child = crate::isolation::std_command_as(settings.identity, crate::env::python())
         .env_clear()
-        .args(["-I", "-c", r#"import json,os,sys
+        .args(["-I", "-c", r#"import json,os,sys,secrets
 root=sys.argv[1]
 os.makedirs(root,mode=0o700,exist_ok=True)
 body=json.load(sys.stdin)
 for name,value in body.items():
- fd=os.open(os.path.join(root,name),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+ final=os.path.join(root,name)
+ tmp=os.path.join(root,f".{name}.{os.getpid()}.{secrets.token_hex(8)}")
+ fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(fd,'w') as out: json.dump(value,out)
+ os.replace(tmp,final)
 "#, &dir.display().to_string()])
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().ok()?;
     {
         use std::io::Write;
-        let body = serde_json::to_vec(&json!({"models.json": models, "settings.json": settings_json})).ok()?;
+        let body = serde_json::to_vec(&files).ok()?;
         child.stdin.take()?.write_all(&body).ok()?;
     }
     if !child.wait().ok()?.success() { return None; }
     Some(dir)
 }
+
+/// pi's `mcp.json` for a turn: the same servers Claude Code is given (hosts/claude.rs `argv`), in pi's format. The
+/// repository's own `.mcp.json` comes first, then the bot's declared servers, then the hub, each replacing the one before
+/// by name. An SSE server (a repository's, not the bot's: those are filtered by the manifest) is left out, since pi
+/// refuses it. Secrets stay `${VAR}`: the hub's variables are named there and pi reads them from the turn's environment.
+pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
+    let project = if settings.cwd.is_empty() { None } else { std::fs::read_to_string(std::path::Path::new(&settings.cwd).join(".mcp.json")).ok() };
+    let project = project
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|v| v.get("mcpServers").and_then(Value::as_object).cloned())
+        .unwrap_or_default();
+    let mut servers: serde_json::Map<String, Value> = project
+        .into_iter()
+        .filter(|(_, s)| s.is_object() && s["type"] != "sse")
+        .map(|(name, mut s)| {
+            s["exposure"] = json!("direct");
+            (name, s)
+        })
+        .collect();
+    servers.extend(crate::mcp::pi_config(&settings.mcp_servers));
+    if let Some(hub) = hub_mcp_server(env) {
+        let vars: serde_json::Map<String, Value> = hub["env"].as_object().into_iter().flatten().map(|(k, _)| (k.clone(), json!(format!("${{{k}}}")))).collect();
+        servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
+    }
+    // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
+    // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
+    // overrides what it inherits. A server's own env may still name a model key or the hub token (a declared server
+    // can need one), but never the Gateway key; the hub server keeps its `${HUB_TOKEN}`.
+    for (name, row) in servers.iter_mut() {
+        if row.get("command").is_some() {
+            let mut own = row["env"].as_object().cloned().unwrap_or_default();
+            for key in MCP_BLANKED_ENV.iter().copied().filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub") {
+                if !own.contains_key(key) {
+                    own.insert(key.into(), json!(""));
+                }
+            }
+            own.insert(GATEWAY_KEY_ENV.into(), json!(""));
+            row["env"] = Value::Object(own);
+        }
+    }
+    json!({"mcpServers": servers})
+}
+
+/// The variables a stdio MCP server is started without: the model provider keys a pi turn may hold, and the hub's token
+/// (every server but the hub, which gets it through `${HUB_TOKEN}`). The Gateway key is blanked separately, always.
+const MCP_BLANKED_ENV: &[&str] = &["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "HUB_TOKEN"];
 
 /// Loopback hosts, added to NO_PROXY for a Gateway turn. pi sends every request through the environment's proxy
 /// (a CONNECT tunnel, even for plain http), so a proxy without a loopback bypass would carry a plain-http local
@@ -355,6 +419,12 @@ impl Wire for Pi {
         if !key.is_empty() {
             env.insert("OPENROUTER_API_KEY".into(), key);
         }
+        match agent_dir(settings, &env) {
+            Some(dir) => {
+                env.insert("PI_CODING_AGENT_DIR".into(), dir.display().to_string());
+            }
+            None => crate::util::log("Tico runner: pi's agent folder could not be written, so this turn has no MCP servers"),
+        }
         env
     }
 
@@ -534,13 +604,13 @@ mod tests {
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
         assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
         // pi's models.json names the Gateway and the key's variable, never the key; pi itself never retries.
-        let written = std::fs::read_to_string(dir.join("runtime/pi-gateway/models.json")).unwrap();
+        let written = std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap();
         assert!(!written.contains("tgw-synthetic-fixture"));
         let models: Value = serde_json::from_str(&written).unwrap();
         assert_eq!(models["providers"]["tico"]["baseUrl"], "https://gw.example/v1/gateway");
         assert_eq!(models["providers"]["tico"]["apiKey"], "$TICOAI_GATEWAY_KEY");
         assert_eq!(models["providers"]["tico"]["api"], "openai-completions");
-        let settings: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-gateway/settings.json")).unwrap()).unwrap();
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-agent/acme/settings.json")).unwrap()).unwrap();
         assert_eq!(settings["retry"]["enabled"], false);
         // Every bash command pi runs starts without the key in its environment.
         assert_eq!(settings["shellCommandPrefix"], "unset TICOAI_GATEWAY_KEY");
@@ -572,11 +642,71 @@ mod tests {
         let (_, dir) = gateway_turn_on("tico-cheap-1.0", &[SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"agent_end"}"#]).await;
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
         assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-cheap-1.0 "), "{args}");
-        let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-gateway/models.json")).unwrap()).unwrap();
+        let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap()).unwrap();
         let ids: Vec<&str> = models["providers"]["tico"]["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
         assert!(ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"), "{ids:?}");
         // What a person is told to pick names only the current lineup.
         assert!(!plain_error(r#"400: {"code":"unknown_model"}"#).contains("Cheap 1.0"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_as_direct_http_servers() {
+        let dir = std::env::temp_dir().join(format!("pi-mcp-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "legacy": {"type": "sse", "url": "https://old.example/sse"}, "hub": {"command": "stale"}}}"#).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-synthetic"),
+                       ("HUB_BOT", "acme"), ("OPENROUTER_API_KEY", "or-synthetic"), ("LINEAR_API_KEY", "linear-synthetic")] {
+            s.env.insert(k.into(), v.into());
+        }
+        s.mcp_servers = vec![json!({"name": "linear", "url": "https://mcp.linear.app/mcp", "transport": "http", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})];
+        let env = Pi::env(&s);
+        let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
+        assert_eq!(agent, dir.join("runtime/pi-agent/acme"));
+        let written = std::fs::read_to_string(agent.join("mcp.json")).unwrap();
+        // Secrets stay `${VAR}` in the file: no granted value is written into it.
+        for secret in ["hub-token-synthetic", "linear-synthetic", "or-synthetic"] {
+            assert!(!written.contains(secret), "{secret} in mcp.json");
+        }
+        let config: Value = serde_json::from_str(&written).unwrap();
+        let servers = &config["mcpServers"];
+        assert_eq!(servers["linear"], json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
+        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}}));
+        assert!(servers.get("legacy").is_none(), "an SSE server of the repository is left out");
+        assert_eq!(servers["hub"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
+        assert_eq!((&servers["hub"]["env"]["HUB_TOKEN"], &servers["hub"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
+        // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
+        for stdio in ["repo", "hub"] {
+            assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
+        }
+        // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
+        assert!(!TOOLS.split(',').any(|t| t.starts_with("mcp__")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_stdio_mcp_server_starts_without_the_model_keys_or_hub_token_unless_its_own_env_names_them() {
+        let dir = std::env::temp_dir().join(format!("pi-mcp-env-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "tool": {"command": "uvx", "args": ["y"], "env": {"ANTHROPIC_API_KEY": "anthropic-synthetic", "TICOAI_GATEWAY_KEY": "gateway-synthetic"}}}}"#).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-synthetic"),
+                       ("HUB_BOT", "acme"), ("OPENROUTER_API_KEY", "or-synthetic"), (GATEWAY_KEY_ENV, "gateway-synthetic")] {
+            s.env.insert(k.into(), v.into());
+        }
+        let env = s.env.clone();
+        let config = mcp_json(&s, &env);
+        let servers = &config["mcpServers"];
+        // A repository server that names nothing gets every blanked variable empty, the Gateway key included.
+        assert_eq!(servers["repo"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        // Its own env keeps the one it names, but never the Gateway key.
+        assert_eq!(servers["tool"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        // The hub keeps its token through `${HUB_TOKEN}`, and the model keys stay blank for it too.
+        assert_eq!(servers["hub"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
+        assert_eq!(servers["hub"]["env"]["OPENROUTER_API_KEY"], json!(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

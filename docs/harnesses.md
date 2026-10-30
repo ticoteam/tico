@@ -85,13 +85,20 @@ Providers with no CLI of their own (DeepSeek, Kimi, Llama, Mistral, and whatever
 takes an API key. Candidates:
 
 - **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): one non-interactive process per run (`pi -p --mode json`), a
-  JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools (the bot reaches Tico
-  with the `hub` CLI over bash), no permission prompts, an npm package, and keys for many providers by environment
-  variable. Tico reaches every model through OpenRouter, so one key covers all of them.
+  JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
+  reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
+  for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.
 - **aider**: edits a git repository well, but it is a chat-driven editor, not an agent with a shell; a bot's run
   (read the repo, call Tico, run tests, commit) does not fit.
+
+A pi turn gets the same MCP servers as a Claude Code or Codex turn (the hub, the bot's bot.yaml servers and the
+repository's `.mcp.json`), in the turn's `mcp.json` under its agent folder (`PI_CODING_AGENT_DIR`: `runtime/pi-agent/<bot>`,
+or the turn's own folder for a Tico model). The file is written atomically per turn. pi takes streamable HTTP only, so an
+SSE server is named as not passed. Each tool is declared directly (`exposure: direct`). Secrets stay `${VAR}`, and each
+stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
+(2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
