@@ -624,7 +624,9 @@ def cut_by_update(c, attempt_id):
     """How Tico's update or a hub restart cut this run, {'cause': 'update' or 'restart', 'at': when}, else None. Only a
     lapsed or interrupted run counts: never one that reported its own end, a Stop (a person's or a quarantine's) or a
     usage limit, which keep their own rules. The updater restarts the runners after it reports its finish, so an
-    unflagged run that began just after the update counts too."""
+    unflagged run that began just after the update counts too. A flag counts only for a run already started when it
+    was written: a lease claimed before the cut and started after it ran on the new hub, so its lapse is an ordinary
+    one."""
     row = (c.execute("SELECT state,started,finished,stop_requested,result_json FROM attempts WHERE id=?",
                      (attempt_id,)).fetchone() if attempt_id else None)
     if (not row or row['state'] not in ('interrupted', 'expired') or not row['started'] or not row['finished']
@@ -634,8 +636,11 @@ def cut_by_update(c, attempt_id):
     if result.get('limited') or result.get('limit_source'):
         return None
     window = Settings.lease_seconds + UPDATE_MARGIN_S
-    flags = c.execute("SELECT ts,detail_json FROM events WHERE action=? AND target=? ORDER BY ts",
-                      (UPDATE_CUT, attempt_id)).fetchall()
+    flagged = c.execute("SELECT ts,detail_json FROM events WHERE action=? AND target=? ORDER BY ts",
+                        (UPDATE_CUT, attempt_id)).fetchall()
+    flags = [f for f in flagged if row['started'] <= f['ts']]
+    if flagged and not flags:
+        return None
     if flags:
         # The hub is back at its start (the last flag) or once the update finished, whichever is later.
         ended = c.execute("SELECT ts FROM events WHERE action='system.update.finished' AND ts>=? ORDER BY ts LIMIT 1",
@@ -5132,9 +5137,10 @@ class Execution:
         if (not body.acknowledge_uncertain_effects or row['state'] != 'uncertain'
                 or row['attempt_id'] != body.attempt_id):
             raise Problem("uncertain", "This run changed or its external effects have not been reviewed", 409)
-        # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog.
-        if c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?",
-                     (job_id, body.attempt_id)).fetchone():
+        # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog. Tico's own saved
+        # choice for an update cut gives way to a person's.
+        if c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND actor<>?",
+                     (job_id, body.attempt_id, H.KEEPER)).fetchone():
             raise Problem("uncertain", "A choice is already saved for this run. Refresh to see it.", 409)
         note = body.note.strip()
         if len(note) < 20:
@@ -5387,8 +5393,8 @@ class Execution:
                     if not prior or prior['action'] != 'job.recovery_wait' or json.loads(prior['detail_json']) != detail:
                         H.event(c, H.KEEPER, 'job.recovery_wait', row['attempt_id'], detail)
                     if not row['pending_decision'] and cut_by_update(c, row['attempt_id']):
-                        # Tico's own choice for an update cut, saved now so nobody is asked meanwhile; the sweep
-                        # applies it once the lane frees, like a person's deferred choice.
+                        # Tico's own choice for an update cut, saved now so nobody is asked meanwhile; once the lane
+                        # frees, the sweep judges the run again rather than applying it blindly.
                         facts = retry_facts(c, row, row['started'], row['finished'])
                         if facts['update']:
                             decided.append(self._decide(c, row, row['attempt_id'], *self._update_choice(c, row, facts),
@@ -5399,7 +5405,11 @@ class Execution:
                     H.event(c, H.KEEPER, 'job.recovery_ready', row['attempt_id'],
                             {'job_id': row['id'], 'owner': H.KEEPER,
                              'reason': 'Live task or session lane is free; Tico is re-evaluating recovery.'})
-                if row['pending_decision']:
+                if row['pending_decision'] and row['reviewer'] == H.KEEPER:
+                    # Tico's own saved choice is only a placeholder while the lane was busy: the rules below judge the
+                    # run afresh, so a Stop, a quarantine, a finished task or a day's wait since it was saved counts.
+                    c.execute("DELETE FROM job_recovery WHERE job_id=? AND actor=?", (row['id'], H.KEEPER))
+                elif row['pending_decision']:
                     decided.append(self._decide(c, row, row['attempt_id'], row['pending_decision'],
                                                 row['review_note'], row['reviewer'], saved=True))
                     continue
@@ -5566,7 +5576,8 @@ class Execution:
                                "day ago, so its stale work is not resumed.")
         resumed = c.execute("SELECT count(*) FROM events WHERE action='job.auto_reconcile' AND target=? "
                             "AND json_extract(detail_json,'$.cause')='update' "
-                            "AND json_extract(detail_json,'$.decision')='resume'", (row['id'],)).fetchone()[0]
+                            "AND json_extract(detail_json,'$.decision')='resume' "
+                            "AND json_extract(detail_json,'$.deferred') IS NULL", (row['id'],)).fetchone()[0]
         if resumed >= UPDATE_RESUMES:
             return 'dismiss', f"Ended quietly: cut by {by} again after {resumed} resumes, so it is not resumed again."
         named = [*facts['outside'], *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')']

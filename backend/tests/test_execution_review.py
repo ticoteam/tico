@@ -679,24 +679,74 @@ def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(
     no_one_asked(api)
 
 
-def test_an_update_cut_behind_live_work_on_its_lane_is_saved_for_it_and_shown_to_nobody(api):
-    """A run waits for live work in its lane before it resumes; meanwhile Tico's own choice is saved, so no Needs you
-    line offers one, and the sweep applies it once the lane frees."""
-    from backend import execution
+def cut_behind_live_work(api):
+    """An update cut whose lane is busy with live work ('live-one'): the sweep saves Tico's choice for it."""
     machine, message, attempt = lapsed_shell_run(api, update=0)
-    store = api.app.state.store
-    with store.transaction() as c:
+    with api.app.state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(attempts)")]
         picked = ",".join({'id': "'live-one'", 'token_hash': "'live-hash'", 'state': "'running'"}.get(k, k) for k in cols)
         c.execute(f"INSERT INTO attempts ({','.join(cols)}) SELECT {picked} FROM attempts WHERE id=?", (attempt['id'],))
     [decision] = sweep(api)
     assert decision == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
+    return machine, message, attempt
+
+
+def test_an_update_cut_behind_live_work_on_its_lane_is_saved_for_it_and_shown_to_nobody(api):
+    """A run waits for live work in its lane before it resumes; meanwhile Tico's own choice is saved, so no Needs you
+    line offers one, and the sweep applies it once the lane frees."""
+    from backend import execution
+    machine, message, attempt = cut_behind_live_work(api)
+    store = api.app.state.store
     with store.read_transaction() as c:
         assert execution.stopped_rows(c, store.settings.test_identities['ana-test'], api.app.state.auth, 'ops') == ([], 0)
     no_one_asked(api)
     with store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed' WHERE id='live-one'")
     assert [d['state'] for d in sweep(api)] == ['queued']
+    assert "by Tico's update" in resumed_body(api, machine)
+
+
+@pytest.mark.parametrize('since', ['stop', 'stale'])
+def test_tico_s_saved_choice_for_an_update_cut_is_judged_again_when_its_lane_frees(api, since):
+    """The saved choice is Tico's, not a person's: a Stop pressed on the lapsed run meanwhile, or a day's wait for the
+    lane, dismisses it quietly when the lane frees instead of resuming stale or stopped work."""
+    from backend.store import H
+    machine, message, attempt = cut_behind_live_work(api)
+    if since == 'stop':
+        post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    with api.app.state.store.transaction() as c:
+        if since == 'stale':
+            for table, col, where in (('events', 'ts', "action LIKE 'system.update.%'"), ('attempts', 'finished', 'id=?')):
+                args = (attempt['id'],) if '?' in where else ()
+                for rid, ts in c.execute(f"SELECT rowid,{col} FROM {table} WHERE {where}", args).fetchall():
+                    c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (H.shift(ts, seconds=-25 * 3600), rid))
+        c.execute("UPDATE attempts SET state='completed' WHERE id='live-one'")
+    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    with api.app.state.store.read() as c:
+        note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
+    assert note.startswith('Stopped by' if since == 'stop' else 'Dismissed quietly')
+    no_one_asked(api)
+
+
+def test_a_lease_claimed_before_a_restart_that_started_after_it_lapses_as_usual(api):
+    """The server's start flags the leases its last process held, but a run that only began after the restart ran on
+    the new server: its lapse is an ordinary one, held for review like any run that acted, never resumed as a cut."""
+    from backend.execution import flag_cut
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        assert flag_cut(c, 'restart') == 1
+        c.execute("UPDATE events SET ts=? WHERE action='attempt.update_cut' AND target=?",
+                  (H.shift(H.now(), seconds=-60), attempt['id']))
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'after'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'started', 'item_id': 'sh1',
+                                               'summary': 'gh pr merge 12'}}]}, machine['token'])
+    lapse(api, machine, attempt)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    [review] = get(api, 'bots/ops/execution-review')['jobs']
+    assert review['stopped'] == 'changed' and 'restart' not in review['reason']
 
 
 @pytest.mark.parametrize('update', [None, -3600])
