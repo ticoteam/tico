@@ -124,7 +124,12 @@ pub async fn fill(bot: &Bot, aid: &str, body: &Value) -> Value {
     for turn in bot.turn_ids() {
         crate::redact::add_to(&turn, &secrets);
     }
-    let Some(login) = find(&logins, &credential) else { return no("not_granted") };
+    let Some(login) = find(&logins, &credential) else {
+        // Names only: which logins this run was given, so a refusal says what was there to match.
+        let names: Vec<String> = logins.iter().map(|l| text_of(&l["name"])).collect();
+        crate::util::diagnostic(&format!("Tico runner: {}: browser fill refused for {credential:?}: the run holds {} login(s) {names:?}", bot.name, names.len()));
+        return no("not_granted");
+    };
     let sites: Vec<String> = login["sites"].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(String::from)).collect();
     let value = match value_for(login, &field) {
         Ok(v) => v,

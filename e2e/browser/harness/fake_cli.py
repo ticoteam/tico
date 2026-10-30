@@ -253,6 +253,38 @@ def codex_app_server():
             send({"id": rid, "result": {}})
 
 
+def grok_acp():
+    """`grok agent ... stdio` speaks ACP over stdin/stdout: initialize, session/new, session/prompt (its reply comes as
+    session/update chunks, then the prompt's stopReason)."""
+    sessions, servers = {}, {}
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        method, params, rid = msg.get("method"), msg.get("params") or {}, msg.get("id")
+        if rid is None:
+            continue
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
+        elif method in ("session/new", "session/load"):
+            sid = str(params.get("sessionId") or "grok-" + uuid.uuid4().hex[:12])
+            servers[sid] = {item.get("name", "server%d" % i): item for i, item in enumerate(params.get("mcpServers") or [])}
+            sessions[sid] = True
+            send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": sid}})
+        elif method == "session/prompt":
+            sid = str(params.get("sessionId"))
+            text = " ".join(part.get("text", "") for part in params.get("prompt", []) if isinstance(part, dict))
+            done = run_probe(text, servers.get(sid, {}), sys.argv)
+            reply = reply_text(*done) if done else "no harness-run in the prompt"
+            send({"jsonrpc": "2.0", "method": "session/update",
+                  "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk",
+                                                          "content": {"type": "text", "text": reply}}}})
+            send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+        else:
+            send({"jsonrpc": "2.0", "id": rid, "result": {}})
+
+
 def main():
     args = sys.argv[1:]
     if "--version" in args or args[:1] == ["version"]:
@@ -266,6 +298,13 @@ def main():
         return
     if NAME == "cursor-agent" and args[:1] == ["status"]:
         print("Logged in as harness@acme.example")
+        return
+    if NAME == "cursor-agent" and args[:1] == ["create-chat"]:
+        # cursor-agent prints the new chat's id on stdout; the runner keeps it as the thread id.
+        print(str(uuid.uuid4()))
+        return
+    if NAME == "grok" and "stdio" in args and "agent" in args[:1]:
+        grok_acp()
         return
     if NAME == "codex" and args[:1] == ["app-server"]:
         codex_app_server()
