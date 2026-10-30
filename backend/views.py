@@ -1376,6 +1376,15 @@ def fold_related(items, c, me):
     return [it for it in items if str(it["id"]) not in gone]
 
 
+# Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
+# Team, 43 ms warm) to find a few hundred replaced asks.
+WITHDRAWN_ASKS_SQL = (
+    "SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
+    "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
+    f"AND {H.OPEN_ASK_SQL})")
+
+
 def went_away(c, me, days=7):
     """How many of `me`'s Needs you items left this week without them: an ask that expired or went ahead on its bot's
     default, an ask or approval withdrawn (superseded by a newer one, or no longer needed), and what their Assistant
@@ -1385,10 +1394,7 @@ def went_away(c, me, days=7):
                         "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
-    withdrawn = (c.execute("SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
-                           "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
-                           "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
-                           f"AND {H.OPEN_ASK_SQL})", (me, since)).fetchone()[0]
+    withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
                  + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
     assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "

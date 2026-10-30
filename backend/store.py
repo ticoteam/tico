@@ -1785,6 +1785,9 @@ class Store:
                                    # so Health's silent_waits keeps a good plan.
                                    ("messages_open_ask_to",
                                     "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                   # Replaced asks to someone (views.went_away, on every Needs you read).
+                                   ("messages_superseded_asks_to",
+                                    "messages(to_actor, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
                                    # PRs at a commit (github.pr_signal, on every check and status webhook): the
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),
