@@ -92,19 +92,16 @@ async function recruitNewSeat(seed = {}) {
   if (!S.me?.id || !settingsCanCreateBots()) return;
   const dialog = recruitDialog(), owner = S.me?.role === 'owner';
   const title = String(seed.title || '').slice(0, 120), brief = String(seed.brief || '').slice(0, 8000);
-  dialog.innerHTML = `<form data-recruit-new><div class="tmodal-head"><h2 id="recruit-title">Add a bot</h2><span class="spacer"></span><button class="ghost" type="button" data-recruit-close aria-label="Close">✕</button></div>
-    <div class="bot-editor-body"><p class="muted">Every bot starts as a Recruiting seat on the org chart: the role, its job description and who it reports to. You pick a candidate next.</p>
-    <label>Role title<input name="title" maxlength="120" required value="${esc(title)}" placeholder="Customer support"></label>
-    <label>Reports to<select name="reports_to">${recruitPlaces().map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('')}</select></label>
+  // From a group's plus: the seat goes in that group and reports to its head when you may place it there.
+  const team = String(seed.team || ''), boss = recruitPlaces().some(([id]) => id === seed.reports_to) ? seed.reports_to : '';
+  dialog.innerHTML = `<form data-recruit-new><div class="tmodal-head"><h2 id="recruit-title">${seed.teamName ? `Recruit for ${esc(seed.teamName)}` : 'Recruit a bot'}</h2><span class="spacer"></span><button class="ghost" type="button" data-recruit-close aria-label="Close">✕</button></div>
+    <div class="bot-editor-body"><p class="muted">Starts as a Recruiting seat. You pick a candidate next.</p>
+    <label>Job title<input name="title" maxlength="120" required value="${esc(title)}" placeholder="Customer support"></label>
     <label>Job description <span class="muted">(optional)</span><textarea name="description" rows="4" maxlength="8000" placeholder="${owner ? `Leave it empty and one is drafted for you` : 'What should this role own? You can write it later'}">${esc(brief)}</textarea></label>
-    <p class="muted">Connecting an agent you already run? <button class="linkish" type="button" data-recruit-ask>Ask</button></p>
+    <label>Reports to<select name="reports_to">${recruitPlaces().map(([id, name]) => `<option value="${esc(id)}"${id === boss ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>
     <p class="err" role="alert" data-recruit-error hidden></p></div>
     <div class="bot-editor-actions"><button class="primary" type="submit">Create seat</button><button class="ghost" type="button" data-recruit-close>Cancel</button></div></form>`;
   dialog.querySelectorAll('[data-recruit-close]').forEach(b => { b.onclick = () => dialog.close(); });
-  dialog.querySelector('[data-recruit-ask]').onclick = () => {
-    dialog.close();
-    askDraft('Help me connect an agent I already run. Here is where it lives (folder path and computer, or GitHub URL):\n\n');
-  };
   const form = dialog.querySelector('form'), error = dialog.querySelector('[data-recruit-error]');
   let creating = false;
   form.onsubmit = async event => {
@@ -115,7 +112,7 @@ async function recruitNewSeat(seed = {}) {
     const data = new FormData(form);
     try {
       const seat = await post('/v2/seats', {title: String(data.get('title') || '').trim(), reports_to: String(data.get('reports_to') || ''),
-        description: String(data.get('description') || '').trim()});
+        description: String(data.get('description') || '').trim(), ...(team ? {team} : {})});
       void refresh(true);
       await recruitSeat(seat.id);
     } catch (e) { error.textContent = e.message; error.hidden = false; creating = false; }

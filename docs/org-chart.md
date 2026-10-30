@@ -70,14 +70,16 @@ direct reports' ([Updates](using-tico.md#updates)).
 
 ## Groups
 
-The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
-**Add section** opens the inline group-name field. **Add bot** makes a Recruiting seat (a role with no bot yet) under the
-manager you choose and opens it: its job description, which the Strategy Bot drafts for the owner, then **Recruit** and the
-pick ([Recruiting a seat](onboarding.md#recruiting-a-seat)). Open seats show on the chart under their manager with a
-**Recruiting** mark; clicking one opens it. **Ask BotOps** in the Add bot form opens its chat with an editable request,
-preserving any draft already there. Describe a custom bot or
-share an existing agent's folder path and computer, or its GitHub URL. Nothing is sent until you send the message;
-BotOps helps work out the setup rather than automatically importing an arbitrary folder.
+The **+** beside **Team** offers **Recruit a bot**, **Add existing bot**, **Add section** and **Add human**, according to
+your permissions. Each group's **+** offers the same, with **Add group** (a group inside it) and no **Add human**.
+**Add section** and **Add group** open the inline group-name field. **Recruit a bot** asks for a job title and an optional
+job description, makes a Recruiting seat (a role with no bot yet) under the manager you choose and opens it: its job
+description, which the Strategy Bot drafts for the owner, then **Recruit** and the pick
+([Recruiting a seat](onboarding.md#recruiting-a-seat)). From a group's **+** the seat is in that group and reports to its
+head by default. **Add existing bot** opens [Connect an external agent](connect-an-agent.md). Open seats show on the chart
+under their manager with a **Recruiting** mark; clicking one opens it.
+
+Clicking a group's name opens its page and unfolds it; its arrow folds it.
 
 A group is an id, a name, an optional parent group, and its teammates. A teammate is in one group at a time: putting a human or bot in a
 group takes it out of the one it was in. Groups are stored with the roster (`org_groups` in `registry/people.yaml` seeds them; from then on

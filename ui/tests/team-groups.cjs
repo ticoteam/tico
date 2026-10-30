@@ -379,7 +379,10 @@ async function owner(browser) {
   assert.deepEqual(calls, []);
   // Add one inside a group.
   await row(page, 'Sales').hover();
-  await page.locator('[data-group-add=sales]').click();
+  await page.locator('[data-group-plus=sales]').click();
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot', 'Add existing bot', 'Add group'], 'a group adds no humans');
+  await shot(page, 'group-add-menu-desktop');
+  await page.getByRole('menuitem', {name: 'Add group', exact: true}).click();
   await page.locator('#tree .org-name').fill('EMEA');
   await page.locator('#tree .org-name').press('Enter');
   await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).waitFor();
@@ -502,9 +505,14 @@ async function member(browser) {
   assert.deepEqual(await shape(page), [
     'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, 'Cara', 'Scout']);
   await page.locator('#org-add-group').click();
-  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Add bot']);
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot']);
   await page.keyboard.press('Escape');
-  assert.equal(await page.locator('[data-group-rename], [data-group-add], [data-group-delete], #tree .org-no-group').count(), 0);
+  assert.equal(await page.locator('[data-group-rename], [data-group-bet], [data-group-delete], #tree .org-no-group').count(), 0);
+  // A group's plus still recruits into it.
+  await row(page, 'Marketing').hover();
+  await page.locator('[data-group-plus=marketing]').click();
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot']);
+  await page.keyboard.press('Escape');
   await page.evaluate(() => orgGroupDelete('marketing'));
   assert.equal(await page.locator('#tree .noderow[data-org^="g:"][draggable="true"]').count(), 0);
   assert.equal(await node(page, 'b:scout').getAttribute('draggable'), null, 'a member moves only what reports up to them');
@@ -532,7 +540,7 @@ async function teamAdd(browser) {
   // draft
   // of its job description arrives while it is open, Recruit offers one recommended candidate with its model, and the
   // pick creates the bot in Onboarding where the seat was.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await shot(page, 'team-add-bot-desktop');
   await page.locator('[data-recruit-new] [name=title]').fill('Ledger');
   await page.locator('[data-recruit-new] [name=reports_to]').selectOption('scout');
@@ -565,7 +573,7 @@ async function teamAdd(browser) {
   await page.goBack();
   await page.waitForFunction(() => location.hash === '#/updates');
   // A permission lost while the form is open creates nothing, and submitting never navigates the page.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await page.locator('[data-recruit-new] [name=title]').fill('Analyst');
   await page.evaluate(() => { S.me.role = 'viewer'; S.me.can_create_bots = false; });
   await page.locator('[data-recruit-new] [type=submit]').click();
@@ -577,7 +585,7 @@ async function teamAdd(browser) {
 
   // The bot is hired from the words on screen. A reply to an earlier save never marks newer typing saved: one save runs
   // at a time, a second click joins it, and it carries on until the stored text matches.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await page.locator('[data-recruit-new] [name=title]').fill('Payroll');
   await page.locator('[data-recruit-new] [name=description]').fill('Runs payroll.');
   await page.locator('[data-recruit-new] [type=submit]').click();
@@ -630,18 +638,12 @@ async function teamAdd(browser) {
   await node(page, 'p:new-human').waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'humans', {email: 'dana@acme.example', name: 'Dana'}]);
 
-  // Ask (for an agent you already run) opens the Ask panel with an editable draft, never sends it, and keeps one being written.
-  await choose('Add bot');
-  await page.locator('[data-recruit-ask]').click();
-  const draft = page.locator('#ask-panel .ask-form .p-text');
-  await draft.waitFor();
-  assert.match(await draft.inputValue(), /folder path and computer, or GitHub URL/);
-  assert.equal(await draft.evaluate(el => el === document.activeElement), true);
-  await draft.fill('Keep this existing request.');
-  await choose('Add bot');
-  await page.locator('[data-recruit-ask]').click();
-  assert.equal(await draft.inputValue(), 'Keep this existing request.');
-  assert.deepEqual(calls, [], 'the handoff does not send a chat message');
+  // Add existing bot opens the external agent instructions.
+  await choose('Add existing bot');
+  await page.locator('dialog.connect-agent[open]').waitFor();
+  await page.locator('dialog.connect-agent [data-close]').click();
+  await page.waitForFunction(() => !document.querySelector('dialog.connect-agent'));
+  assert.deepEqual(calls, []);
 
   // The same actions work from the phone drawer and the menu stays within the screen.
   await page.setViewportSize({width: 390, height: 844});

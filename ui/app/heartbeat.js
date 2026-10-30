@@ -324,7 +324,6 @@ function renderAccount() {
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
   el.querySelector('.account-email').textContent = me.email || 'Not signed in';
   renderAccountStatus();
-  $('#connect-agent').hidden = !settingsCanMakeTokens();
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();
