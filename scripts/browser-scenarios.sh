@@ -152,7 +152,8 @@ task_start() {  # the phase's name: creates one task for the bot that runs the p
   local name=$1 nonce text body
   nonce="$name-$RANDOM$RANDOM"
   text="journey-run $nonce $name PRACTICE=$PRACTICE HOST=$HOST_NAME OTHER=$OTHER CREDENTIAL=$CREDENTIAL LABEL=$LABEL"
-  body="$(python3 -c 'import json,sys; print(json.dumps({"title": sys.argv[1], "body": sys.argv[2], "owner": sys.argv[3]}))' "Scenario $name" "$text" "bot:$BOT")"
+  # The title carries the nonce: the server refuses a second open task with the same title for one bot.
+  body="$(python3 -c 'import json,sys; print(json.dumps({"title": sys.argv[1], "body": sys.argv[2], "owner": sys.argv[3]}))' "Scenario $nonce" "$text" "bot:$BOT")"
   send POST /api/v2/tasks "$body" >/dev/null || return 1
   printf '%s\n' "$nonce"
 }

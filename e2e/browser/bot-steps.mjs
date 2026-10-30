@@ -8,6 +8,7 @@
 //
 // Node 22 only: the WebSocket and fetch globals, no packages.
 import {execFileSync} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
 
 const phase = process.argv[2] || '';
 const env = process.env;
@@ -129,12 +130,15 @@ const fill = (tab, field, selector) => {
 
 async function logIn(tab) {
   await tab.go(practice + '/login');
-  check('login: username filled from Tico', fill(tab, 'username', 'input[name=username]').ok === true);
-  check('login: password filled from Tico', fill(tab, 'password', 'input[name=password]').ok === true);
+  const user = fill(tab, 'username', 'input[name=username]');
+  check('login: username filled from Tico', user.ok === true, user.error || '');
+  const pass = fill(tab, 'password', 'input[name=password]');
+  check('login: password filled from Tico', pass.ok === true, pass.error || '');
   await tab.click('button[type=submit]');
   await tab.waitFor('["/login/2fa", "/me"].includes(location.pathname) || document.body.innerText.includes("Wrong")');
   if ((await tab.path()) === '/login/2fa') {
-    check('login: authenticator code filled from Tico', fill(tab, 'totp', 'input[name=code]').ok === true);
+    const code = fill(tab, 'totp', 'input[name=code]');
+    check('login: authenticator code filled from Tico', code.ok === true, code.error || '');
     await tab.click('button[type=submit]');
     await tab.waitFor('location.pathname === "/me" || document.body.innerText.includes("That code is wrong")');
   }
@@ -294,23 +298,24 @@ const phases = {
     check('the peer reports its Chrome port', Boolean(data.port));
   },
 
-  // Scenario, bot A on the same computer: the other bot's endpoint refuses it, and it cannot fill the other bot's login.
+  // Scenario, bot A on the same computer: the endpoint refuses secrets no run holds, and bot A cannot fill a login it was not granted.
   async 'peer-probe'(browser, data) {
     await status(browser);
     const own = hub(['browser', 'status']).json || {};
     data.profile = own.profile || '';
     check('separate profile from the peer', Boolean(own.profile) && own.profile !== env.PEER_PROFILE, data.profile);
-    const mine = new URL(env.TICO_BROWSER_URL);
-    const secret = mine.pathname.split('/')[1] || '';
     check('its own endpoint answers its own secret', await fetchStatus(env.TICO_BROWSER_URL + '/json/version') === 200);
     const peer = `http://127.0.0.1:${env.PEER_PORT}`;
     const bare = await fetchStatus(peer + '/json/version');
     check('the peer endpoint refuses a request without a secret', bare !== 200, bare);
-    const wrong = await fetchStatus(`${peer}/${secret}/json/version`);
-    check('the peer endpoint refuses this bot\'s secret', wrong !== 200, wrong);
+    // One endpoint serves every bot on the computer: a secret picks its bot. A secret no run holds is refused.
+    const unknown = await fetchStatus(`${peer}/${randomBytes(32).toString('hex')}/json/version`);
+    check('the endpoint refuses a secret no live run holds', unknown !== 200, unknown);
     const tab = await browser.newTab();
-    const refused = fill(tab, 'username', 'input[name=username]');
-    check('the peer\'s login is not granted to this bot', refused.ok === false && refused.error === 'not_granted', refused.error || '');
+    // A login this bot was not granted; the runner refuses it before it looks at any page.
+    const refusedRun = hub(['browser', 'fill', 'Not-granted-login', 'username', '--target', tab.targetId]);
+    const refused = refusedRun.json || {ok: false, error: refusedRun.err};
+    check('a login this bot was not granted is refused', refused.ok === false && refused.error === 'not_granted', refused.error || '');
   },
 
   // Scenario: Chrome was killed; the runner starts it again and the same profile still holds the session. The browser

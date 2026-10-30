@@ -211,7 +211,9 @@ def cmd_save_card(args):
 
 def find_reconnect(node, host):
     if isinstance(node, dict):
-        if node.get("host") == host and node.get("id"):
+        # A site card names its host as its label; its fix carries the host too. Needs you lists the card under its task.
+        fix = node.get("fix") if isinstance(node.get("fix"), dict) else {}
+        if node.get("id") and node.get("service") == "site" and host in (node.get("label"), fix.get("host")):
             return node
         for value in node.values():
             found = find_reconnect(value, host)
