@@ -150,10 +150,16 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",
      "efforts": ("low", "high"), "default_effort": "low"},
+    # Inception's Mercury 3 (text only, tools, 1M context) through OpenRouter: the meeting model's next step on a computer
+    # that cannot run the Gateway's (backend/live_meetings.py turn_config). A meeting model, never a bot's pick.
+    {"id": "mercury-3", "label": "mercury 3", "runtime": "pi", "provider": "openrouter", "meeting": True,
+     "efforts": ("low", "high"), "default_effort": "low"},
     # The Tico AI Gateway's lineup (backend/gateway_tiers.py): 60 department tiers at their current pinned version, then the
     # old lineup (retired: it keeps working at its old price, nothing new may pick it). Any other id of the lineup
     # (an auto id, an older version, one that arrived with HQ's catalog) is found through `MODEL_BY_ID`.
     *gateway_tiers.listed_rows(),
+    # The meeting model (live-meeting replies): picked in Settings, never a bot's model (`meeting`, see provider_models).
+    *gateway_tiers.meeting_rows(),
     # An external agent brings its own model; the profile's config decides, and the heartbeat
     # reports what it is. This row exists so the bot can be created and shown like any other.
     {"id": "hermes-profile", "label": "profile's own model", "runtime": "hermes", "provider": "",
@@ -208,6 +214,8 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
+#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, the list price the Gateway's meeting row marks up; cache
+#              reads at 10% of input, as the Gateway prices it
 PRICES_AS_OF = "2026-09-29"
 class _Priced(dict):
     """A price table whose lookups also find the Gateway's ids (`gateway_tiers`): a tier, a pinned version, an old id."""
@@ -258,6 +266,7 @@ PRICES = _Priced({
     "llama-4-maverick": (0.1875, 0.1875, 0.6525),
     "mistral-medium-3.5": (1.5, 1.5, 7.5),
     "devstral-2512": (0.40, 0.04, 2.0),
+    "mercury-3": (0.20, 0.02, 0.70),
 }, gateway_tiers.price_for)    # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
 
 
@@ -335,9 +344,11 @@ def serves(provider, row):
                 or (named.get("catch_all") and named["runtime"] == row["runtime"] and not gateway))
 
 
-def provider_models(provider, *, current=True):
+def provider_models(provider, *, current=True, meeting=False):
+    """The catalog models a provider serves. A bot's picks leave out the meeting models unless `meeting` asks for them."""
     return [row for row in MODEL_CATALOG
-            if serves(provider, row) and not (current and row.get("deprecated"))]
+            if serves(provider, row) and not (current and row.get("deprecated"))
+            and bool(row.get("meeting")) == meeting]
 
 
 def recommended(provider):
@@ -426,7 +437,10 @@ def _record(value):
             # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
             "preset": models_preset.normalize(stored.get("preset")),
             # How hard the Tico AI Gateway thinks on a decision (clients/judge.py DECIDE_LEVELS); Low is today's.
-            "decide_level": J.normalize_level(stored.get("decide_level"))}
+            "decide_level": J.normalize_level(stored.get("decide_level")),
+            # The model live-meeting replies run on (backend/live_meetings.py): None is unset (the Gateway's default
+            # while the Gateway is on), '' the bot's own model, else a model id.
+            "meeting_model": None if stored.get("meeting_model") is None else str(stored.get("meeting_model") or "")}
 
 
 def env_seed(settings):
@@ -447,13 +461,34 @@ def env_seed(settings):
     return {"enabled": enabled, "runtime": runtime, "model": model, **({"preset": preset} if preset else {})}
 
 
+# The model live-meeting replies run on when the company has not chosen one and the Tico AI Gateway is on.
+MEETING_MODEL = "tico-meeting-1.0"
+# The same model through OpenRouter, for a computer that cannot run the Gateway's (a Mac runner).
+OPENROUTER_MEETING_MODEL = "mercury-3"
+
+
 def with_gateway(record, connected):
     """`record` with the Tico AI Gateway's provider on exactly while its connection has a key: it is never the owner's
-    to tick, so it follows Settings > Computers > Tico AI Gateway (backend/gateway_connection.py)."""
+    to tick, so it follows Settings > Computers > Tico AI Gateway (backend/gateway_connection.py). An unset meeting
+    model is the Gateway's meeting model while the Gateway is on, else the bot's own model ('')."""
     enabled = [name for name in record["enabled"] if not PROVIDER_BY_ID[name].get("gateway")]
     if connected:
         enabled += [row["id"] for row in PROVIDERS if row.get("gateway")]
-    return {**record, "enabled": enabled}
+    meeting = record.get("meeting_model")
+    meeting = (MEETING_MODEL if connected else "") if meeting is None else meeting
+    return {**record, "enabled": enabled, "meeting_model": meeting}
+
+
+def meeting_choice(record, model):
+    """A live-meeting model as a request names it: '' for the bot's own model, else a current model one of the enabled
+    providers can run. Raises ProviderError."""
+    model = str(model or "").strip()
+    if not model:
+        return ""
+    row = MODEL_BY_ID.get(model)
+    if not row or not row["provider"] or row.get("deprecated") or not runtime_enabled(row["runtime"], record["enabled"], row):
+        raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
+    return model
 
 
 def load(c, settings=None):
@@ -490,9 +525,10 @@ def seed_from_env(c, settings, now):
     return True
 
 
-def save(c, actor, body, now):
-    """Replace the choice. `body` carries enabled, runtime, model and the revision it was read at."""
-    before = load(c)
+def save(c, actor, body, now, settings=None):
+    """Replace the choice. `body` carries enabled, runtime, model and the revision it was read at. `settings` is read
+    the way `load` reads it, so the revision and the Gateway's provider match what the page read."""
+    before = load(c, settings)
     if before["revision"] != int(body.get("expected_revision") or 0):
         raise ProviderError("conflict", "The provider choice changed since you opened it; reload and try again", 409)
     gateway = [name for name in before["enabled"] if PROVIDER_BY_ID[name].get("gateway")]
@@ -505,6 +541,11 @@ def save(c, actor, body, now):
     level = body.get("decide_level")
     if level not in (None, "") and level not in J.DECIDE_LEVELS:
         raise ProviderError("decide_level", "Choose Low, Medium or High for decisions", 422)
+    # Kept as saved (None while unset, so the Gateway's default follows the connection) unless the owner names one.
+    from . import read_cache
+    saved = read_cache.metadata(c, KEY)
+    kept = _record(saved[0])["meeting_model"] if saved else None
+    meeting = kept if body.get("meeting_model") is None else meeting_choice({"enabled": enabled}, body.get("meeting_model"))
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
              "updated": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
@@ -512,9 +553,10 @@ def save(c, actor, body, now):
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
                                                                    "model": model}, before["check_models"])),
              "preset": preset,
-             "decide_level": before["decide_level"] if level is None else J.normalize_level(level)}
+             "decide_level": before["decide_level"] if level is None else J.normalize_level(level),
+             "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
-    stored = {**after, "enabled": [name for name in enabled if name not in gateway]}
+    stored = {**after, "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (KEY, json.dumps(stored, sort_keys=True)))
     return before, after
@@ -530,6 +572,7 @@ def view(record):
             "check_models": record["check_models"], "check_order": check_order(record),
             "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
             "decide_level": record.get("decide_level", J.DECIDE_LEVELS[0]), "decide_levels": list(J.DECIDE_LEVELS),
+            "meeting_model": record["meeting_model"],
             "providers": [{**row, "enabled": row["id"] in record["enabled"],
                            "recommended": (recommended(row["id"]) or {}).get("id", "")}
                           for row in PROVIDERS]}

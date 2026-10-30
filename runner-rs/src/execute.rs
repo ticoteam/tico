@@ -1322,15 +1322,22 @@ impl Runner {
             if let Some(p) = &selected {
                 env = p.environment(&runtime, &env);
             }
+            // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
+            let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             let socket_path = self.socket.as_ref().map(|s| {
-                s.register(&token, &bot);
+                match &own {
+                    Some(client) => s.register_as(&token, &bot, client.clone()),
+                    None => s.register(&token, &bot),
+                }
                 s.set_mailboxes(&token, crate::mail_key::mailboxes(&attempt));
                 s.path.clone()
             });
             if let Some(p) = &socket_path {
                 env.insert(crate::gitcred::SOCKET_ENV.into(), p.display().to_string());
             }
-            crate::gitcred::apply(&mut env, &self.client, &self.tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
+            let own_tokens = crate::gitcred::TokenCache::new();
+            let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
+            crate::gitcred::apply(&mut env, client, tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
                 if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
@@ -1406,7 +1413,7 @@ impl Runner {
             memory_before = redact::head(&execution_path);
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory).
-            if crate::harness_memory::is_checkout(&execution_path) {
+            if !p.private && crate::harness_memory::is_checkout(&execution_path) {
                 // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
                 let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
                 let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
@@ -1756,7 +1763,9 @@ impl Runner {
                 unavailable = false;
             } else {
                 self.report_failure(&aid, &bot, e, redactor.as_ref(), &vault, &token, "execution interrupted");
-                unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p));
+                // No fallback for a private meeting with no copy of its own: it would have none either.
+                unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p))
+                    && !e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED);
             }
         }
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
@@ -2317,7 +2326,8 @@ impl Runner {
                     self.state.off(move |s| s.phase(&id, "synced")).await?;
                     // A bot delivered through an app has no repository here: its work lives in the app.
                     let repository = crate::appdriver::delivery(&config).is_none();
-                    if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some() && repository) {
+                    // A private meeting's copy is never committed, pushed, published or reported (sessions.rs).
+                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && repository && !p.private) {
                         if !committed_secret && p.session_path.is_none() {
                             self.publish(&bot, &execution_path, &env).await;
                         }
@@ -2531,7 +2541,11 @@ impl Runner {
         let masked = redact::scrub_credentials(&scrub.scrub_text(&e.text), &[]);
         let cause: String = masked.chars().take(300).collect();
         let detail = if cause.is_empty() { String::new() } else { format!(" ({cause})") };
-        let _ = self.state.append(aid, "diagnostic", &json!({"runner_error": cause, "error_type": e.kind}));
+        let mut said = json!({"runner_error": cause, "error_type": e.kind});
+        if e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED) {
+            said["code"] = json!("private_checkout"); // the server ends the meeting turn: retrying fails the same way
+        }
+        let _ = self.state.append(aid, "diagnostic", &said);
         self.diagnose(aid, &format!("{}: {what}{detail}; inspect local runner", e.kind));
         if !OWN_INTERRUPT.iter().any(|p| e.text.contains(p)) {
             crate::util::diagnostic(&format!("Tico runner: {bot}: turn {aid} stopped: {}{}", e.kind, if cause.is_empty() { String::new() } else { format!(": {cause}") }));

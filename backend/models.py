@@ -1382,7 +1382,7 @@ class Heartbeat(Contract):
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
-        "turns_at_once_v1"]] = Field(
+        "turns_at_once_v1", "private_lanes_v1"]] = Field(
         default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
@@ -1971,6 +1971,8 @@ class ProvidersUpdate(Contract):
     preset: str | None = Field(default=None, max_length=40)
     # How hard the Tico AI Gateway thinks on a decision (low, medium, high); None keeps the saved one.
     decide_level: str | None = Field(default=None, max_length=10)
+    # The model live-meeting replies run on: '' for the bot's own model; None keeps the saved one.
+    meeting_model: str | None = Field(default=None, max_length=100)
 
 
 class GatewaySearch(Contract):

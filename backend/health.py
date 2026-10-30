@@ -795,6 +795,8 @@ HELD = {
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
+    # A private meeting's turn runs only on a runner with private lanes (execution.PRIVATE_LANES).
+    "private_update": ("{computer} needs a Tico update before it can join private meetings", COMPUTERS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": ("Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now", BOT_SETTINGS),

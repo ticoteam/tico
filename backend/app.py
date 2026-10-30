@@ -295,6 +295,11 @@ def create_app(settings=None):
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                 try:
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
+                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
+                except Exception as exc:
+                    telemetry.capture("live_meeting_sweep", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass
@@ -352,6 +357,7 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            app.state.live_meeting_routing.stop()
             if inbound_task:
                 await inbound_task
             if hook_relay_task:
@@ -1561,11 +1567,11 @@ def create_app(settings=None):
             raise Problem("forbidden", "Only the owner may choose the company's AI providers", 403)
 
         def work(c):
-            before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            before, after = Providers.save(c, who.actor, body.model_dump(), H.now(), settings)
             model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
-                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")},
-                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")}})
+                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")},
+                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")}})
             return Providers.view(after)
         return mutate(request, body, work)
 
