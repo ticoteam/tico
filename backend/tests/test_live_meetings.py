@@ -1146,6 +1146,10 @@ def test_a_runner_without_private_lanes_never_takes_a_private_meetings_turn(live
     assert reasons and set(reasons) == {"private_update"}
     assert [(w["bot"], w["reason"], w["detail"]) for w in waiting] == [
         ("ops", "runner_update", "Test Mac needs a Tico update before it can join private meetings")], "said once"
+    notices = get(live, f"live-meetings/{private['id']}")["notices"]
+    assert [(n["kind"], n["bot"], n.get("detail") or n.get("reason")) for n in notices] == [
+        ("waiting", "ops", "Test Mac needs a Tico update before it can join private meetings"),
+        ("deferred", "ops", "replying_in_meeting")], "the view says it too, oldest first"
     team = post(live, "live-meetings", {"title": "Team", "visibility": "team", "cooldown_seconds": 0})
     attach(live, team["id"], "ops")
     chunk(live, team["id"], 1, 0, 1000, "Ops, the standup moved to 10. Got it?")
