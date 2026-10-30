@@ -66,6 +66,18 @@ def test_standard_startup_owns_rust_and_shutdown_releases_the_public_port(tmp_pa
                 return False
             Service.eventually(healthy, seconds=20)
             assert httpx.get(origin + "/control/v1/hello").status_code == 403
+            # On a stop, the public port answers 200 until it refuses connects, never the relay's 502 for a server
+            # that no longer listens: Caddy holds a refused connect, but passes a 502 through to the visitor.
+            process.terminate()
+            gone = time.monotonic() + 1.5
+            while True:
+                try:
+                    answer = httpx.get(origin + "/healthz", timeout=.5).status_code
+                except httpx.ConnectError:
+                    break
+                assert answer == 200, f"the public port answered {answer} while the server stopped"
+                assert time.monotonic() < gone, "the public port still accepts connects"
+                time.sleep(.02)
         finally:
             if process.poll() is None:
                 process.terminate()
