@@ -48,6 +48,12 @@ impl Host {
         }
     }
 
+    /// Whether `compact` works on this host now (`compact_first` needs it; a harness with `compaction` but no `/compact`
+    /// to run first, pi, has none).
+    pub fn can_compact(&self) -> bool {
+        matches!(self, Host::Codex(_) | Host::Claude(_))
+    }
+
     /// Goal records the harness keeps outside its event stream (Claude's transcript).
     pub fn poll_goal(&self, thread: &str) {
         if let Host::Claude(h) = self {

@@ -2396,7 +2396,7 @@ impl Runner {
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<Value>,
         mut meter: Option<&mut Meter>,
     ) -> Result<(), String> {
-        if !crate::harness_tools::caps(runtime, harness).compaction {
+        if !crate::harness_tools::caps(runtime, harness).compaction || !h.can_compact() {
             return Err("this harness cannot compact a session".into());
         }
         let _ = self.state.append(aid, "diagnostic", &json!({"text": "Compacting the saved session before this turn (the last turn ran out of room)."}));
@@ -3772,6 +3772,8 @@ for line in sys.stdin:
         assert_ne!(ran.sessions[0], ran.sessions[1]);
         assert_eq!(session_of(&ran.completions[1]), ("new".to_string(), json!("compact_failed"), json!("this harness cannot compact a session")));
         assert!(ran.diagnostics[1].iter().any(|d| d.contains("could not be compacted")), "{:?}", ran.diagnostics[1]);
+        // Refused before anything is compacted: no "Compacting the saved session" line that the refusal would contradict.
+        assert!(!ran.diagnostics[1].iter().any(|d| d.contains("Compacting the saved session")), "{:?}", ran.diagnostics[1]);
         assert!(ran.prompts[1].contains("New session:") && ran.prompts[1].contains("could not be compacted"), "{}", ran.prompts[1]);
         assert!(ran.prompts[1].contains("Where this task stood") && ran.prompts[1].contains("[m3]: Release build 41 failed its smoke test."), "{}", ran.prompts[1]);
         assert!(!ran.prompts[1].contains("[m1]"), "only what came after the last turn: {}", ran.prompts[1]);
