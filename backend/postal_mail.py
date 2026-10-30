@@ -224,14 +224,15 @@ def _stamp(value):
     return text[:40] if H.parse_ts(text) else H.now()
 
 
-def _keep(c, provider, external_id, *, delivery, address="", state="", received_at=None, pages=None, raw=None):
+def _keep(c, provider, external_id, *, delivery, address="", state="", received_at=None, pages=None, raw=None,
+          checks=False):
     """One letter, once per (provider, external id). Returns whether it is new."""
     now = H.now()
     raw_json = json.dumps(raw or {}, sort_keys=True, default=str)[:8000]
     cursor = c.execute("INSERT OR IGNORE INTO mail_items(id,provider,external_id,address,state,received_at,num_pages,"
-                       "delivery,raw_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       "contains_checks,delivery,raw_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                        ("mail_" + uuid.uuid4().hex[:16], provider, external_id, address[:300], state[:20],
-                        received_at or now, pages, delivery[:200], raw_json, now, now))
+                        received_at or now, pages, int(bool(checks)), delivery[:200], raw_json, now, now))
     return bool(cursor.rowcount)
 
 
@@ -255,7 +256,14 @@ def arrived(c, body, delivery):
     address = got.get("address") if isinstance(got.get("address"), str) else str(got.get("box") or "")
     return _keep(c, "gateway", ident, delivery=str(delivery), address=_clean(address, 300),
                  state=_clean(got.get("state"), 20), received_at=_stamp(got.get("received_at") or got.get("date_created")),
-                 pages=pages, raw={k: got[k] for k in list(got)[:40]})
+                 pages=pages, raw={k: got[k] for k in list(got)[:40]}, checks=contains_checks(got))
+
+
+def contains_checks(got):
+    """Whether the mailbox provider says the envelope holds a check: `contains_checks` / `containsChecks` at the top or
+    under `flags`. Only an explicit true counts."""
+    flags = got.get("flags") if isinstance(got.get("flags"), dict) else {}
+    return any(where.get(key) is True for where in (got, flags) for key in ("contains_checks", "containsChecks"))
 
 
 def intake_inbox(c):
@@ -315,13 +323,19 @@ def reading_of(answer):
             "text": str(answer.get("text") or "")[:EXCERPT]}
 
 
-def classify(reading, decided, thresholds):
+def classify(reading, decided, thresholds, checks=False):
     """The kind a letter is filed under, from the reader's hint and Decide's (choice, confidence) or None. Legal on
-    either word; junk only at its own threshold; anything short of the threshold is `other`. Without Decide the
-    reader's hint stands, except junk, which then goes to the Assistant rather than being archived unseen."""
-    hint = reading["kind"]
+    either word; then a check when the mailbox provider flagged one (`checks`) or the reader saw one, whatever Decide
+    says, so money never lands in junk or the Assistant's queue; junk only at its own threshold; anything short of the
+    threshold is `other`. Without Decide the reader's hint stands, except junk, which then goes to the Assistant rather
+    than being archived unseen."""
+    hint = reading["kind"] if reading else ""
     if hint == "legal" or (decided and decided[0] == "legal"):
         return "legal"
+    if checks or hint == "check":
+        return "check"
+    if not reading:
+        return ""
     if decided:
         kind, confidence = decided
         if kind not in KINDS:
@@ -423,7 +437,7 @@ class PostalMail:
             if not last:
                 return self.fail(row, "read_failed:" + type(error).__name__)
             reading = None
-        kind = classify(reading, self.decide(reading), self.thresholds()) if reading else ""
+        kind = classify(reading, self.decide(reading), self.thresholds(), bool(row["contains_checks"]))
         try:
             with self.store.transaction() as c:
                 self.file(c, ident, kind, reading, digest, len(data), mime, name)
@@ -523,10 +537,12 @@ class PostalMail:
         from .task_review import file_added
         reading = reading or {"sender": "", "summary": "", "deadline": None, "text": ""}
         rule = route_for(kind)
-        item = blobs.register(c, KEEPER, digest, size, name, mime)
         to = target(c, self.settings, self.auth, rule["to"])
         if rule["to"] and not to:
             raise Unavailable("no_recipient")   # nobody on the roster yet: kept failed, never archived unseen
+        # A filed scan is read through its task; an archived one has no task, so it is the owner's own file.
+        holder = KEEPER if to else SimpleNamespace(actor=owner_actor(c, self.auth) or H.KEEPER)
+        item = blobs.register(c, holder, digest, size, name, mime)
         task_id, file_id = None, None
         if to:
             summary = reading["summary"] or f"a letter received {row['received_at'][:10]}"
@@ -585,9 +601,44 @@ def view(row):
     return {"id": row["id"], "provider": row["provider"], "external_id": row["external_id"], "address": row["address"],
            "state": row["state"], "received_at": row["received_at"], "num_pages": row["num_pages"],
            "kind": row["kind"], "summary": row["summary"], "sender": row["sender"], "deadline": row["deadline"],
+           "contains_checks": bool(row["contains_checks"]),
            "status": row["status"], "task_id": row["task_id"], "file_id": row["file_id"],
            "file_url": "/api/v2/files/" + row["blob_id"] if row["blob_id"] else None,
            "attempts": row["attempts"], "error": row["error"]}
+
+
+def redacted(row):
+    """What an owner or admin who may not read a letter's contents still sees, to retry it: when and how it came, and
+    its status. No sender, summary, deadline, task or scan."""
+    return {"id": row["id"], "provider": row["provider"], "received_at": row["received_at"], "status": row["status"],
+            "kind": row["kind"] if row["status"] == "archived" else "", "attempts": row["attempts"],
+            "error": row["error"], "redacted": True}
+
+
+def access(c, auth, who, row):
+    """How much of a letter `who` sees: "full", "status" (`redacted`) or None. A filed letter follows its task: whoever
+    may read the task (a private one only its parties, admins included) reads the letter. A letter with no task
+    (new, failed, archived) is the owner's alone; other owners and admins see only its status."""
+    if row["task_id"]:
+        try:
+            auth.task(c, who, row["task_id"])
+            return "full"
+        except Problem:
+            return None
+    if who.actor == owner_actor(c, auth):
+        return "full"
+    if who.role in ("owner", "human") and auth.company_role(who) in ("owner", "admin"):
+        return "status"
+    return None
+
+
+def scan_access(c, auth, who, blob_id):
+    """For the file download (media.blob_for): None when the blob is no letter's scan, else whether `who` may open it
+    under `access`."""
+    row = c.execute("SELECT * FROM mail_items WHERE blob_id=?", (blob_id,)).fetchone()
+    if not row:
+        return None
+    return access(c, auth, who, row) == "full"
 
 
 def detail(row):
@@ -612,15 +663,6 @@ def install(app, settings, store, auth):
     def admin(who):
         return who.role in ("owner", "human") and auth.company_role(who) in ("owner", "admin")
 
-    def readable(c, who, row):
-        if admin(who):
-            return True
-        if not row["task_id"]:
-            return False                    # archived and unrouted letters: owners and admins only
-        from .task_privacy import task_readable
-        task = c.execute("SELECT * FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
-        return bool(task) and task_readable(c, who, dict(task))
-
     def need_admin(who, what):
         if not admin(who):
             raise Problem("forbidden", f"An owner or admin {what}", 403)
@@ -630,8 +672,9 @@ def install(app, settings, store, auth):
                   kind: str | None = Query(default=None, max_length=20),
                   after: str = Query(default="", max_length=200),
                   limit: int = Query(default=50, ge=1, le=LISTED)):
-        """Physical mail, newest first: each letter's kind, one-line summary, deadline, status, task and scan. Owners and
-        admins see every letter; anyone else sees the letters whose task they can read. Follow `next` with `after`."""
+        """Physical mail, newest first: each letter's kind, one-line summary, deadline, status, task and scan. A filed
+        letter shows to whoever may read its task (a private task only to its parties); a letter with no task to the
+        owner, and to admins only as its status (`redacted`). Follow `next` with `after`."""
         who = request.state.identity
         sql, args = "SELECT * FROM mail_items WHERE 1=1", []
         if status:
@@ -653,8 +696,9 @@ def install(app, settings, store, auth):
                 if len(out) >= limit:
                     break
                 next_at = f"{row['received_at']}|{row['id']}"
-                if readable(c, who, row):
-                    out.append(view(row))
+                seen = access(c, auth, who, row)
+                if seen:
+                    out.append(view(row) if seen == "full" else redacted(row))
         more = len(rows) == limit * 4 or len(out) >= limit
         return {"items": out, "next": next_at if more and next_at else None}
 
@@ -665,9 +709,10 @@ def install(app, settings, store, auth):
         with store.read() as c:
             member(c, who)
             row = c.execute("SELECT * FROM mail_items WHERE id=?", (item_id,)).fetchone()
-            if not row or not readable(c, who, row):
+            seen = access(c, auth, who, row) if row else None
+            if not seen:
                 raise Problem("not_found", "No such letter", 404)
-            return {"item": detail(row)}
+            return {"item": detail(row) if seen == "full" else redacted(row)}
 
     @app.post("/api/v2/postal/items/{item_id}/retry")
     def mail_retry(request: Request, item_id: str):

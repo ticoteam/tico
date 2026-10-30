@@ -4,7 +4,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS mail_items (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL, external_id TEXT NOT NULL,
   address TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT '', received_at TEXT NOT NULL,
-  num_pages INTEGER, file_id TEXT, blob_id TEXT, kind TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
+  num_pages INTEGER, contains_checks INTEGER NOT NULL DEFAULT 0, file_id TEXT, blob_id TEXT, kind TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
   sender TEXT NOT NULL DEFAULT '', deadline TEXT, status TEXT NOT NULL DEFAULT 'new',
   task_id TEXT, delivery TEXT NOT NULL DEFAULT '', raw_json TEXT NOT NULL DEFAULT '{}',
   attempts INTEGER NOT NULL DEFAULT 0, next_try TEXT, error TEXT NOT NULL DEFAULT '',

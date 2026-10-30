@@ -24,8 +24,10 @@ const pmPill = ([tone, label]) => `<span class="pill${tone ? ' ' + tone : ''}">$
 const pmDay = iso => iso ? new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '';
 function pmPrice(kind) {
   const v = PM.prices?.[kind];
-  if (typeof v === 'number' && v > 0) return `$${Number.isInteger(v) ? v : v.toFixed(2)}/mo`;
-  return typeof v === 'string' && v ? v : PM_PRICES[kind];
+  // Tico Gateway sends dollars a month; a plain label passes through as it is.
+  const n = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
+  if (typeof n === 'number' && Number.isFinite(n) && n > 0) return `$${Number.isInteger(n) ? n : n.toFixed(2)}/mo`;
+  return typeof n === 'string' && n.trim() ? n : PM_PRICES[kind];
 }
 
 async function renderSettingsMail() {
@@ -130,10 +132,12 @@ async function pmIntake(run) {
       <option value="">None</option>${list.map(i => `<option value="${esc(i.inbox_id)}"${i.inbox_id === cur ? ' selected' : ''}>${esc(i.name ? `${i.name} · ${i.address}` : i.address)}</option>`).join('')}
     </select></label>`;
   const select = host.querySelector('[data-pm-intake-select]');
+  // A failed save goes back to what the server last took, not to what the page first loaded.
+  let saved = cur;
   select.onchange = async () => {
     settingsFieldClear(select); select.disabled = true;
-    try { await put('/v2/postal/intake', {inbox_id: select.value || null}); toast('Saved'); }
-    catch (e) { select.value = cur; settingsFieldError(select, e.message); }
+    try { await put('/v2/postal/intake', {inbox_id: select.value || null}); saved = select.value || ''; toast('Saved'); }
+    catch (e) { select.value = saved; settingsFieldError(select, e.message); }
     finally { select.disabled = false; }
   };
 }

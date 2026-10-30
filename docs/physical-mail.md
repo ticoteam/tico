@@ -31,17 +31,25 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 | Government or tax | The Finance bot, or the owner when there is none |
 | Bill | The Finance bot, or the owner |
 | Financial (statements, bank notices) | The Finance bot, or the owner |
-| Check | The owner, private: depositing it needs their approval |
+| Check (flagged by the mailbox provider, or seen by the reader) | The owner, private: depositing it needs their approval |
 | Junk | Archived: no task; the scan is still kept |
 | Other, or not sure | The Assistant, or the owner |
 | Could not be read | The owner, private |
 
 Legal goes to the owner whenever the reader or Decide says legal, however unsure: a missed summons costs more than
-a wrong card. Junk is archived only when Decide is sure; anything else short of its threshold goes to the Assistant.
+a wrong card. A check works the same way: when the mailbox provider flags one in the envelope, or the reader sees
+one, it goes to the owner whatever Decide says, never to junk or the Assistant. Junk is archived only when Decide is sure; anything else short of its threshold goes to the Assistant.
 The routing lives in one table (`ROUTES` in `backend/postal_mail.py`) so it can become editable later.
 
 A letter's text comes from outside the company. The reading prompt and the Decide question both treat it as data,
 never as instructions, and each task says so.
+
+## Who sees a letter
+
+A filed letter shows to whoever may read its task, so legal mail, checks and unread scans (private tasks) show only to
+the owner, not to admins. A letter with no task (just in, failed, or archived as junk) shows in full only to the
+owner; admins see that it came and its status, so they can retry it, but not its sender, summary or scan. The scan
+download (`/api/v2/files/{id}`) follows the same rule, and so do the hub tools.
 
 ## When something fails
 
@@ -60,8 +68,8 @@ Florida); Bring your own (the intake inbox); Recent letters, with Retry on a fai
 
 | | |
 |---|---|
-| `GET /api/v2/postal/items` (`status`, `kind`, `after`, `limit`) | Letters, newest first. Owners and admins see every letter; anyone else sees the letters whose task they can read. |
-| `GET /api/v2/postal/items/{id}` | One letter: summary, kind, sender, deadline, task, file id and scan link, mailbox flags. |
+| `GET /api/v2/postal/items` (`status`, `kind`, `after`, `limit`) | Letters, newest first, as [Who sees a letter](#who-sees-a-letter) says; a status-only row has `redacted: true`. |
+| `GET /api/v2/postal/items/{id}` | One letter: summary, kind, sender, deadline, task, file id and scan link, mailbox flags, `contains_checks`. |
 | `POST /api/v2/postal/items/{id}/retry` | Try a failed letter again (owner or admin). |
 | `GET /api/v2/postal/addresses` | The company's addresses at Tico Gateway, its orders, and prices when Tico Gateway sends them. |
 | `POST /api/v2/postal/orders` | Order an address (`kind`: `shared`, `private` or `lease`; `state`; `company_name`), owner or admin, with an `Idempotency-Key`. Tico staff fulfil it. |

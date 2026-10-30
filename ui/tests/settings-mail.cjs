@@ -1,8 +1,8 @@
 // Settings > Mail (ui/app/settings-mail.js) against a fake server. Guards: addresses list state, kind, the full
 // address only once active, registered agent and Form 1583 status, with open orders as Pending; Get an address shows
-// each kind's price (Private's from the addresses answer) and line, offers an office lease only in CA, DE and FL, and
+// each kind's price (Tico Gateway's `prices` win, the office lease falls back to $437.50/mo) and line, offers an office lease only in CA, DE and FL, and
 // sends the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the
-// company's email inboxes; a failed letter is retried by an owner, and its task is a link. A member reads only.
+// company's email inboxes, and a failed save goes back to the last saved inbox; a failed letter is retried by an owner, and its task is a link. A member reads only.
 // Without Tico Gateway the addresses card says so and offers no order. No sideways scroll on a phone.
 // TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
@@ -26,7 +26,8 @@ function server() {
     ],
     orders: [{order_id: 'mo_1', kind: 'shared', state: 'NV', company_name: 'Acme Inc', status: 'open', created_at: AGO(30)},
       {order_id: 'mo_0', kind: 'shared', state: 'DE', company_name: 'Acme Inc', status: 'fulfilled', assignment_id: 'as_1', created_at: AGO(9100)}],
-    prices: {private: 25},
+    prices: {shared: 12, private: '25'},
+    intakeFail: false,
     intake: null,
     inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example'},
       {inbox_id: 'ib_phone', kind: 'phone', name: 'Front desk', address: '+15550100'}],
@@ -78,6 +79,7 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     }
     if (p === '/api/v2/postal/intake') {
       if (method === 'PUT') {
+        if (state.intakeFail) return json({error: {code: 'bad_request', detail: 'Not saved'}}, 422);
         const id = req.postDataJSON().inbox_id, box = state.inboxes.find(i => i.inbox_id === id);
         state.intake = id ? {inbox_id: id, address: box.address, set_by: 'human:ana', set_at: AGO(0)} : null;
       }
@@ -134,14 +136,21 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await intake.selectOption('ib_mail');
       await page.locator('.toast', {hasText: 'Saved'}).waitFor();
       assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body, {inbox_id: 'ib_mail'});
+      // A refused change goes back to the inbox saved a moment ago, not to the one the page loaded with (None).
+      state.intakeFail = true;
+      await intake.selectOption('');
+      await pane.locator('#settings-mail-intake [data-field-err]').waitFor();
+      assert.equal(await intake.inputValue(), 'ib_mail', 'a failed save restores the last saved inbox');
+      state.intakeFail = false;
       // Get an address: prices and lines, lease only where it is sold, then one order.
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       const kind = k => dialog.locator(`[data-pm-kind="${k}"]`);
-      assert.equal(await rowText(kind('shared')), 'Shared $10/mo Mailing address and registered agent');
-      assert.equal(await kind('private').locator('[data-pm-price]').innerText(), '$25/mo', "Private's price comes from the addresses answer");
-      assert.match(await rowText(kind('lease')), /^Office lease \$[\d.,]+\/mo For bank accounts, Amazon, Stripe; billed yearly$/);
+      assert.equal(await rowText(kind('shared')), 'Shared $12/mo Mailing address and registered agent', "Tico Gateway's price wins");
+      assert.equal(await kind('private').locator('[data-pm-price]').innerText(), '$25/mo', 'a price sent as text reads the same');
+      assert.equal(await rowText(kind('lease')), 'Office lease $437.50/mo For bank accounts, Amazon, Stripe; billed yearly',
+        'no lease price sent: the catalogue price');
       assert.equal(await dialog.locator('[name=company_name]').inputValue(), 'Acme Inc');
       await dialog.locator('[name=state]').selectOption('TX');
       assert.equal(await kind('lease').locator('input').isDisabled(), true, 'no office lease in Texas');
@@ -189,8 +198,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await page.close();
     }
     {
-      // Phone: nothing sideways, the dialog fits.
-      const {page, errors} = await open(browser, {width: 390, height: 844});
+      // Phone: nothing sideways, the dialog fits. Every price here is Tico Gateway's, in dollars.
+      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {shared: 10, private: 25, lease: 437.5}}));
       const pane = page.locator('#settings-mail');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-letter="pm_2"]').waitFor();
@@ -201,6 +210,7 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       assert.ok(await dialog.evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the order form fits');
+      assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', '$25/mo', '$437.50/mo']);
       if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-phone.png')});
       assert.deepEqual(errors, []);
       await page.close();

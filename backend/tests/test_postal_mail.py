@@ -1,6 +1,8 @@
 """Physical mail (backend/postal_mail.py) against a fake Tico HQ: `_mail` deliveries on the system relay are kept once,
-read, classified and routed by the table, legal mail reaches the owner's Needs you with its deadline, the email-in
-adapter turns an attachment into a letter, and a failure marks the letter failed and retries without a second task."""
+read, classified and routed by the table, legal mail reaches the owner's Needs you with its deadline, a check the
+provider flags or the reader sees is always the owner's, a letter (and its scan) shows only to who may read it, the
+email-in adapter turns an attachment into a letter, and a failure marks the letter failed and retries without a second
+task."""
 import base64
 import json
 
@@ -10,7 +12,9 @@ import pytest
 from backend import hubdb as H
 from backend import postal_mail as P
 from backend.tests.test_api import api, get, post, put  # noqa: F401
+from backend.tests.test_api import headers
 from backend.tests.test_hook_relay import hq, service  # noqa: F401
+from backend.tests.test_mcp import call
 
 SYSTEM = "hr_00000000000000a1"
 
@@ -19,7 +23,7 @@ class Mail:
     """HQ's mail routes (`/v1/gateway/mail/...`) and the inbound attachment route, in memory."""
 
     def __init__(self):
-        self.down, self.calls, self.orders = set(), [], []
+        self.down, self.calls, self.orders, self.prices = set(), [], [], None
 
     def __call__(self, request):
         path = request.url.path
@@ -32,7 +36,7 @@ class Mail:
         if path.startswith("/v1/inbound/messages/") and "/attachments/" in path:
             return httpx.Response(200, content=b"%PDF-1.4 emailed", headers={"content-type": "application/pdf"})
         if path == "/v1/gateway/mail/addresses":
-            return httpx.Response(200, json={"items": [{"id": "ma_1", "state": "DE", "kind": "shared", "agent": True,
+            return httpx.Response(200, json={**({"prices": self.prices} if self.prices else {}), "items": [{"id": "ma_1", "state": "DE", "kind": "shared", "agent": True,
                                                         "status": "active", "address": "1 Main St, Claymont DE"}],
                                               "orders": [{"order_id": "mo_0", "kind": "lease", "state": "CA", "status": "open"}]})
         if path == "/v1/gateway/mail/orders":
@@ -93,9 +97,9 @@ def letter(api, ident, kind, decided=None, deadline=None, summary=None):
     svc.engine.answers[summary] = decided or (kind, 0.95)
 
 
-def deliver(hq, ident, relay=SYSTEM, seq=None):
+def deliver(hq, ident, relay=SYSTEM, seq=None, checks=False):
     body = json.dumps({"item_id": ident, "box": "DE-1", "state": "DE", "num_pages": 2,
-                       "received_at": "2026-10-30T09:00:00Z", "flags": {"containsChecks": False}}).encode()
+                       "received_at": "2026-10-30T09:00:00Z", "flags": {"containsChecks": checks}}).encode()
     hq.queue.append({"hq_seq": seq or len(hq.queue) + 1, "relay_id": relay, "trigger_id": "_mail",
                      "delivery_id": "mail:" + ident, "received_at": "2026-10-30T09:00:00Z", "headers": {},
                      "body_b64": base64.b64encode(body).decode()})
@@ -104,6 +108,10 @@ def deliver(hq, ident, relay=SYSTEM, seq=None):
 def items(api):
     with api.app.state.store.read() as c:
         return {r["external_id"]: dict(r) for r in c.execute("SELECT * FROM mail_items")}
+
+
+def scan(api, row, token="ana-test"):
+    return api.get("/api/v2/files/" + row["blob_id"], headers=headers(token)).status_code
 
 
 def task(api, task_id):
@@ -141,8 +149,14 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     assert [i["id"] for i in listed["items"]] == [row["id"]] and listed["items"][0]["summary"].startswith("A summons")
     read = get(api, "postal/items/" + row["id"])["item"]
     assert read["kind"] == "legal" and read["file_url"] == "/api/v2/files/" + row["blob_id"]
-    assert get(api, "postal/items", "cara-test")["items"] == []           # a member who cannot read the task
-    get(api, "postal/items/" + row["id"], "cara-test", expected=404)
+    assert scan(api, row) == 200
+    # Legal mail is the owner's private task: neither a member nor an admin reads it, its scan or it through the hub.
+    for token in ("cara-test", "ben-test"):
+        assert get(api, "postal/items", token)["items"] == []
+        get(api, "postal/items/" + row["id"], token, expected=404)
+        assert scan(api, row, token) == 404
+    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token="ben-test")[0] is True
+    assert call(api, "hub_mail_read", {"item_id": row["id"]})[1]["item"]["kind"] == "legal"
 
 
 def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
@@ -175,6 +189,52 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
     service(api).tick()
     drain(api)
     assert task(api, items(api)["210"]["task_id"])["owner"] == "human:ana"
+
+
+def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
+    letter(api, "401", "junk", ("junk", 0.95), summary="Looks like an offer")    # the provider saw a check inside
+    deliver(hq, "401", checks=True)
+    letter(api, "402", "check", ("bill", 0.95), summary="Refund from a supplier")  # the reader saw one
+    deliver(hq, "402")
+    service(api).tick()
+    drain(api)
+    got = items(api)
+    assert got["401"]["contains_checks"] == 1 and got["402"]["contains_checks"] == 0
+    for ident in ("401", "402"):
+        row = got[ident]
+        made = task(api, row["task_id"])
+        assert (row["kind"], row["status"], made["owner"]) == ("check", "filed", "human:ana"), ident
+        get(api, "postal/items/" + row["id"], "ben-test", expected=404)          # private: not even an admin
+    assert get(api, "postal/items/" + got["401"]["id"])["item"]["contains_checks"] is True
+
+
+def test_a_letter_with_no_task_is_the_owners_alone(api, hq, mail):
+    letter(api, "501", "junk", summary="Credit card offer")
+    deliver(hq, "501")
+    letter(api, "502", "bill", summary="Gas bill")
+    mail.down.add("502")
+    deliver(hq, "502")
+    service(api).tick()
+    drain(api)
+    got = items(api)
+    archived, failed = got["501"], got["502"]
+    assert (archived["status"], failed["status"]) == ("archived", "failed")
+
+    full = {i["id"]: i for i in get(api, "postal/items")["items"]}
+    assert full[archived["id"]]["summary"] == "Credit card offer" and full[archived["id"]]["sender"] == "Acme Sender"
+    assert scan(api, archived) == 200                     # the owner opens an archived scan
+    # An admin sees that they came and how they stand, to retry one, but not who sent what.
+    shown = {i["id"]: i for i in get(api, "postal/items", "ben-test")["items"]}
+    assert set(shown) == {archived["id"], failed["id"]}
+    for item in shown.values():
+        assert item["redacted"] is True and not {"sender", "summary", "deadline", "file_url", "task_id"} & set(item)
+    assert get(api, "postal/items/" + archived["id"], "ben-test")["item"]["redacted"] is True
+    assert "Credit card offer" not in json.dumps(call(api, "hub_mail_list", {}, token="ben-test")[1])
+    assert scan(api, archived, "ben-test") == 404
+    assert get(api, "postal/items", "cara-test")["items"] == []
+    get(api, "postal/items/" + archived["id"], "cara-test", expected=404)
+    assert scan(api, archived, "cara-test") == 404
+    post(api, "postal/items/" + failed["id"] + "/retry", {}, "ben-test")
 
 
 def test_a_failed_letter_is_marked_and_retried_without_a_second_task(api, hq, mail):
@@ -249,6 +309,8 @@ def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
     listed = get(api, "postal/addresses")
     assert listed["addresses"][0]["state"] == "DE" and listed["orders"][0]["order_id"] == "mo_0"
     assert "prices" not in listed
+    mail.prices = {"shared": 10, "private": 25, "lease": 437.5}
+    assert get(api, "postal/addresses")["prices"] == {"shared": 10, "private": 25, "lease": 437.5}
     post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, "cara-test", expected=403)
     made = post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, key="order-1")
     assert made["order"]["id"] == "mo_1"
