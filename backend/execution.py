@@ -598,31 +598,60 @@ def restart_reported(c, attempt_id):
                 and result.get('text') == 'Runner restarted during execution')
 
 
-# An update that restarts the hub and its runners ends their turns without a report, so each lapses. The update's
-# snapshot, image switch and health check take minutes (docs/updates.md) and the sweep that expires a lapsed lease
-# runs after them, so a turn that ends this long after the update finished (or started) stopped during it. That is
-# timing, not proof the update restarted its computer: it names the cause and groups the runs for one choice, and
-# never relaxes the retry rule the way the computer's own restart report does.
+# Tico's update, or any restart of the hub, cuts the runs live then, mostly with no report from their computer, so each
+# lapses. Updates must not wait for runs, so each such run is flagged at the cut (`flag_cut`): when an update starts,
+# and when the hub starts for the runs its last process still held. A flagged run that ends without an answer within
+# the lease plus UPDATE_MARGIN_S of the hub coming back (the update's snapshot, image switch and health check take
+# minutes, docs/updates.md) was cut, and resumes on the next sweep with no Needs you (auto_reconcile). A run the flags
+# miss (one begun just after the update, before the updater restarted its runner) is judged by the same window.
 UPDATE_MARGIN_S = 15 * 60
+UPDATE_CUT = 'attempt.update_cut'
+UPDATE_RESUMES = 3          # update cuts one request resumes from; the next one ends it quietly
+UPDATE_STALE_S = 24 * 3600  # an older cut is dismissed, not resumed: its work is stale by now
+
+
+def flag_cut(c, cause, update=None):
+    """Flag every live run (leased or running) as cut by `cause`: 'update' as Tico's update starts (`update` its
+    target), 'restart' as the hub starts on the runs its last process held. How many it flagged."""
+    rows = c.execute("SELECT id,bot,job_id FROM attempts WHERE state IN ('leased','running')").fetchall()
+    for row in rows:
+        H.event(c, H.KEEPER, UPDATE_CUT, row['id'], {'bot': row['bot'], 'job_id': row['job_id'], 'cause': cause,
+                                                     **({'update': update} if update else {})})
+    return len(rows)
 
 
 def cut_by_update(c, attempt_id):
-    """Whether this run stopped during Tico's own update: an update started before the run ended, and the run ended
-    within the lease plus UPDATE_MARGIN_S of that update's finish (or of its start while the update is still running).
-    The updater restarts the runners after it reports its finish, so a run that began just after the update counts
-    too. Only a lapsed or interrupted run counts; a run that reported its own end never does."""
-    row = (c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-           if attempt_id else None)
-    if not row or row['state'] not in ('interrupted', 'expired') or not row['started'] or not row['finished']:
-        return False
+    """How Tico's update or a hub restart cut this run, {'cause': 'update' or 'restart', 'at': when}, else None. Only a
+    lapsed or interrupted run counts: never one that reported its own end, a Stop (a person's or a quarantine's) or a
+    usage limit, which keep their own rules. The updater restarts the runners after it reports its finish, so an
+    unflagged run that began just after the update counts too."""
+    row = (c.execute("SELECT state,started,finished,stop_requested,result_json FROM attempts WHERE id=?",
+                     (attempt_id,)).fetchone() if attempt_id else None)
+    if (not row or row['state'] not in ('interrupted', 'expired') or not row['started'] or not row['finished']
+            or row['stop_requested']):
+        return None
+    result = json.loads(row['result_json'] or '{}') or {}
+    if result.get('limited') or result.get('limit_source'):
+        return None
+    window = Settings.lease_seconds + UPDATE_MARGIN_S
+    flags = c.execute("SELECT ts,detail_json FROM events WHERE action=? AND target=? ORDER BY ts",
+                      (UPDATE_CUT, attempt_id)).fetchall()
+    if flags:
+        # The hub is back at its start (the last flag) or once the update finished, whichever is later.
+        ended = c.execute("SELECT ts FROM events WHERE action='system.update.finished' AND ts>=? ORDER BY ts LIMIT 1",
+                          (flags[-1]['ts'],)).fetchone()
+        base = ended['ts'] if ended and ended['ts'] <= row['finished'] else flags[-1]['ts']
+        if row['finished'] <= H.shift(base, seconds=window):
+            update = any((json.loads(f['detail_json'] or '{}') or {}).get('cause') == 'update' for f in flags)
+            return {'cause': 'update' if update else 'restart', 'at': flags[0]['ts']}
     began = c.execute("SELECT ts FROM events WHERE action='system.update.started' AND ts<=? ORDER BY ts DESC LIMIT 1",
                       (row['finished'],)).fetchone()
     if not began:
-        return False
+        return None
     ended = c.execute("SELECT ts FROM events WHERE action='system.update.finished' AND ts>=? ORDER BY ts LIMIT 1",
                       (began['ts'],)).fetchone()
     base = ended['ts'] if ended and ended['ts'] <= row['finished'] else began['ts']
-    return row['finished'] <= H.shift(base, seconds=Settings.lease_seconds + UPDATE_MARGIN_S)
+    return {'cause': 'update', 'at': row['finished']} if row['finished'] <= H.shift(base, seconds=window) else None
 
 
 def restart_cause(facts):
@@ -718,7 +747,9 @@ def retry_facts(c, job, started, finished):
     starts = c.execute("SELECT count(*) FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
                        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
                        (job['id'], job['message_id'])).fetchone()[0]
-    update = cut_by_update(c, job['attempt_id'])
+    timeout = run_limit_minutes(c, job['attempt_id'])
+    # A run its own time limit cut was not cut by the update, whenever it ended.
+    update = None if timeout else cut_by_update(c, job['attempt_id'])
     restart = restart_reported(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (attempt['runner_id'],)).fetchone() if attempt else None
@@ -728,7 +759,6 @@ def retry_facts(c, job, started, finished):
                       "AND json_extract(payload_json,'$.final')=1 LIMIT 1", (job['attempt_id'],)).fetchone()
     lease_lost = bool(attempt and attempt['state'] == 'expired' and started and attempt['thread_id']
                       and capacity_continue_on(computer) and reported and not acted and not final)
-    timeout = run_limit_minutes(c, job['attempt_id'])
     outside = outside_actions(c, job, started, finished) if restart or lease_lost or timeout or update else []
     result = c.execute("SELECT result_json FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
@@ -847,9 +877,11 @@ def _readable_held_for(c, who, auth, bots):
     actor = privacy.actor(who)
     fence = auth.task_sql(c, who)
     marks = ",".join("?" * len(bots))
+    # A run Tico itself chose for (an update cut waiting for its lane, auto_reconcile) is nobody's to review.
     rows = list(c.execute(
         "SELECT m.*,j.attempt_id,j.id AS job_id,j.bot AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
-        f"WHERE j.bot IN ({marks}) AND j.state='uncertain' ORDER BY j.created", list(bots)))
+        f"WHERE j.bot IN ({marks}) AND j.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
+        "WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id AND r.actor=?) ORDER BY j.created", [*bots, H.KEEPER]))
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
     kept = [r for r in rows if r["id"] in shown
@@ -888,6 +920,18 @@ def _readable_held_for(c, who, auth, bots):
         else:
             out[row["held_bot"]].append((row, task, True))
     return out
+
+
+def tico_chosen(c, who, bot):
+    """How many of the bot's runs saved for later that `who` may read wait only for Tico's own choice to apply (an
+    update cut behind live work in its lane, auto_reconcile): nobody's to review, so no line counts them."""
+    actor = privacy.actor(who)
+    rows = list(c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                          "JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
+                          "WHERE j.bot=? AND j.state='uncertain' AND r.actor=?", (bot, H.KEEPER)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)} if rows else set()
+    return sum(1 for r in rows if r["id"] in shown
+               and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"])))
 
 
 def held_runs(c, who, auth, bot, limit=3):
@@ -973,11 +1017,7 @@ def stopped_rows(c, who, auth, bot, limit=5):
         # Each request folded into a run is judged on its own facts (its starts, the approvals its message used), and
         # the run's line is only as safe as its least safe request, since one choice settles them all.
         facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
-        return facts, {"retry": bool(facts["safe"] and facts["starts"] <= 1),
-                       # One choice for every run the update stopped, unless this one recorded a named outside action
-                       # or used an approval: those stay a choice of their own.
-                       "update_group": bool(facts["update"] and not facts["outside"] and not facts["consumed"]
-                                            and not facts["fallback_unknown"])}
+        return facts, {"retry": bool(facts["safe"] and facts["starts"] <= 1)}
 
     def handle(job):
         key = (job["id"], job["attempt_id"])
@@ -1009,8 +1049,6 @@ def stopped_rows(c, who, auth, bot, limit=5):
     for row in rows:
         # The Details card decides each folded request on its own, so they can differ.
         saved = {job.get("decided") for job in row["jobs"]}
-        # Kept for readers not shown the jobs: a run someone started deciding is no longer the update's to group.
-        row["chosen"] = bool(saved - {None})
         row["decided"] = None if None in saved else saved.pop() if len(saved) == 1 else "mixed"
     return rows, len(by_run)
 
@@ -1101,8 +1139,10 @@ def left_by_keeper(c, who, bot):
         "SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
         "JOIN attempts a ON a.id=j.attempt_id "
         "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
-        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
-        (bot, H.KEEPER)))
+        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=? "
+        # One Tico chose for itself too (an update cut behind live work) waits for nobody.
+        "AND NOT EXISTS(SELECT 1 FROM job_recovery o WHERE o.job_id=j.id AND o.attempt_id=j.attempt_id AND o.actor=?)",
+        (bot, H.KEEPER, H.KEEPER)))
     # One privacy prime (status/operations used to call message_readable per row here).
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
@@ -3523,7 +3563,7 @@ class Execution:
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
                             "login_class": login_class(c, task, msg, routine),
-                            "recovery": {"resume_session": restart_reported(c, row["attempt_id"]) or cut_by_update(c, row["attempt_id"])
+                            "recovery": {"resume_session": restart_reported(c, row["attempt_id"]) or bool(cut_by_update(c, row["attempt_id"]))
                                          or bool(run_limit_minutes(c, row["attempt_id"])) or bool(c.execute(
                                 "SELECT 1 FROM attempts WHERE id=? AND state='expired' AND thread_id IS NOT NULL",
                                 (row["attempt_id"],)).fetchone())} if recovery else None,
@@ -5103,9 +5143,11 @@ class Execution:
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
                               note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
 
-    def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False):
+    def _decide(self, c, row, attempt_id, decision, note, actor, *, action='job.reconcile', shown=None, deferred=False, saved=False,
+                cause=None):
         """Record one decision on an uncertain job: resume queues it again, dismiss releases it. `shown` is the
-        line people read when the note itself is written to the bot. A deferred choice stays held until its lane is idle."""
+        line people read when the note itself is written to the bot. A deferred choice stays held until its lane is idle.
+        `cause` names what stopped the run in the event ('update': the update cuts UPDATE_RESUMES counts)."""
         job_id = row['id']
         state = 'uncertain' if deferred else 'queued' if decision == 'resume' else 'cancelled'
         if not saved:
@@ -5122,6 +5164,7 @@ class Execution:
         c.execute("UPDATE jobs SET state=? WHERE id=?", (state,job_id))
         H.event(c, actor, action, job_id, {'attempt_id':attempt_id, 'decision':decision, 'note':note,
                                            **({'deferred': True} if deferred else {}),
+                                           **({'cause': cause} if cause else {}),
                                            **({'shown':shown} if shown else {})})
         self._finish_recovery_review(c, row['bot'])
         if not c.execute("SELECT 1 FROM jobs WHERE bot=? AND state='uncertain'", (row['bot'],)).fetchone():
@@ -5272,6 +5315,10 @@ class Execution:
         approval or a named merge, publish, send or payment requires review. Its note gives the interruption time
         and asks it to check existing effects first. Lost leases without that report retain the conservative rule.
 
+        A run Tico's update or a hub restart cut (cut_by_update) resumes on the next sweep whatever it used, a named
+        outside action or a consumed approval included (its note names those to verify first): nobody is asked, and
+        BotOps gets no review. A stale cut or a request cut UPDATE_RESUMES times already ends quietly (_update_choice).
+
         Any other run, one that used a tool that can change things or whose host cannot say what it
         did, stays held for its operator or BotOps to review (`review_jobs`), because the hub cannot
         see what a tool did on the Mac and running it again could repeat an outside action. BotOps is
@@ -5323,6 +5370,13 @@ class Execution:
                               'reason': 'Tico is waiting for live work on the same task or session lane and re-evaluates when it ends.'}
                     if not prior or prior['action'] != 'job.recovery_wait' or json.loads(prior['detail_json']) != detail:
                         H.event(c, H.KEEPER, 'job.recovery_wait', row['attempt_id'], detail)
+                    if not row['pending_decision'] and cut_by_update(c, row['attempt_id']):
+                        # Tico's own choice for an update cut, saved now so nobody is asked meanwhile; the sweep
+                        # applies it once the lane frees, like a person's deferred choice.
+                        facts = retry_facts(c, row, row['started'], row['finished'])
+                        if facts['update']:
+                            decided.append(self._decide(c, row, row['attempt_id'], *self._update_choice(c, row, facts),
+                                                        H.KEEPER, action='job.auto_reconcile', deferred=True, cause='update'))
                     continue
                 freed = bool(prior and prior['action'] == 'job.recovery_wait')
                 if freed:
@@ -5340,7 +5394,8 @@ class Execution:
                 if not held or facts['restart'] or facts['lease_lost'] or facts['timeout']:
                     calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
                 started = facts['starts']
-                if not row['aged'] and not freed and not facts['restart'] and not facts['timeout'] and not (safe and started <= 1):
+                if (not row['aged'] and not freed and not facts['restart'] and not facts['timeout'] and not facts['update']
+                        and not (safe and started <= 1)):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
@@ -5392,6 +5447,12 @@ class Execution:
                         decided.append(self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER,
                                                     action='job.auto_reconcile'))
                         said['resume'] += 1
+                    continue
+                if facts['update']:
+                    # Cut by Tico's update or a hub restart: resumed like a computer-reported restart, never held for a
+                    # person or BotOps, whatever it used (_update_choice).
+                    decided.append(self._decide(c, row, row['attempt_id'], *self._update_choice(c, row, facts),
+                                                H.KEEPER, action='job.auto_reconcile', cause='update'))
                     continue
                 # Only runs that started count: a claim that lapsed before its run began (a computer offline, the
                 # hub unreachable) says nothing about the request itself.
@@ -5457,8 +5518,7 @@ class Execution:
                     # The cut time is the attempt's finished (report) time: the closest Tico has to when
                     # the computer was cut off.
                     at = (row['finished'] or H.now())[11:16]
-                    cut = "a computer restart or lost lease" + (" during Tico's update" if facts['update'] else "")
-                    note = (f"You were interrupted at {at} UTC by {cut}. "
+                    note = (f"You were interrupted at {at} UTC by a computer restart or lost lease. "
                             "Check what already happened first, then continue in this provider session. "
                             "No consumed approval or named irreversible outside action was recorded. " +
                             (note if not acted else ''))
@@ -5476,6 +5536,30 @@ class Execution:
             with isolated(c, "auto_reconcile", bot):
                 self._say_settled(c, bot, said)
         return decided
+
+    @staticmethod
+    def _update_choice(c, row, facts):
+        """(decision, note) for a run Tico's update or a hub restart cut (facts['update']): resume on the same computer
+        and provider session, even after a shell, a local edit, a named outside action or a consumed approval, with a
+        note that names any such action to verify first. A cut more than UPDATE_STALE_S old is dismissed as stale, and
+        a request already resumed from UPDATE_RESUMES cuts ends; both quietly, in the recovery record only."""
+        cut = facts['update']
+        by = "Tico's update" if cut['cause'] == 'update' else "a Tico restart"
+        if (row['finished'] or row['created']) <= H.shift(H.now(), seconds=-UPDATE_STALE_S):
+            return 'dismiss', (f"Dismissed quietly: stopped by {by} at {cut['at'][:16].replace('T', ' ')} UTC, more than a "
+                               "day ago, so its stale work is not resumed.")
+        resumed = c.execute("SELECT count(*) FROM events WHERE action='job.auto_reconcile' AND target=? "
+                            "AND json_extract(detail_json,'$.cause')='update' "
+                            "AND json_extract(detail_json,'$.decision')='resume'", (row['id'],)).fetchone()[0]
+        if resumed >= UPDATE_RESUMES:
+            return 'dismiss', f"Ended quietly: cut by {by} again after {resumed} resumes, so it is not resumed again."
+        named = [*facts['outside'], *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')']
+                                      if facts['consumed'] else [])]
+        return 'resume', (f"You were interrupted at {cut['at'][11:16]} UTC by {by}. Check what already happened first, "
+                          "then continue in this provider session. " +
+                          (f"Before it stopped, this run recorded {', '.join(named)}: verify whether that already took "
+                           "effect before doing it again." if named else
+                           "No consumed approval or named irreversible outside action was recorded."))
 
     @staticmethod
     def _covered(c, row, task_id):

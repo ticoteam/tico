@@ -534,7 +534,7 @@ def lapsed_shell_run(api, summary='ls notes', update=None):
     return machine, message, attempt
 
 
-def update_line(api):
+def run_line(api):
     """The run's own line, as Needs you lists it for its operator."""
     from backend import execution
     store = api.app.state.store
@@ -543,20 +543,33 @@ def update_line(api):
     return line
 
 
+def no_one_asked(api):
+    """Nothing about the run reaches a person or BotOps: no Needs you or Settings line, no review task."""
+    from backend.store import H
+    assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE title IN (?,?)", (
+            H.HELD_REVIEW_TITLE.format(bot='ops'), "Find why ops's runs keep stopping")).fetchone()
+
+
+def resumed_body(api, machine):
+    ready(api, machine, ['ops'])
+    attempt = claim(api, machine)
+    assert attempt['recovery']['resume_session'] is True       # the same computer continues the provider session
+    return attempt['message']['body']
+
+
 @pytest.mark.parametrize('update', [0, -300])
-def test_a_lapse_during_tico_s_update_is_named_and_grouped_but_not_retried_on_timing_alone(api, update):
-    """A lapse near an update is timing, not proof the update restarted the run's computer: one on a computer the
-    update never touched looks the same. The run is held like any lapse that used a shell, its line says it stopped
-    during the update, and it joins the update's one choice. The updater restarts the runners after it reports its
-    finish, so a run that began minutes after the update finished counts too."""
+def test_a_lapse_in_tico_s_update_window_resumes_on_the_next_sweep_and_asks_nobody(api, update):
+    """An update must not wait for runs, so a run it cut resumes by itself, a shell command and all, with the
+    restart's note. The updater restarts the runners after it reports its finish, so a run that began minutes after
+    the update finished counts too, flagged or not."""
     machine, message, attempt = lapsed_shell_run(api, update=update)
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    [review] = get(api, 'bots/ops/execution-review')['jobs']
-    assert review['stopped'] != 'restarted' and 'restart' not in review['reason'].lower()
-    line = update_line(api)
-    assert (line['cause'], line['why'], line['update_group']) == ('update', "Stopped during Tico's update", True)
-    # The shell command is one Tico cannot check, so the group's row offers no Try all again for this run.
-    assert line['retry'] is False
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    no_one_asked(api)
+    body = resumed_body(api, machine)
+    assert "by Tico's update" in body and 'Check what already happened first' in body
+    assert 'No consumed approval or named irreversible outside action was recorded.' in body
 
 
 def test_a_restart_the_computer_reports_during_tico_s_update_is_retried_by_the_sweep(api):
@@ -576,11 +589,114 @@ def test_a_restart_the_computer_reports_during_tico_s_update_is_retried_by_the_s
     assert [d['state'] for d in sweep(api)] == ['queued']
 
 
-def test_a_lapse_during_tico_s_update_that_ran_a_named_outside_action_stays_out_of_the_group(api):
-    machine, message, attempt = lapsed_shell_run(api, summary='gh pr merge 12', update=0)
+def owner_update(api, monkeypatch):
+    """The owner's Update now (app.py), its updater answering that the update started."""
+    import httpx
+    from backend import releases
+    monkeypatch.setattr(releases, 'TRANSPORT', httpx.MockTransport(lambda request: httpx.Response(
+        200, json={'state': 'pulling', 'from': '0.4.16', 'to': '0.4.17', 'message': ''})))
+    monkeypatch.setenv('TICO_UPDATER_URL', 'http://updater:9000')
+    monkeypatch.setenv('TICO_VERSION', '0.4.16')
+    post(api, 'system/update', {'version': 'v0.4.17'})
+
+
+def live_shell_run(api, summary):
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'cut'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'started', 'item_id': 'sh1',
+                                               'summary': summary}}]}, machine['token'])
+    return machine, message, attempt
+
+
+def lapse(api, machine, attempt):
+    expire(api, attempt['id'])
+    assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def test_a_run_live_as_the_owner_updates_is_flagged_and_resumes_naming_its_outside_action(api, monkeypatch):
+    """The cut is recorded as the update starts, not guessed afterwards. A run that recorded a merge still resumes,
+    held for nobody: its note names the merge to verify before doing it again."""
+    machine, message, attempt = live_shell_run(api, 'gh pr merge 12')
+    owner_update(api, monkeypatch)
+    with api.app.state.store.read() as c:
+        [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+                           (attempt['id'],)).fetchall()
+    assert json.loads(flag[0])['cause'] == 'update' and json.loads(flag[0])['update'] == '0.4.17'
+    lapse(api, machine, attempt)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    no_one_asked(api)
+    body = resumed_body(api, machine)
+    assert "by Tico's update" in body and 'merge pull request' in body
+    assert 'verify whether that already took effect before doing it again' in body
+
+
+def test_a_flagged_run_that_lapses_long_after_the_server_came_back_keeps_the_usual_rule(api):
+    """The flag says the run was live at the cut, not that every later lapse is the cut's: one that carried on and
+    lapsed an hour later is held like any other lapse after a shell command."""
+    from backend.execution import flag_cut
+    from backend.store import H
+    machine, message, attempt = live_shell_run(api, 'ls notes')
+    with api.app.state.store.transaction() as c:
+        flag_cut(c, 'restart')
+        c.execute("UPDATE events SET ts=? WHERE action='attempt.update_cut'", (H.shift(H.now(), seconds=-3600),))
+    lapse(api, machine, attempt)
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    line = update_line(api)
-    assert line['cause'] == 'update' and line['update_group'] is False
+
+
+def test_a_request_cut_by_updates_resumes_three_times_then_ends_quietly(api):
+    from backend.execution import UPDATE_RESUMES, flag_cut
+    machine, message, attempt = live_shell_run(api, 'ls notes')
+    for n in range(UPDATE_RESUMES + 1):
+        if n:
+            ready(api, machine, ['ops'])
+            attempt = claim(api, machine)
+            post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'cut'}, machine['token'])
+        with api.app.state.store.transaction() as c:
+            flag_cut(c, 'update', '0.4.17')
+        lapse(api, machine, attempt)
+        [decision] = sweep(api)
+        assert decision['state'] == ('queued' if n < UPDATE_RESUMES else 'cancelled')
+    no_one_asked(api)
+    with api.app.state.store.read() as c:
+        note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
+    assert note.startswith('Ended quietly')
+
+
+@pytest.mark.parametrize('stale', [False, True])
+def test_a_run_held_before_this_release_for_an_update_settles_on_the_next_sweep(api, stale):
+    """Runs held before Tico resumed update cuts, already handed to BotOps, settle with no choice: a recent one
+    resumes, one stopped more than a day ago is dismissed as stale work."""
+    from backend.store import H
+    hours = 25 if stale else 1
+    machine, message, attempt = lapsed_shell_run(api, update=-hours * 3600)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-hours * 3600 + 60), attempt['id']))
+        H.event(c, H.KEEPER, 'job.held', attempt['id'], {'job_id': attempt['job_id'], 'tools': ['shell'],
+                                                         'reason': 'Review required before repeating possible effects.'})
+    assert [d['state'] for d in sweep(api)] == ['cancelled' if stale else 'queued']
+    no_one_asked(api)
+
+
+def test_an_update_cut_behind_live_work_on_its_lane_is_saved_for_it_and_shown_to_nobody(api):
+    """A run waits for live work in its lane before it resumes; meanwhile Tico's own choice is saved, so no Needs you
+    line offers one, and the sweep applies it once the lane frees."""
+    from backend import execution
+    machine, message, attempt = lapsed_shell_run(api, update=0)
+    store = api.app.state.store
+    with store.transaction() as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(attempts)")]
+        picked = ",".join({'id': "'live-one'", 'token_hash': "'live-hash'", 'state': "'running'"}.get(k, k) for k in cols)
+        c.execute(f"INSERT INTO attempts ({','.join(cols)}) SELECT {picked} FROM attempts WHERE id=?", (attempt['id'],))
+    [decision] = sweep(api)
+    assert decision == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
+    with store.read_transaction() as c:
+        assert execution.stopped_rows(c, store.settings.test_identities['ana-test'], api.app.state.auth, 'ops') == ([], 0)
+    no_one_asked(api)
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='live-one'")
+    assert [d['state'] for d in sweep(api)] == ['queued']
 
 
 @pytest.mark.parametrize('update', [None, -3600])
@@ -1350,9 +1466,8 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert issue['detail'] == ('Its computer stopped answering during this run, not a bug. '
                                '2 queued requests wait until you decide.')
     assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
-                              'routine': True, 'retry': False, 'update_group': False, 'at': issue['runs'][0]['at'],
-                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'chosen': False,
-                              'decided': None}]
+                              'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
+                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'decided': None}]
     assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
@@ -1446,20 +1561,19 @@ def beside_open_work(monkeypatch):
     monkeypatch.setattr(execution, 'held_back', lambda *args, **kwargs: (1, ['Another task']))
 
 
-def test_a_folded_request_that_is_unsafe_to_retry_keeps_its_run_out_of_the_update_s_one_choice(api, monkeypatch):
+def test_a_folded_request_that_is_unsafe_to_retry_keeps_its_run_off_try_again(api, monkeypatch):
     """One choice settles every request folded into a run, so the run's line is only as safe as its least safe
-    request: a folded comment whose message used an approval keeps the run off Try again and out of the group."""
+    request: a folded comment whose message used an approval keeps the run off Try again."""
     from backend import execution
     first, second = busy_folded_run(api)
-    safe = {'safe': True, 'starts': 1, 'update': True, 'outside': [], 'consumed': 0, 'fallback_unknown': False}
+    safe = {'safe': True, 'starts': 1, 'update': None, 'outside': [], 'consumed': 0, 'fallback_unknown': False}
     monkeypatch.setattr(execution, 'retry_facts', lambda c, job, started, finished: {
         **safe, **({'safe': False, 'consumed': 1} if job['id'] == second['id'] else {})})
-    line = update_line(api)
+    line = run_line(api)
     assert [j['id'] for j in line['jobs']] == [first['id'], second['id']]
-    assert (line['cause'], line['retry'], line['update_group']) == ('update', False, False)
+    assert line['retry'] is False
     monkeypatch.setattr(execution, 'retry_facts', lambda c, job, started, finished: safe)
-    line = update_line(api)
-    assert (line['retry'], line['update_group']) == (True, True)
+    assert run_line(api)['retry'] is True
 
 
 def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api, monkeypatch):

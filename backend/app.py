@@ -49,7 +49,7 @@ from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PAT
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name, route as error_route
 from .execution import (ClaimFaults, Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
-                        lift_after_model_change, model_choice, own_login_hold)
+                        flag_cut, lift_after_model_change, model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -217,6 +217,13 @@ def create_app(settings=None):
                 ship_deployed(c, settings)
         except Exception as exc:
             telemetry.capture("github", exc)
+        # The runs the last process still held were cut by its stop, unless their computers carry on: flagged, they
+        # resume on the next sweep if they lapse (execution.cut_by_update).
+        try:
+            with store.transaction() as c:
+                flag_cut(c, "restart")
+        except Exception as exc:
+            telemetry.capture("flag_cut", exc)
         # A deploy keeps the API down longer than a lease; do not fail turns for that.
         execution.grace_leases()
         # A live support session picks its link to HQ back up (backend/support_access.py).
@@ -1562,6 +1569,7 @@ def create_app(settings=None):
             c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(record),))
             H.event(c, who.actor, "system.update.started", target, {"from": record["from"], "to": target})
+            flag_cut(c, "update", target)    # the runs it cuts resume after it (execution.cut_by_update)
         return result
 
     @app.get("/api/v2/providers")
