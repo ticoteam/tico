@@ -34,7 +34,7 @@ function teamAddRefresh() {
 }
 function teamAddClose(returnFocus = false) {
   const open = !TEAM_ADD_MENU.hidden;
-  TEAM_ADD_MENU.hidden = true;
+  if (open) TEAM_ADD_MENU.hidden = true;     // every click and focus elsewhere lands here: no write when already shut
   teamAddAnchor()?.setAttribute('aria-expanded', 'false');
   if (open && returnFocus) teamAddReturnFocus();
 }

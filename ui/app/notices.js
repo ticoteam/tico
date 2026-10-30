@@ -199,7 +199,7 @@ function renderNewVersion() {
 }
 function setNewVersionPop(open) {
   const pop = $('#new-version-pop'), btn = $('#new-version');
-  if (!pop) return;
+  if (!pop || pop.hidden !== open) return;       // every click elsewhere lands here: no `hidden` write unless it changes
   pop.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
 }

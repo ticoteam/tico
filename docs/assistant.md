@@ -42,6 +42,9 @@ the screen moves at a time and the rest hold still; it pauses off screen and in 
 left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
 holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
 CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
+Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on
+a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
+but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
 What waits on you from elsewhere comes at the end of the chat as cards: a Confirm card BotOps (or another bot) left in
 its own chat, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
