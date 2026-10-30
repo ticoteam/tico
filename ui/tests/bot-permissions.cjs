@@ -402,8 +402,11 @@ async function roles(browser) {
   const card = page.locator('.asst-card[data-action=act1]');
   await card.waitFor();
   assert.match(await card.innerText(), /Add Sean \(sean@example\.test\) to the roster/);
+  assert.equal(await card.locator('.asst-who').innerText(), 'BotOps asks');
+  // BotOps' own words sit behind the title; Confirm says how it runs on hover.
+  await card.locator('details.asst-raw > summary').click();
   assert.match(await card.innerText(), /BotOps says/);
-  assert.match(await card.innerText(), /Runs as you, only when you confirm/);
+  assert.equal(await card.locator('[data-confirm]').getAttribute('title'), 'Runs as you, only when you confirm');
   assert.deepEqual(posts, []);
   await card.locator('[data-confirm]').click();
   await page.waitForFunction(() => /Done\./.test(document.querySelector('.asst-card[data-action=act1]')?.textContent || ''));

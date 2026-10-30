@@ -21,27 +21,29 @@
 .st-ic .nav-icon{font-size:16px}
 .st-needs{background:var(--needs,#d64545);color:#fff}
 .st-waiting{color:var(--muted)}
-.st-doing{border:2px solid var(--line);border-top-color:var(--accent);animation:stspin .9s linear infinite}
+.st-doing{border:2px solid var(--line);border-top-color:var(--ink);animation:stspin .9s linear infinite}
 .st-todo{border:1.5px solid var(--muted)}
-.st-doing-idle{border:2px solid var(--line);border-top-color:color-mix(in srgb,var(--accent) 55%,transparent);border-right-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+.st-doing-idle{border:2px solid var(--line);border-top-color:color-mix(in srgb,var(--ink) 55%,transparent);border-right-color:color-mix(in srgb,var(--ink) 55%,transparent)}
 @keyframes stspin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.st-doing{animation:none;border-style:dotted}}
 .trow .tbody{padding:4px 2px 12px 54px;font-size:var(--t-base)}
 .trow .tbody .lbl{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);margin-bottom:4px;font-weight:600}
 .trow .tbody .q{white-space:pre-wrap;background:var(--surface2);padding:8px 10px;border-radius:6px;max-height:280px;overflow:auto;margin-bottom:8px}
 form.task{display:flex;flex-direction:column;gap:10px;padding-top:6px;border-radius:6px}
-form.task.over{outline:2px dashed var(--accent);outline-offset:6px}
+form.task.over{outline:2px dashed var(--ink);outline-offset:6px}
 form.task .r1{display:grid;grid-template-columns:1fr 110px 110px;gap:10px}
 form.task textarea{min-height:64px}
 form.task .r3{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:var(--t-base)}
-form.task .attach{color:var(--accent);cursor:pointer}
+form.task .attach{color:var(--ink);cursor:pointer}
 form.task .files{display:flex;gap:6px;flex-wrap:wrap}
 form.task .files span{background:var(--surface2);padding:2px 8px;border-radius:10px;font-size:var(--t-sm)}
 form.task .hint{font-size:var(--t-sm)}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px;flex-wrap:wrap}
 .tabs button{background:none;border:0;padding:8px 12px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
-.tabs button.cur{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.tabs button.cur{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
 .md{font-size:var(--t-md);max-width:78ch}
+/* links are ink, so in running text an underline says which words are one */
+.md a:not([class]){text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 40%,transparent);text-underline-offset:2px}
 .md h1,.md h2,.md h3{margin:18px 0 6px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}.md h1{font-size:var(--t-lg)}
 .md pre{background:var(--surface2);padding:10px;border-radius:6px;overflow-x:auto;font:var(--t-sm)/var(--lh) var(--mono)}
 .md code{font-family:var(--mono);font-size:var(--t-sm);background:var(--surface2);padding:0 4px;border-radius:3px}
@@ -52,6 +54,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 details .q{white-space:pre-wrap;font-size:var(--t-base);margin-top:6px;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:300px;overflow:auto}
 .toast.docs-archive-undo{pointer-events:auto;z-index:1000}
 .toast button,.toast a{pointer-events:auto}
+/* links and ghost buttons are ink, the toast is too: on it they take its own colour */
+.toast :is(a,button.linkish,button.ghost){color:inherit}.toast button.ghost{border-color:color-mix(in srgb,currentColor 40%,transparent)}
 .toast{position:fixed;right:20px;bottom:20px;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2);max-width:420px;pointer-events:none}
 
 form.task .task-private{display:flex;flex-direction:column;gap:3px}

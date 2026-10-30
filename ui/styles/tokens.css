@@ -41,13 +41,12 @@
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
   /* the house rules these serve are at the top of components.css */
   /* focus: one ring for buttons, links, rows and switches, outside the box, or inside it on a row that meets its
-     container's edge; a text field takes the halo instead (its border turns the accent) */
-  --focus-ring:2px solid var(--accent);--focus-offset:2px;--focus-inset:-2px;
-  --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
+     container's edge; a text field takes the halo instead (its border turns --focus). Ink, not the accent: --focus is
+     g7, 9:1 or more on every surface in both themes. */
+  --focus-ring:2px solid var(--focus);--focus-offset:2px;--focus-inset:-2px;
+  --focus-halo:3px solid color-mix(in srgb,var(--focus) 28%,transparent);
   /* control heights: small and regular (a phone's are 40px, forms.css) */
   --ctl-sm:28px;--ctl:32px;
-  /* the Ask pill's footprint on a computer (ask.css): 16px off the bottom, 40px tall, 20px clear above it; how wide it is */
-  --fab-room:76px;--ask-pill:104px;
   /* a fold's chevron (chevron_right) turns a quarter to open */
   --chev-open:rotate(90deg);
 }
@@ -64,11 +63,12 @@
   --raised:var(--g3);
   /* your own message: one clear step above the pane it sits on */
   --bubble:#2b3430;
-  /* Jade, from the dot's own hue: 8.2:1 on --bg, 7:1 on --surface2. */
+  /* Jade, from the dot's own hue: 8.2:1 on --bg, 7:1 on --surface2. Green is the Liquid Dot's and the one primary
+     action's on a view (and a chart's one series); links, counts, selection, focus and status marks are ink. */
   --accent:#5cc092;--accent-ink:#0c1a14;
-  /* Links in a dense list (a bot's right rail): the accent, a step quieter. Mixed from --accent and --muted, so
-     it follows the theme without a value of its own. */
   --accent-quiet:color-mix(in srgb,var(--accent) 68%,var(--muted));
+  /* Links are ink (underlined where they sit in ink text); in a dense list (a bot's right rail), a step quieter. */
+  --link:var(--ink);--link-quiet:var(--g7);--focus:var(--g7);
   --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#6d7b75;--ok:#6cc48f;
   /* Waiting labels need a separate ink: the amber also fills badges with dark text. */
   --wait-ink:var(--wait);

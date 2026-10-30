@@ -1,9 +1,14 @@
 /* ui/styles/search.css — Search dialog.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* Search: one dialog for the sidebar control and the phone's bottom-nav slot. */
-#search-open{width:100%;display:flex;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+/* Search: one dialog for the sidebar control and the phone's bottom-nav slot. In the sidebar it is an icon at the end
+   of the Ask row (ask.css); where Ask is away it is the whole row, words and ⌘K. */
+#search-open{flex:none;width:32px;height:32px;display:flex;align-items:center;justify-content:center;gap:9px;padding:0;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
 #search-open:hover{background:var(--surface2)}
+#search-open:hover .nav-icon{color:var(--ink)}
 #search-open kbd{margin-left:auto;font:var(--t-xs) var(--sans);color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px;line-height:16px}
+#search-open>:not(.nav-icon){display:none}
+#ask-row[hidden]+#search-open{flex:1;width:auto;height:auto;justify-content:flex-start;padding:7px 10px}
+#ask-row[hidden]+#search-open>*{display:revert}
 .search-modal{width:min(560px,calc(100vw - 32px));margin-top:12vh}
 .search-box{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
 .search-box .nav-icon{color:var(--muted)}

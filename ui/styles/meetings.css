@@ -3,8 +3,8 @@
 /* the ask pill: one line at the top of the Notes page - talk, type, attach, send */
 .ask{margin:0 0 16px}
 .p-pill{display:flex;align-items:center;gap:6px;min-height:46px;padding:5px 6px 5px 5px;background:var(--surface);border:1px solid var(--line);border-radius:24px}
-.p-pill:focus-within{border-color:var(--accent)}
-.p-pill.over{border-color:var(--accent);box-shadow:0 0 0 3px var(--run-bg)}
+.p-pill:focus-within{border-color:var(--focus)}
+.p-pill.over{border-color:var(--ink);box-shadow:0 0 0 3px var(--run-bg)}
 .ask textarea{flex:1;min-width:0;height:32px;max-height:120px;padding:5px 4px;border:0;background:transparent;border-radius:0;resize:none;overflow-y:auto;line-height:var(--lh)}
 .ask textarea:focus{outline:0}
 .p-icon{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:0;border-radius:18px;background:transparent;color:var(--muted);cursor:pointer}
@@ -20,8 +20,8 @@
 .p-menu button{display:flex;align-items:center;gap:9px;width:100%;height:auto;padding:6px 9px;border-radius:7px;background:transparent;color:var(--ink);font:inherit;font-weight:400;text-align:left}
 .p-menu button:hover{background:var(--surface2);filter:none}
 .p-menu button>span:nth-child(2){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.p-menu .auto{width:18px;text-align:center;color:var(--accent)}
-.p-menu .tick{margin-left:auto;color:var(--accent)}
+.p-menu .auto{width:18px;text-align:center;color:var(--ink)}
+.p-menu .tick{margin-left:auto;color:var(--ink)}
 .p-menu .sep{height:1px;margin:5px 2px;background:var(--line)}
 .p-save{flex:none;height:34px;padding:0 13px;border:1px solid var(--line);border-radius:17px;background:transparent;color:var(--ink);cursor:pointer}
 .p-save:hover:not(:disabled){background:var(--surface2)}
@@ -82,11 +82,11 @@
 .mg-host{font-size:var(--t-base);color:var(--ink)}
 .mg-skip{color:var(--muted);cursor:help}
 .mg-syncing{display:inline-flex;align-items:center;gap:5px}
-.mg-spin{width:10px;height:10px;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:mg-turn .8s linear infinite}
+.mg-spin{width:10px;height:10px;border:1.5px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:mg-turn .8s linear infinite}
 @keyframes mg-turn{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.mg-spin{animation:none}}
 .mg-sub{margin:0;font-size:var(--t-sm)}
-.mg-sub .linkish{font-size:var(--t-sm);color:var(--accent-quiet);text-decoration:none}
+.mg-sub .linkish{font-size:var(--t-sm);color:var(--link-quiet);text-decoration:none}
 .mg-sub .linkish:hover{text-decoration:underline}
 .mg-err{margin:0;font-size:var(--t-sm);color:var(--fail)}
 .mg-actions{flex:none;display:flex;align-items:center;gap:6px}
@@ -94,7 +94,7 @@
 .mg-code-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin:2px 0}
 .mg-code{font-family:var(--mono);font-size:var(--t-xl);font-weight:600;letter-spacing:.12em;color:var(--ink);padding:3px 10px;border-radius:7px;background:var(--surface2);border:1px solid var(--line);user-select:all}
 .mg-code-row .ghost{padding:5px 10px;font-size:var(--t-base)}
-.mg-open{font-size:var(--t-base);font-weight:600;color:var(--accent)}
+.mg-open{font-size:var(--t-base);font-weight:600;color:var(--ink)}
 .mg-wait{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm)}
 .mg-wait .dot{width:7px;height:7px;background:var(--wait);animation:mg-pulse 1.4s ease-in-out infinite}
 @keyframes mg-pulse{50%{opacity:.3}}
@@ -123,7 +123,7 @@
 .meet-sources-label{margin:0 0 6px;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 .meet-tiles{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
 .meet-tile{flex:1 0 152px;display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;text-decoration:none;cursor:pointer}
-.meet-tile:hover:not(:disabled){border-color:var(--accent)}
+.meet-tile:hover:not(:disabled){border-color:var(--muted)}
 .meet-tile:disabled{cursor:default;opacity:1}
 .meet-tile:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .mt-text{display:flex;flex-direction:column;min-width:0;line-height:var(--lh-tight)}
@@ -134,7 +134,7 @@
 .meet-tile[data-state=delayed] .dot,.meet-tile[data-state=wait] .dot{background:var(--wait)}
 .meet-tile[data-state=error] .dot{background:var(--fail)}
 .meet-tile[data-state=error] .mt-status{color:var(--fail)}
-.meet-tile[data-state=off] .mt-status{color:var(--accent);font-weight:600}
+.meet-tile[data-state=off] .mt-status{color:var(--ink);font-weight:600}
 .meet-tiles.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));overflow:visible}
 .meet-tile.big{flex-direction:column;justify-content:center;gap:10px;padding:18px 10px 16px;text-align:center}
 .meet-tile.big .mt-text{align-items:center}
@@ -151,12 +151,12 @@
 .meet-row:hover{background:var(--surface2)}
 .meet-main{min-width:0}
 .note-title{display:block;max-width:100%;border:0;background:none;padding:0;color:var(--ink);font:inherit;font-weight:600;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.meet-row:hover .note-title{color:var(--accent)}
+.meet-row:hover .note-title{color:var(--ink)}
 .meet-meta{display:flex;align-items:center;flex-wrap:wrap;gap:0 6px;margin-top:2px;font-size:var(--t-sm);color:var(--muted)}
 .meet-meta>*+*::before{content:'·';margin-right:6px}
 .meet-who{display:inline-flex;align-items:center;gap:6px;min-width:0}
 .meet-side{display:flex;align-items:center;gap:8px}
-.meet-tasks{padding:3px 10px;border-radius:999px;font-size:var(--t-sm);font-weight:600;white-space:nowrap;background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--accent)}
+.meet-tasks{padding:3px 10px;border-radius:999px;font-size:var(--t-sm);font-weight:600;white-space:nowrap;background:color-mix(in srgb,var(--ink) 8%,var(--surface));color:var(--ink)}
 .meet-faces{display:flex;align-items:center}
 .meet-faces .av{flex:none}
 .notes-modal{width:100vw;height:100vh;max-width:none;max-height:none;margin:0;border-radius:0}
@@ -171,7 +171,7 @@
 .notes.detail .notes-list{display:none}
 .notes:not(.detail) .notes-detail{display:none}
 .notes-detail{padding:18px 22px 20px;min-width:0}
-.notes-back{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0 0 10px;color:var(--accent);font:inherit;cursor:pointer}
+.notes-back{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0 0 10px;color:var(--ink);font:inherit;cursor:pointer}
 .note-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .note-head>div{flex:1;min-width:0}
 .note-head h2{display:flex;align-items:center;gap:8px;font-size:var(--t-lg);line-height:var(--lh-tight);min-width:0;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
@@ -238,7 +238,7 @@
 .import-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:640px){.import-grid{grid-template-columns:1fr}}
 .meet-drop{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;font-size:var(--t-base);color:var(--muted)}
-.meet-drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.meet-drop.over{border-color:var(--ink);background:color-mix(in srgb,var(--ink) 5%,var(--surface))}
 .import-form label.import-private{flex-direction:row;align-items:center;gap:8px}
 .import-form .row{display:flex;gap:8px;align-items:center}
 /* the three sections and Push */
@@ -265,7 +265,7 @@
 .meet-item textarea{min-height:52px;resize:vertical}
 .meet-item input,.meet-item textarea{font-size:var(--t-base);padding:5px 7px}
 .meet-empty{color:var(--muted);font-size:var(--t-sm);padding:4px 0}
-.meet-seeked{background:color-mix(in srgb,var(--accent) 18%,transparent);border-radius:4px}
+.meet-seeked{background:color-mix(in srgb,var(--ink) 11%,transparent);border-radius:4px}
 @media (max-width:640px){.meet-sections .cols{grid-template-columns:1fr}}
 
 @media (max-width:900px){
@@ -282,10 +282,10 @@
 
 /* What a meeting is doing and what it made: a spinner while a bot works, then links to the tasks. */
 .meet-state{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);white-space:nowrap;color:var(--ink)}
-.meet-made-chip{padding:2px 9px;border-radius:999px;font-size:var(--t-sm);font-weight:600;white-space:nowrap;text-decoration:none;background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--accent)}
+.meet-made-chip{padding:2px 9px;border-radius:999px;font-size:var(--t-sm);font-weight:600;white-space:nowrap;text-decoration:none;background:color-mix(in srgb,var(--ink) 8%,var(--surface));color:var(--ink)}
 a.meet-made-chip:hover{text-decoration:underline}
 .meet-proposed{font-size:var(--t-sm);white-space:nowrap}
-.meet-syncing{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--accent) 5%,var(--surface))}
+.meet-syncing{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--ink) 3%,var(--surface))}
 .meet-syncing[hidden]{display:none}
 .meet-syncing b{font-size:var(--t-md);font-weight:600;letter-spacing:var(--track-snug)}
 .meet-made{margin-top:12px;padding:8px 0 10px;border-bottom:1px solid var(--line)}
@@ -295,7 +295,7 @@ a.meet-made-chip:hover{text-decoration:underline}
 .meet-made li a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .meet-made-kind{flex:none;width:112px;font-size:var(--t-sm);color:var(--muted)}
 .note-outcome strong.meet-state{font-size:var(--t-base)}
-.meet-review-tabs button.has-pending:not([aria-selected=true]) .meet-pending-n{color:var(--accent);font-weight:600}
+.meet-review-tabs button.has-pending:not([aria-selected=true]) .meet-pending-n{color:var(--ink);font-weight:600}
 .meet-review-tag{font-size:var(--t-sm);font-weight:600;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--wait) 18%,var(--surface));color:var(--ink)}
 .meet-review-who{font-size:var(--t-sm)}
 .meet-review-detail select{flex:0 1 auto;width:auto;max-width:220px}
@@ -336,7 +336,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-review-bulk .linkish{color:var(--muted);text-decoration:none}
 .meet-select-all{display:flex;align-items:center;margin-right:6px}
 .meet-select-all[hidden]{display:none}
-.meet-select-all input{width:16px;height:16px;accent-color:var(--accent)}
+.meet-select-all input{width:16px;height:16px;accent-color:var(--ink)}
 /* Add source: a quiet menu in the tab bar */
 .meet-sources{position:relative;margin:0}
 .meet-review-bar .linkish{display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:var(--t-base);white-space:nowrap}
@@ -348,7 +348,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-tile.item:hover:not(:disabled),.meet-tile.item:focus-visible{background:var(--surface2);border-color:transparent;outline:0}
 .meet-tile.item .mt-text{flex-direction:row;align-items:center;justify-content:space-between;gap:10px;flex:1}
 .meet-tile.item .mt-status{font-size:var(--t-sm)}
-.meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--accent)}
+.meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--ink)}
 .meet-row.review-pending{grid-template-columns:16px auto minmax(0,1fr) auto}
 .meet-row .meet-side{display:flex;align-items:center;gap:6px}
 .meet-row [data-review-action]{font-size:var(--t-sm);padding:5px 10px}
@@ -389,10 +389,10 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-layout{display:grid;grid-template-columns:minmax(190px,260px) minmax(0,1fr);align-items:start;gap:14px}
 .live-list{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 220px);overflow:auto}
 .live-list-item{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:11px;text-align:left;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;cursor:pointer}
-.live-list-item.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.live-list-item.selected{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
 .live-list-item small,.live-card small{font-size:var(--t-xs);color:var(--muted)}
 .live-state{display:inline-flex;padding:2px 7px;border-radius:99px;background:var(--surface2);font-size:var(--t-xs);text-transform:capitalize}
-.live-state.live{color:var(--ok,var(--accent))}.live-state.paused{color:var(--muted)}.live-state.ended{color:var(--muted)}
+.live-state.live{color:var(--ok,var(--ink))}.live-state.paused{color:var(--muted)}.live-state.ended{color:var(--muted)}
 .live-card{min-width:0;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .live-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .live-card-head h2{margin:0 0 7px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
@@ -411,7 +411,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-chat>p{grid-template-columns:minmax(80px,130px) minmax(0,1fr)}
 .live-chat>p.live-notice{padding:4px;color:var(--muted);font-size:var(--t-sm)}.live-chat>p.live-notice b{font-weight:500}
 .live-chat>p.live-notice.failed{color:var(--wait-ink)}
-.live-transcript-link{padding:0;border:0;color:var(--accent);background:transparent;text-decoration:underline;cursor:pointer}
+.live-transcript-link{padding:0;border:0;color:var(--ink);background:transparent;text-decoration:underline;cursor:pointer}
 .live-router details{padding:7px 0;border-bottom:1px solid var(--line)}
 .live-router summary{display:flex;gap:8px;align-items:center;cursor:pointer}
 .live-router summary small{margin-left:auto}

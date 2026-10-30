@@ -138,11 +138,16 @@
     </section>
   </nav>
   <footer class="side-footer">
-    <button id="search-open" type="button" aria-label="Search" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span>Search</span><kbd>⌘K</kbd></button>
-    <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
     <div class="new-version" id="new-version-wrap" hidden>
       <button id="new-version" type="button" aria-expanded="false" aria-controls="new-version-pop"><span class="nv-dot" aria-hidden="true"></span><span id="new-version-label"></span></button>
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
+    </div>
+    <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
+    <!-- Ask on a computer: the dot and "Ask Tico" (ui/app/ask-panel.js), Search's icon at the row's end. Where Ask is away
+         (the Assistant page, setup, signed out) the icon is the whole Search row again (search.css). -->
+    <div class="side-ask">
+      <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word></span></button>
+      <button id="search-open" type="button" aria-label="Search (⌘K)" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span class="search-label">Search</span><kbd>⌘K</kbd></button>
     </div>
     <div class="side-utility">
       <div class="account-wrap">
@@ -171,13 +176,12 @@
   <div id="app-nudge" hidden><span class="app-nudge-text"></span><a class="app-nudge-get" href="/download/mac">Download</a><button type="button" class="app-nudge-close" aria-label="Not now">✕</button></div>
 </div>
 <main id="main"></main>
-<button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word hidden></span></button>
-<div class="ask-peek" id="ask-peek" hidden><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
-<section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" hidden>
+<div class="ask-peek" id="ask-peek"><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
+<section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
   <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
-    <span class="ask-sees" data-ask-sees hidden><span data-ask-sees-name></span></span>
+    <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
     <span class="ask-people" data-ask-people></span>
-    <button type="button" class="ask-loop" data-ask-loop title="Shares this chat with Tico Support" hidden>Loop in Support</button>
+    <button type="button" class="ask-loop" data-ask-loop title="Shares this chat with Tico Support">Loop in Support</button>
     <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
   <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
   <div class="ask-form"></div>
@@ -308,6 +312,7 @@
 <script src="/tico/ui/app/settings-company.js"></script>
 <script src="/tico/ui/app/settings-billing.js"></script>
 <script src="/tico/ui/app/settings-gateway.js"></script>
+<script src="/tico/ui/app/settings-mail.js"></script>
 <script src="/tico/ui/app/settings-hosted.js"></script>
 <script src="/tico/ui/app/settings-strategy-bot.js"></script>
 <script src="/tico/ui/app/settings-bot-editor.js"></script>

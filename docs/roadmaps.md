@@ -182,12 +182,13 @@ and nothing reaches Slack. Requesters remain on the roadmap task.
 clients cannot choose their IP with forwarding headers.
 
 The standard Docker Compose file needs no change: Caddy and cloudflared reach the server only over a dedicated
-`edge` network (`172.30.254.0/28`) from fixed addresses (`172.30.254.2` and `172.30.254.3`), and the server's
-default `TICO_TRUSTED_PROXIES` is loopback plus exactly those two addresses. Other containers on that network draw
-addresses from its upper half (`172.30.254.8/29`), so they never take a front door's. If that subnet clashes with a
-network on your computer, set `TICO_EDGE_SUBNET`, `TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and
-`TICO_CLOUDFLARED_ADDRESS` together in `.env`; the trusted list follows the two addresses. Setting
-`TICO_TRUSTED_PROXIES` in `.env` replaces the whole list. With your own proxy in front of a native install, list its
+`edge` network (`172.30.254.0/28`) from fixed addresses (`172.30.254.2` and `172.30.254.3`). The only other
+containers on that network, the server and the tunnel's `hold` (which keeps requests waiting while the server
+restarts), draw addresses from its upper half (`172.30.254.8/29`), so they never take a front door's. The server's
+default `TICO_TRUSTED_PROXIES` is loopback, those two addresses and that range; `hold` itself believes forwarded
+addresses only from cloudflared. If that subnet clashes with a network on your computer, set `TICO_EDGE_SUBNET`,
+`TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and `TICO_CLOUDFLARED_ADDRESS` together in `.env`; the trusted list
+follows them. Setting `TICO_TRUSTED_PROXIES` in `.env` replaces the whole list. With your own proxy in front of a native install, list its
 addresses, never a range shared with untrusted machines.
 
 `TICO_CLIENT_IP_HEADER=x-forwarded-for` (default) works behind both Caddy and cloudflared: the relay appends its

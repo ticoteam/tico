@@ -45,7 +45,8 @@
 .people-chip-x:hover{color:var(--fail)}
 input.people-switch{appearance:none;-webkit-appearance:none;position:relative;flex:none;width:34px;height:20px;margin:0;border-radius:10px;background:color-mix(in srgb,var(--muted) 45%,var(--line));cursor:pointer;transition:background var(--dur) var(--ease);vertical-align:middle}
 input.people-switch::before{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform var(--dur) var(--ease)}
-input.people-switch:checked{background:var(--accent)}
+/* on: an ink track and a paper knob, so on and off differ in both themes without the accent */
+input.people-switch:checked{background:var(--ink)}input.people-switch:checked::before{background:var(--bg)}
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
@@ -70,7 +71,7 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:5px;background:none;color:var(--ink);font-size:var(--t-base);text-align:left;cursor:pointer;white-space:nowrap}
 .people-menu button:hover,.people-menu button:focus-visible{background:var(--surface2)}
 .people-menu .danger-text,.people-row.is-left .danger-text{color:var(--fail)}
-.people-check{width:14px;color:var(--accent);font-weight:600}
+.people-check{width:14px;color:var(--ink);font-weight:600}
 .people-left{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
 .people-left summary{padding:4px 0;color:var(--muted);font-size:var(--t-base);cursor:pointer}
 .people-row.is-left{grid-template-columns:minmax(0,1fr) auto}.people-row.is-left .people-who{opacity:.6}
@@ -142,7 +143,7 @@ p:empty{display:none}
 .sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
 tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}
 .sb-task-mark:hover,.sb-task-mark[aria-expanded=true]{border-color:var(--line);background:var(--surface2)}
-.sb-task-mark.on{opacity:1;color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+.sb-task-mark.on{opacity:1;color:var(--ink);border-color:color-mix(in srgb,var(--ink) 35%,transparent)}
 .sb-task-mark.on::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .sb-task-mark:disabled{cursor:default}
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
@@ -292,7 +293,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-bot-name a{color:var(--ink);font-weight:600}
 .settings-bot-name small,.settings-cell-note{display:block;color:var(--muted);font-size:var(--t-xs);margin-top:2px}
 .settings-bot-name small .linkish{font-size:inherit;text-decoration:none;color:var(--muted)}
-.settings-bot-name small .linkish:hover{color:var(--accent);text-decoration:underline}
+.settings-bot-name small .linkish:hover{color:var(--ink);text-decoration:underline}
 .settings-owner-list{display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
 .settings-owner-list .pchip{margin:0}
 .settings-bots-table .settings-inline-select{width:100%;min-width:0;max-width:none;padding:6px 22px 6px 7px;font-size:var(--t-sm)}
@@ -320,6 +321,15 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 /* In the panel an issue's actions sit under its text, each as wide as its words, not a column as tall as the text. */
 .needs-you .settings-issue{grid-template-columns:minmax(0,1fr)}
 .issue-buttons{display:flex;flex-wrap:wrap;gap:8px;align-items:center;align-self:start}.issue-buttons:empty{display:none}
+/* An item's title is its way to its details (heartbeat.js needsTitle): one line, cut short, a chevron after it; the
+   line under it one line too, its whole sentence on hover. */
+.needs-title{display:flex;align-items:center;gap:2px;max-width:100%;padding:0;border:0;background:none;font:inherit;font-weight:600;color:var(--ink);text-align:left;text-decoration:none;cursor:pointer}
+.needs-title>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.needs-title .nav-icon{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+.needs-title:hover .nav-icon{color:var(--ink)}.needs-title[aria-expanded="true"] .nav-icon{transform:var(--chev-open)}
+.needs-title+p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* An issue's own runs read as part of it: no rule between the title and the first one. */
+.settings-issue>div>.stopped-lines{margin-top:2px}.settings-issue>div>.stopped-lines>.stopped-line:first-child{border-top:0;padding-top:4px}
 /* A bot's stopped runs in Needs you (heartbeat.js stoppedLines): one short line each, its own two buttons. */
 .stopped-lines{list-style:none;margin:8px 0 4px;padding:0}
 .stopped-line{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:7px 0;border-top:1px solid var(--line)}
@@ -343,14 +353,14 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-facts{display:block}
 /* Settings > Computers (ui/app/computer-detail.js): one compact row per computer, a chip per AI connection. */
 .settings-machines tbody tr{cursor:pointer}.settings-machines tbody tr:hover{background:var(--surface2)}
-.machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--accent)}.machine-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--ink)}.machine-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .machine-chips{display:flex;flex-wrap:wrap;gap:4px}
 .machine-chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);line-height:20px;white-space:nowrap;cursor:pointer}
 .machine-chip.waiting{color:var(--muted);cursor:default;border-style:dashed}
 .machine-chip-bar{width:28px;height:4px}
 .machine-chip-pct{color:var(--muted);font-variant-numeric:tabular-nums}
 .machine-chip-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fail)}
-.machine-chip-add{color:var(--muted);border-style:dashed}.machine-chip-add:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}.machine-chip-add:disabled{cursor:default;opacity:.5}
+.machine-chip-add{color:var(--muted);border-style:dashed}.machine-chip-add:hover:not(:disabled){color:var(--ink);border-color:var(--muted)}.machine-chip-add:disabled{cursor:default;opacity:.5}
 /* The computer's pop-up: Connections, Screen, Bots on this computer, Versions and updates, Settings. */
 .computer-detail{width:min(760px,calc(100vw - 32px))}
 .computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}
@@ -546,7 +556,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .repos-bots{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted);cursor:pointer;white-space:nowrap}
 button.repos-small{padding:3px 9px;font-size:var(--t-sm)}
 .repos-line{margin:0;font-size:var(--t-base);color:var(--muted)}
-.repos-line a{color:var(--accent)}
+.repos-line a{color:var(--ink)}
 .repos-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:0 0 var(--s2);border-bottom:1px solid var(--line)}
 .repos-k,.brepo-k{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px 4px 30px;font-size:var(--t-base);background-position:9px center}
@@ -720,8 +730,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .strategy-levels{display:grid;gap:8px;margin:10px 0}
 .strategy-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
 .strategy-level span{font-size:var(--t-sm);color:var(--muted)}
-.strategy-level[aria-checked="true"]{border-color:var(--accent)}
-.strategy-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
+.strategy-level[aria-checked="true"]{border-color:var(--ink)}
+.strategy-confirm{padding:10px 12px;border:1px solid var(--ink);border-radius:8px;margin-bottom:8px}
 .strategy-confirm p{margin:0 0 8px}
 .strategy-log{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .strategy-log-entry{padding-bottom:10px;border-bottom:1px solid var(--line)}
@@ -786,7 +796,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .billing-days summary{display:flex;justify-content:space-between;padding:4px 0}
 .billing-days details>.billing-table,.billing-days [data-billing-hours]{margin-left:var(--s2)}
 .billing-hour-head{display:flex;justify-content:space-between;color:var(--muted);font-size:var(--t-xs);margin-top:var(--s1)}
-a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600}
 @media (max-width:640px){.billing-table td,.billing-table th{padding:4px 3px}.billing-balance{font-size:1.6rem}}
 
 .stopped-run-actions{position:sticky;bottom:-16px;padding:12px 0 4px;background:var(--surface);border-top:1px solid var(--line);margin-top:12px}
@@ -854,3 +863,39 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
 .bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
 .settings-confirm{max-width:min(440px,calc(100vw - 32px))}
+/* Settings > Mail (ui/app/settings-mail.js) */
+.pm-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.pm-table td,.pm-table th{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.pm-table th{color:var(--muted);font-weight:500}
+.pm-table tbody tr:last-child td{border-bottom:0}
+.pm-address,.pm-from{min-width:0;overflow-wrap:anywhere}
+.pm-from>*{display:block}.pm-from>*+*{margin-top:2px}
+#settings-mail-addresses>header{align-items:center}#settings-mail-addresses>header .row{margin-left:auto}
+.pm-status{white-space:nowrap}.pm-status .ghost{margin-left:6px;padding:2px 10px}
+.pm-agent-label{display:none}
+.pm-kinds{display:grid;gap:8px}
+.pm-kind{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px!important;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.pm-kind:has(input:checked){border-color:var(--accent)}
+.pm-kind-name{font-weight:600}
+.pm-kind-price{color:var(--ink)}
+.pm-kind-line{grid-column:2/-1;font-size:var(--t-sm);color:var(--muted)}
+.pm-scan{margin:-8px 0 0;padding:0 2px;font-size:var(--t-sm)}
+.pm-dialog .task-rule-form>label:not(.pm-kind){display:grid;gap:4px}
+.pm-dialog input[name=company_name],.pm-dialog select{width:100%}
+.pm-intake{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;flex-wrap:wrap}
+.pm-intake select{width:auto!important;min-width:0;max-width:min(100%,420px)}
+@media (max-width:640px){
+  .pm-table thead{display:none}
+  .pm-table tbody tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .pm-table tbody tr:last-child{border-bottom:0}
+  .pm-table td{padding:0;border:0}
+  .pm-table .pm-place{font-weight:600}
+  .pm-table .pm-status{grid-column:3;grid-row:1;text-align:right}
+  .pm-table .pm-address,.pm-table .pm-agent{grid-column:1/-1;color:var(--muted)}
+  .pm-table .pm-agent:empty,.pm-table td:has(>.pm-none:only-child){display:none}
+  .pm-agent-label{display:inline}
+  .pm-letters .pm-date{grid-column:1;grid-row:1;color:var(--muted)}
+  .pm-letters .pm-kind-cell{grid-column:2;grid-row:1}
+  .pm-letters .pm-from{grid-column:1/-1}
+  .pm-letters .pm-where{grid-column:1/-1}
+}

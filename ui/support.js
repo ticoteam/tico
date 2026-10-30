@@ -730,7 +730,7 @@
     });
     return pop;
   }
-  const visibleQuestion = () => ['ask-fab', 'mobile-ask'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
+  const visibleQuestion = () => ['ask-row', 'mobile-ask'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
   // On a phone the sheet sits on the bottom of what is visible: with the keyboard up, the space above it. The browser
   // reports that space in the visual viewport, whose height shrinks both for the keyboard and for pinch zoom, so
   // height × scale is the visible height in page pixels with zoom taken out. At normal scale the sheet follows the

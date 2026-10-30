@@ -1,6 +1,6 @@
 // Tico's own update restarts every computer at once, so the runs it stops arrive together. Needs you groups the ones
 // the server puts in the update's group under one row with "Don't retry" and, when the review card would retry every
-// run, "Try all again" (one request per run), with each run's own line under Details, one row per cluster of stops
+// run, "Try all again" (one request per run), with each run's own line under the row's title, one row per cluster of stops
 // within ten minutes. A run that recorded an outside action, a run with a choice already saved for one of its
 // requests, and a lone later stop keep their own lines. A group's choice and a run's own never save at once. Someone who may not decide the runs sees the same rows with no buttons. Checked at desktop and phone widths.
 const {chromium} = require('playwright');
@@ -90,18 +90,22 @@ const issues = canReview => [
       const {page, panel, errors, decisions, slow} = await open({canReview: true, width: 1280, height: 800});
       const group = panel.locator('[data-update-group="0"]');
       assert.equal(await panel.locator('[data-update-group]').count(), 2);
-      assert.match(await group.locator('strong').innerText(), /^3 runs stopped during Tico.s update at 14:02 UTC$/);
-      assert.match(await panel.locator('[data-update-group="1"] strong').innerText(), /^2 runs stopped during Tico.s update at 14:30 UTC$/);
-      assert.deepEqual(await group.locator('.issue-buttons > button').allInnerTexts(), ['Try all again', 'Don’t retry', 'Details']);
-      assert.doesNotMatch(await group.locator('p').first().innerText(), /can.t check/);
+      assert.match(await group.locator('.needs-title').innerText(), /^3 runs stopped during Tico.s update at 14:02 UTC/);
+      assert.match(await panel.locator('[data-update-group="1"] .needs-title').innerText(), /^2 runs stopped during Tico.s update at 14:30 UTC/);
+      // A title, at most one line and two buttons: the title opens the runs, so Details is no button of its own.
+      assert.deepEqual(await group.locator('.issue-buttons > button').allInnerTexts(), ['Try all again', 'Don’t retry']);
+      assert.doesNotMatch(await group.innerText(), /can.t check/);
       // A group with a run that ran commands Tico cannot check says so and offers no Try all again: retrying that run
-      // is its own choice under Details.
+      // is its own choice on its line.
       const later = panel.locator('[data-update-group="1"]');
-      assert.match(await later.locator('p').first().innerText(), /^1 of them ran commands Tico can.t check: try it one at a time/);
-      assert.deepEqual(await later.locator('.issue-buttons > button').allInnerTexts(), ['Don’t retry', 'Details']);
+      assert.equal(await later.locator('p').first().innerText(), '1 of them ran commands Tico can’t check');
+      assert.deepEqual(await later.locator('.issue-buttons > button').allInnerTexts(), ['Don’t retry']);
+      // The bots whose every run is in a group have no rows of their own repeating it; writer's ungrouped run keeps one.
+      assert.equal(await panel.locator('[data-list] > .settings-issue:not([hidden])').count(), 4);
+      assert.equal(await panel.locator('h2').innerText(), '4 things need you');
       assert.equal(await group.locator('[data-group-runs]').isVisible(), false);
       await group.locator('[data-group-details]').click();
-      assert.equal(await group.locator('[data-group-details]').innerText(), 'Hide details');
+      assert.equal(await group.locator('[data-group-details]').getAttribute('aria-expanded'), 'true');
       assert.deepEqual(await group.locator('[data-group-runs] .stopped-name').allInnerTexts(),
         ['Ship the receipts fix', 'Weekly numbers', 'Billing 3/5']);
       await group.locator('[data-group-details]').click();
@@ -162,8 +166,8 @@ const issues = canReview => [
     {
       const {page, panel, errors, decisions} = await open({canReview: false, width: 1280, height: 800});
       const group = panel.locator('[data-update-group="0"]');
-      assert.match(await group.locator('strong').innerText(), /^3 runs stopped/);
-      assert.deepEqual(await group.locator('.issue-buttons > button').allInnerTexts(), ['Details']);
+      assert.match(await group.locator('.needs-title').innerText(), /^3 runs stopped/);
+      assert.deepEqual(await group.locator('.issue-buttons > button').allInnerTexts(), []);
       assert.equal(await panel.locator('[data-run-decision], [data-group-decision]').count(), 0);
       assert.equal(await panel.locator('.stopped-picks').count(), 0);
       assert.deepEqual(decisions, []);

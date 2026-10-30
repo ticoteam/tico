@@ -28,25 +28,43 @@ function ldotSet(el, state) {
   const next = ldotState(state, Number(el.dataset.size) || 24);
   if (el.dataset.state !== next) el.dataset.state = next;
 }
-// The dot hardly ever just vanishes: when it moves (a pill into a panel and back, an older turn to the newest), a copy
+// The dot hardly ever just vanishes: when it moves (a row into a panel and back, an older turn to the newest), a copy
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both
 // rects are measured once, before the flight (`to` when the caller knows better, e.g. a panel still sliding in); the
 // copy moves by a Web Animation of transform alone, on top of every clip, and is the only thing with will-change.
 // None with reduced motion. Returns the Animation, or null when nothing flew.
+// The copies are made once, in one fixed layer, and reused: a flight only places one and shows it by a class. A node
+// added to or taken from <body> per flight costs a whole-page restyle (body's `:has(> …)` rules look again).
 const ldotCalm = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const LDOT_GHOSTS = [];
+let LDOT_LAYER = null;
+function ldotLayer() {
+  if (LDOT_LAYER?.isConnected) return LDOT_LAYER;
+  LDOT_LAYER = document.createElement('div');
+  LDOT_LAYER.className = 'ldot-layer';
+  LDOT_LAYER.setAttribute('aria-hidden', 'true');
+  document.body.append(LDOT_LAYER);
+  LDOT_GHOSTS.length = 0;
+  return LDOT_LAYER;
+}
+// A copy not flying now (one whose flight was just cancelled is free at once; its late cancel event leaves it be).
+function ldotGhost() {
+  const layer = ldotLayer(), free = LDOT_GHOSTS.find(g => g._run?.playState !== 'running');
+  if (free) return free;
+  layer.insertAdjacentHTML('beforeend', ldotHTML({state: 'still', cls: 'ldot-ghost'}));
+  LDOT_GHOSTS.push(layer.lastElementChild);
+  return layer.lastElementChild;
+}
 function ldotFly(el, from, {to = null} = {}) {
   if (!el?.isConnected || !from?.width || ldotCalm() || typeof el.animate !== 'function') return null;
   to ||= el.getBoundingClientRect();
   const dx = from.left - to.left, dy = from.top - to.top, dist = Math.hypot(dx, dy);
   if (!to.width || dist < 2) return null;
   el._ldotFly?.cancel();
-  const ghost = el.cloneNode(true);
-  ghost.removeAttribute('data-ask-dot'); ghost.removeAttribute('id');
-  ghost.classList.remove('ldot-away');
-  ghost.classList.add('ldot-fly');
-  ghost.dataset.state = 'still';
+  const ghost = ldotGhost();
   Object.assign(ghost.style, {left: `${to.left}px`, top: `${to.top}px`, width: `${to.width}px`});
-  document.body.append(ghost);
+  if (ghost.classList.contains('sm') !== el.classList.contains('sm')) ghost.classList.toggle('sm');
+  ghost.classList.add('ldot-fly');
   el.classList.add('ldot-away');
   const arc = Math.min(110, dist * .3) + 24, s0 = from.width / to.width;
   const run = ghost.animate([
@@ -56,10 +74,13 @@ function ldotFly(el, from, {to = null} = {}) {
     {transform: 'translate(0,-3px) scale(.95,1.06)', offset: .93},
     {transform: 'none'},
   ], {duration: Math.min(900, 480 + dist * .45), easing: 'cubic-bezier(.45,0,.4,1)'});
-  const land = () => { ghost.remove(); el.classList.remove('ldot-away'); if (el._ldotFly === run) delete el._ldotFly; };
+  const land = () => {
+    if (ghost._run === run) { ghost.classList.remove('ldot-fly'); ghost._run = null; }
+    if (el._ldotFly === run) { el.classList.remove('ldot-away'); delete el._ldotFly; }
+  };
   run.onfinish = land;
   run.oncancel = land;
-  el._ldotFly = run;
+  el._ldotFly = ghost._run = run;
   return run;
 }
 // One hop (a peek arrived, support left) or a squash (support popped out of it): a Web Animation on the body, on top
@@ -112,11 +133,12 @@ function ldotWatch(el) {
   }
   if (!LDOT_TIMER) ldotSchedule();
 }
+if (globalThis.document?.body) ldotLayer();   // made with the page, so no flight adds to <body>
 globalThis.document?.addEventListener('visibilitychange', () => {
   document.querySelectorAll('.ldot').forEach(el => el.toggleAttribute('data-paused', document.hidden || LDOT_OFF.has(el)));
   if (document.hidden) { clearTimeout(LDOT_TIMER); LDOT_TIMER = 0; } else ldotSchedule();
 });
-// Reduced motion turned on mid-flight: every scripted move (flights, hops, the pill, support's chip) jumps to its end
+// Reduced motion turned on mid-flight: every scripted move (flights, hops, support's chip) jumps to its end
 // at once, so nothing keeps moving after the switch. CSS animations stop on their own (liquid-dot.css).
 globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').addEventListener?.('change', e => {
   if (!e.matches || typeof document.getAnimations !== 'function') return;

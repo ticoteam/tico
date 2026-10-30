@@ -1,4 +1,5 @@
-// One-click pause, refusal/retry, refresh, permissions, billing and phone layout. Synthetic fixtures only.
+// The bot's Settings pause row: one-click pause, refusal/retry, refresh, permissions, billing and phone layout. No strip
+// on the page itself; the header's Paused badge follows the control. Synthetic fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -63,7 +64,7 @@ function heldRead(state) {
   return hold;
 }
 async function staleReadAfterControl(browser, action) {
-  const {page, errors, state} = await open(browser, 'owner', '#/bot/ops/info');
+  const {page, errors, state} = await open(browser, 'owner', '#/bot/ops/settings');
   let held;
   try {
     await page.locator('[data-bot-pause-action]').waitFor();
@@ -98,10 +99,17 @@ async function staleReadAfterControl(browser, action) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     for (const action of (process.env.RACE_ACTION ? [process.env.RACE_ACTION] : ['pause', 'resume'])) await staleReadAfterControl(browser, action);
-    const {page, errors, posts, state} = await open(browser, 'owner', '#/bot/ops/info');
+    const {page, errors, posts, state} = await open(browser, 'owner', '#/bot/ops/settings');
     const strip = page.locator('#bot-control-host');
     await strip.getByRole('button', {name: 'Pause', exact: true}).waitFor();
-    assert.equal(await page.locator('#main > :first-child').getAttribute('id'), 'bot-control-host');
+    // One row at the bottom of Settings, and nothing above or below the chat.
+    assert.equal(await page.locator('#pane-settings > section.card').last().getAttribute('id'), 'bot-pause-card');
+    assert.match(await strip.innerText(), /^Pause this bot\n/);
+    await page.evaluate(() => { location.hash = '#/bot/ops'; });
+    await page.locator('#pane-settings').waitFor({state: 'hidden'});
+    assert.equal(await page.locator('#bot-control-host:visible, .bot-control-strip').count(), 0);
+    await page.evaluate(() => { location.hash = '#/bot/ops/settings'; });
+    await strip.waitFor();
     // Refreshes with the page's view unchanged do not re-read the pause state until it is a minute old.
     await page.waitForFunction(() => !BOT.pauseLoading);
     const readsBefore = state.reads;
@@ -117,6 +125,7 @@ async function staleReadAfterControl(browser, action) {
     await strip.getByRole('button', {name: 'Unpause', exact: true}).waitFor();
     await page.waitForFunction(() => document.querySelector('#bot-control-host').textContent.includes('Paused by Ana'));
     assert.match(await strip.innerText(), /2026-10-28 12:30 UTC/);
+    assert.equal(await page.locator('#bot-top #bot-paused .bot-paused-badge').innerText(), 'Paused');
     assert.equal(dialogs, 0);
     assert.equal(posts[0].action, 'pause');
     assert.equal(await strip.locator('[aria-live=polite]').count(), 1);
@@ -127,6 +136,7 @@ async function staleReadAfterControl(browser, action) {
     state.fail = false;
     await strip.getByRole('button', {name: 'Retry', exact: true}).click();
     await strip.getByRole('button', {name: 'Pause', exact: true}).waitFor();
+    assert.equal(await page.locator('#bot-paused .bot-paused-badge').count(), 0);
     state.paused = true; state.record = null; state.tasks = 3;
     // A change made elsewhere shows once the page's last read is a minute old.
     await page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
@@ -134,6 +144,9 @@ async function staleReadAfterControl(browser, action) {
     assert.match(await strip.innerText(), /3 open tasks are waiting on it/);
     assert.equal(await strip.locator('a').getAttribute('href'), '#/bot/ops/tasks');
     assert.equal(await strip.locator('.bot-pause-record').innerText(), 'Paused');
+    // The roster still says active (its fixture never changes); the fresh read is the authority for the badges.
+    assert.equal(await page.locator('#bot-top #bot-paused .bot-paused-badge').innerText(), 'Paused', 'header follows a paused read');
+    assert.equal(await page.locator('#tree a[data-org="b:ops"] .bot-paused-badge').innerText(), 'Paused', 'tree follows a paused read');
     await page.setViewportSize({width: 375, height: 812});
     await page.waitForFunction(() => document.querySelector('#side').getBoundingClientRect().right <= 1);
     const box = await strip.boundingBox(), button = await strip.getByRole('button', {name: 'Unpause', exact: true}).boundingBox();
@@ -148,14 +161,14 @@ async function staleReadAfterControl(browser, action) {
     assert.equal(await strip.getByRole('link', {name: 'Add credit'}).getAttribute('href'), '#/settings/billing');
     assert.deepEqual(errors, []);
     await page.close();
-    const member = await open(browser, 'member', '#/bot/ops/info');
+    const member = await open(browser, 'member', '#/bot/ops/settings');
     member.state.paused = true;
     await member.page.waitForFunction(() => BOT?.slug === 'ops' && BOT.pauseLoadedAt != null && !BOT.pauseLoading);
     await member.page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
-    await member.page.getByText('Ask Ana to unpause', {exact: true}).waitFor();
+    await member.page.getByText(/Ask Ana to unpause\./).waitFor();
     assert.equal(await member.page.locator('#bot-control-host button').count(), 0);
     assert.deepEqual(member.errors, []);
     await member.page.close();
-    console.log('bot pause strip: 3 passed, 0 failures');
+    console.log('bot pause settings: 3 passed, 0 failures');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error); process.exitCode = 1;});

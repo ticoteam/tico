@@ -334,6 +334,8 @@ def create_app(settings=None):
             webhook_delivery.start(store, app.state.vault, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
+        # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
+        postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
         sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
         # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
@@ -375,6 +377,8 @@ def create_app(settings=None):
                 await inbound_task
             if hook_relay_task:
                 await hook_relay_task
+            if postal_mail_task:
+                await postal_mail_task
             if sleep_idle_task:
                 await sleep_idle_task
             if cloud_machines_task:
@@ -7327,6 +7331,8 @@ def create_app(settings=None):
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
     install_hook_relay(app, settings, store, auth)
+    from .postal_mail import install as install_postal_mail
+    install_postal_mail(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle
     install_sleep_idle(app, settings, store, auth)
     from .cloud_machines import install as install_cloud_machines

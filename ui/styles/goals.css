@@ -8,7 +8,7 @@
 /* "+" adds a goal for the line's owner (a group's: its lead), shown under a pointer; a phone long-presses the line. */
 .gt-row,.gt-group{position:relative}
 .gt-add{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);width:24px;height:24px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:var(--t-md);line-height:var(--lh-none);cursor:pointer}
-.gt-add:hover{border-color:var(--accent);color:var(--accent)}
+.gt-add:hover{border-color:var(--muted);color:var(--ink)}
 @media (hover:hover){.gt-row:hover>.gt-add,.gt-row:focus-within>.gt-add,.gt-group:hover>.gt-add{display:inline-flex}}
 .gt-row>.gt-goal{cursor:pointer}
 .gt-ind{grid-area:ind}
@@ -76,7 +76,7 @@
 .head-goals{margin-top:6px;font-size:var(--t-base)}.head-goals:empty{display:none}.head-goals li{padding-left:0}.head-goals li:hover{background:var(--surface2)}
 .goal-ed-row{display:flex;align-items:center;gap:4px}
 input.goal-ed-text{flex:1;min-width:0;width:100%;font:inherit;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:4px;padding:2px 6px;margin-left:-6px}
-input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--accent);background:var(--bg)}
+input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--focus);background:var(--bg)}
 .goal-ed-link{flex:none;width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .goal-ed-link .nav-icon{font-size:18px}
 .goal-ed-supports{font-size:var(--t-sm);color:var(--muted)}.goal-ed-supports:empty{display:none}.goal-ed-supports a{color:inherit;text-decoration:underline}
@@ -100,7 +100,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-why-ed{display:flex;gap:8px;align-items:center;margin:0 0 8px 19px}.goal-why-ed input{flex:1 1 auto;min-width:0}
 .goal-bet-line{display:flex;align-items:center;gap:8px;min-width:0;margin:-2px 0 6px 19px;font-size:var(--t-sm)}
 .goal-bet-chip{flex:none;display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-weight:600;text-decoration:none}
-.goal-bet-chip:hover{border-color:var(--accent);text-decoration:none}
+.goal-bet-chip:hover{border-color:var(--muted);text-decoration:none}
 .goal-bet-st{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 @media (max-width:760px){.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
@@ -237,7 +237,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .kpi-prop-warn{font-size:var(--t-sm)}.kpi-prop-warn::before{content:'';display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--wait);vertical-align:1px}
 .kpi-prop-line{margin:0 0 4px;font-size:var(--t-sm);flex-basis:100%}
 .kpi-prop-do:has(.kpi-prop-line){flex-wrap:wrap;max-width:280px}
-.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--accent,inherit);width:max-content}
+.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--link);width:max-content}
 .kpi-prop-tf{margin-top:6px;display:grid;gap:var(--s2,8px)}
 .prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:var(--lh)}
 .prop-np-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}

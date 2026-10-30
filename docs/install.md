@@ -469,8 +469,9 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
 
 1. In Cloudflare Zero Trust, create a tunnel (Networks > Tunnels > Create > Cloudflared) and copy its token.
 2. Nothing to route by hand: the compose file runs cloudflared with a small config that sends `TICO_DOMAIN` to
-   `http://server:8765` and answers anything else with a 404. The server writes it at every start. Only the DNS
-   record is yours: a proxied CNAME for the hostname to `<tunnel id>.cfargotunnel.com` (the wizard creates it).
+   `http://hold:8080` and answers anything else with a 404. `hold` is a small Caddy in front of `server:8765` that
+   keeps requests waiting while the server restarts ([Update](#update)). The server writes the config at every start.
+   Only the DNS record is yours: a proxied CNAME for the hostname to `<tunnel id>.cfargotunnel.com` (the wizard creates it).
    With Access in front, the wizard also gives the tunnel a runner hostname without Access (`--runner-hostname`; default
    `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
@@ -526,11 +527,12 @@ provider less often, lengthen the global session duration in Zero Trust settings
 
 **Which route wins.** cloudflared prefers the configuration Cloudflare holds for the tunnel. A tunnel you created in the
 dashboard, or that setup created through the API, is remotely managed and keeps the **Public Hostname** route you set
-there: the config the server writes is ignored, so keep that route at `HTTP` `server:8765`. A locally managed tunnel
-(made with `cloudflared tunnel create` and reused here by its token) has none, and the server's config is what routes
-it. Before this was shipped such a tunnel logged `No ingress rules ... cloudflared will return 503` and answered every
-request with a 503 while its container showed as running. `python3 -m setup doctor` now fails on that 503 and on that log
-line, and says what to run: `docker compose pull && docker compose up -d` in `/opt/tico`.
+there: the config the server writes is ignored, so set that route to `HTTP` `hold:8080` (`server:8765` still works, but
+requests fail while the server restarts). A locally managed tunnel (made with `cloudflared tunnel create` and reused
+here by its token) has none, and the server's config is what routes it. Before this was shipped such a tunnel logged
+`No ingress rules ... cloudflared will return 503` and answered every request with a 503 while its container showed as
+running. `python3 -m setup doctor` now fails on that 503 and on that log line, and says what to run:
+`docker compose pull && docker compose up -d` in `/opt/tico`.
 
 `TICO_DOMAIN_ALIASES` changes only the locally generated tunnel config; add explicit app and restricted visual
 routes in Cloudflare for a remotely managed tunnel. Caddy app aliases are unchanged; its optional restricted visual
@@ -872,8 +874,8 @@ Tickets, sessions, buffering and socket forwarding live only in Rust. There is n
 | Installation | Routing |
 |---|---|
 | Docker with Caddy | The existing front door continues forwarding to `server:8765`. |
-| Locally managed Cloudflare Tunnel | Both generated origins remain `http://server:8765`. |
-| Dashboard-managed Cloudflare Tunnel | Keep or restore both applicable origins to `http://server:8765`; preserve hostname, Access and runner-path restrictions. |
+| Locally managed Cloudflare Tunnel | Both generated origins remain `http://hold:8080`, which forwards to `server:8765`. |
+| Dashboard-managed Cloudflare Tunnel | Keep or restore both applicable origins to `http://hold:8080` (or `http://server:8765`, without the restart hold); preserve hostname, Access and runner-path restrictions. |
 | Native/local or native Tunnel | Run `python -m backend.server --host 127.0.0.1 --port 8765`; keep the existing public origin. |
 
 Native release checkouts download the matching checksummed binary. Development checkouts build
@@ -887,15 +889,16 @@ use that entry point. The server creates a fresh private control secret and allo
 on every start; no relay option or manually managed secret is required. The public listener refuses
 `/control/*` and `/_tico/*`. If either server process exits, its supervisor restarts the pair.
 
-The standard Compose file's front doors (Caddy, cloudflared) reach the server over their own `edge` network from
-fixed addresses, and the server trusts forwarded client addresses only from those two and loopback, so each visitor
-keeps their own rate limit with no change to `compose.yaml`. If `172.30.254.0/28` clashes with a network on your
-computer, move it with `TICO_EDGE_SUBNET`, `TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and
-`TICO_CLOUDFLARED_ADDRESS` in `.env`; an update that hits the clash rolls back and its message names these
-settings. After setting them, run `docker compose up -d` (or update again). Docker keeps an existing network's
-subnet, so to move an edge network that was already created, run `docker compose down` once first. With your own reverse proxy, set `TICO_TRUSTED_PROXIES` to its addresses plus
-loopback. `TICO_CLIENT_IP_HEADER` defaults to `x-forwarded-for`; use `cf-connecting-ip` only when cloudflared is
-the only trusted ingress. See [public roadmaps](roadmaps.md#client-addresses-behind-a-proxy).
+The standard Compose file's front doors (Caddy, cloudflared) reach the server over their own `edge` network from fixed
+addresses, and the server trusts forwarded client addresses only from those two, loopback and the network's dynamic
+range (where only the server and the tunnel's `hold` live), so each visitor keeps their own rate limit with no change to
+`compose.yaml`. If `172.30.254.0/28` clashes with a network on your computer, move it with `TICO_EDGE_SUBNET`,
+`TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and `TICO_CLOUDFLARED_ADDRESS` in `.env`; an update that hits the clash
+rolls back and its message names these settings. After setting them, run `docker compose up -d` (or update again).
+Docker keeps an existing network's subnet, so to move an edge network that was already created, run
+`docker compose down` once first. With your own reverse proxy, set `TICO_TRUSTED_PROXIES` to its addresses plus loopback.
+`TICO_CLIENT_IP_HEADER` defaults to `x-forwarded-for`; use `cf-connecting-ip` only when cloudflared is the only trusted
+ingress. See [public roadmaps](roadmaps.md#client-addresses-behind-a-proxy).
 
 Former pilot installations should stop their own `screen-proxy` and `screen-relay` services and
 return to the standard Compose file. The old overlay is an empty compatibility file. For a manually
@@ -985,6 +988,13 @@ Use **Update now** (Settings, or Health → Version for the owner), or run the t
 
 Pulling an unchanged pinned tag does not upgrade Tico. See [Updates](updates.md) for manual updates, self-update and rollback.
 Data lives in named volumes and survives updates. Computers follow the server's release.
+
+The server is down for a few seconds while its container is replaced. The front door holds requests meanwhile: it tries
+the server again every 250 ms for up to 30 seconds, and the request gets its normal answer once the server is back, a
+little late. Only a failed connection is retried for every method; once a request reached the server, only a GET is
+sent again, so a write never runs twice. Down for longer, it answers 503 with `Retry-After`, never 502. Caddy does this
+itself; cloudflared cannot, so with a tunnel the `hold` service sits between them (same image as Caddy, nothing to
+configure). After an update the updater also recreates Caddy itself, a moment in which new connections are refused.
 
 A server Tico hosts (`TICO_HOSTED`) never follows new releases by itself either. Tico support can schedule a release
 for it: the server reads it from Tico HQ with its Gateway key every 15 minutes, waits until no bot turn runs (two hours

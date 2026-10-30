@@ -16,6 +16,9 @@ COMPANY_FILE_NAME = "plan.b64"
 COMPOSE_RAW_URL = "https://raw.githubusercontent.com/ticoteam/tico/{ref}/compose.yaml"
 SERVER_PORT = 8765
 SERVICE_SERVER = "server"
+# The tunnel's origin: compose.yaml's hold, in front of the server so a request waits out a restart. docker/entrypoint.sh
+# writes the same.
+TUNNEL_ORIGIN = "hold:8080"
 UPDATER_URL = "http://updater:8080"
 
 # Bots run on separate computers that join with a one-time code (the server runs none).

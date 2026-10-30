@@ -9,7 +9,7 @@
 .bot-more-top .bot-learn{display:inline-flex;width:auto;gap:6px;margin:0;padding:6px 10px 6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:var(--t-base);color:var(--ink)}
 .bot-more-top .bot-learn .bl-label{display:inline}
 .bot-more-top .bot-learn .bl-n{position:static}
-.bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--accent-ink);font-size:var(--t-2xs);font-weight:600;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+.bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 
 .learn-panel{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(460px,100vw);padding:0;border:0;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.35)}
 .learn-panel:not([open]){display:none}
@@ -24,13 +24,13 @@
 .learn-warning{margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-base)}
 .learn-list{list-style:none;margin:0;padding:0}
 .learn-row{padding:9px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh)}
-.learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--accent)}
+.learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--ink)}
 .lr-subject{overflow-wrap:anywhere}
 .lr-meta,.lr-source,.lr-files,.lr-diff summary{font-size:var(--t-sm);color:var(--muted)}
 .lr-meta code{font-size:var(--t-xs)}
 .lr-local{color:var(--wait-ink)}
-.lr-source a{color:var(--accent-quiet)}
-.lr-source a:hover{color:var(--accent)}
+.lr-source a{color:var(--link-quiet)}
+.lr-source a:hover{color:var(--ink)}
 .lr-diff summary{cursor:pointer;overflow-wrap:anywhere}
 .lr-diff pre{margin:6px 0 0;padding:6px 0;border-radius:6px;background:var(--bg);font:var(--t-sm)/var(--lh) var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}
 .lr-diff pre>span{display:block;padding:0 8px;border-left:2px solid transparent}

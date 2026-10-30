@@ -1,9 +1,10 @@
 # The Assistant
 
 Every human has one private chat with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: the
-pill at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet (there is no second, floating button on a phone). The panel names the page it sees, and a message sent from it carries that
+bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
+computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
+opens a small panel beside the rail, rising from the bottom left, and nothing floats over the page. On a phone the Liquid Dot in the
+middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The chat is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
@@ -15,7 +16,8 @@ the rail: you ask the Assistant, and it hands its helpers what needs them (below
 It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
-header: opening flies it up from the button to its place beside the name, closing flies it back down. Bots' questions
+header: opening flies it up from the row (or tab) to its place beside the name, closing flies it back down; while the
+panel is open a close mark holds the dot's place. Bots' questions
 and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
 
 **Loop in Support**, a link at the top right of the panel, brings Tico support into the chat. It rides on your support
@@ -31,7 +33,7 @@ Nothing more from this chat goes to support; the request itself stays open in Su
 (remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
 `#/support`, such as the Assistant's "Loop in Tico support" reply.
 
-A **peek** is a few words beside the closed dot (above the tab bar on a phone), Tico saying something waits on you:
+A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
 never who asked. Tap it and the chat opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
 few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
@@ -42,6 +44,9 @@ the screen moves at a time and the rest hold still; it pauses off screen and in 
 left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
 holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
 CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
+Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on
+a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
+but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
 What waits on you from elsewhere comes at the end of the chat as cards: a Confirm card BotOps (or another bot) left in
 its own chat, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
@@ -108,7 +113,7 @@ and as you (what you may see, nothing more), with no run and no model:
 
 | You ask | It answers from |
 |---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting; no provider or runner turn |
+| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the chat; no provider or runner turn (later, it goes to the model) |
 | What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
 | What needs me | Needs you |
 | Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |

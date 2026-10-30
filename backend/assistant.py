@@ -1552,24 +1552,30 @@ def install(app, store, auth, mutate, onboarding):
         def work(c):
             bot = chat_bot_for(c, who, uploads is not None)
             room = chat_room(c, settings, who)
+            said, kind, fast_links = reply, intent, links
+            # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
+            # what came before, rather than repeating the same line.
+            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? LIMIT 1",
+                                                (room["id"], who.actor)).fetchone():
+                said, kind, fast_links = None, None, []
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
             page = getattr(body, "page", None)
             if page and page.path.startswith("#/"):
                 refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
-            if reply is not None:
+            if said is not None:
                 refs["quiet"] = True
             message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
                             kind="say", refs=refs)
             if uploads is not None:
                 message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
-            out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
-            if reply is not None:
-                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
-                                                {"assistant": True, "fast": True, "intent": intent, "links": links},
+            out = {"message": message, "reply": None, "fast": said is not None, "intent": kind}
+            if said is not None:
+                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
+                                                {"assistant": True, "fast": True, "intent": kind, "links": fast_links},
                                                 message["id"], None, delivered_at=H.now())
-                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
+                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
             return out
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)

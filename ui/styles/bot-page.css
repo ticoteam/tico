@@ -15,7 +15,7 @@
 .bot-screen-open{display:inline-flex;align-items:center;gap:4px}.bot-screen-open .nav-icon{width:16px;height:16px;font-size:16px}
 .bot-screen-steps{margin-top:4px;color:var(--muted)}.bot-screen-steps p{margin:6px 0 4px}
 .bot-screen-cmd{display:flex;align-items:center;gap:8px;max-width:100%}.bot-screen-cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--hover);color:var(--ink)}
-button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline}
+button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:pointer;font:inherit;text-decoration:underline}
 /* the tab strip stays put while the pane scrolls */
 .tabs.bottabs{position:sticky;top:-22px;z-index:8;margin:-22px 0 14px;padding-top:22px;background:var(--bg)}   /* the padding sits in .bothead's margin and hides content scrolling under #main's 22px top padding */
 @media (max-width:760px){
@@ -55,9 +55,9 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
 .bot-goal{order:2;flex:0 1000000 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
 .bot-goal[data-status=none]{display:block;flex:0 1000000 auto}
 .bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;color:inherit}
-a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title{color:var(--accent)}
+a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title{color:var(--ink)}
 .bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
-.bot-goal-set{flex:none;color:var(--accent-quiet)}.bot-goal-set:hover{color:var(--accent)}
+.bot-goal-set{flex:none;color:var(--link-quiet)}.bot-goal-set:hover{color:var(--ink)}
 .bot-goal-row{padding:8px 0;border-top:1px solid var(--line)}.bot-goal-row:first-child{border-top:0;padding-top:0}
 .person-edit-btn{font-size:var(--t-base);font-weight:400;margin-left:8px;vertical-align:middle}
 .person-notify{display:flex;width:fit-content;align-items:center;gap:10px;cursor:pointer}.person-notify+.person-notify{margin-top:10px}
@@ -102,8 +102,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
 .rail-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
-.bot-rail a{color:var(--accent-quiet)}
-.bot-rail a:hover{color:var(--accent)}
+.bot-rail a{color:var(--link-quiet)}
+.bot-rail a:hover{color:var(--ink)}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
 .rail-fold>summary{cursor:pointer;list-style:none;margin:0}
 .rail-fold>summary::-webkit-details-marker{display:none}
@@ -207,7 +207,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border-radius:8px}
   .bot-switch .bt-label{display:none}
   .bot-switch .bt-icon{display:inline;font-size:20px}
-  .bot-switch button.cur{background:var(--surface2);color:var(--accent)}
+  .bot-switch button.cur{background:var(--surface2);color:var(--ink)}
 }
 @media (max-width:760px){
   #pane-tasks .trow[data-task-version] :is(summary,.trow-head){grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"ttl pr who" "status status status"}
@@ -299,14 +299,11 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 
 .bot-settings-panel .access-body{max-height:none;overflow:visible}
 
-/* Always above the bot name and tabs; a personal pause and company pause stay separate. */
-.bot-control-strip{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:10px 16px;margin-bottom:12px;border:1px solid var(--line);border-radius:8px}
-.bot-control-state{display:flex;align-items:center;gap:9px}
-.bot-running-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#24984b}
-.bot-control-strip.is-paused,.bot-company-pause{background:#fff0c2;color:#563800;border:1px solid #b87d15;padding:22px;margin-bottom:12px;border-radius:8px}
-.bot-control-strip.is-paused strong{font-size:1.2rem}
-.bot-control-strip p,.bot-company-pause p{margin:8px 0 0}
-.bot-control-strip.is-paused a,.bot-company-pause a{color:inherit;text-decoration:underline}
-.bot-control-strip.is-paused>button{min-height:48px;min-width:110px}
-.bot-control-copy{min-width:0;overflow-wrap:anywhere}
-@media(max-width:600px){.bot-control-strip{align-items:stretch;flex-direction:column;gap:12px}.bot-control-strip>button{width:100%;min-height:44px}}
+/* Settings' pause row: a title, one line of why, the button at the end. The header's Paused badge is the at-a-glance. */
+.bot-pause-row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.bot-pause-copy{min-width:0;overflow-wrap:anywhere}
+.bot-pause-title{font-weight:600}
+.bot-pause-row p{margin:2px 0 0;font-size:var(--t-sm)}
+.bot-pause-row>button{flex:none}
+#bot-paused:empty{display:none}#bot-paused .bot-paused-badge{margin-left:8px}
+@media(max-width:600px){.bot-pause-row{align-items:stretch;flex-direction:column;gap:12px}.bot-pause-row>button{width:100%}}

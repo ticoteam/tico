@@ -70,7 +70,7 @@
 .strat-form-why{margin:0;color:var(--wait-ink);font-size:var(--t-sm)}
 .strat-sec-form input[name="title"]{box-sizing:border-box;width:100%;height:36px;margin:0 0 8px;font-size:var(--t-md)}
 .strat-flash{animation:stratflash 1.6s var(--ease-out)}
-@keyframes stratflash{from{background:color-mix(in srgb,var(--accent) 16%,transparent)}to{background:transparent}}
+@keyframes stratflash{from{background:color-mix(in srgb,var(--ink) 10%,transparent)}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.strat-flash{animation:none}}
 
 /* ---------------------------------------------------------------- the page: cards */
@@ -91,7 +91,7 @@
 /* Text that is its own field: a border on hover and focus. */
 .strat-ed{display:block;width:calc(100% + 12px);margin:-3px -6px;padding:3px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh)}
 .strat-ed:hover{border-color:var(--line)}
-.strat-ed:focus{border-color:var(--accent);background:var(--bg);outline:var(--focus-halo);outline-offset:0}
+.strat-ed:focus{border-color:var(--focus);background:var(--bg);outline:var(--focus-halo);outline-offset:0}
 .strat-ed::placeholder{color:var(--muted)}
 .strat-big{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-snug);overflow-wrap:anywhere}
 .strat-memo section.card.strat-top{padding:16px 18px}
@@ -103,14 +103,14 @@
 :is(.strat-bets-card .strat-bet,.strat-chip,.strat-tm):hover .strat-x,:is(.strat-bets-card .strat-bet,.strat-chip):focus-within .strat-x{opacity:1}
 @media (hover:none){.strat-x{opacity:1}}
 .strat-add{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-tight);cursor:pointer;white-space:nowrap}
-.strat-add:hover{border-color:var(--accent);color:var(--accent)}
+.strat-add:hover{border-color:var(--muted);color:var(--ink)}
 .strat-addrow{display:flex;gap:6px;margin:2px 0 0}
 .strat-addrow input{flex:1 1 auto;min-width:0;height:30px;padding:0 12px;border-radius:999px;font-size:var(--t-base)}
 
 /* The bets: number (the drag handle), statement, then health, status and ×. */
 .strat-bets-card .strat-bet{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 0;border-top:1px solid var(--line)}
 .strat-bets-card .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
-.strat-bets-card .strat-bet-n{width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:700;line-height:24px;text-align:center}
+.strat-bets-card .strat-bet-n{width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:700;line-height:24px;text-align:center}
 .strat-bets-card button.strat-bet-n{cursor:grab;touch-action:none}
 .strat-bets-card button.strat-bet-n:hover{background:var(--surface2)}
 .strat-bets-card .strat-bet.dragging{opacity:.7}
@@ -170,7 +170,7 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-posts small{display:block;margin-top:2px;color:var(--muted);font-size:var(--t-xs)}
 .strat-tag{margin-right:6px;font-weight:700}
 .strat-tag.hot{color:var(--wait-ink)}
-.strat-tag.lead{color:var(--accent)}
+.strat-tag.lead{color:var(--ink)}
 
 /* The sections: cards in a grid */
 .strat-memo .strat-sec .strat-md{font-size:var(--t-base)}

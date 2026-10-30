@@ -125,6 +125,7 @@ ENROLL_MINUTES = 15
 ENROLL_GRACE = 60               # past its newest code's expiry, a machine not enrolled yet never will be
 ENROLL_TRIES = 3                # machines made in a row that never enrolled before it waits for a person
 STOP_HOLD = 120                 # a stop's reservation lapses this late: a server that died mid-stop strands no work
+DEAD = ("deleted", "failed")     # HQ's word for a machine that is gone or never got a computer: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
@@ -589,7 +590,7 @@ def decide(current, found, at, idle_s):
     `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
     on = current["state"] in ON and current["machine_id"]
     # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
-    booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] != "deleted")
+    booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] not in DEAD)
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
         # out (a drain lets it finish).
@@ -613,10 +614,11 @@ def decide(current, found, at, idle_s):
     key = "always_on" if current["always_on"] else found["want"]
     if not key:
         return None, None
-    if key not in ("always_on",) and key == current["wake_key"] and not (
+    if key not in ("always_on",) and key == current["wake_key"] and current["state"] not in DEAD and not (
             (found["activity"] or 0) > (current["woke_at"] or 0)):
         return None, "stuck"                                # woken for this once already, and nothing ran
-    if not current["machine_id"] or current["state"] == "deleted":
+    # (A dead machine never ran it: the next is made, and enroll_fails caps how many.)
+    if not current["machine_id"] or current["state"] in DEAD:
         if current["enroll_fails"] >= ENROLL_TRIES:
             return None, "no_enroll"                        # its last machines never enrolled: a person looks first
         return "create", None
@@ -672,6 +674,7 @@ class Manager:
         self.client = client
         self.lock = threading.Lock()
         self.synced = None
+        self.relist = False             # a create was refused: no other create until HQ's list has been read
 
     @property
     def off(self):
@@ -732,6 +735,7 @@ class Manager:
                 with self.store.transaction() as c:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
+        self.relist = False
         with self.store.transaction() as c:
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
@@ -739,17 +743,31 @@ class Manager:
                           "value_json=excluded.value_json",
                           (SIZES_KEY, json.dumps({"sizes": listed["sizes"], "caps": listed["caps"], "at": H.now()})))
             mine = rows(c)
-            latest = {}                                     # per key, a machine that is not deleted wins
+            # Per key, a machine that is not dead wins, then the one this row already has. HQ renames a machine a new
+            # one replaces (key ":superseded:"), so it lists one per key; a dead one already counted is never re-read.
+            latest = {}
             for machine in listed["machines"]:
-                if machine["state"] != "deleted" or machine["key"] not in latest:
+                had = latest.get(machine["key"])
+                mine_id = (mine.get(machine["key"]) or {}).get("machine_id")
+                if had is None or had["state"] in DEAD and (machine["state"] not in DEAD or machine["id"] == mine_id):
                     latest[machine["key"]] = machine
             for key, machine in latest.items():
                 current = mine.get(key)
                 if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
                     continue                                # deleted here: live at HQ only until boat confirms
                 if current and (current["machine_id"] in (None, machine["id"]) or (
-                        current["state"] == "deleted" and machine["state"] != "deleted")):
+                        current["state"] in DEAD and machine["id"] != current["machine_id"])):
                     gone = {"enroll_by": None} if machine["state"] == "deleted" else {}
+                    if machine["state"] == "failed" and (current["machine_id"], current["state"]) != (
+                            machine["id"], "failed"):
+                        # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
+                        # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
+                        # Only HQ's list says so: a refused or unanswered create may be a passing outage.
+                        gone.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1, wake_key=None)
+                    elif machine["state"] in ON and current["machine_id"] != machine["id"]:
+                        # a create whose answer was lost: HQ made it after all, so it starts as act() would have it
+                        gone.update(active_at=at, heartbeat_at=at,
+                                    **({"problem": ""} if current["problem"].startswith("hq:") else {}))
                     save(c, key, **self.described(machine), **gone)
             if learned and self.on_offered is not None and offered(c, self.settings):
                 c.execute("SAVEPOINT cloud_offered")
@@ -801,6 +819,8 @@ class Manager:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
+        if action == "create" and self.relist:
+            return                                          # the last create was refused, and HQ's list not read since
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
@@ -829,13 +849,16 @@ class Manager:
         except Refused as refused:
             self.refused(current, action, refused, at)
             return
-        if action == "create" and current["state"] == "deleted" and machine["id"] == current["machine_id"]:
-            # HQ still has the machine deleted here (until boat confirms): the new one is made once it is gone.
+        if action == "create" and current["state"] in DEAD and machine["id"] == current["machine_id"]:
+            # HQ still has the machine deleted (until boat confirms) or failed here: the new one is made once it is
+            # gone, and HQ answering with that same machine is not a new one.
             with self.store.transaction() as c:
                 save(c, key, next_try=at + BACKOFF, enroll_by=None)     # the code it took for that goes unused
             return
         fields = self.described(machine)
-        if action in ("create", "start"):
+        if action == "create" and machine["state"] == "failed":
+            fields.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1)   # as when HQ's list says so
+        elif action in ("create", "start"):
             woke_for = "always_on" if current["always_on"] else found["want"]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
@@ -872,6 +895,8 @@ class Manager:
             fields = {"failures": failures, "next_try": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
+            if action == "create":
+                self.synced, self.relist = None, True       # HQ's list first: a machine it failed counts before a retry
         if action in ("stop", "delete"):
             if stopped_unknown(refused):
                 # It may be stopping all the same: the fence holds for STOP_HOLD more, and the next look asks HQ's
