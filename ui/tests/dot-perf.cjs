@@ -6,8 +6,10 @@
 // - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
 //   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
-// - Opening and closing Ask, by the pill, ⌘J and Escape, flights included: no `hidden` attribute changes anywhere and no
-//   child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once and reused.
+// - Opening and closing Ask, by the row, ⌘J, Escape and a peek, with a peek showing, and from a page with no heading to
+//   one with a heading (the page it sees goes and comes back), flights included: no `hidden` attribute changes anywhere
+//   and no child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once
+//   and reused.
 // - A hidden tab: every dot paused and no idle timer left, and none set while hidden.
 // DOT_PERF_OUT=<file> writes the numbers (the PR body quotes them).
 const {chromium} = require('playwright');
@@ -54,7 +56,7 @@ async function open(browser) {
   });
   await page.goto('https://tico-ui.test/#/tasks');
   await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
-  await page.locator('#ask-fab').waitFor();
+  await page.locator('#ask-row').waitFor();
   return {page, errors};
 }
 const metrics = async cdp => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
@@ -130,7 +132,7 @@ const round = v => Math.round(v * 10) / 10;
     const swapsBefore = await metrics(cdp);
     await browser.startTracing(page, {categories: ['devtools.timeline']});
     for (const v of await page.evaluate(() => LDOT_IDLES)) {
-      await page.evaluate(v => { document.querySelector('#ask-fab .ldot').dataset.idle = v; }, v);
+      await page.evaluate(v => { document.querySelector('#ask-row .ldot').dataset.idle = v; }, v);
       await page.waitForTimeout(400);
     }
     const swapsAfter = await metrics(cdp);
@@ -141,7 +143,7 @@ const round = v => Math.round(v * 10) / 10;
     assert.ok(swapPaints.length <= 1, `idle variants: paints ${JSON.stringify(swapPaints)}`);
 
     // ---- Open, a reply, close, with the CPU slowed 4x. A first open and close loads the chat; the second is timed.
-    await page.locator('#ask-fab').click();
+    await page.locator('#ask-row').click();
     await page.locator('#ask-panel .ask-form .p-text').waitFor();
     await page.waitForFunction(() => !document.querySelector('.ldot-fly'));
     await page.keyboard.press('Escape');
@@ -149,10 +151,10 @@ const round = v => Math.round(v * 10) / 10;
     await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
     await page.waitForTimeout(400);
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
-    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-fab').getAnimations().length);
+    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-row').getAnimations().length);
     const budget = {p95: 20 * SLOWDOWN, max: 50 * SLOWDOWN, long: 50 * SLOWDOWN};
     const phases = {
-      open: async () => { await page.locator('#ask-fab').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
+      open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
       reply: async () => {
         const box = page.locator('#ask-panel .ask-form .p-text');
         await box.fill('Thanks'); await box.press('Enter');
@@ -177,7 +179,7 @@ const round = v => Math.round(v * 10) / 10;
       assert.ok(r.longTask <= budget.long, `${name}: a ${r.longTask} ms long task (budget ${budget.long})`);
     }
 
-    // ---- Opening and closing (the pill, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
+    // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
     // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.js askSync).
     await page.evaluate(() => {
       const seen = window.__askMut = [], name = n => n.id || String(n.className || n.nodeName);
@@ -188,11 +190,32 @@ const round = v => Math.round(v * 10) / 10;
     });
     const shut = async () => { await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); };
     for (let i = 0; i < 2; i++) {
-      await page.locator('#ask-fab').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+      await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
       await page.keyboard.press('Escape'); await shut();
       await page.keyboard.press('Control+j'); await page.locator('#ask-panel .p-text:focus').waitFor(); await settle();
       await page.keyboard.press('Control+j'); await shut();
     }
+    // With a peek showing (a question just came in): tapping the peek opens Ask, as does the row; the peek goes by a
+    // class. And the page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
+    const peekShows = id => page.evaluate(id => {
+      document.activeElement?.blur();
+      (S.v2 ||= {}).needs = [{kind: 'ask', id, created: new Date().toISOString(),
+        ask: {id, from_actor: 'bot:coo', to_actor: 'human:ben', body: 'Ship it?', created: new Date().toISOString(), refs: {}}}];
+      askPeek();
+    }, id).then(() => page.locator('#ask-peek .ask-peek-go').waitFor());
+    const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);
+    await peekShows('q1');
+    await page.locator('#ask-peek .ask-peek-go').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+    await page.keyboard.press('Escape'); await shut();
+    await peekShows('q2');
+    await heading('');
+    await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+    assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), false, 'no heading, no page named');
+    await page.keyboard.press('Escape'); await shut();
+    await heading(null);
+    await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+    assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), true, 'the page it sees, named');
+    await page.keyboard.press('Escape'); await shut();
     out.toggleMutations = await page.evaluate(() => window.__askMut);
     assert.deepEqual(out.toggleMutations, [], 'Ask opening and closing changed `hidden` or <body>');
     assert.equal(await page.evaluate(() => document.querySelectorAll('.ldot-layer .ldot').length), 1, 'one flying copy, reused');

@@ -223,7 +223,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
 
     // A reply arrives while it is closed: counted, none on Ask's button, and the toast, which opens the pop-up on that
     // request and reads it.
-    const help = page.locator('#ask-fab'), unread = () => page.evaluate(() => window.supportState().unread);
+    const help = page.locator('#ask-row'), unread = () => page.evaluate(() => window.supportState().unread);
     assert.equal(await unread(), 0);
     v.hq.reply = true;
     await page.evaluate(() => window.supportPoll());
