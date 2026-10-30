@@ -49,3 +49,21 @@ def test_the_gateways_refusals_come_back_as_plain_problems(api, monkeypatch):
         monkeypatch.setattr(G, "image", lambda *args, status=status, code=code: (status, {}, code))
         refused = api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "graphic"}, headers=headers("ana-test"))
         assert (refused.status_code, refused.json()["error"]["code"]) == (want_status, want), refused.text
+
+
+def test_the_images_route_answers_429_with_retry_after_while_its_slots_are_full(api, monkeypatch):
+    from backend.app import GATEWAY_IMAGE_SLOTS
+    connect(api)
+    slots = api.app.state.image_slots
+    monkeypatch.setattr(G, "image", lambda *args: (200, {"model": "tico-images-1.0", "images": []}, ""))
+    taken = [slots.acquire(blocking=False) for _ in range(GATEWAY_IMAGE_SLOTS)]
+    full = api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"}, headers=headers("ana-test"))
+    assert full.status_code == 429 and full.headers["Retry-After"] == "10"
+    assert full.json()["error"]["code"] == "gateway_images_busy" and full.json()["error"]["retryable"] is True
+    for _ in taken:
+        slots.release()
+    assert api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"},
+                    headers=headers("ana-test")).status_code == 200
+    # The slot a call holds goes back when it returns, so every slot is free again.
+    assert all(slots.acquire(blocking=False) for _ in range(GATEWAY_IMAGE_SLOTS))
+    assert not slots.acquire(blocking=False)

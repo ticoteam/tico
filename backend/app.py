@@ -7,6 +7,7 @@ import json
 from dataclasses import replace
 import re
 import sqlite3
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -92,6 +93,8 @@ STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(sp
 # The inbox sends at most this many messages and this many tasks; the rest wait for a later read.
 INBOX_LIMIT = 100
 INBOX_PAGE = 500            # unread messages read per query while looking for the newest INBOX_LIMIT readable ones
+# Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
+GATEWAY_IMAGE_SLOTS = 4
 
 
 def _first_visible(items, visible):
@@ -1654,6 +1657,8 @@ def create_app(settings=None):
             raise Problem("gateway_fetch_failed", f"Fetch failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
         return answer
 
+    app.state.image_slots = threading.BoundedSemaphore(GATEWAY_IMAGE_SLOTS)
+
     @app.post("/api/v2/gateway/images")
     def gateway_images(request: Request, body: M.GatewayImage):
         """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
@@ -1668,8 +1673,14 @@ def create_app(settings=None):
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
                           "Settings > Computers", 409)
-        status, answer, code = gateway_client.image(base, key, body.prompt, body.category, body.images, body.size,
-                                                    body.count, header)
+        if not app.state.image_slots.acquire(blocking=False):
+            return JSONResponse({"error": {"code": "gateway_images_busy", "detail": "Image making is busy; try again shortly",
+                                           "retryable": True}}, status_code=429, headers={"Retry-After": "10"})
+        try:
+            status, answer, code = gateway_client.image(base, key, body.prompt, body.category, body.images, body.size,
+                                                        body.count, header)
+        finally:
+            app.state.image_slots.release()
         if status != 200:
             if status == 404:
                 raise Problem("gateway_image_unavailable", "The Tico AI Gateway does not make images yet", 503)

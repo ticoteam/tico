@@ -82,3 +82,16 @@ def test_publishing_keeps_live_tags_with_their_own_attributes_only():
     assert b'<tico-tasks waiting-on="viewer" limit="3"></tico-tasks>' in cleaned
     assert b'<tico-task id="t1"/>' in cleaned
     assert b"bogus" not in cleaned and b"onclick" not in cleaned and unembedded == []
+
+
+def test_a_page_fills_at_most_the_cap_and_the_tags_past_it_render_empty(monkeypatch):
+    from types import SimpleNamespace
+    from backend import live_blocks as LB
+    filled = []
+    monkeypatch.setattr(LB, "_task", lambda c, auth, who, attrs, base: filled.append(attrs["id"]) or f"<b>{attrs['id']}</b>")
+    auth = SimpleNamespace(settings=SimpleNamespace(public_url=""))
+    text = "".join(f'<tico-task id="t{i}"></tico-task>' for i in range(LB.LIVE_TAG_CAP + 25))
+    out = LB.fill(text, None, None, auth, None)
+    assert filled == [f"t{i}" for i in range(LB.LIVE_TAG_CAP)]
+    assert out.startswith(LB.STYLE) and out.count(LB.STYLE) == 1
+    assert "<b>t49</b>" in out and "t50" not in out and "<tico-task" not in out
