@@ -62,7 +62,10 @@ fn connect_links_carry_only_a_safe_tico_address() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
     app.link("tico-recorder://connect?server=https://tico.example.com");
-    assert_eq!(full_view(&mut app)["status"]["connect"], "https://tico.example.com");
+    assert_eq!(
+        full_view(&mut app)["status"]["connect"],
+        "https://tico.example.com"
+    );
     app.dismiss_connect();
     app.link("tico-recorder://connect?server=http://evil.example");
     assert!(app.connect.is_none());
@@ -80,8 +83,15 @@ fn library_rows_send_and_delete_only_what_is_stopped() {
     let count = app.records.len();
     let demo = row(&view, "Product & architecture · demo");
     assert_eq!(demo["can_send"], true);
-    assert_eq!(demo["targets"], json!([{"id":"fixture","name":"example.com","already":false}]));
-    assert_eq!(demo["status"], Value::Null, "a finished private recording needs no status");
+    assert_eq!(
+        demo["targets"],
+        json!([{"id":"fixture","name":"example.com","already":false}])
+    );
+    assert_eq!(
+        demo["status"],
+        Value::Null,
+        "a finished private recording needs no status"
+    );
     let silent = row(&view, "Recording test · silence example");
     assert_eq!(silent["status"]["label"], "No signal");
     let target = demo["id"].as_str().unwrap().to_owned();
@@ -129,7 +139,12 @@ fn a_meeting_in_one_tico_can_still_be_sent_to_another() {
         )
         .unwrap();
     app.reload();
-    let record = app.records.iter().find(|row| row.id == target).cloned().unwrap();
+    let record = app
+        .records
+        .iter()
+        .find(|row| row.id == target)
+        .cloned()
+        .unwrap();
     assert!(!app.sent_everywhere(&record.deliveries));
     let view = full_view(&mut app);
     let listed = view["library"]["data"]["rows"]
@@ -184,7 +199,13 @@ fn opening_a_meeting_keeps_background_drafts_and_requires_explicit_sharing() {
     assert_eq!(meeting["actions"]["mode"], "signin");
     assert_eq!(meeting["people"]["stage"], "invite");
     assert_eq!(meeting["chat"]["private"], true);
-    assert_eq!(view["transcript"]["data"]["blocks"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        view["transcript"]["data"]["blocks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
     // A background draft survives the person's next edit of an older copy.
     app.store
         .update_context(&id, |context| {
@@ -204,7 +225,10 @@ fn opening_a_meeting_keeps_background_drafts_and_requires_explicit_sharing() {
     app.add_item("Draft the release notes");
     let typed = app.context.items.last().unwrap().id.clone();
     app.edit_item(&typed, "Draft and send the release notes");
-    assert_eq!(app.context.items[2].title, "Draft and send the release notes");
+    assert_eq!(
+        app.context.items[2].title,
+        "Draft and send the release notes"
+    );
     app.remove_item(&typed);
     assert_eq!(app.store.context(&id).unwrap().items.len(), 2);
     // Sending needs a Tico: without one nothing happens.
@@ -212,7 +236,10 @@ fn opening_a_meeting_keeps_background_drafts_and_requires_explicit_sharing() {
     assert!(!app.busy);
     // Nothing reaches Tico until a bot or person is added; Add people alone starts nothing.
     app.start_adding();
-    assert_eq!(full_view(&mut app)["meeting"]["data"]["people"]["stage"], "add");
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["people"]["stage"],
+        "add"
+    );
     app.add_participant("Alex (not in Tico)");
     assert!(app.context.live_id.is_empty());
     assert_eq!(app.store.context(&id).unwrap().participants.len(), 2);
@@ -234,7 +261,10 @@ fn opening_a_meeting_keeps_background_drafts_and_requires_explicit_sharing() {
         meeting["audio"]["warning"],
         "No signal was captured. Silent audio cannot produce a transcript."
     );
-    assert_eq!(meeting["send_blocked"], "This recording has no transcript to send");
+    assert_eq!(
+        meeting["send_blocked"],
+        "This recording has no transcript to send"
+    );
 }
 
 #[test]
@@ -278,12 +308,21 @@ fn a_sent_or_ended_meeting_is_never_reshared() {
     let meeting = full_view(&mut app)["meeting"]["data"].clone();
     assert_eq!(meeting["people"]["can_share"], false);
     // Its chat can only ask Tico privately; a message would have to connect it.
-    assert_eq!((meeting["chat"]["can_message"].as_bool(), meeting["chat"]["private"].as_bool()), (Some(false), Some(true)));
+    assert_eq!(
+        (
+            meeting["chat"]["can_message"].as_bool(),
+            meeting["chat"]["private"].as_bool()
+        ),
+        (Some(false), Some(true))
+    );
     assert_eq!(meeting["notes"]["editable"], false);
     assert_eq!(meeting["title_editable"], false);
     // Renaming a sent meeting is refused.
     app.rename("Something else");
-    assert_eq!(app.store.get(&id).unwrap().title, "Product & architecture · demo");
+    assert_eq!(
+        app.store.get(&id).unwrap().title,
+        "Product & architecture · demo"
+    );
 }
 
 #[test]
@@ -294,23 +333,59 @@ fn a_chosen_bot_shows_at_once_and_leaves_with_the_reason_if_tico_refuses() {
     let mut app = app(store, directory.path());
     app.config.destinations = vec![connection("fixture", "Tico Team")];
     app.destination = "fixture".into();
-    app.roster = vec![("bot:librarian".into(), "Librarian".into()), ("human:2".into(), "Arthur Silva".into())];
-    let id = app.records.iter().find(|row| row.title.starts_with("Product")).unwrap().id.clone();
+    app.roster = vec![
+        ("bot:librarian".into(), "Librarian".into()),
+        ("human:2".into(), "Arthur Silva".into()),
+    ];
+    let id = app
+        .records
+        .iter()
+        .find(|row| row.title.starts_with("Product"))
+        .unwrap()
+        .id
+        .clone();
     app.open(&id).unwrap();
     app.pick("bot:librarian");
     let people = full_view(&mut app)["meeting"]["data"]["people"].clone();
-    let pending: Vec<_> = people["rows"].as_array().unwrap().iter().filter(|row| row["pending"] == true).collect();
+    let pending: Vec<_> = people["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["pending"] == true)
+        .collect();
     assert_eq!(pending.len(), 1);
-    assert_eq!((pending[0]["name"].as_str(), pending[0]["kind"].as_str()), (Some("Librarian"), Some("bot")));
-    assert!(people["candidates"].as_array().unwrap().iter().all(|row| row["actor"] != "bot:librarian"));
+    assert_eq!(
+        (pending[0]["name"].as_str(), pending[0]["kind"].as_str()),
+        (Some("Librarian"), Some("bot"))
+    );
+    assert!(
+        people["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["actor"] != "bot:librarian")
+    );
     // Choosing it again while it is on its way does nothing.
     app.pick("bot:librarian");
     // This fixture's Tico cannot be reached, so the bot leaves People again with the reason.
     settle(&mut app, |app| !app.busy && app.adding_people_count() == 0);
     let people = full_view(&mut app)["meeting"]["data"]["people"].clone();
-    assert!(people["rows"].as_array().unwrap().iter().all(|row| row["pending"] != true));
-    assert!(people["error"].as_str().unwrap().starts_with("Not added: "), "{}", people["error"]);
-    assert!(app.error.is_empty(), "the reason shows in People, not as a banner");
+    assert!(
+        people["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["pending"] != true)
+    );
+    assert!(
+        people["error"].as_str().unwrap().starts_with("Not added: "),
+        "{}",
+        people["error"]
+    );
+    assert!(
+        app.error.is_empty(),
+        "the reason shows in People, not as a banner"
+    );
 }
 
 #[test]
@@ -332,7 +407,11 @@ fn long_meetings_read_as_turns() {
         store
             .save_audio(
                 &record.id,
-                if them { Channel::Meeting } else { Channel::Microphone },
+                if them {
+                    Channel::Meeting
+                } else {
+                    Channel::Microphone
+                },
                 index * 6000,
                 index * 6000 + 5800,
                 &samples,
@@ -356,7 +435,13 @@ fn long_meetings_read_as_turns() {
     app.open(&record.id).unwrap();
     let started = Instant::now();
     let view = full_view(&mut app);
-    assert_eq!(view["transcript"]["data"]["blocks"].as_array().unwrap().len(), 400);
+    assert_eq!(
+        view["transcript"]["data"]["blocks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        400
+    );
     assert_eq!(view["meeting"]["data"]["chat"]["messages"], json!([]));
     // Polling an unchanged meeting sends nothing big again.
     let have = Have {
@@ -377,7 +462,9 @@ fn background_delivery_failure_is_visible_in_the_library_and_meeting_without_los
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let record = store.create("Shared recording fixture").unwrap();
-    store.create("Stopped before audio inputs connected").unwrap();
+    store
+        .create("Stopped before audio inputs connected")
+        .unwrap();
     store
         .update_context(&record.id, |context| {
             context.live_id = "fixture-live-room".into();
@@ -408,7 +495,9 @@ fn background_delivery_failure_is_visible_in_the_library_and_meeting_without_los
     let meeting = full_view(&mut app)["meeting"]["data"].clone();
     assert_eq!(
         meeting["sync_error"],
-        format!("Tico sync needs attention: {error}. Audio and transcript remain saved on this Mac.")
+        format!(
+            "Tico sync needs attention: {error}. Audio and transcript remain saved on this Mac."
+        )
     );
     assert_eq!(meeting["live"], "Private in Tico");
     assert_eq!(meeting["place"], "Shared live · ");
@@ -479,7 +568,10 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
     assert!(full_view(&mut app)["status"]["recording"].is_null());
     let stored = app.store.get(&recording.id).unwrap();
     assert_ne!(stored.state, "recording");
-    assert!(!stored.chunks.is_empty(), "the buffered audio was saved on stop");
+    assert!(
+        !stored.chunks.is_empty(),
+        "the buffered audio was saved on stop"
+    );
 }
 
 #[test]
@@ -491,21 +583,32 @@ fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
     settings::write(directory.path(), &saved).unwrap();
     let recording = store.create("Pressed Send").unwrap();
     let mut app = app(store.clone(), directory.path());
-    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(store.clone(), recording.id.clone(), || {
-        Ok((vec![], String::new()))
-    })
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
     .unwrap();
     app.set_active(recording.id.clone(), handle);
     app.open(&recording.id).unwrap();
     assert!(full_view(&mut app)["meeting"]["data"]["send_blocked"].is_null());
     store
-        .save_audio(&recording.id, tico_recorder_native::audio::Channel::Microphone, 0, 1000, &vec![0.2; 16000], 16000)
+        .save_audio(
+            &recording.id,
+            tico_recorder_native::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
         .unwrap();
     app.send_meeting(&recording.id, "first");
     assert!(app.error.is_empty(), "{}", app.error);
     assert_eq!(app.status_view()["sending"]["id"], recording.id.as_str());
     // The send waits while the last chunk is transcribed, and says so on the button.
-    settle(&mut app, |app| app.status_view()["sending"]["label"] == "Transcribing…");
+    settle(&mut app, |app| {
+        app.status_view()["sending"]["label"] == "Transcribing…"
+    });
     let claimed = store.claim_transcription().unwrap().unwrap();
     store
         .transcription_result(&claimed, "Ship it on Friday", "", json!({"fixture":true}))
@@ -514,7 +617,10 @@ fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
     settle(&mut app, |app| !app.busy);
     assert_eq!(app.error, "Sign in to Tico in Settings");
     assert!(app.status_view()["sending"].is_null());
-    assert!(app.status_view()["recording"].is_null(), "Send stopped the recording");
+    assert!(
+        app.status_view()["recording"].is_null(),
+        "Send stopped the recording"
+    );
 }
 
 #[test]
@@ -522,11 +628,17 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let mut saved = settings::read(directory.path()).unwrap();
-    saved.destinations = vec![connection("first", "example.com"), connection("second", "tico.team")];
+    saved.destinations = vec![
+        connection("first", "example.com"),
+        connection("second", "tico.team"),
+    ];
     settings::write(directory.path(), &saved).unwrap();
     let mut app = app(store, directory.path());
     app.make_default("second");
-    assert_eq!(settings::read(directory.path()).unwrap().destinations[0].id, "second");
+    assert_eq!(
+        settings::read(directory.path()).unwrap().destinations[0].id,
+        "second"
+    );
     // Connected and never chosen: speech goes through the default Tico, which hasn't said yet
     // what it can do.
     assert_eq!(
@@ -551,18 +663,27 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     assert_eq!(written.speech_source, "own");
     // Own keys without a saved key can't transcribe.
     assert_eq!(app.status_view()["speech"]["source"], "none");
-    assert_eq!(full_view(&mut app)["settings"]["data"]["speech_source"], "own");
+    assert_eq!(
+        full_view(&mut app)["settings"]["data"]["speech_source"],
+        "own"
+    );
     assert_eq!(written.microphone, "Studio mic");
     assert!(!written.meeting_audio);
     assert_eq!(written.transcription_language, "");
     assert_eq!(written.calendar_connection, "second");
     assert_eq!(written.destinations.len(), 2);
     assert_eq!(written.streaming, Some(true));
-    assert_eq!(written.streaming_model, tico_recorder_native::stream::DEFAULT_MODEL);
+    assert_eq!(
+        written.streaming_model,
+        tico_recorder_native::stream::DEFAULT_MODEL
+    );
     let file = std::fs::read_to_string(directory.path().join("settings.json")).unwrap();
     assert!(!file.contains("key"), "{file}");
     let view = full_view(&mut app);
-    assert_eq!(view["settings"]["data"]["connections"][0]["name"], "tico.team");
+    assert_eq!(
+        view["settings"]["data"]["connections"][0]["name"],
+        "tico.team"
+    );
     assert_eq!(view["settings"]["data"]["connections"][0]["default"], true);
     // Turning the calendar on fetches it; this fixture has no sign-in token, so that fetch fails
     // visibly. Let it finish before the next check.
@@ -576,7 +697,10 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     });
     settle(&mut app, |app| !app.busy);
     assert_eq!(app.error, "Use HTTPS, or HTTP on localhost");
-    assert_eq!(settings::read(directory.path()).unwrap().microphone, "Studio mic");
+    assert_eq!(
+        settings::read(directory.path()).unwrap().microphone,
+        "Studio mic"
+    );
 }
 
 #[test]
@@ -614,15 +738,36 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
     app.config.destinations = vec![connection("fixture", "Tico Team")];
     app.destination = "fixture".into();
     app.roster = vec![("bot:librarian".into(), "Librarian".into())];
-    let id = app.records.iter().find(|row| row.title.starts_with("Product")).unwrap().id.clone();
+    let id = app
+        .records
+        .iter()
+        .find(|row| row.title.starts_with("Product"))
+        .unwrap()
+        .id
+        .clone();
     app.open(&id).unwrap();
     // Not in Tico yet: the dock messages the meeting, and the first message would connect it.
     let chat = full_view(&mut app)["meeting"]["data"]["chat"].clone();
-    assert_eq!((chat["connected"].as_bool(), chat["can_message"].as_bool(), chat["private"].as_bool()), (Some(false), Some(true), Some(false)));
+    assert_eq!(
+        (
+            chat["connected"].as_bool(),
+            chat["can_message"].as_bool(),
+            chat["private"].as_bool()
+        ),
+        (Some(false), Some(true), Some(false))
+    );
     assert_eq!(chat["messages"], json!([]));
 
-    let turn = |role: &str, text: &str| Turn { role: role.into(), text: text.into(), via: "text".into(), at: "2026-10-29T15:00:30+00:00".into() };
-    app.context.chat = vec![turn("you", "Who owns it?"), turn("assistant", "Arthur does.")];
+    let turn = |role: &str, text: &str| Turn {
+        role: role.into(),
+        text: text.into(),
+        via: "text".into(),
+        at: "2026-10-29T15:00:30+00:00".into(),
+    };
+    app.context.chat = vec![
+        turn("you", "Who owns it?"),
+        turn("assistant", "Arthur does."),
+    ];
     app.context.live_id = "live-1".into();
     app.context.live_state = "live".into();
     app.live = json!({
@@ -639,16 +784,29 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
         ]},
     });
     let chat = full_view(&mut app)["meeting"]["data"]["chat"].clone();
-    let rows: Vec<(String, bool, bool, bool)> = chat["messages"].as_array().unwrap().iter().map(|row| (
-        row["name"].as_str().unwrap().to_owned(), row["bot"] == true, row["me"] == true, row["private"] == true,
-    )).collect();
-    assert_eq!(rows, vec![
-        ("Arthur Silva".into(), false, false, false),
-        ("You".into(), false, true, false),
-        ("You".into(), false, true, true),
-        ("Tico".into(), true, false, true),
-        ("Librarian".into(), true, false, false),
-    ]);
+    let rows: Vec<(String, bool, bool, bool)> = chat["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["name"].as_str().unwrap().to_owned(),
+                row["bot"] == true,
+                row["me"] == true,
+                row["private"] == true,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("Arthur Silva".into(), false, false, false),
+            ("You".into(), false, true, false),
+            ("You".into(), false, true, true),
+            ("Tico".into(), true, false, true),
+            ("Librarian".into(), true, false, false),
+        ]
+    );
     // A bot that claimed its turn is shown replying; one that already replied is not.
     assert_eq!(chat["replying"], json!(["Head of engineering"]));
     assert_eq!(chat["connected"], true);

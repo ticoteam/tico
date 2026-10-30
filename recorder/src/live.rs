@@ -234,7 +234,11 @@ impl Tico {
     pub fn sync_live(&self, store: &Store, id: &str) -> Result<Value> {
         self.push_live(store, id)?;
         let context = store.context(id)?;
-        let view = self.call(&format!("/api/v2/live-meetings/{}", context.live_id), None, "")?;
+        let view = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
         note_state(store, id, &view)?;
         Ok(view)
     }
@@ -538,12 +542,13 @@ pub(crate) fn corrected(mut words: Vec<Word>, speaker: &str) -> (String, String)
             None => voices.push((&word.speaker, 1)),
         }
     }
-    let named = voices
-        .iter()
-        .fold(None, |best: Option<(&str, usize)>, &(name, count)| match best {
+    let named = voices.iter().fold(
+        None,
+        |best: Option<(&str, usize)>, &(name, count)| match best {
             Some((_, most)) if most >= count => best,
             _ => Some((name, count)),
-        });
+        },
+    );
     (named.map_or(speaker, |(name, _)| name).into(), text)
 }
 

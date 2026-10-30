@@ -61,6 +61,26 @@ enum Command {
         #[arg(long)]
         bot: String,
     },
+    /// Real speech through a local Tico the way the app sends it: 16 kHz WAV files played in real
+    /// time as the microphone (and meeting audio), live text and transcription through Your Tico,
+    /// the meeting shared live with a bot. Prints a timeline of what was shared and what the bot
+    /// said, then ends the meeting without sending it. Needs an isolated TICO_RECORDER_DATA_DIR
+    /// and the person's token in TICO_REPLAY_TEST_TOKEN.
+    #[command(hide = true)]
+    LiveSpeechTest {
+        #[arg(long)]
+        tico_url: String,
+        /// The bot that joins the meeting.
+        #[arg(long)]
+        bot: String,
+        #[arg(long)]
+        me: std::path::PathBuf,
+        #[arg(long)]
+        them: Option<std::path::PathBuf>,
+        /// How long recording goes on after the files end.
+        #[arg(long, default_value_t = 15)]
+        seconds_after: u64,
+    },
     /// Runs the recorder's transcript pipeline on two 16 kHz WAV files (microphone and meeting
     /// audio): chunking, real STT, echo removal and speaker labels. Prints the transcript lines
     /// as JSON. Needs an isolated TICO_RECORDER_DATA_DIR and TICO_RECORDER_STT_KEY; used by
@@ -280,6 +300,13 @@ fn main() -> Result<()> {
                     person,
                     bot,
                 } => replay_test(&store, tico_url, stt_url, person, bot)?,
+                Command::LiveSpeechTest {
+                    tico_url,
+                    bot,
+                    me,
+                    them,
+                    seconds_after,
+                } => live_speech_test(&store, tico_url, bot, &me, them.as_deref(), seconds_after)?,
                 _ => unreachable!(),
             }
         }
@@ -349,7 +376,12 @@ fn replay_test(
     let transcribe_all = || -> Result<()> {
         while let Some(chunk) = store.claim_transcription()? {
             let text = transcribe_audio(&config, key, &std::fs::read(store.audio_path(&chunk)?)?)?;
-            store.transcription_result(&chunk, &text, "", json!({"source":"synthetic-provider-fixture"}))?;
+            store.transcription_result(
+                &chunk,
+                &text,
+                "",
+                json!({"source":"synthetic-provider-fixture"}),
+            )?;
         }
         Ok(())
     };
@@ -402,7 +434,9 @@ fn replay_test(
     // The Actions tab: the owner picker lists the bot; one drafted item goes to it now, and one
     // typed item waits for Send.
     anyhow::ensure!(
-        tico.roster()?.iter().any(|row| row.0 == format!("bot:{bot}")),
+        tico.roster()?
+            .iter()
+            .any(|row| row.0 == format!("bot:{bot}")),
         "The owner list is missing the bot"
     );
     let drafted = assist::draft(store, &config, key, &record.id)?;
@@ -412,8 +446,22 @@ fn replay_test(
         .first()
         .context("No action item was drafted")?
         .clone();
-    tico.send_task(store, &record.id, &item.id, &format!("bot:{bot}"), "Fixture bot", true)?;
-    tico.send_task(store, &record.id, &item.id, &format!("bot:{bot}"), "Fixture bot", true)?;
+    tico.send_task(
+        store,
+        &record.id,
+        &item.id,
+        &format!("bot:{bot}"),
+        "Fixture bot",
+        true,
+    )?;
+    tico.send_task(
+        store,
+        &record.id,
+        &item.id,
+        &format!("bot:{bot}"),
+        "Fixture bot",
+        true,
+    )?;
     store.update_context(&record.id, |context| {
         context.items.push(Item {
             id: "typed-item".into(),
@@ -470,6 +518,289 @@ fn replay_test(
     Ok(())
 }
 
+fn live_speech_test(
+    store: &tico_recorder_native::store::Store,
+    tico_url: String,
+    bot: String,
+    me: &std::path::Path,
+    them: Option<&std::path::Path>,
+    seconds_after: u64,
+) -> Result<()> {
+    use serde_json::{Value, json};
+    use std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    };
+    use tico_recorder_native::{
+        audio::Channel,
+        capture,
+        engine::RecordingHandle,
+        live::LiveSync,
+        network::{Tico, Transcriber},
+        notices,
+        settings::{self, Destination, Settings},
+        speech, stream,
+    };
+    anyhow::ensure!(
+        std::env::var_os("TICO_RECORDER_DATA_DIR").is_some(),
+        "Use an isolated TICO_RECORDER_DATA_DIR"
+    );
+    let url = reqwest::Url::parse(&tico_url)?;
+    anyhow::ensure!(
+        ["127.0.0.1", "localhost", "::1", "[::1]"].contains(&url.host_str().unwrap_or("")),
+        "The live speech test only runs against localhost"
+    );
+    // Signed in to the Tico as the person, with speech through it. The token is held for this
+    // run only, not saved in the keychain.
+    let destination = Destination {
+        id: "speech-test".into(),
+        name: "Local Tico".into(),
+        base_url: tico_url,
+        actor: String::new(),
+    };
+    let token = std::env::var("TICO_REPLAY_TEST_TOKEN").context("Set TICO_REPLAY_TEST_TOKEN")?;
+    settings::hold_secret(&format!("tico-grant:{}", destination.id), "")?;
+    settings::hold_secret(&format!("tico:{}", destination.id), &token)?;
+    let config = Settings {
+        destinations: vec![destination.clone()],
+        speech_source: speech::TICO.into(),
+        streaming: Some(true),
+        ..Default::default()
+    };
+    settings::write(store.root(), &config)?;
+    let services = speech::refresh(&destination)?;
+    anyhow::ensure!(
+        services.stream && services.transcribe,
+        "This Tico can't stream and transcribe: {services:?}"
+    );
+    // The app's background workers: transcription (with speaker labels) and live sharing.
+    let _transcriber = Transcriber::start(store.clone());
+    let _live = LiveSync::start(store.clone());
+    let mut inputs = vec![(Channel::Microphone, read_wav(me)?)];
+    if let Some(them) = them {
+        inputs.push((Channel::Meeting, read_wav(them)?));
+    }
+    let speech_ms = inputs
+        .iter()
+        .map(|(_, samples)| samples.len() as u64 * 1000 / 16000)
+        .max()
+        .unwrap_or(0);
+    let record = store.create("Live speech test")?;
+    let id = record.id.clone();
+    let started = Instant::now();
+    let handle = RecordingHandle::with_sources_streaming(
+        store.clone(),
+        id.clone(),
+        stream::Plan::from_settings(&config),
+        move || {
+            let sources = inputs
+                .into_iter()
+                .map(|(channel, samples)| {
+                    capture::start_paced(channel, "Speech file", 16000, move |frame| {
+                        samples.get(frame as usize).copied().unwrap_or(0.)
+                    })
+                })
+                .collect();
+            Ok((sources, String::new()))
+        },
+    )?;
+    let at = || started.elapsed().as_millis() as u64;
+    // People: adding the bot opens the meeting in Tico, private, as the app does.
+    let tico = Tico::saved(&config, &destination.id)?;
+    let live_id = tico.ensure_live(store, &id, false)?;
+    tico.call(
+        &format!("/api/v2/live-meetings/{live_id}/bots"),
+        Some(&json!({"bots":[bot]})),
+        &format!("recorder:{id}:attach:{bot}"),
+    )?;
+    let attached_ms = at();
+    // Everything below is in ms since recording started: streamed words as they arrive, turns
+    // queued and acknowledged, corrections, finished chunks and the meeting's events.
+    let mut words: BTreeMap<(String, u64, String), u64> = BTreeMap::new();
+    let mut turns: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut corrections: BTreeMap<i64, Value> = BTreeMap::new();
+    let mut chunks: BTreeMap<String, Value> = BTreeMap::new();
+    let mut events: Vec<Value> = vec![];
+    let mut errors: Vec<Value> = vec![];
+    let (mut after, mut quiet_since, mut polled, mut synced) = (0, 0, 0, 0);
+    let stop_at = speech_ms + seconds_after * 1000;
+    let mut stopped = false;
+    loop {
+        let now = at();
+        if !stopped && now >= stop_at {
+            handle.stop();
+            stopped = true;
+        }
+        for (channel, list) in store.live_words(&id)? {
+            for word in list {
+                words
+                    .entry((channel.clone(), word.start_ms, word.text))
+                    .or_insert(now);
+            }
+        }
+        {
+            let db = store.db()?;
+            let mut query = db.prepare(
+                "SELECT seq,payload_json,acknowledged FROM live_outbox WHERE recording_id=? ORDER BY seq",
+            )?;
+            for row in query.query_map([&id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })? {
+                let (seq, payload, acknowledged) = row?;
+                let turn = turns.entry(seq).or_insert_with(|| {
+                    let mut turn: Value = serde_json::from_str(&payload).unwrap_or_default();
+                    turn["queued_ms"] = json!(now);
+                    turn
+                });
+                if acknowledged && turn["ack_ms"].is_null() {
+                    turn["ack_ms"] = json!(now);
+                }
+            }
+            drop(query);
+            let mut query = db.prepare(
+                "SELECT rowid,seq,revision,payload_json,state FROM live_corrections WHERE recording_id=?",
+            )?;
+            for row in query.query_map([&id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })? {
+                let (rowid, seq, revision, payload, state) = row?;
+                let correction = corrections.entry(rowid).or_insert_with(|| {
+                    let payload: Value = serde_json::from_str(&payload).unwrap_or_default();
+                    json!({"seq":seq,"revision":revision,"speaker":payload["speaker"],"text":payload["text"],"queued_ms":now})
+                });
+                if state != 0 && correction["posted_ms"].is_null() {
+                    correction["posted_ms"] = json!(now);
+                    correction["state"] = json!(if state == 1 {
+                        "posted"
+                    } else {
+                        "kept streamed text"
+                    });
+                }
+            }
+        }
+        let current = store.get(&id)?;
+        for chunk in &current.chunks {
+            let row = chunks.entry(chunk.id.clone()).or_insert_with(|| {
+                json!({"channel":chunk.channel,"start_ms":chunk.start_ms,"end_ms":chunk.end_ms,"saved_ms":now})
+            });
+            if ["done", "silence"].contains(&chunk.status.as_str()) && row["done_ms"].is_null() {
+                row["done_ms"] = json!(now);
+                row["status"] = json!(chunk.status);
+                row["text"] = json!(chunk.text);
+            }
+            if !chunk.error.is_empty() {
+                row["error"] = json!(chunk.error);
+            }
+        }
+        if now >= polled + 250 {
+            polled = now;
+            match tico.events(&format!(
+                "/api/v2/live-meetings/{live_id}/events?after={after}"
+            )) {
+                Ok(rows) => {
+                    for (event, kind, payload) in rows {
+                        after = after.max(event);
+                        quiet_since = at();
+                        events.push(
+                            json!({"id":event,"type":kind,"ms":quiet_since,"payload":payload}),
+                        );
+                    }
+                }
+                Err(error) => errors.push(json!({"ms":now,"events":format!("{error:#}")})),
+            }
+        }
+        // The window's own sync while it shows the meeting: every 2.5 s, with the bots' notices.
+        if now >= synced + 2500 {
+            synced = now;
+            let result = tico.sync_live(store, &id).and_then(|view| {
+                view["event_id"]
+                    .as_u64()
+                    .map_or(Ok(()), |latest| tico.read_notices(&live_id, latest))
+            });
+            if let Err(error) = result {
+                errors.push(json!({"ms":now,"sync":format!("{error:#}")}));
+            }
+        }
+        let settled = stopped
+            && handle.is_finished()
+            && current
+                .chunks
+                .iter()
+                .all(|chunk| ["done", "silence"].contains(&chunk.status.as_str()))
+            && turns.values().all(|turn| !turn["ack_ms"].is_null())
+            && corrections.values().all(|row| !row["posted_ms"].is_null());
+        if settled && now > quiet_since.max(stop_at) + 8000 || now > stop_at + 120_000 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle.finish()?;
+    let finish = tico
+        .finish_live(store, &id)
+        .map_err(|error| format!("{error:#}"));
+    // Each streamed turn that names the bot (its first word, so a misheard "PM" still counts):
+    // from the end of its words to them arriving as final text, to Tico acknowledging the turn,
+    // and to the bot's reply to it.
+    let name = bot.split('-').next().unwrap_or_default().to_lowercase();
+    let mut asks = vec![];
+    for (seq, turn) in &turns {
+        let text = turn["text"].as_str().unwrap_or_default().to_lowercase();
+        if !text.contains(&name) {
+            continue;
+        }
+        let end = turn["end_ms"].as_u64().unwrap_or(0);
+        let final_ms = words
+            .iter()
+            .filter(|((_, start, _), _)| {
+                (turn["start_ms"].as_u64().unwrap_or(0)..=end).contains(start)
+            })
+            .map(|(_, arrived)| *arrived)
+            .max();
+        let reply = events.iter().find(|event| {
+            event["type"] == "meeting.bot_reply" && event["payload"]["transcript_seq"] == json!(seq)
+        });
+        let since = |ms: Option<u64>| ms.map(|ms| ms as i64 - end as i64);
+        asks.push(json!({"seq":seq,"text":turn["text"],"end_ms":end,
+            "final_after_ms":since(final_ms),"ack_after_ms":since(turn["ack_ms"].as_u64()),
+            "reply_after_ms":since(reply.and_then(|event| event["ms"].as_u64())),
+            "reply":reply.map(|event| &event["payload"]["text"])}));
+    }
+    let kinds = [
+        "meeting.bot_reply",
+        "meeting.model",
+        "meeting.router",
+        "meeting.chat",
+    ];
+    let record = store.get(&id)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "live_id":live_id,"recording_id":id,"speech_ms":speech_ms,"stopped_ms":stop_at,
+            "attached_ms":attached_ms,"asks":asks,
+            "streamed":turns.values().collect::<Vec<_>>(),
+            "corrections":corrections.values().collect::<Vec<_>>(),
+            "chunks":chunks.values().collect::<Vec<_>>(),
+            "bot_events":events.iter().filter(|event| {
+                let kind = event["type"].as_str().unwrap_or_default();
+                kinds.contains(&kind) || kind.starts_with("meeting.bot_turn")
+            }).collect::<Vec<_>>(),
+            "notices":notices::notices(&live_id),
+            "errors":errors,"finish":finish,
+            "lines":meeting_json(&record, json!({}))["lines"]}))?
+    );
+    Ok(())
+}
+
 fn transcribe_meeting(
     store: &tico_recorder_native::store::Store,
     me: &std::path::Path,
@@ -484,24 +815,13 @@ fn transcribe_meeting(
         "Use an isolated TICO_RECORDER_DATA_DIR"
     );
     let key = std::env::var("TICO_RECORDER_STT_KEY").context("Set TICO_RECORDER_STT_KEY")?;
-    let read = |path: &std::path::Path| -> Result<Vec<f32>> {
-        let mut reader = hound::WavReader::open(path)?;
-        anyhow::ensure!(
-            reader.spec().sample_rate == 16000 && reader.spec().channels == 1,
-            "Expected 16 kHz mono WAV"
-        );
-        Ok(reader
-            .samples::<i16>()
-            .map(|value| value.map(|value| value as f32 / 32768.))
-            .collect::<std::result::Result<_, _>>()?)
-    };
     let record = store.create("Meeting benchmark")?;
     store.mutate(&record.id, |record| {
         record.meeting_audio = true;
         Ok(())
     })?;
-    engine::import_audio(store, &record.id, Channel::Microphone, read(me)?)?;
-    engine::import_audio(store, &record.id, Channel::Meeting, read(them)?)?;
+    engine::import_audio(store, &record.id, Channel::Microphone, read_wav(me)?)?;
+    engine::import_audio(store, &record.id, Channel::Meeting, read_wav(them)?)?;
     let config = Settings {
         transcription_url: url,
         transcription_model: model,
@@ -538,6 +858,18 @@ fn transcribe_meeting(
         )
     );
     Ok(())
+}
+/// The samples of a 16 kHz mono WAV file.
+fn read_wav(path: &std::path::Path) -> Result<Vec<f32>> {
+    let mut reader = hound::WavReader::open(path)?;
+    anyhow::ensure!(
+        reader.spec().sample_rate == 16000 && reader.spec().channels == 1,
+        "Expected 16 kHz mono WAV"
+    );
+    Ok(reader
+        .samples::<i16>()
+        .map(|value| value.map(|value| value as f32 / 32768.))
+        .collect::<std::result::Result<_, _>>()?)
 }
 /// `fields` plus the recording's transcript lines.
 fn meeting_json(

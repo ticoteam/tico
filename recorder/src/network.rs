@@ -395,12 +395,16 @@ impl Tico {
     }
     /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
     /// keep-alive, which follows what was already there. The stream is then closed.
-    pub(crate) fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+    pub fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
             "Invalid Tico endpoint"
         );
-        let url = format!("{}{}", settings::safe_url(&self.destination.base_url)?, path);
+        let url = format!(
+            "{}{}",
+            settings::safe_url(&self.destination.base_url)?,
+            path
+        );
         let reply = self
             .client
             .get(url)
@@ -429,7 +433,10 @@ impl Tico {
                 data.clear();
                 continue;
             }
-            match line.split_once(':').map(|(field, value)| (field, value.trim_start())) {
+            match line
+                .split_once(':')
+                .map(|(field, value)| (field, value.trim_start()))
+            {
                 Some(("id", value)) => id = value.parse().unwrap_or(id),
                 Some(("event", value)) => kind = value.into(),
                 Some(("data", value)) => data.push_str(value),
@@ -473,15 +480,23 @@ impl Tico {
                 && let Some(id) = row["id"].as_str()
             {
                 let name = row["name"].as_str().filter(|name| !name.is_empty());
-                result.push((format!("human:{id}"), name.or(row["email"].as_str()).unwrap_or(id).into()));
+                result.push((
+                    format!("human:{id}"),
+                    name.or(row["email"].as_str()).unwrap_or(id).into(),
+                ));
             }
         }
         for row in org["bots"].as_array().into_iter().flatten() {
-            if row["status"].as_str().is_none_or(|state| state.is_empty() || state == "active")
+            if row["status"]
+                .as_str()
+                .is_none_or(|state| state.is_empty() || state == "active")
                 && let Some(slug) = row["id"].as_str()
             {
                 let name = row["display_name"].as_str().filter(|name| !name.is_empty());
-                result.push((format!("bot:{slug}"), name.or(row["name"].as_str()).unwrap_or(slug).into()));
+                result.push((
+                    format!("bot:{slug}"),
+                    name.or(row["name"].as_str()).unwrap_or(slug).into(),
+                ));
             }
         }
         Ok(result)
@@ -597,8 +612,11 @@ impl Tico {
                 && !notes.is_empty()
                 && delivery.receipt["notes_saved"] != true
             {
-                let meeting =
-                    self.call(&format!("/api/v2/meetings/{}", delivery.meeting_id), None, "")?;
+                let meeting = self.call(
+                    &format!("/api/v2/meetings/{}", delivery.meeting_id),
+                    None,
+                    "",
+                )?;
                 self.call_meeting(
                     &format!("/meetings/{}/edit", delivery.meeting_id),
                     Some(&json!({"version":meeting["version"].as_u64().unwrap_or(1),"note":notes})),
@@ -715,16 +733,18 @@ impl Tico {
             "Choose who gets it"
         );
         let base = settings::safe_url(&self.destination.base_url)?;
-        let filed = record
-            .deliveries
-            .iter()
-            .find(|entry| entry.destination_id == self.destination.id && !entry.meeting_id.is_empty());
+        let filed = record.deliveries.iter().find(|entry| {
+            entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
+        });
         let link = match (filed, context.live_id.is_empty()) {
             (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
             (None, false) => format!("{base}/#/meetings?live={}", context.live_id),
             (None, true) => String::new(),
         };
-        let sender = who["name"].as_str().or(who["email"].as_str()).unwrap_or("me");
+        let sender = who["name"]
+            .as_str()
+            .or(who["email"].as_str())
+            .unwrap_or("me");
         let body = json!({"title":item.title.chars().take(300).collect::<String>(),
             "body":crate::assist::task_body(&record, &item, sender, &link),"owner":owner,"private":private});
         let reply = self.call(
@@ -780,7 +800,10 @@ pub fn ready(record: &Recording) -> Result<()> {
 fn import_body(record: &Recording, context: &MeetingContext) -> Value {
     let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":true,"review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(&record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});
     // Tico takes calendar attendees as participants; it has no calendar field.
-    let attendees = context.calendar["attendees"].as_array().into_iter().flatten();
+    let attendees = context.calendar["attendees"]
+        .as_array()
+        .into_iter()
+        .flatten();
     for attendee in attendees.filter_map(|row| row.as_str().or(row["email"].as_str())) {
         let participants = body["participants"].as_array_mut().expect("participants");
         if participants.len() < 100 && !participants.contains(&json!(attendee)) {

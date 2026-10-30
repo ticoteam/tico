@@ -219,44 +219,59 @@ pub fn start_meeting_audio() -> Result<Source> {
 /// A real-time test tone in place of a microphone, for profiling and demos without a device:
 /// 48 kHz in 10 ms packets, a tone that pauses now and then like speech.
 pub fn start_synthetic(channel: Channel) -> Source {
+    let rate = 48_000;
+    start_paced(channel, "Test tone", rate, move |frame| {
+        let at = frame as f32 / rate as f32;
+        if at % 7. < 5. {
+            (at * 220. * std::f32::consts::TAU).sin() * 0.2
+        } else {
+            0.
+        }
+    })
+}
+
+/// An input that delivers `sample_at(frame)` in real time, as a device would: a test tone, or a
+/// recorded file for headless tests. Only in isolated libraries.
+pub fn start_paced(
+    channel: Channel,
+    name: &str,
+    rate: u32,
+    mut sample_at: impl FnMut(u64) -> f32 + Send + 'static,
+) -> Source {
     use std::sync::atomic::AtomicBool;
-    struct Synthetic(Arc<AtomicBool>);
-    impl CaptureStream for Synthetic {
+    struct Paced(Arc<AtomicBool>);
+    impl CaptureStream for Paced {
         fn stop(&mut self) -> Result<()> {
             self.0.store(true, Ordering::Relaxed);
             Ok(())
         }
     }
-    let rate = 48_000;
     let (mut sink, consumer) = AudioSink::channel();
     let health = sink.health.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
     let started = std::time::Instant::now();
     std::thread::Builder::new()
-        .name("tico-synthetic-input".into())
+        .name("tico-paced-input".into())
         .spawn(move || {
             let mut frame = 0_u64;
             while !stopped.load(Ordering::Relaxed) {
                 let due = started.elapsed().as_secs_f64() * f64::from(rate);
                 let frames = (due as u64).saturating_sub(frame) as usize;
-                sink.push_frames(frames, |index| {
-                    let at = (frame + index as u64) as f32 / rate as f32;
-                    if at % 7. < 5. { (at * 220. * std::f32::consts::TAU).sin() * 0.2 } else { 0. }
-                });
+                sink.push_frames(frames, |index| sample_at(frame + index as u64));
                 frame += frames as u64;
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         })
-        .expect("synthetic input");
+        .expect("paced input");
     Source {
         channel,
-        name: "Test tone".into(),
+        name: name.into(),
         sample_rate: rate,
         started,
         health,
         consumer,
-        stream: Box::new(Synthetic(stop)),
+        stream: Box::new(Paced(stop)),
     }
 }
 

@@ -2,9 +2,9 @@
 //! HTML/CSS/JS; it polls `view` and calls the commands below, each a thin wrapper over
 //! `Recorder`. Recording, transcription, live sync and drafts run on their own threads.
 mod recorder;
-mod update;
 #[cfg(test)]
 mod tests;
+mod update;
 
 use recorder::{Have, Recorder, SettingsForm};
 use serde_json::Value;

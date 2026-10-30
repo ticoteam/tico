@@ -42,7 +42,10 @@ impl Shared {
         if data {
             self.data.fetch_add(1, Ordering::SeqCst);
         }
-        let mut changes = self.changes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut changes = self
+            .changes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         *changes += 1;
         self.wake.notify_all();
     }
@@ -879,7 +882,12 @@ impl Store {
             match (kept.first(), kept.iter().map(|word| word.end_ms).max()) {
                 (Some(first), Some(end)) => transaction.execute(
                     "UPDATE live_words SET start_ms=?,end_ms=?,words=? WHERE rowid=?",
-                    params![first.start_ms as i64, end as i64, serde_json::to_string(&kept)?, rowid],
+                    params![
+                        first.start_ms as i64,
+                        end as i64,
+                        serde_json::to_string(&kept)?,
+                        rowid
+                    ],
                 )?,
                 _ => transaction.execute("DELETE FROM live_words WHERE rowid=?", [rowid])?,
             };
@@ -904,7 +912,9 @@ impl Store {
             "SELECT channel,words FROM live_words WHERE recording_id=? ORDER BY start_ms,rowid",
         )?;
         let mut out: BTreeMap<String, Vec<Word>> = BTreeMap::new();
-        for row in query.query_map([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+        for row in query.query_map([id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
             let (channel, text) = row?;
             out.entry(channel)
                 .or_default()
@@ -942,8 +952,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         // Same connection on the next borrow: a TEMP table lives only in the connection that made it.
-        store.db().unwrap().execute_batch("CREATE TEMP TABLE probe(x)").unwrap();
-        store.db().unwrap().execute_batch("SELECT * FROM temp.probe").unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute_batch("CREATE TEMP TABLE probe(x)")
+            .unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute_batch("SELECT * FROM temp.probe")
+            .unwrap();
         let journal: String = store
             .db()
             .unwrap()
@@ -964,7 +982,10 @@ mod tests {
         // A poke wakes waiters without counting as a write.
         let (version, changes) = (store.version(), store.changes());
         store.poke();
-        assert_eq!(store.wait_changes(changes, Duration::from_secs(1)), changes + 1);
+        assert_eq!(
+            store.wait_changes(changes, Duration::from_secs(1)),
+            changes + 1
+        );
         assert_eq!(store.version(), version);
     }
     #[test]
@@ -1087,11 +1108,21 @@ mod tests {
         };
         assert_eq!(texts(&store), ["We", "ship", "Friday", "morning", "then"]);
         // The end of the utterance restates all of it.
-        let whole = [word(1000, "We"), word(1300, "ship"), word(1800, "Friday"), word(2100, "morning.")];
+        let whole = [
+            word(1000, "We"),
+            word(1300, "ship"),
+            word(1800, "Friday"),
+            word(2100, "morning."),
+        ];
         save(900, 2700, &whole);
-        assert_eq!(texts(&Store::open(dir.path()).unwrap()), ["We", "ship", "Friday", "morning."]);
+        assert_eq!(
+            texts(&Store::open(dir.path()).unwrap()),
+            ["We", "ship", "Friday", "morning."]
+        );
         // Other channels and recordings are untouched; deleting the recording removes its words.
-        store.replace_live_words(&record.id, "them", 0, 5000, &[word(1200, "Hi")]).unwrap();
+        store
+            .replace_live_words(&record.id, "them", 0, 5000, &[word(1200, "Hi")])
+            .unwrap();
         save(0, 5000, &[]);
         assert!(!store.live_words(&record.id).unwrap().contains_key("me"));
         assert_eq!(store.live_words(&record.id).unwrap()["them"].len(), 1);

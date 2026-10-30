@@ -78,7 +78,11 @@ fn server(
                 let failed = reply.as_object().is_some_and(|row| {
                     row.len() == 1 || (row.len() == 2 && row.contains_key("error"))
                 }) && reply["status"].as_u64().is_some_and(|code| code >= 400);
-                let status = if failed { format!("{} Refused", reply["status"]) } else { "200 OK".into() };
+                let status = if failed {
+                    format!("{} Refused", reply["status"])
+                } else {
+                    "200 OK".into()
+                };
                 let body = match (failed, reply.get("error")) {
                     (true, Some(error)) => serde_json::to_vec(&json!({"error":error})).unwrap(),
                     (true, None) => b"{}".to_vec(),
@@ -208,8 +212,14 @@ fn send_one_item(steps: Vec<Option<Value>>) -> Vec<String> {
     let (tico, seen, worker) = server(steps);
     tico.send(&store, &record.id, false).unwrap();
     worker.join().unwrap();
-    let lines = seen.lock().unwrap().iter().map(|row| row.0.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect();
-    let saved = store.get(&record.id).unwrap().deliveries[0].receipt["items"]["item-fixture"]["id"].clone();
+    let lines = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|row| row.0.split(' ').take(2).collect::<Vec<_>>().join(" "))
+        .collect();
+    let saved =
+        store.get(&record.id).unwrap().deliveries[0].receipt["items"]["item-fixture"]["id"].clone();
     assert_eq!(saved, "proposal-fixture");
     lines
 }
@@ -221,10 +231,13 @@ fn meeting_routes_go_to_api_v2_which_runner_hostnames_route() {
         Some(json!({"sections":{"task":[]}})),
         Some(json!({"item":{"id":"proposal-fixture"}})),
     ]);
-    assert_eq!(&lines[2..], [
-        "GET /api/v2/meetings/meeting-fixture/items",
-        "POST /api/v2/meetings/meeting-fixture/items",
-    ]);
+    assert_eq!(
+        &lines[2..],
+        [
+            "GET /api/v2/meetings/meeting-fixture/items",
+            "POST /api/v2/meetings/meeting-fixture/items",
+        ]
+    );
 }
 #[test]
 fn an_older_tico_without_v2_meeting_routes_gets_the_old_path() {
@@ -237,12 +250,15 @@ fn an_older_tico_without_v2_meeting_routes_gets_the_old_path() {
         missing(),
         Some(json!({"item":{"id":"proposal-fixture"}})),
     ]);
-    assert_eq!(&lines[2..], [
-        "GET /api/v2/meetings/meeting-fixture/items",
-        "GET /api/meetings/meeting-fixture/items",
-        "POST /api/v2/meetings/meeting-fixture/items",
-        "POST /api/meetings/meeting-fixture/items",
-    ]);
+    assert_eq!(
+        &lines[2..],
+        [
+            "GET /api/v2/meetings/meeting-fixture/items",
+            "GET /api/meetings/meeting-fixture/items",
+            "POST /api/v2/meetings/meeting-fixture/items",
+            "POST /api/meetings/meeting-fixture/items",
+        ]
+    );
 }
 #[test]
 fn a_pending_earlier_turn_holds_back_later_source_turns_and_silence_does_not_block() {
@@ -395,25 +411,43 @@ fn drafts_and_private_answers_come_from_the_model_and_nothing_reaches_tico() {
     let record = transcript(&store, "Solo session");
     let chat = |content: &str| Some(json!({"choices":[{"message":{"content":content}}]}));
     let (model, seen, worker) = server(vec![
-        chat(r#"{"items":[{"title":"Send the proposal","quote":"I will send the proposal"},
-            {"title":"Ship on Friday","quote":"We ship on Friday"}]}"#),
+        chat(
+            r#"{"items":[{"title":"Send the proposal","quote":"I will send the proposal"},
+            {"title":"Ship on Friday","quote":"We ship on Friday"}]}"#,
+        ),
         chat("You said you will send the proposal (00:00)."),
     ]);
     let config = Settings {
         transcription_url: model.destination.base_url.clone(),
         ..Default::default()
     };
-    assert_eq!(crate::assist::draft(&store, &config, "key", &record.id).unwrap(), 1);
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        1
+    );
     // Nothing new to review: no request is made.
-    assert_eq!(crate::assist::draft(&store, &config, "key", &record.id).unwrap(), 0);
-    let answer = crate::assist::ask(&store, &config, "key", &record.id, "What did I commit to?").unwrap();
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        0
+    );
+    let answer =
+        crate::assist::ask(&store, &config, "key", &record.id, "What did I commit to?").unwrap();
     assert!(answer.contains("send the proposal"));
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert!(requests.iter().all(|row| row.0.starts_with("POST /chat/completions ")));
+    assert!(
+        requests
+            .iter()
+            .all(|row| row.0.starts_with("POST /chat/completions "))
+    );
     assert_eq!(requests[0].1["model"], crate::settings::ASSIST_MODEL);
-    assert!(requests[0].1["messages"][1]["content"].as_str().unwrap().contains("I will send the proposal"));
+    assert!(
+        requests[0].1["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("I will send the proposal")
+    );
     let context = store.context(&record.id).unwrap();
     assert!(context.live_id.is_empty() && context.live_destination.is_empty());
     assert_eq!(context.chat.len(), 2);
@@ -445,22 +479,44 @@ fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
         Some(who),
     ]);
     for _ in 0..2 {
-        tico.send_task(&store, &record.id, "item-fixture", "bot:sales", "Sales Bot", true)
-            .unwrap();
+        tico.send_task(
+            &store,
+            &record.id,
+            "item-fixture",
+            "bot:sales",
+            "Sales Bot",
+            true,
+        )
+        .unwrap();
     }
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
-    let tasks: Vec<_> = requests.iter().filter(|row| row.0.starts_with("POST /api/v2/tasks ")).collect();
+    let tasks: Vec<_> = requests
+        .iter()
+        .filter(|row| row.0.starts_with("POST /api/v2/tasks "))
+        .collect();
     assert_eq!(tasks.len(), 1);
     let body = &tasks[0].1;
-    assert_eq!((body["owner"].as_str(), body["private"].as_bool()), (Some("bot:sales"), Some(true)));
+    assert_eq!(
+        (body["owner"].as_str(), body["private"].as_bool()),
+        (Some("bot:sales"), Some(true))
+    );
     let text = body["body"].as_str().unwrap();
-    assert!(text.contains("“I will send the proposal” — Me, 00:00"), "{text}");
-    assert!(text.contains("Transcript around it:\n[00:00] Me: I will send the proposal"), "{text}");
+    assert!(
+        text.contains("“I will send the proposal” — Me, 00:00"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Transcript around it:\n[00:00] Me: I will send the proposal"),
+        "{text}"
+    );
     assert!(text.contains("sent by Chris from Tico Recorder"), "{text}");
     let context = store.context(&record.id).unwrap();
     let item = &context.items[0];
-    assert_eq!((item.task_id.as_str(), item.sent_to.as_str()), ("task-fixture", "Sales Bot"));
+    assert_eq!(
+        (item.task_id.as_str(), item.sent_to.as_str()),
+        ("task-fixture", "Sales Bot")
+    );
     assert!(item.task_url.ends_with("/#/task/task-fixture"));
     // The meeting now belongs to this Tico: Send offers only it.
     assert_eq!(context.live_destination, tico.destination.id);
@@ -478,7 +534,9 @@ fn streamed(store: &Store, id: &str, channel: &str, start_ms: u64, text: &str, s
         })
         .collect();
     let end = words.last().map_or(start_ms, |word| word.end_ms);
-    store.replace_live_words(id, channel, start_ms, end, &words).unwrap();
+    store
+        .replace_live_words(id, channel, start_ms, end, &words)
+        .unwrap();
 }
 #[test]
 fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
@@ -487,9 +545,21 @@ fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
     let record = store.create("Streamed drafting").unwrap();
     store.state(&record.id, "recording").unwrap();
     // Streamed text a few seconds old; no chunk is transcribed yet.
-    streamed(&store, &record.id, "me", 1_000, "Okay I will send Dana the pricing deck tomorrow", "");
-    assert!(!crate::assist::draft_due(&store, &record.id).unwrap(), "under 400 new characters");
-    let long = "so the plan is that everyone reviews the numbers before the board meeting next week ".repeat(8);
+    streamed(
+        &store,
+        &record.id,
+        "me",
+        1_000,
+        "Okay I will send Dana the pricing deck tomorrow",
+        "",
+    );
+    assert!(
+        !crate::assist::draft_due(&store, &record.id).unwrap(),
+        "under 400 new characters"
+    );
+    let long =
+        "so the plan is that everyone reviews the numbers before the board meeting next week "
+            .repeat(8);
     streamed(&store, &record.id, "them", 5_000, long.trim(), "S1");
     assert!(crate::assist::draft_due(&store, &record.id).unwrap());
     let chat = |content: &str| Some(json!({"choices":[{"message":{"content":content}}]}));
@@ -501,9 +571,15 @@ fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
         transcription_url: model.destination.base_url.clone(),
         ..Default::default()
     };
-    assert_eq!(crate::assist::draft(&store, &config, "key", &record.id).unwrap(), 1);
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        1
+    );
     worker.join().unwrap();
-    let sent = seen.lock().unwrap()[0].1["messages"][1]["content"].as_str().unwrap().to_owned();
+    let sent = seen.lock().unwrap()[0].1["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(sent.contains("I will send Dana the pricing deck"));
     // The newest five seconds wait for the next review while recording.
     let through = store.context(&record.id).unwrap().drafted_through_ms;
@@ -511,25 +587,50 @@ fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
     assert!(through > 4_000 && through <= 40_950 - 5_000, "{through}");
     // The chunk for that time lands and words it differently.
     store
-        .save_audio(&record.id, crate::audio::Channel::Microphone, 0, 4_500, &vec![0.2; 72_000], 16000)
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            4_500,
+            &vec![0.2; 72_000],
+            16000,
+        )
         .unwrap();
     let claimed = store.claim_transcription().unwrap().unwrap();
-    let words = ["Okay,", "I'll", "send", "Dana", "the", "pricing", "deck", "tomorrow."]
-        .iter()
-        .enumerate()
-        .map(|(index, text)| Word {
-            start_ms: 1_000 + index as u64 * 300,
-            end_ms: 1_250 + index as u64 * 300,
-            text: (*text).into(),
-            ..Default::default()
-        })
-        .collect();
+    let words = [
+        "Okay,",
+        "I'll",
+        "send",
+        "Dana",
+        "the",
+        "pricing",
+        "deck",
+        "tomorrow.",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, text)| Word {
+        start_ms: 1_000 + index as u64 * 300,
+        end_ms: 1_250 + index as u64 * 300,
+        text: (*text).into(),
+        ..Default::default()
+    })
+    .collect();
     store
-        .transcription_words(&claimed, "Okay, I'll send Dana the pricing deck tomorrow.", words, "", json!({}))
+        .transcription_words(
+            &claimed,
+            "Okay, I'll send Dana the pricing deck tomorrow.",
+            words,
+            "",
+            json!({}),
+        )
         .unwrap();
     let record = store.get(&record.id).unwrap();
     let shown = crate::transcript::live_lines(&record, &store.live_words(&record.id).unwrap());
-    assert_eq!(shown[0].text, "Okay, I'll send Dana the pricing deck tomorrow.");
+    assert_eq!(
+        shown[0].text,
+        "Okay, I'll send Dana the pricing deck tomorrow."
+    );
     assert!(!shown.iter().any(|line| line.text.contains("I will send")));
     // The item stays, backed by the text it was drafted from; an invented quote is not.
     let context = store.context(&record.id).unwrap();
@@ -579,11 +680,21 @@ fn once_a_recording_is_transcribed_its_streamed_text_never_reaches_tico() {
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 4);
-    assert_eq!(requests[0].1["chunks"][0]["text"], "I will send the proposal");
-    assert!(requests[3].1["transcript"].to_string().contains("I will send the proposal"));
+    assert_eq!(
+        requests[0].1["chunks"][0]["text"],
+        "I will send the proposal"
+    );
+    assert!(
+        requests[3].1["transcript"]
+            .to_string()
+            .contains("I will send the proposal")
+    );
     for (_, body, _) in requests.iter() {
         let body = body.to_string();
-        assert!(!body.contains("streamed"), "streamed text reached Tico: {body}");
+        assert!(
+            !body.contains("streamed"),
+            "streamed text reached Tico: {body}"
+        );
     }
 }
 
@@ -772,7 +883,10 @@ fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
         .collect();
     assert_eq!(
         texts,
-        [vec!["early", "edge", "tie"], vec!["between", "inside", "late"]]
+        [
+            vec!["early", "edge", "tie"],
+            vec!["between", "inside", "late"]
+        ]
     );
     assert!(assign(&[], &words).is_empty());
     // Words in time order; the voice diarization named most, else the speaker it had.
@@ -791,26 +905,47 @@ fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
     );
     // Streamed microphone words that repeat streamed meeting audio are echo.
     assert!(
-        crate::transcript::without_echo(&[word(1000, 1200, "Hello", "")], &[word(1100, 1300, "hello,", "S1")])
-            .is_empty()
+        crate::transcript::without_echo(
+            &[word(1000, 1200, "Hello", "")],
+            &[word(1100, 1300, "hello,", "S1")]
+        )
+        .is_empty()
     );
     // A turn the finished transcript has no words for is emptied.
     assert_eq!(corrected(vec![], "S1"), ("S1".into(), String::new()));
     // Streamed turns end where the speaker changes or speech pauses.
     let me = streamed_turns(
         "me",
-        &[word(0, 250, "so", "S1"), word(300, 550, "yes", ""), word(2600, 2800, "right", "")],
+        &[
+            word(0, 250, "so", "S1"),
+            word(300, 550, "yes", ""),
+            word(2600, 2800, "right", ""),
+        ],
     );
     assert_eq!(
-        me.iter().map(|turn| (turn.speaker.as_str(), turn.text.as_str(), turn.start_ms, turn.end_ms)).collect::<Vec<_>>(),
+        me.iter()
+            .map(|turn| (
+                turn.speaker.as_str(),
+                turn.text.as_str(),
+                turn.start_ms,
+                turn.end_ms
+            ))
+            .collect::<Vec<_>>(),
         [("Me", "so yes", 0, 550), ("Me", "right", 2600, 2800)]
     );
     let them = streamed_turns(
         "them",
-        &[word(0, 250, "hi", "S1"), word(300, 550, "all", "S1"), word(600, 800, "hey", "S2"), word(900, 950, "ok", "")],
+        &[
+            word(0, 250, "hi", "S1"),
+            word(300, 550, "all", "S1"),
+            word(600, 800, "hey", "S2"),
+            word(900, 950, "ok", ""),
+        ],
     );
     assert_eq!(
-        them.iter().map(|turn| (turn.speaker.as_str(), turn.text.as_str())).collect::<Vec<_>>(),
+        them.iter()
+            .map(|turn| (turn.speaker.as_str(), turn.text.as_str()))
+            .collect::<Vec<_>>(),
         [("S1", "hi all"), ("S2", "hey"), ("Meeting audio", "ok")]
     );
 }
@@ -829,10 +964,21 @@ fn live_recording(store: &Store, title: &str) -> Recording {
 /// Finishes a microphone chunk with these words, as Scribe returns them.
 fn finished_chunk(store: &Store, id: &str, start: u64, end: u64, words: Vec<Word>) {
     store
-        .save_audio(id, crate::audio::Channel::Microphone, start, end, &vec![0.2; 16000], 16000)
+        .save_audio(
+            id,
+            crate::audio::Channel::Microphone,
+            start,
+            end,
+            &vec![0.2; 16000],
+            16000,
+        )
         .unwrap();
     let claimed = store.claim_transcription().unwrap().unwrap();
-    let text = words.iter().map(|word| word.text.as_str()).collect::<Vec<_>>().join(" ");
+    let text = words
+        .iter()
+        .map(|word| word.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     store
         .transcription_words(&claimed, &text, words, "", json!({"fixture":true}))
         .unwrap();
@@ -855,7 +1001,11 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     streamed(&store, id, "them", 1_200, "hi all", "S1");
     let (result, requests) = pass(vec![Some(json!({"accepted":[1,2]}))]);
     result.unwrap();
-    assert!(requests[0].0.starts_with("POST /api/v2/live-meetings/live-fixture/chunks "));
+    assert!(
+        requests[0]
+            .0
+            .starts_with("POST /api/v2/live-meetings/live-fixture/chunks ")
+    );
     assert_eq!(
         requests[0].1["chunks"],
         json!([
@@ -869,8 +1019,14 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     let (result, requests) = pass(vec![Some(json!({"accepted":[3,4]}))]);
     result.unwrap();
     let chunks = &requests[0].1["chunks"];
-    assert_eq!((chunks[0]["seq"].clone(), chunks[0]["text"].clone()), (json!(3), json!("yes")));
-    assert_eq!((chunks[1]["seq"].clone(), chunks[1]["text"].clone()), (json!(4), json!("and fiends")));
+    assert_eq!(
+        (chunks[0]["seq"].clone(), chunks[0]["text"].clone()),
+        (json!(3), json!("yes"))
+    );
+    assert_eq!(
+        (chunks[1]["seq"].clone(), chunks[1]["text"].clone()),
+        (json!(4), json!("and fiends"))
+    );
     assert_eq!(chunks.as_array().unwrap().len(), 2);
     // A final that arrives after a later one starts no earlier than it (Tico refuses that);
     // a streamed word the finished transcript won't have still goes now.
@@ -910,7 +1066,9 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     let (result, requests) = pass(vec![
         Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
         Some(json!({"id":"live-fixture","seq":4,"revision":2,"replayed":false,"event_id":10})),
-        Some(json!({"status":422,"error":{"code":"validation","message":"Transcript text is required"}})),
+        Some(
+            json!({"status":422,"error":{"code":"validation","message":"Transcript text is required"}}),
+        ),
     ]);
     result.unwrap();
     assert_eq!(first[1], requests[0], "the retry is the same request");
@@ -921,13 +1079,19 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     assert_eq!(
         corrections,
         [
-            ("/api/v2/live-meetings/live-fixture/chunks/1/corrections".into(),
-             json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})),
-            ("/api/v2/live-meetings/live-fixture/chunks/4/corrections".into(),
-             json!({"revision":2,"speaker":"Me","start_ms":3000,"end_ms":3550,"text":"and friends"})),
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/1/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})
+            ),
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/4/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":3000,"end_ms":3550,"text":"and friends"})
+            ),
             // No finished words: emptied (Tico refuses empty text for now, and keeps "uh").
-            ("/api/v2/live-meetings/live-fixture/chunks/6/corrections".into(),
-             json!({"revision":2,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":""})),
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/6/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":""})
+            ),
         ]
     );
     assert!(requests[0].2.contains(":live:1:r2:"), "{}", requests[0].2);
@@ -936,8 +1100,18 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
         .iter()
         .map(|(_, body)| body["text"].as_str().unwrap().to_owned())
         .collect();
-    shared.insert(2, first[0].1["chunks"][0]["text"].as_str().unwrap().to_owned());
-    assert_eq!(shared.join(" ").split_whitespace().collect::<Vec<_>>().join(" "), "Hello there and friends bye");
+    shared.insert(
+        2,
+        first[0].1["chunks"][0]["text"].as_str().unwrap().to_owned(),
+    );
+    assert_eq!(
+        shared
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        "Hello there and friends bye"
+    );
     // Nothing changed: nothing is sent (this Tico is gone, so any request would fail).
     let (tico, _, worker) = server(vec![]);
     worker.join().unwrap();
@@ -954,10 +1128,18 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     let store = Store::open(dir.path()).unwrap();
     let record = live_recording(&store, "Chunks only");
     let id = record.id.as_str();
-    finished_chunk(&store, id, 0, 5_000, vec![word(400, 700, "Morning", ""), word(800, 1000, "all", "")]);
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5_000,
+        vec![word(400, 700, "Morning", ""), word(800, 1000, "all", "")],
+    );
     let (tico, seen, worker) = server(vec![
         // Paused in Tico: the turn waits, and the meeting is read to see so.
-        Some(json!({"status":409,"error":{"code":"meeting_state","message":"A paused meeting cannot accept new transcript text"}})),
+        Some(
+            json!({"status":409,"error":{"code":"meeting_state","message":"A paused meeting cannot accept new transcript text"}}),
+        ),
         Some(json!({"id":"live-fixture","state":"paused"})),
     ]);
     tico.push_live(&store, id).unwrap();
@@ -973,13 +1155,15 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     worker.join().unwrap();
     tico.push_live(&store, id).unwrap();
     // Resumed in Tico: the waiting turn goes again, then the streamed one.
-    let (tico, seen, worker) = server(vec![
-        Some(json!({"id":"live-fixture","state":"live"})),
-    ]);
+    let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"live"}))]);
     // A paused meeting is only read back.
     tico.sync_live(&store, id).unwrap();
     worker.join().unwrap();
-    assert!(seen.lock().unwrap()[0].0.starts_with("GET /api/v2/live-meetings/live-fixture "));
+    assert!(
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-fixture ")
+    );
     assert_eq!(store.context(id).unwrap().live_state, "live");
     let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
     tico.push_live(&store, id).unwrap();
@@ -1006,14 +1190,19 @@ fn meeting_notices_are_read_from_new_events_only() {
     tico.read_notices("live-events", 240).unwrap();
     worker.join().unwrap();
     assert!(
-        seen.lock().unwrap()[0].0.starts_with("GET /api/v2/live-meetings/live-events/events?after=40 "),
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-events/events?after=40 "),
         "{}",
         seen.lock().unwrap()[0].0
     );
     let shown = crate::notices::notices("live-events");
     // What came after the keep-alive is the next read's.
     assert_eq!(shown.len(), 1);
-    assert_eq!(shown[0].text("Falcon"), "Falcon will answer after its current reply");
+    assert_eq!(
+        shown[0].text("Falcon"),
+        "Falcon will answer after its current reply"
+    );
     // Nothing new: nothing asked (this Tico is gone, so a request would fail).
     let (tico, _, worker) = server(vec![]);
     worker.join().unwrap();

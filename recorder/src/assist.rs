@@ -43,7 +43,12 @@ fn row(line: &Line) -> Value {
 }
 
 /// One chat completion through the transcription provider (OpenRouter by default).
-fn complete(config: &Settings, key: &str, messages: Vec<Value>, json_reply: bool) -> Result<String> {
+fn complete(
+    config: &Settings,
+    key: &str,
+    messages: Vec<Value>,
+    json_reply: bool,
+) -> Result<String> {
     ensure!(
         !key.is_empty() && !config.assist_model.trim().is_empty(),
         "Add a transcription key in Settings"
@@ -100,7 +105,10 @@ pub fn quote_supported(item: &Item, record: &Recording) -> bool {
         || transcript::lines(record)
             .iter()
             .any(|line| line.text.contains(&item.quote))
-        || record.chunks.iter().any(|chunk| chunk.text.contains(&item.quote))
+        || record
+            .chunks
+            .iter()
+            .any(|chunk| chunk.text.contains(&item.quote))
 }
 
 /// The lines drafting reads: finished chunks plus final streamed text, and whether the
@@ -168,8 +176,15 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
     if fresh.is_empty() {
         return Ok(0);
     }
-    let earlier: Vec<Value> = lines[first.saturating_sub(6)..first].iter().map(row).collect();
-    let existing: Vec<&str> = context.items.iter().map(|item| item.title.as_str()).collect();
+    let earlier: Vec<Value> = lines[first.saturating_sub(6)..first]
+        .iter()
+        .map(row)
+        .collect();
+    let existing: Vec<&str> = context
+        .items
+        .iter()
+        .map(|item| item.title.as_str())
+        .collect();
     let input = json!({"EXISTING":existing,"EARLIER":earlier,"NEW":fresh.iter().map(row).collect::<Vec<_>>()});
     let text = complete(
         config,
@@ -183,8 +198,19 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
     let found = object(&text).context("The suggestion model returned something other than JSON")?;
     let mut added = 0;
     store.update_context(id, |current| {
-        for row in found["items"].as_array().into_iter().flatten().take(MAX_PER_REVIEW) {
-            let title: String = row["title"].as_str().unwrap_or("").trim().chars().take(300).collect();
+        for row in found["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(MAX_PER_REVIEW)
+        {
+            let title: String = row["title"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(300)
+                .collect();
             let Some((quote, at_ms, source)) = locate(&fresh, row["quote"].as_str().unwrap_or(""))
             else {
                 continue;
@@ -214,7 +240,13 @@ pub fn draft(store: &Store, config: &Settings, key: &str, id: &str) -> Result<us
 }
 
 /// A private answer about one recording. It never leaves this computer except to the model.
-pub fn ask(store: &Store, config: &Settings, key: &str, id: &str, question: &str) -> Result<String> {
+pub fn ask(
+    store: &Store,
+    config: &Settings,
+    key: &str,
+    id: &str,
+    question: &str,
+) -> Result<String> {
     let record = store.get(id)?;
     let context: MeetingContext = store.context(id)?;
     // Newest speech matters most when the whole meeting does not fit.
@@ -225,7 +257,12 @@ pub fn ask(store: &Store, config: &Settings, key: &str, id: &str, question: &str
         if bytes > 120_000 {
             break;
         }
-        rows.push(format!("[{}] {}: {}", clock(line.start_ms), line.speaker, line.text));
+        rows.push(format!(
+            "[{}] {}: {}",
+            clock(line.start_ms),
+            line.speaker,
+            line.text
+        ));
     }
     rows.reverse();
     let mut messages = vec![json!({"role":"system","content":format!(
@@ -235,8 +272,13 @@ pub fn ask(store: &Store, config: &Settings, key: &str, id: &str, question: &str
         rows.join("\n")
     )})];
     for turn in &context.chat[context.chat.len().saturating_sub(10)..] {
-        let role = if turn.role == "you" { "user" } else { "assistant" };
-        messages.push(json!({"role":role,"content":turn.text.chars().take(4000).collect::<String>()}));
+        let role = if turn.role == "you" {
+            "user"
+        } else {
+            "assistant"
+        };
+        messages
+            .push(json!({"role":role,"content":turn.text.chars().take(4000).collect::<String>()}));
     }
     let question = question.trim();
     messages.push(json!({"role":"user","content":question.chars().take(4000).collect::<String>()}));
@@ -269,12 +311,20 @@ pub fn task_body(record: &Recording, item: &Item, sender: &str, link: &str) -> S
             .iter()
             .find(|line| line.text.contains(&item.quote))
             .map_or("", |line| line.speaker.as_str());
-        parts.push(format!("> “{}” — {speaker}, {}", item.quote, clock(item.at_ms)));
+        parts.push(format!(
+            "> “{}” — {speaker}, {}",
+            item.quote,
+            clock(item.at_ms)
+        ));
     }
     // The two minutes before the item and the half minute after, or the end of the meeting for
     // an item typed by hand.
     let end = lines.last().map_or(0, |line| line.end_ms);
-    let at = if item.quote.is_empty() && item.at_ms == 0 { end } else { item.at_ms };
+    let at = if item.quote.is_empty() && item.at_ms == 0 {
+        end
+    } else {
+        item.at_ms
+    };
     let excerpt: Vec<String> = lines
         .iter()
         .filter(|line| line.end_ms + 120_000 >= at && line.start_ms <= at + 30_000)
@@ -282,7 +332,10 @@ pub fn task_body(record: &Recording, item: &Item, sender: &str, link: &str) -> S
         .collect();
     let mut excerpt = excerpt.join("\n");
     if excerpt.len() > 6000 {
-        let cut = excerpt.char_indices().nth(6000).map_or(excerpt.len(), |(at, _)| at);
+        let cut = excerpt
+            .char_indices()
+            .nth(6000)
+            .map_or(excerpt.len(), |(at, _)| at);
         excerpt.truncate(cut);
         excerpt.push('…');
     }
@@ -290,7 +343,10 @@ pub fn task_body(record: &Recording, item: &Item, sender: &str, link: &str) -> S
         parts.push(format!("Transcript around it:\n{excerpt}"));
     }
     let started = record.started_at.get(..10).unwrap_or("");
-    let mut source = format!("From the meeting “{}”, {started}, sent by {sender} from Tico Recorder.", record.title);
+    let mut source = format!(
+        "From the meeting “{}”, {started}, sent by {sender} from Tico Recorder.",
+        record.title
+    );
     if !link.is_empty() {
         source.push_str(&format!("\nMeeting: {link}"));
     }
@@ -315,7 +371,11 @@ mod tests {
 
     #[test]
     fn quotes_must_come_from_the_transcript() {
-        let lines = [line(65_000, "Speaker 1", "Okay, I'll send Dana the pricing deck tomorrow.")];
+        let lines = [line(
+            65_000,
+            "Speaker 1",
+            "Okay, I'll send Dana the pricing deck tomorrow.",
+        )];
         assert_eq!(
             locate(&lines, "“i'll send Dana the pricing deck”"),
             Some((

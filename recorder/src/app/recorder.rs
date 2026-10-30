@@ -424,7 +424,11 @@ impl Recorder {
     }
     /// Starts `work` in the background; false when a job holding the controls (or one of this
     /// kind) is already running.
-    fn job(&mut self, kind: &str, work: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> bool {
+    fn job(
+        &mut self,
+        kind: &str,
+        work: impl FnOnce() -> anyhow::Result<Value> + Send + 'static,
+    ) -> bool {
         let meeting = self.meeting.clone();
         self.job_for(kind, meeting, work)
     }
@@ -559,7 +563,10 @@ impl Recorder {
                 };
                 let started = if synthetic_input() {
                     RecordingHandle::with_sources(self.store.clone(), record.id.clone(), || {
-                        Ok((vec![capture::start_synthetic(Channel::Microphone)], String::new()))
+                        Ok((
+                            vec![capture::start_synthetic(Channel::Microphone)],
+                            String::new(),
+                        ))
                     })
                 } else {
                     RecordingHandle::start(
@@ -805,7 +812,10 @@ impl Recorder {
                 self.signing_in = false;
             }
             if reply.kind == "send" {
-                *self.send_step.lock().unwrap_or_else(|error| error.into_inner()) = None;
+                *self
+                    .send_step
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = None;
             }
             // People and bots being added: a refusal takes them out again with the reason; once added,
             // the meeting's people list is fetched now instead of at the next sync.
@@ -960,7 +970,9 @@ impl Recorder {
                         "chat" => {
                             // Shown at once; the next sync brings bot replies and other people.
                             let sent = &value["sent"];
-                            if sent.is_object() && let Some(chat) = self.live["chat"].as_array_mut() {
+                            if sent.is_object()
+                                && let Some(chat) = self.live["chat"].as_array_mut()
+                            {
                                 if !chat.iter().any(|row| row["id"] == sent["id"]) {
                                     chat.push(sent.clone());
                                 }
@@ -1055,7 +1067,10 @@ impl Recorder {
         let before = self.adding_people.len();
         self.adding_people.retain(|row| {
             row.step != AddStep::Added
-                || !shown.contains(&row.actor) && row.added.is_some_and(|at| at.elapsed() < Duration::from_secs(15))
+                || !shown.contains(&row.actor)
+                    && row
+                        .added
+                        .is_some_and(|at| at.elapsed() < Duration::from_secs(15))
         });
         if self.adding_people.len() != before {
             self.bump();
@@ -1070,13 +1085,16 @@ impl Recorder {
         let now = Instant::now();
         for source in handle.status().sources {
             let lost = source.dropped_frames + source.errors;
-            let watch = self.inputs.entry(source.channel.clone()).or_insert(InputWatch {
-                nonzero: source.nonzero,
-                lost,
-                signal_at: now,
-                loss_since: None,
-                loss_at: now,
-            });
+            let watch = self
+                .inputs
+                .entry(source.channel.clone())
+                .or_insert(InputWatch {
+                    nonzero: source.nonzero,
+                    lost,
+                    signal_at: now,
+                    loss_since: None,
+                    loss_at: now,
+                });
             if source.nonzero > watch.nonzero {
                 watch.nonzero = source.nonzero;
                 watch.signal_at = now;
@@ -1102,7 +1120,10 @@ impl Recorder {
             return Some("Your mic isn't picking anything up. Check the microphone in Settings.");
         }
         for (channel, watch) in &self.inputs {
-            if watch.loss_since.is_some_and(|since| since.elapsed() > LOSING_FOR) {
+            if watch
+                .loss_since
+                .is_some_and(|since| since.elapsed() > LOSING_FOR)
+            {
                 return Some(if channel == "me" {
                     "Your mic keeps dropping audio. Parts of what you say may be missing."
                 } else {
@@ -1133,13 +1154,18 @@ impl Recorder {
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.active.is_some() {
             Some("After this recording")
-        } else if self.records.iter().any(|record| record.live_state == "live") {
-            Some("After the live meeting ends")
         } else if self
             .records
             .iter()
-            .any(|record| record.deliveries.iter().any(|entry| entry.status == "sending"))
+            .any(|record| record.live_state == "live")
         {
+            Some("After the live meeting ends")
+        } else if self.records.iter().any(|record| {
+            record
+                .deliveries
+                .iter()
+                .any(|entry| entry.status == "sending")
+        }) {
             // A request to Tico is in flight; the outbox keeps unsent items and resumes them after a restart.
             Some("While a meeting is being sent")
         } else {
@@ -1154,7 +1180,9 @@ impl Recorder {
         let sources: Vec<Value> = status
             .sources
             .iter()
-            .map(|source| json!({"channel":source.channel,"level":source.peak.clamp(0., 1.).sqrt()}))
+            .map(
+                |source| json!({"channel":source.channel,"level":source.peak.clamp(0., 1.).sqrt()}),
+            )
             .collect();
         Some(json!({"id":id,"elapsed_ms":status.elapsed_ms,"sources":sources}))
     }
@@ -1168,17 +1196,36 @@ impl Recorder {
             let status = handle.status();
             let _ = write!(out, "{id}|{}|{}|", status.phase, status.error);
             for source in &status.sources {
-                let _ = write!(out, "{}:{}:{};", source.channel, source.name, source.nonzero == 0);
+                let _ = write!(
+                    out,
+                    "{}:{}:{};",
+                    source.channel,
+                    source.name,
+                    source.nonzero == 0
+                );
             }
             let _ = write!(out, "{:?}|", self.input_notice());
             for row in stream::status(id) {
-                let _ = write!(out, "{}:{}:{}:{};", row.channel, row.state, row.error, row.reconnects);
+                let _ = write!(
+                    out,
+                    "{}:{}:{}:{};",
+                    row.channel, row.state, row.error, row.reconnects
+                );
             }
             for partial in stream::partials(id) {
-                let _ = write!(out, "{}:{}:{};", partial.channel, partial.start_ms, partial.text);
+                let _ = write!(
+                    out,
+                    "{}:{}:{};",
+                    partial.channel, partial.start_ms, partial.text
+                );
             }
         }
-        let _ = write!(out, "|{:?}|{}|", self.send_step(), self.transcriber.status());
+        let _ = write!(
+            out,
+            "|{:?}|{}|",
+            self.send_step(),
+            self.transcriber.status()
+        );
         if let Some(sync) = &self.live_sync {
             let _ = write!(out, "{:?}", sync.errors());
         }
@@ -1269,7 +1316,12 @@ impl Recorder {
             return;
         }
         let at_ms = if record.state == "recording" {
-            record.chunks.iter().map(|chunk| chunk.end_ms).max().unwrap_or(0)
+            record
+                .chunks
+                .iter()
+                .map(|chunk| chunk.end_ms)
+                .max()
+                .unwrap_or(0)
         } else {
             0
         };
@@ -1347,7 +1399,12 @@ impl Recorder {
             .find(|row| row.0 == owner)
             .map_or(owner.to_owned(), |row| row.1.clone());
         self.last_owner = owner.to_owned();
-        if let Some(item) = self.context.items.iter_mut().find(|item| item.id == item_id) {
+        if let Some(item) = self
+            .context
+            .items
+            .iter_mut()
+            .find(|item| item.id == item_id)
+        {
             item.owner = owner.to_owned();
         }
         self.save_context();
@@ -1355,8 +1412,7 @@ impl Recorder {
         // A task from a private meeting is between me and whoever gets it.
         let private = self.live["visibility"] != "team";
         self.sending = Some(item_id.to_owned());
-        let (config, store, destination) =
-            (self.config.clone(), self.store.clone(), self.router());
+        let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
         self.job_for("task", Some(id.clone()), move || {
             Tico::saved(&config, &destination)?
@@ -1470,7 +1526,10 @@ impl Recorder {
             return;
         };
         if !(actor.starts_with("bot:") || actor.starts_with("human:"))
-            || self.adding_people.iter().any(|row| row.meeting == meeting && row.actor == actor)
+            || self
+                .adding_people
+                .iter()
+                .any(|row| row.meeting == meeting && row.actor == actor)
         {
             return;
         }
@@ -1490,7 +1549,13 @@ impl Recorder {
             .map_or(actor, |row| row.1.as_str())
             .to_owned();
         self.people_error.clear();
-        self.adding_people.push(Adding { meeting, actor: actor.into(), name, step: AddStep::Queued, added: None });
+        self.adding_people.push(Adding {
+            meeting,
+            actor: actor.into(),
+            name,
+            step: AddStep::Queued,
+            added: None,
+        });
         self.add_people();
     }
     /// Sends the queued people and bots of the open meeting to Tico, bots first, each kind in one
@@ -1501,14 +1566,21 @@ impl Recorder {
         };
         let queued = |rows: &[Adding], prefix: &str| -> Vec<String> {
             rows.iter()
-                .filter(|row| row.meeting == meeting && row.step == AddStep::Queued && row.actor.starts_with(prefix))
+                .filter(|row| {
+                    row.meeting == meeting
+                        && row.step == AddStep::Queued
+                        && row.actor.starts_with(prefix)
+                })
                 .map(|row| row.actor.clone())
                 .collect()
         };
         let bots = queued(&self.adding_people, "bot:");
         let humans = queued(&self.adding_people, "human:");
         let started = if !bots.is_empty() {
-            let slugs: Vec<String> = bots.iter().map(|actor| actor["bot:".len()..].to_owned()).collect();
+            let slugs: Vec<String> = bots
+                .iter()
+                .map(|actor| actor["bot:".len()..].to_owned())
+                .collect();
             let ok = self.network_job("attach", move |tico, store, id| {
                 let live_id = tico.ensure_live(&store, &id, false)?;
                 tico.call(
@@ -1520,12 +1592,17 @@ impl Recorder {
             });
             ok.then_some(bots)
         } else if !humans.is_empty() {
-            self.access_job(None, humans.clone(), vec![]).then_some(humans)
+            self.access_job(None, humans.clone(), vec![])
+                .then_some(humans)
         } else {
             None
         };
         for row in &mut self.adding_people {
-            if started.as_ref().is_some_and(|actors| actors.contains(&row.actor)) && row.meeting == meeting {
+            if started
+                .as_ref()
+                .is_some_and(|actors| actors.contains(&row.actor))
+                && row.meeting == meeting
+            {
                 row.step = AddStep::Sending;
             }
         }
@@ -1605,12 +1682,21 @@ impl Recorder {
             self.save_context();
         }
         self.destination = destination.into();
-        let (config, store, step) = (self.config.clone(), self.store.clone(), self.send_step.clone());
+        let (config, store, step) = (
+            self.config.clone(),
+            self.store.clone(),
+            self.send_step.clone(),
+        );
         let (id, destination) = (id.to_owned(), destination.to_owned());
         let say = move |label: &str| {
-            *step.lock().unwrap_or_else(|error| error.into_inner()) = Some((id.clone(), label.into()));
+            *step.lock().unwrap_or_else(|error| error.into_inner()) =
+                Some((id.clone(), label.into()));
         };
-        say(if recording_here { "Stopping…" } else { "Sending…" });
+        say(if recording_here {
+            "Stopping…"
+        } else {
+            "Sending…"
+        });
         let id = record.id.clone();
         self.job("send", move || {
             let deadline = Instant::now() + SEND_WAIT;
@@ -1618,7 +1704,11 @@ impl Recorder {
                 let record = store.get(&id)?;
                 let label = if record.state == "recording" {
                     "Stopping…"
-                } else if record.chunks.iter().any(|chunk| ["pending", "running"].contains(&chunk.status.as_str())) {
+                } else if record
+                    .chunks
+                    .iter()
+                    .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
+                {
                     "Transcribing…"
                 } else {
                     break;
@@ -1644,14 +1734,20 @@ impl Recorder {
     /// Why Send cannot work now, when waiting would not help: a recording made in another
     /// session, a failed or missing transcript.
     fn send_blocked(&self, record: &Recording) -> Option<String> {
-        let waiting = record.chunks.iter().any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()));
+        let waiting = record
+            .chunks
+            .iter()
+            .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()));
         if waiting && record.state != "recording" && !self.config.transcription_model.is_empty() {
             return None;
         }
         network::ready(record).err().map(|error| error.to_string())
     }
     fn send_step(&self) -> Option<(String, String)> {
-        self.send_step.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.send_step
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
@@ -1781,7 +1877,10 @@ impl Recorder {
             config.speech_source = source.trim().into();
         }
         // Unset follows the source, so compare against the source being saved.
-        if let Some(on) = form.streaming.filter(|on| *on != self.streaming_for(&config)) {
+        if let Some(on) = form
+            .streaming
+            .filter(|on| *on != self.streaming_for(&config))
+        {
             config.streaming = Some(on);
         }
         config.streaming_model = match form.streaming_model.trim() {
@@ -1841,8 +1940,7 @@ impl Recorder {
     /// Opens a Tico page (a sent task) in the browser. Only addresses of a connected Tico.
     pub fn open_url(&mut self, url: &str) {
         let allowed = self.config.destinations.iter().any(|row| {
-            settings::safe_url(&row.base_url)
-                .is_ok_and(|base| url.starts_with(&format!("{base}/")))
+            settings::safe_url(&row.base_url).is_ok_and(|base| url.starts_with(&format!("{base}/")))
         });
         if allowed {
             signin::open_browser(url);
@@ -2081,8 +2179,15 @@ impl Recorder {
         let live = !self.context.live_id.is_empty();
         let ended = self.context.live_state == "ended";
         let team = self.live["visibility"] == "team";
-        let has_text = record.chunks.iter().any(|chunk| !chunk.text.trim().is_empty());
-        let blocked = if recording_here { None } else { self.send_blocked(&record) };
+        let has_text = record
+            .chunks
+            .iter()
+            .any(|chunk| !chunk.text.trim().is_empty());
+        let blocked = if recording_here {
+            None
+        } else {
+            self.send_blocked(&record)
+        };
         let sync_error = self.sync_error(&record.id);
         json!({
             "id": record.id,
@@ -2118,7 +2223,8 @@ impl Recorder {
     fn setup_notices(&self) -> Vec<String> {
         let mut notices = vec![];
         if self.config.transcription_model.is_empty() {
-            notices.push("Choose a transcription model and key in Settings. Audio is saved.".into());
+            notices
+                .push("Choose a transcription model and key in Settings. Audio is saved.".into());
         }
         let status = self.transcriber.status();
         if !status.is_empty() {
@@ -2203,7 +2309,9 @@ impl Recorder {
         for human in self.live["humans"].as_array().into_iter().flatten() {
             let actor = human["actor"].as_str().unwrap_or("").to_owned();
             if !listed.contains(&actor) {
-                rows.push(json!({"kind":"person","name":human["name"].as_str().unwrap_or("Participant")}));
+                rows.push(
+                    json!({"kind":"person","name":human["name"].as_str().unwrap_or("Participant")}),
+                );
                 listed.push(actor);
             }
         }
@@ -2213,8 +2321,10 @@ impl Recorder {
             if listed.contains(&actor) {
                 continue;
             }
-            rows.push(json!({"kind":"person","name":person["name"].as_str().unwrap_or(&actor),
-                "actor":actor,"removable":enabled}));
+            rows.push(
+                json!({"kind":"person","name":person["name"].as_str().unwrap_or(&actor),
+                "actor":actor,"removable":enabled}),
+            );
             listed.push(actor);
         }
         for bot in self.live["bots"].as_array().into_iter().flatten() {
@@ -2229,7 +2339,11 @@ impl Recorder {
         }
         for row in &self.adding_people {
             if row.meeting == record.id && !listed.contains(&row.actor) {
-                let kind = if row.actor.starts_with("bot:") { "bot" } else { "person" };
+                let kind = if row.actor.starts_with("bot:") {
+                    "bot"
+                } else {
+                    "person"
+                };
                 rows.push(json!({"kind":kind,"name":row.name,"actor":row.actor,"pending":true}));
                 listed.push(row.actor.clone());
             }
@@ -2241,8 +2355,7 @@ impl Recorder {
         let adding = self.adding.as_deref() == Some(record.id.as_str());
         let stage = if !started && !adding {
             "invite"
-        } else if !started && self.destination.is_empty() && !self.config.destinations.is_empty()
-        {
+        } else if !started && self.destination.is_empty() && !self.config.destinations.is_empty() {
             "org"
         } else {
             "add"
@@ -2299,17 +2412,25 @@ impl Recorder {
                 self.actor_name(actor)
             };
             let at = message["created"].as_str().unwrap_or("");
-            rows.push((millis(at), rows.len(), json!({
-                "id": message["id"], "name": name, "bot": bot, "me": mine, "private": false,
-                "text": message["text"].as_str().unwrap_or(""), "time": at,
-            })));
+            rows.push((
+                millis(at),
+                rows.len(),
+                json!({
+                    "id": message["id"], "name": name, "bot": bot, "me": mine, "private": false,
+                    "text": message["text"].as_str().unwrap_or(""), "time": at,
+                }),
+            ));
         }
         for (index, turn) in self.context.chat.iter().enumerate() {
             let mine = turn.role == "you";
-            rows.push((millis(&turn.at), rows.len(), json!({
-                "id": format!("private-{index}"), "name": if mine { "You" } else { "Tico" },
-                "bot": !mine, "me": mine, "private": true, "text": turn.text, "time": turn.at,
-            })));
+            rows.push((
+                millis(&turn.at),
+                rows.len(),
+                json!({
+                    "id": format!("private-{index}"), "name": if mine { "You" } else { "Tico" },
+                    "bot": !mine, "me": mine, "private": true, "text": turn.text, "time": turn.at,
+                }),
+            ));
         }
         rows.sort_by_key(|(at, order, _)| (*at, *order));
         let mut messages: Vec<Value> = rows.into_iter().map(|(_, _, row)| row).collect();

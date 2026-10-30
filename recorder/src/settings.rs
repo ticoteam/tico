@@ -186,6 +186,19 @@ pub fn secret(name: &str) -> Result<String> {
     cache.insert(name.into(), value.clone());
     Ok(value)
 }
+/// Uses `value` as a secret for this run only, without the keychain, for headless tests that
+/// sign in with a token from the environment. Only in an isolated library.
+pub fn hold_secret(name: &str, value: &str) -> Result<()> {
+    ensure!(
+        std::env::var_os("TICO_RECORDER_DATA_DIR").is_some(),
+        "Use an isolated TICO_RECORDER_DATA_DIR"
+    );
+    SECRETS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(name.into(), value.into());
+    Ok(())
+}
 pub fn save_secret(name: &str, value: &str) -> Result<()> {
     let entry = keyring::Entry::new(&service(), name)?;
     if value.is_empty() {

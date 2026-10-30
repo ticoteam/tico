@@ -220,7 +220,11 @@ fn with_streamed(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> 
             "provider": {"source": "stream"},
         }))
         .expect("stand-in chunk");
-        chunk.text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        chunk.text = words
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         chunk.words = words;
         merged.chunks.push(chunk);
     }
@@ -302,7 +306,11 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
 pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
     let heard = Heard::chunks(record);
     let mut out = BTreeMap::new();
-    for chunk in record.chunks.iter().filter(|chunk| !chunk.text.trim().is_empty()) {
+    for chunk in record
+        .chunks
+        .iter()
+        .filter(|chunk| !chunk.text.trim().is_empty())
+    {
         let me = chunk.channel == "me";
         let words = if chunk.words.is_empty() {
             vec![Word {
@@ -317,7 +325,11 @@ pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
                 .iter()
                 .filter(|word| !(me && heard.echo(word.start_ms, &word.text)))
                 .map(|word| Word {
-                    speaker: if me { String::new() } else { word.speaker.clone() },
+                    speaker: if me {
+                        String::new()
+                    } else {
+                        word.speaker.clone()
+                    },
                     ..word.clone()
                 })
                 .collect()
@@ -413,9 +425,16 @@ mod tests {
         let mut streamed = BTreeMap::new();
         streamed.insert(
             "me".to_owned(),
-            vec![word(1000, "we", ""), word(1300, "chip", ""), word(50_000, "later", "")],
+            vec![
+                word(1000, "we", ""),
+                word(1300, "chip", ""),
+                word(50_000, "later", ""),
+            ],
         );
-        streamed.insert("them".to_owned(), vec![word(2000, "sure", "S1"), word(2300, "thing", "S1")]);
+        streamed.insert(
+            "them".to_owned(),
+            vec![word(2000, "sure", "S1"), word(2300, "thing", "S1")],
+        );
         let partials = [Partial {
             channel: "me".into(),
             start_ms: 51_000,
