@@ -138,6 +138,10 @@ that bot's turn, or within about 10 minutes for another bot's copy or one whose 
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
 See [Task worktrees](worktrees.md) for code worktrees and cleanup.
 
+A private live meeting's bot turns get a worktree of their own the same way, `sessions/bot-<slug>/private-<id>`, but
+nothing in it is ever saved: it is never committed for the bot or pushed, and it is deleted, unsaved changes and all,
+within about 10 minutes of the meeting ending ([Live meetings](live-meetings-api.md)).
+
 ## Linked sessions
 
 You can link other sessions to a task to track them: a Bot Desk or Orca thread URL, a `claude --resume <id>` or

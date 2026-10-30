@@ -217,12 +217,34 @@ cannot reach the Gateway's meeting models), a Gateway meeting model falls back t
 the reply uses the bot's own model. `meeting.model` records each step.
 
 Each bot has one conversation per meeting, kept for the meeting's turns while the bot stays attached, and
-every turn runs on that conversation's own thread whatever the bot's session setting. A private meeting's turn
-also tells the bot not to save anything from it to memory, knowledge, docs, tasks or any other shared place
-unless someone in the meeting explicitly asks. Known limit: that is an instruction to the bot, not enforced; a
-bot's memory and docs are read by its other meetings and chats. Team meetings get no such line. So a bot's turns in
+every turn runs on that conversation's own thread whatever the bot's session setting. So a bot's turns in
 one meeting continue each other, and nothing said in a meeting (private or team) reaches the bot's other
 meetings or its ordinary chats through the harness thread. Removing and re-adding a bot starts a new one.
+
+A private meeting's bot turns change nothing shared; they read as any turn does (memory, instructions,
+knowledge, docs, hub reads). The meeting's owner shares its notes and action items after the meeting, by
+review. Enforced, not left to the bot, on any harness:
+
+- **Hub writes.** Every write a private meeting's turn makes through the hub API or `/api/v2/mcp` is refused
+  with HTTP 403 `privacy`, detail "This is a private meeting: nothing from it is saved or shared until its
+  owner reviews it." (docs, pages, tasks, messages to other rooms, mail, status, approvals, settings). What it
+  may still write is one list, `task_privacy.PRIVATE_MEETING_WRITES`: reads over POST (`sql`,
+  `tasks/dry-run`), the MCP door, run files (they keep the run's provenance, so only the meeting's readers see
+  them), a GitHub token (read-only for it), and its own meeting's `chat` and `turns/{turn_id}/claim`. The
+  runner's own lease, event and result calls are not affected.
+- **The bot's repository.** Its turns run in their own lane, `private:<conversation id>`, which the runner
+  gives a worktree of the bot's repository kept for that meeting alone (`sessions/bot-<slug>/private-<id>`,
+  branch `tico-session/private-<id>` with no upstream). The bot keeps what it changed there for the rest of
+  the meeting; nothing in it is committed for the bot, pushed, published or reported, and the bot's checkout
+  is never used. Its GitHub tokens are asked for with the turn's own token, so they are read-only. The
+  runner deletes the worktree and its branch, unsaved work and all, within ten minutes of the meeting
+  ending (`POST /api/v2/runners/me/session-tasks` answers `done` for `private-<id>`). If the worktree
+  cannot be made (the bot has no checkout, or one with no upstream), the turn fails rather than run in the
+  bot's checkout.
+- **The prompt** says so: the bot cannot save or share anything from the meeting, and when asked to, it says
+  the owner can share the meeting's notes and action items after the meeting. Team meetings get no such line.
+
+Team meetings are unchanged.
 
 Each selected bot gets a durable normal Tico runner job containing only that meeting's title,
 transcript (up to 20 latest chunks through the routed sequence), and recent chat (up to 12 messages);

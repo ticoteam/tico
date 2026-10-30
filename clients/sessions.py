@@ -13,6 +13,17 @@ BOT_THREAD = "bot"
 # the bot's main checkout and so run one at a time.
 MAIN_LANE = "main"
 
+# A private live meeting's bot turns: `private:<conversation id>`, its own lane, which the runner runs in a checkout of
+# the bot's repository kept for that meeting alone, never pushed and taken away when the meeting ends
+# (runner-rs/src/sessions.rs). The server picks it from the meeting's room (backend/execution.py job_lane).
+PRIVATE_LANE = "private:"
+# That checkout's folder and branch name: `private-<conversation id>` (backend/worktrees.py session_tasks).
+PRIVATE_FOLDER = "private-"
+
+
+def private_lane(conversation_id):
+    return PRIVATE_LANE + conversation_id
+
 
 def session_key(config, bot, task_id, conversation_id):
     """The provider thread this turn continues. A turn on a task continues that task's own session,

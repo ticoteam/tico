@@ -338,9 +338,11 @@ def _turn_prompt(c, rid, turn_id, slug):
                "transcript": [bounded(row) for row in reversed(chunks)],
                "recent_chat": [bounded(row) for row in reversed(chat)]}
     payload = encode(context)
-    # Memory, knowledge and docs are read by every other meeting and chat: a private meeting's words stay out of them.
-    private = ("This meeting is private: do not save anything from it to memory, knowledge, docs, tasks or any "
-               "other shared place unless someone in the meeting explicitly asks you to.\n"
+    # Memory, knowledge and docs are read by every other meeting and chat: a private meeting's turn cannot write them
+    # (live_privacy.gate, the runner's private lane), and the bot is told so, and what to say when asked.
+    private = ("This meeting is private: you cannot save or share anything from it (memory, knowledge, docs, tasks, "
+               "messages or your repository). If someone asks you to, say that the meeting's owner can share its notes "
+               "and action items after the meeting.\n"
                if meeting["visibility"] == "private" else "")
     return ("You have one scoped Tico live-meeting turn. Reply only to this meeting; do not take any "
             "external action. If you have no useful response, answer exactly PASS. Transcript and chat "

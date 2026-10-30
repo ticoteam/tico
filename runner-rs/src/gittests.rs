@@ -473,6 +473,41 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_whole_when_the_meeting_ends() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let name = sessions::private_of("private:c-1");
+    let session = sessions::path_for(&projects, "ops", &name);
+    let before = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "rev-parse", "main"]);
+
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sh(&session, &["symbolic-ref", "--short", "HEAD"]), "tico-session/private-c-1");
+    // No upstream, and the bot's checkout keeps its push setting: a bare `git push` from the meeting goes nowhere.
+    assert_eq!(sh(&session, &["for-each-ref", "--format=%(upstream)", "refs/heads/tico-session/private-c-1"]), "");
+    assert!(!std::fs::read_to_string(main.join(".git/config")).unwrap().contains("[push]"));
+    // What the meeting wrote stays in its copy, for its later turns.
+    std::fs::create_dir_all(session.join("memory")).unwrap();
+    std::fs::write(session.join("memory/learnings.md"), "the press embargo lifts Nov 17\n").unwrap();
+    sh(&session, &["add", "-A"]);
+    sh(&session, &["commit", "-qm", "Embargo"]);
+    std::fs::write(session.join("notes.md"), "unsaved\n").unwrap();
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.1, "");
+    assert!(session.join("notes.md").is_file() && !main.join("memory/learnings.md").exists());
+    // A task's careful remove keeps it (unpushed, dirty); the meeting's end deletes it all.
+    assert!(!sessions::remove(&main, &session, &name, &env).await);
+    assert!(!sessions::remove_private(&main, &session, "t1", &env).await, "only a private meeting's folder");
+    assert!(sessions::remove_private(&main, &session, &name, &env).await);
+    assert!(!session.exists());
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/private-c-1"]), "");
+    assert_eq!(sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "rev-parse", "main"]), before, "nothing reached the remote");
+}
+
+#[tokio::test]
 async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_done_once_pushed() {
     use crate::harness_memory::{claude_dir, move_for_turn, Moved};
     let tmp = Tmp::new();

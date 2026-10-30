@@ -224,8 +224,18 @@ def job_lane(c, bot, config, message, conversation, lanes, roots=False):
     its session root's lane, so it and its parent's turns take turns in one session."""
     if not lanes:
         return sessions.MAIN_LANE
+    if private := private_lane(c, conversation):
+        return private
     return sessions.lane(config, bot, session_task_id(c, bot, config, work_task_id(message, conversation), roots),
                          conversation["id"] if conversation else None)
+
+
+def private_lane(c, conversation):
+    """A private live meeting's room runs in its own lane (clients/sessions.py PRIVATE_LANE), else None."""
+    from .live_privacy import private_room
+    if conversation and private_room(c, conversation.get("room_key")):
+        return sessions.private_lane(conversation["id"])
+    return None
 
 
 def bump_bot_session_epoch(c, bot):
@@ -348,6 +358,8 @@ def lane_history(c, bot, config, history, conversation, lane, roots=False):
     lane, so the main session never reads task traffic and a task's session never reads the main chat or
     another task. The main chat's quiet task lines (`refs.task_started`, `refs.task_report`) are the main
     session's: how it hears that a task started and where it got to."""
+    if private := private_lane(c, conversation):
+        return list(history) if lane == private else []
     memo = {}
 
     def lane_of(message):

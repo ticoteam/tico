@@ -330,6 +330,17 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
     get(live, f"files/{fid}", expected=404)
 
 
+def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
+    mid, attempt = derived
+    writes = {"docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."}, "pages": {},
+              "tasks": {"owner": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
+    for path, body in writes.items():
+        r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
+        assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (path, r.text)
+    assert get(live, f"live-meetings/{mid}", token=attempt["token"])["id"] == mid
+    assert "files" in get(live, "bots/ops/files", token=attempt["token"])
+
+
 def test_team_meeting_execution_keeps_ordinary_publication(live):
     mid = post(live, "live-meetings", {"title": "Synthetic team plan"}, token="ben-test")["id"]
     attach(live, mid, "ops", token="ben-test")

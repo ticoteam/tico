@@ -979,6 +979,26 @@ def content_readable_rows(c, actor, rows):
     return [row for row in rows if content_readable(c, actor, row)]
 
 
+# What a private meeting's bot turn may write besides its own meeting's chat (guard_write): reads that go over POST, the
+# hub's MCP door (each tool call it makes is a request of its own, gated here), its run files, which keep the run's
+# provenance and so the meeting's readers, and a GitHub token, which is read-only for it (github_app.py token). Its
+# repository stays out of the bot's checkout too (runner-rs/src/sessions.rs, private lanes). The meeting's owner shares
+# its notes and action items after it, by review.
+PRIVATE_MEETING_WRITES = ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run", "/api/v2/files/uploads",
+                          "/api/v2/files/imports", "/api/v2/github/token")
+PRIVATE_MEETING_REFUSAL = "This is a private meeting: nothing from it is saved or shared until its owner reviews it."
+
+
+def private_meeting_run(c, attempt_id):
+    """Whether a run carries a private meeting (guard_write's test): a source that cannot be read counts as one."""
+    if not attempt_id:
+        return False
+    try:
+        return bool(private_meetings(c, meeting_sources(c).attempt(attempt_id)))
+    except Problem:
+        return True
+
+
 def guard_write(c, who, path, auth):
     """A private execution has no automatic company-publication capability."""
     # These controls already enforce their own run ownership and never publish company content.
@@ -989,14 +1009,13 @@ def guard_write(c, who, path, auth):
     meetings = meeting_sources(c).attempt(who.attempt_id)
     if private_meetings(c, meetings):
         # A meeting turn is one scoped reply, not an ordinary task or company publisher.
-        # Run artifacts retain their attempt provenance through the existing file/read fence.
-        if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/files/uploads", "/api/v2/files/imports"):
+        if path in PRIVATE_MEETING_WRITES:
             return
         scoped = re.fullmatch(r"/api/v2/live-meetings/([^/]+)/(chat|turns/[^/]+/claim)", path)
         if (scoped and meetings == {scoped[1]} and not any(
                 H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))):
             return
-        raise Problem("privacy", "Private meeting work can only reply to its meeting or retain scoped run files", 403)
+        raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
     if path == "/api/v2/task-questions":

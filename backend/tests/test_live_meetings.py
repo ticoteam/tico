@@ -1068,7 +1068,7 @@ def test_a_question_followed_by_silence_is_routed_once_the_window_falls_quiet(li
     assert settle(live) and len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 1
 
 
-def test_only_a_private_meetings_turn_tells_the_bot_to_keep_it_out_of_shared_memory(live):
+def test_only_a_private_meetings_turn_tells_the_bot_it_cannot_save_or_share_it(live):
     machine = runner(live)
     assign(live, machine, "ops")
     ready(live, machine, ["ops"])
@@ -1081,8 +1081,37 @@ def test_only_a_private_meetings_turn_tells_the_bot_to_keep_it_out_of_shared_mem
         prompts[visibility] = attempt["message"]["body"]
         post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Noted.", "last_seq": 0},
              token=machine["token"])
-    rule = "This meeting is private: do not save anything from it to memory, knowledge, docs, tasks"
+    rule = "This meeting is private: you cannot save or share anything from it"
     assert rule in prompts["private"] and rule not in prompts["team"]
+    assert "the meeting's owner can share its notes and action items after the meeting" in prompts["private"]
+
+
+def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_it_ends(live):
+    """The runner keeps a private meeting's checkout apart from the bot's (runner-rs/src/sessions.rs, private lanes):
+    the server hands its turns that lane and says when the meeting ended. A team meeting's turns stay in the main lane."""
+    machine = runner(live)
+    assign(live, machine, "ops")
+    post(live, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["task_lanes_v2"],
+                                     "readiness": {"ops": True}}, token=machine["token"])
+    turns = {}
+    for visibility in ("private", "team"):
+        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
+        attach(live, meeting["id"], "ops")
+        chunk(live, meeting["id"], 1, 0, 1000, "Ops, the press embargo lifts Nov 17 9am PT. Got it?")
+        attempt = claimed_turn(live, machine)
+        turns[visibility] = (meeting["id"], attempt)
+        assert attempt["message"]["body"] in [m["body"] for m in attempt["history"]], "its own lane reads its room"
+        post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Got it.", "last_seq": 0},
+             token=machine["token"])
+    mid, attempt = turns["private"]
+    conv = attempt["conversation"]["id"]
+    assert (attempt["lane"], turns["team"][1]["lane"]) == ("private:" + conv, "main")
+    mine = {"bot": "ops", "task": "private-" + conv}
+    sessions = [mine, {"bot": "ops", "task": "private-" + turns["team"][1]["conversation"]["id"]}]
+    asked = lambda: post(live, "runners/me/session-tasks", {"sessions": sessions}, token=machine["token"])["sessions"]
+    assert asked() == [{**mine, "status": "open"}]
+    post(live, f"live-meetings/{mid}/control", {"action": "end"})
+    assert asked() == [{**mine, "status": "done"}]
 
 
 def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):

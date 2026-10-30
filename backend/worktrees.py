@@ -10,10 +10,11 @@ from typing import Literal
 
 from fastapi import Request
 from pydantic import Field
-from clients import git_repository
+from clients import git_repository, sessions
 
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
+from .live_privacy import ROOM_PREFIX
 from .models import Contract
 from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
@@ -953,6 +954,18 @@ def install(app, store, auth, mutate):
                 raise Problem('forbidden', 'A registered computer is required', 403)
             out = []
             for item in body.sessions:
+                if item.task.startswith(sessions.PRIVATE_FOLDER):
+                    # A private meeting's own checkout (clients/sessions.py PRIVATE_LANE): done once the meeting ends.
+                    conv = item.task[len(sessions.PRIVATE_FOLDER):]
+                    if c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND bot=? AND lane=?",
+                                 (who.runner_id, item.bot, sessions.private_lane(conv))).fetchone():
+                        room = c.execute("SELECT room_key FROM conversations WHERE id=?", (conv,)).fetchone()
+                        key = (room["room_key"] if room else "") or ""
+                        meeting = key.startswith(ROOM_PREFIX) and c.execute(
+                            "SELECT state FROM live_meetings WHERE id=?", (key[len(ROOM_PREFIX):],)).fetchone()
+                        out.append({'bot': item.bot, 'task': item.task,
+                                    'status': 'open' if meeting and meeting['state'] != 'ended' else 'done'})
+                    continue
                 row = c.execute("SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
                                 "WHERE a.runner_id=? AND a.bot=? AND a.lane=?)",
                                 (item.task, who.runner_id, item.bot, 'task:' + item.task)).fetchone()
