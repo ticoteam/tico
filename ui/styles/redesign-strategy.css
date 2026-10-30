@@ -167,8 +167,6 @@ a.rdm-row:hover{background:var(--surface2)}
 }
 
 /* ---------------------------------------------------------------- Strategy and Goals */
-/* The Strategy tab drops its contents column and reads as one column, as in the mock; the version line sits tight
-   under the tabs. */
-html.redesign #main.strategy-layout .strat-grid{grid-template-columns:minmax(0,860px)}
-html.redesign #main.strategy-layout .strat-toc{display:none}
+/* The Strategy tab's cards are one page at most 1180px wide; the version line sits tight under the tabs. */
+html.redesign #main.strategy-layout .strat-memo{max-width:1180px}
 html.redesign #main.strategy-layout .strat-meta{margin-bottom:4px}

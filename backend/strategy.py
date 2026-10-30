@@ -2,15 +2,16 @@
 watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
-  the vision (400 characters; the Goals page reads it from here), four fixed sections (`serve`, `sell`, `know`, `not`)
+  the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
+  back to the summary), four fixed sections (`serve`, `sell`, `know`, `not`)
   plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
   editors never overwrite each other silently.
 - Bets (`strategy_bets`) are the spine: a statement that could turn out wrong, why, what it rules out, what would show
   it is wrong (`wrong_if`: a KPI crossing a threshold, a market thesis changing, or a sentence with a check date), the
-  market ids it rests on (`cites`), and a status (proposed, active, retired). An active bet has a `rules_out` and a
-  `wrong_if`, and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
+  market ids it rests on (`cites`), and a status (proposed, active, retired). `rules_out` and `wrong_if` are optional
+  (the fit check watches a bet only when it has a `wrong_if`), and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
 - The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
@@ -245,11 +246,12 @@ def bets(c, status=None):
 
 def vision(c, editor=False):
     """The one vision: the draft's for the owner, the published one for everyone else. Before the first publish the
-    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it."""
+    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it. The
+    Strategy page shows only the summary, so an empty vision is the summary."""
     row = None if editor else \
-        H._one(c, "SELECT vision FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
-    row = row or H._one(c, "SELECT vision FROM strategy_versions WHERE status='draft'")
-    return (row or {}).get("vision") or ""
+        H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
+    row = row or H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='draft'") or {}
+    return row.get("vision") or " ".join(str(row.get("summary") or "").split())
 
 
 def website(c):
@@ -449,10 +451,12 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
         return row
     _bump(c, actor, row, changes)
     _event(c, actor, "draft", {"old": {k: row[k] for k in changes}, "new": changes})
-    if "vision" in changes and not current(c):
+    if ("vision" in changes or "summary" in changes) and not current(c):
         # Before the first publish the draft's vision is the team's (vision()), so its history goes beside the
         # description's (GET /company/history); after it, an unpublished vision stays the owner's until publish.
-        _vision_event(c, actor, row["vision"], changes["vision"])
+        # The summary stands in for an empty vision, so a summary change moves it too.
+        if "vision" in changes:
+            _vision_event(c, actor, row["vision"], changes["vision"])
         sync_vision(c)
     H.event(c, actor, "strategy.draft", "", {"fields": sorted(changes)})
     return draft(c)
@@ -536,13 +540,9 @@ def _cites(c, actor, value):
 
 
 def _may_be(c, actor, row, bet_id=None):
-    """The rules a bet's new state must keep: active only with what it rules out and what would show it wrong, at
-    most ACTIVE_MAX active and LIVE_MAX not retired."""
+    """The rules a bet's new state must keep: at most ACTIVE_MAX active and LIVE_MAX not retired. What it rules out
+    and what would show it wrong are optional; the fit check watches only a bet that has a wrong-if."""
     if row["status"] == "active":
-        if not row["rules_out"]:
-            H.refuse(c, actor, "lint", "an active bet says what it rules out (rules_out)")
-        if not row["wrong_if"]:
-            H.refuse(c, actor, "lint", "an active bet says what would show it is wrong (wrong_if)")
         active = c.execute("SELECT count(*) FROM strategy_bets WHERE status='active' AND id<>?",
                            (bet_id or "",)).fetchone()[0]
         if active >= ACTIVE_MAX:
@@ -706,16 +706,15 @@ def _snapshot(row):
 def publish(c, actor, note="", revision=None):
     """Stamp the draft as version n with every bet that is not retired, open a fresh draft, emit `strategy.published`,
     and file the realignment card when bets with goals were retired or rewritten. The owner's own call (the route
-    checks). Refused without an active bet (which has rules_out and wrong_if) and a "What we won't do", or when
-    nothing changed since the last version."""
+    checks). Refused without an active bet and a "What we won't do", or when nothing changed since the last
+    version."""
     H._writer(c, actor)
     row = draft(c)
     _check_revision(c, row, revision)
     note = _clean(c, actor, note, NOTE_MAX, "note", one_line=True)
     snapshot = [_snapshot(b) for b in bets(c) if b["status"] != "retired"]
-    if not any(b["status"] == "active" and b["rules_out"] and b["wrong_if"] for b in snapshot):
-        H.refuse(c, actor, "lint", "publish with at least one active bet that says what it rules out and what would "
-                                   "show it is wrong")
+    if not any(b["status"] == "active" for b in snapshot):
+        H.refuse(c, actor, "lint", "publish with at least one active bet")
     if not row["sections"]["not"].strip():
         H.refuse(c, actor, "lint", "write \"What we won't do\" before publishing: a strategy with no trade-offs is a "
                                    "description")

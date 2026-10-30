@@ -56,14 +56,21 @@ def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     write(api, summary="x" * (S.SUMMARY_MAX + 1), expected=422)
 
 
-def test_publish_needs_a_wont_and_an_active_bet_with_rules_out_and_wrong_if(api):
+def test_publish_needs_a_wont_and_an_active_bet_rules_out_and_wrong_if_optional(api):
     write(api, summary="Acme runs rentals with bots.")
-    post(api, "strategy/bets", {"statement": "Landlords pay", "status": "active"}, expected=422)   # needs both
+    proposed = post(api, "strategy/bets", {"statement": "Landlords pay"})["bet"]
+    write(api, sections={"not": "No enterprise deals."})
+    publish(api, expected=422)                                                          # no active bet
+    # Rules out and Wrong if are optional: a bare statement is active, and publishes.
+    bare = post(api, "strategy/bets/" + proposed["id"], {"status": "active"})["bet"]
+    assert bare["status"] == "active" and bare["rules_out"] == "" and bare["wrong_if"] is None
+    post(api, "strategy/bets/" + proposed["id"], {"status": "proposed"})
+    write(api, sections={"not": ""})
     add_bet(api)
     publish(api, expected=422)                                                          # no "What we won't do"
     write(api, sections={"not": "No enterprise deals."})
     first = publish(api)
-    assert first["n"] == 1 and first["status"] == "published" and [b["status"] for b in first["bets"]] == ["active"]
+    assert first["n"] == 1 and first["status"] == "published" and [b["status"] for b in first["bets"]] == ["proposed", "active"]
     fresh = draft(api)
     assert fresh["n"] is None and fresh["summary"] == "Acme runs rentals with bots." and fresh["revision"] > 0
     publish(api, expected=422)                                                          # nothing changed
