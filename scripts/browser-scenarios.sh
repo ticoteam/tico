@@ -60,6 +60,52 @@ chrome_pid() {
   printf '%s\n' "$pid"
 }
 
+# Diagnostics, read only: the bot's login, its grants, and every event about them, as the server's database has them.
+grant_trail() {  # a label: says what the server recorded about the login's grants at this point
+  say "grants ($1):"
+  dc exec -T server python -I - "$LABEL" <<'PY' 2>&1 | sed 's/^/    /' || say "grants: the database could not be read"
+import sqlite3, sys
+c = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True)
+c.row_factory = sqlite3.Row
+creds = c.execute("SELECT id, name, revision, updated FROM credentials WHERE name=? ORDER BY created", (sys.argv[1],)).fetchall()
+if not creds:
+    print("no credential named " + sys.argv[1])
+for cr in creds:
+    print(f"credential {cr['id']} revision={cr['revision']} updated={cr['updated']}")
+    grants = c.execute("SELECT id, subject, granted_by, created, revoked, revoked_by FROM credential_grants "
+                       "WHERE credential_id=? ORDER BY created", (cr["id"],)).fetchall()
+    for g in grants:
+        print(f"  grant {g['id']} subject={g['subject']} granted_by={g['granted_by']} created={g['created']} "
+              f"revoked={g['revoked']} revoked_by={g['revoked_by']}")
+    ids = [cr["id"]] + [g["id"] for g in grants]
+    marks = ",".join("?" * len(ids))
+    for e in c.execute(f"SELECT ts, actor, action, target, detail_json FROM events WHERE target IN ({marks}) ORDER BY ts", ids):
+        print(f"  event {e['ts']} {e['action']} actor={e['actor']} target={e['target'][:14]} {(e['detail_json'] or '')[:160]}")
+PY
+}
+
+# Diagnostics, read only: the cookies the bot's Chrome profile holds on disk for the practice host (names and expiry).
+profile_cookies() {  # a label
+  say "profile cookies ($1):"
+  docker exec -i "$RUNNER" python3 -I - "/home/runner/browsers/$BOT/profile" <<'PY' 2>&1 | sed 's/^/    /' || say "profile cookies: could not be read"
+import os, shutil, sqlite3, sys, tempfile
+src = os.path.join(sys.argv[1], "Default", "Cookies")
+if not os.path.exists(src):
+    print("no Cookies file at " + src)
+    sys.exit(0)
+tmp = tempfile.mkdtemp()
+shutil.copy(src, os.path.join(tmp, "Cookies"))
+for extra in ("-journal", "-wal"):
+    if os.path.exists(src + extra):
+        shutil.copy(src + extra, os.path.join(tmp, "Cookies" + extra))
+c = sqlite3.connect(os.path.join(tmp, "Cookies"))
+rows = c.execute("SELECT host_key, name, expires_utc, is_persistent FROM cookies WHERE host_key LIKE '%practice.test%'").fetchall()
+print(f"{len(rows)} cookie(s) for the practice host on disk")
+for host, name, expires, persistent in rows:
+    print(f"{host} {name} expires_utc={expires} persistent={persistent}")
+PY
+}
+
 # Scenario 1: the owner rents a phone (TICO approves the quote, the owner accepts it), and the rental is an SMS inbox.
 sms_inbox() { japi GET /api/v2/inbound/inboxes | pick 'sys.exit(0 if any(i.get("kind") == "sms" for i in d["inboxes"]) else 1)'; }
 
@@ -88,6 +134,7 @@ sc_fingerprint() { browser_phase fingerprint; }
 # Scenario 4: a second bot on the same computer. The first bot reads the second one's port and profile from the second
 # bot's result, then tries that endpoint, and tries the second bot's login.
 sc_peers() {
+  grant_trail "before S4"
   make_bot "$PEER_BOT" "$PEER_NAME" || return 1
   PHASE_BOT="$PEER_BOT" browser_phase status || return 1
   PHASE_BOT="$PEER_BOT" bot_phase peer-setup || return 1
@@ -99,8 +146,9 @@ sc_peers() {
 }
 
 # Scenario 5: Chrome is killed by its exact PID; the runner starts it again with the same profile.
-sc_crash() {
+sc_crash() {  # the round, for the log
   local pid
+  profile_cookies "before the kill, round ${1:-1}"
   pid="$(chrome_pid)" || { say "no Chrome for $BOT is running under its profile lock"; return 1; }
   docker exec "$RUNNER" sh -c "kill -KILL $pid" || { say "Chrome $pid could not be killed"; return 1; }
   sleep 2
@@ -108,9 +156,21 @@ sc_crash() {
   verdict "crash: Chrome (pid $pid, from the profile lock) was killed" 0
 }
 
+# Three kills in one run. A round that fails is recorded, and the next round still runs, so the pattern shows.
 sc_after_crash() {
-  sc_crash || return 1
-  browser_phase after-crash
+  local round failed=0
+  grant_trail "before S5"
+  for round in 1 2 3; do
+    say "crash round $round of 3"
+    sc_crash "$round" || return 1
+    browser_phase after-crash || {
+      failed=1
+      profile_cookies "after the restart, round $round"
+      say "runner log about the browser, round $round:"
+      docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|profile|session|restore|crash' | tail -n 40 | sed 's/^/    /'
+    }
+  done
+  return "$failed"
 }
 
 # Scenario 6: the image has no Playwright, so the repository's pinned playwright-core goes in under /opt/e2e.
@@ -129,7 +189,8 @@ sc_attach() {
 # 390x844), the person marks it done, and the next turn reads the check as passed.
 sc_captcha() {
   # The check's card waits on a person, so the phase runs on a task of the bot's, as the journey's needs-you does.
-  PHASE_ON=task browser_phase challenge || return 1
+  grant_trail "before S7"
+  PHASE_ON=task browser_phase challenge || { grant_trail "after S7's sign-in failed"; return 1; }
   local rid card id task key out="$WORK/captcha-person.json" person
   rid="$(runner_id)" || return 1
   send POST "/api/v2/runners/$rid/screen" '{"mode": "view"}' >/dev/null || { say "the screen could not be turned on"; return 1; }
@@ -165,8 +226,30 @@ task_result() {  # a run's nonce: waits for the bot's result, copies it to the w
   printf '%s\n' "$out"
 }
 
+# Why two runs of one bot did not overlap: the bot's and the computer's turn limits, the server's attempts for the bot since
+# the run started, and the computer's log about turns and claims.
+concurrent_diagnose() {  # the time the first task was created (UTC, to the second)
+  say "turn limits: the bot's and the computer's"
+  japi GET "/api/v2/bots/$BOT" | python3 -c 'import json,re,sys
+print("    bot:", re.findall(r"\"[^\"]*turn[^\"]*\": ?[^,}\]]*", sys.stdin.read())[:6])' 2>&1
+  japi GET /api/v2/operations | python3 -c 'import json,re,sys
+m = json.load(sys.stdin)["machines"][0]
+print("    computer:", re.findall(r"\"[^\"]*(?:turn|capacity)[^\"]*\": ?[^,}\]]*", json.dumps(m))[:8])' 2>&1
+  say "attempts of $BOT since $1 (server)"
+  dc exec -T server python -I - "$1" "$BOT" <<'PY' 2>&1 | sed 's/^/    /'
+import sqlite3, sys
+c = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True)
+for r in c.execute("SELECT id, runner_id, state, created, started, finished FROM attempts WHERE bot=? AND created>=? ORDER BY created",
+                   (sys.argv[2], sys.argv[1])):
+    print(f"attempt {r[0][:12]} runner={r[1][:12]} state={r[2]} created={r[3]} started={r[4]} finished={r[5]}")
+PY
+  say "computer log about turns and claims"
+  docker logs "$RUNNER" 2>&1 | grep -iE 'claim|lane|turn|attempt|busy' | tail -n 40 | sed 's/^/    /'
+}
+
 sc_concurrent() {
-  local first second one two
+  local first second one two since
+  since="$(date -u +%Y-%m-%dT%H:%M:%S)"
   first="$(task_start concurrent)" || { say "the first task was not created"; return 1; }
   second="$(task_start concurrent)" || { say "the second task was not created"; return 1; }
   one="$(task_result "$first")" || { say "the first run did not finish in $PHASE_WAIT seconds"; return 1; }
@@ -181,10 +264,14 @@ checks = [
     ("both runs used the same Chrome profile", bool(a.get("profile")) and a.get("profile") == b.get("profile")),
     ("the two runs overlapped in time", a.get("start", 0) < b.get("end", 0) and b.get("start", 0) < a.get("end", 0)),
 ]
+print(f"  holds (epoch seconds): first {a.get('start')}-{a.get('end')}, second {b.get('start')}-{b.get('end')}")
 for name, ok in checks:
     print(("PASS " if ok else "FAIL ") + name)
 sys.exit(0 if all(ok for _, ok in checks) else 1)
 PY
+  local rc=$?
+  [ "$rc" = 0 ] || concurrent_diagnose "$since"
+  return "$rc"
 }
 
 # Scenario 9: the leak check, over everything the scenarios wrote down.

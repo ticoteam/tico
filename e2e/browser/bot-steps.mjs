@@ -335,7 +335,9 @@ const phases = {
       const tab = await reopened.newTab();
       await tab.go(practice + '/me');
       data.me = await tab.status('/me');
-      check('the same profile is still signed in', data.me === 200, data.me);
+      // The answer's text says why the practice site refused the request (no secret: the page shows none).
+      data.me_body = String(await tab.eval('fetch("/me", {credentials: "include"}).then(async r => (await r.text()).slice(0, 120))')).replace(/\s+/g, ' ');
+      check('the same profile is still signed in', data.me === 200, `${data.me} ${data.me_body}`);
     } finally {
       reopened.close();
     }
