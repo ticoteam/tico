@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 import json
 from dataclasses import replace
@@ -149,6 +150,8 @@ def create_app(settings=None):
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
+        # The company file and the sample company stay before serving: on a first start the first page shows the
+        # company they make, and the owner's first answer must not race them; on any later start each is a quick check.
         if settings.company_file_configured or settings.company_file_data:
             # A file that can't be applied is kept for the owner to see; never a sample company in its place.
             from . import company_import
@@ -164,21 +167,6 @@ def create_app(settings=None):
                     sample_company.load_on_start(onboarding, c)
             except Exception as exc:
                 telemetry.capture("sample_company", exc)
-        # A company from before the Librarian was built in gets it on update, once it can run it.
-        try:
-            with store.transaction() as c:
-                onboarding.ensure_librarian(c)
-                onboarding.ensure_goal_manager(c)
-                onboarding.ensure_task_manager(c)
-        except Exception as exc:
-            telemetry.capture("librarian", exc)
-        # The Librarian gets the market posts from Listening, once (Settings > Listening).
-        try:
-            from . import listening
-            with store.transaction() as c:
-                listening.seed_market(c, settings)
-        except Exception as exc:
-            telemetry.capture("listening", exc)
         # A strategy research run the last process was doing has no thread now: it stops, and setup shows the form.
         try:
             from . import strategy_setup
@@ -199,29 +187,62 @@ def create_app(settings=None):
                 onboarding.name_default_assistant(c)
         except Exception as exc:
             telemetry.capture("assistant_name", exc)
-        # A message bot made before the server linked it to its person is linked now, when there is no doubt whose it is.
-        try:
-            from . import message_bots
-            with store.transaction() as c:
-                message_bots.backfill(c)
-        except Exception as exc:
-            telemetry.capture("message_bots", exc)
-        # This release may contain merged pull requests attached to tasks: their links become shipped (backend/github.py).
-        try:
-            from .github import ship_deployed
-            with store.transaction() as c:
-                ship_deployed(c, settings)
-        except Exception as exc:
-            telemetry.capture("github", exc)
         # A deploy keeps the API down longer than a lease; do not fail turns for that.
         execution.grace_leases()
-        # A live support session picks its link to HQ back up (backend/support_access.py).
+        # A live support session picks its link to HQ back up (backend/support_access.py). Before serving: it also gives
+        # the link worker its loop, which a support session started by the first request needs, and it re-mints the
+        # token of whichever session is live, so run later it could replace the token of a session started just now.
         try:
             from . import support_access
             support_access.started(app, asyncio.get_running_loop())
         except Exception as exc:
             telemetry.capture("support_access", exc)
         telemetry.start()
+
+        def start_jobs():
+            """Start work no request depends on, run beside the server once it serves, so a restart answers sooner
+            (store.initialize, the stop_running fixes, grace leases and the company file stay before serving, above).
+            Each is idempotent and does its own transaction, in the order they always ran in; a failure is captured and
+            the next one still runs."""
+            # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
+            # adds them; until this runs, a page shows the company as it was before the update.
+            try:
+                with store.transaction() as c:
+                    onboarding.ensure_librarian(c)
+                    onboarding.ensure_goal_manager(c)
+                    onboarding.ensure_task_manager(c)
+            except Exception as exc:
+                telemetry.capture("librarian", exc)
+            # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
+            try:
+                from . import listening
+                with store.transaction() as c:
+                    listening.seed_market(c, settings)
+            except Exception as exc:
+                telemetry.capture("listening", exc)
+            # A message bot made before the server linked it to its person is linked now, when there is no doubt whose
+            # it is. A backfill: the bot works unlinked meanwhile, as it did before.
+            try:
+                from . import message_bots
+                with store.transaction() as c:
+                    message_bots.backfill(c)
+            except Exception as exc:
+                telemetry.capture("message_bots", exc)
+            # This release may contain merged pull requests attached to tasks: their links become shipped
+            # (backend/github.py). It reads every pull request link, the slowest of these on a big company; a link
+            # still shows merged until it runs.
+            try:
+                from .github import ship_deployed
+                with store.transaction() as c:
+                    ship_deployed(c, settings)
+            except Exception as exc:
+                telemetry.capture("github", exc)
+        # TICO_START_JOBS=inline (the tests, conftest.py) runs them before serving, as a start did before.
+        if os.environ.get("TICO_START_JOBS") == "inline":
+            start_jobs()
+            start_jobs_task = None
+        else:
+            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs))
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
@@ -357,6 +378,8 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            if start_jobs_task:
+                await start_jobs_task      # short, and each in its own transaction: let it finish
             app.state.live_meeting_routing.stop()
             if inbound_task:
                 await inbound_task
