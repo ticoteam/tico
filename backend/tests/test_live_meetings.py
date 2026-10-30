@@ -1081,6 +1081,44 @@ def test_a_question_followed_by_silence_is_routed_once_the_window_falls_quiet(li
     assert settle(live) and len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 1
 
 
+def test_a_chunk_that_arrives_after_its_window_closed_is_routed_once_by_the_next_open_window(live, monkeypatch):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    routing = live.app.state.live_meeting_routing
+    window = meeting["window_ms"] / 1000
+    clock = {"at": H.now()}
+    monkeypatch.setattr(live_meetings_module, "_now", lambda: clock["at"])
+    chunk(live, mid, 1, 0, 4000, "Can someone check the rollout?")
+    clock["at"] = H.shift(H.now(), seconds=window + 3)
+    routing.later(mid)
+    assert settle(live)
+    assert [(w["window_index"], w["outcome"], w["trace"]["chunk_range"]) for w in
+            get(live, f"live-meetings/{mid}")["router"]["windows"]] == [(0, "route", [1, 1])]
+    # Seq 2 starts inside window 0, which closed quiet a moment ago: it waits for the next window that is open.
+    clock["at"] = H.now()
+    chunk(live, mid, 2, 10_000, 11_000, "Late question for ops")
+    assert settle(live)
+    assert len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 1
+    clock["at"] = H.shift(H.now(), seconds=window + 3)
+    routing.later(mid)
+    assert settle(live)
+    windows = get(live, f"live-meetings/{mid}")["router"]["windows"]
+    assert [(w["window_index"], w["start_ms"], w["trace"]["chunk_range"]) for w in windows] == [
+        (0, 0, [1, 1]), (1, meeting["window_ms"], [2, 2])]
+    # Routed once: going round again decides nothing new, and a correction to that text routes nothing either.
+    routing.later(mid)
+    assert settle(live) and len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 2
+    later = []
+    monkeypatch.setattr(routing, "later", lambda rid, chat_id=None: later.append(rid))
+    post(live, f"live-meetings/{mid}/chunks/2/corrections", {
+        "revision": 2, "speaker": "Ana", "start_ms": 10_000, "end_ms": 11_000, "text": "Late question for Ops"})
+    assert later == []
+
+
 def test_only_a_private_meetings_turn_tells_the_bot_it_cannot_save_or_share_it(live):
     machine = runner(live)
     assign(live, machine, "ops")

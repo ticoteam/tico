@@ -101,8 +101,9 @@ outcome from the event stream or the `router` view.
 
 A window also closes by the wall clock: when no chunk has arrived for the window's length plus 2 seconds since
 the last one, the server routes the open window without waiting for the next words, so a question followed by
-silence is answered. Chunks that arrive later go to the next windows by their transcript time; a late chunk whose
-`start_ms` falls inside a window already closed this way is stored and shown but is not routed again.
+silence is answered. A late chunk, one whose `start_ms` falls inside a window already closed this way, is routed by
+the next window that is open (opened if need be), once: its window's `chunk_range` names it, and no earlier window
+takes it again. Corrections (`/chunks/{seq}/corrections`) never route anything.
 
 `client` is optional on connect: omit it (or send null) for an unnamed connector, or use
 `"tico-recorder"`. Any other value is a validation error. The meeting view always includes
@@ -163,8 +164,8 @@ another decision on a retry. Fail-closed traces carry a `reason` such as
 (optionally followed by `.` or `!`) marks its existing turn skipped with reason `bot_pass`, emits the
 router trace, and creates no Chat message. Ending a meeting marks open turns skipped and suppresses
 their queued jobs. An interrupted in-flight decision emits
-`{window_index,outcome:"pass",trace:{reason:"interrupted decision; not retried"}}` without window
-timing fields. A router PASS creates no bot turn; a bot PASS settles its existing turn without
+`{window_index,outcome:"pass",trace:{reason:"interrupted decision; not retried",chunk_range:[first_seq,last_seq]}}`
+without window timing fields; its chunks are passed, not routed again by a later window. A router PASS creates no bot turn; a bot PASS settles its existing turn without
 creating visible chat.
 
 For transcript-window and chat decisions, `decision_input` has this exact structure (arrays may be
