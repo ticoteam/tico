@@ -662,7 +662,6 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     if not found:
         return gone
     actor, fid, number, part = found
-    live = None
     with store.read() as c:
         who = token_reader(c, auth, actor)
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -689,14 +688,10 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
-        if kind == "page" and not part:
-            # A page with live blocks is filled in for this reader alone, so it is never the shared hosted copy.
-            text = blobs.get(blob["digest"]).decode("utf-8", errors="replace")
-            if has_live(text):
-                live = fill_live(text, c, who, auth, files).encode("utf-8")
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
-        link = None if live is not None else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
+        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
                                                       "Referrer-Policy": "no-referrer"})
@@ -704,7 +699,12 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
-        data, _ = clean(live if live is not None else blobs.get(blob["digest"]), kind)
+        data = blobs.get(blob["digest"])
+        if kind == "page" and not part and has_live(text := data.decode("utf-8", errors="replace")):
+            # Filled in for this reader alone, with what they may see now.
+            with store.read() as c:
+                data = fill_live(text, c, who, auth, files).encode("utf-8")
+        data, _ = clean(data, kind)
         if kind == "page":
             data = with_reporter(data)
         response = Response(data if request.method != "HEAD" else b"", media_type=mime,
