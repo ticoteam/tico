@@ -428,12 +428,10 @@ def test_shipped_linux_producer_and_pinned_caddy_enforce_visual_boundary(contain
     assert qa.backend_count() == before
     qa.docker("stop", qa.backend)
     # The proxy holds the request while the server is gone (caddy_assets.HOLD_FOR), then answers a plain 503.
-    _, headers, _ = qa.expect(VISUAL, SIGNED_PATH, 503, headers={"Referer": "https://" + VISUAL + SIGNED_PATH}, timeout=45)
-    assert headers["retry-after"] == "5"
-    def error_logged():
-        log = qa.docker("logs", qa.caddy)
-        return '"logger":"http.log.error"' in log.stdout + log.stderr
-    qa.wait(error_logged, "actual error log without request credentials", seconds=5)
+    # The error route answers it, so Caddy logs the error at DEBUG, below this config's INFO; whatever it does log
+    # must still leave the signed path out.
+    _, headers, body = qa.expect(VISUAL, SIGNED_PATH, 503, headers={"Referer": "https://" + VISUAL + SIGNED_PATH}, timeout=45)
+    assert headers["retry-after"] == "5" and body.startswith(b"Tico is starting")
     log = qa.docker("logs", qa.caddy)
     if TOKEN in log.stdout + log.stderr:
         raise AssertionError("Caddy error log exposed the synthetic signed path")
