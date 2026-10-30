@@ -40,6 +40,9 @@ is tried again every 250 ms for up to 30 s, and only then answered, with a plain
 `sleep` stops a company's server and sends its hosts to the wake service instead (setup/cell_wake.py, systemd unit
 tico-cell-wake, which `init` installs): its first request starts the server with `wake` and is answered by it, and
 `wake` sends the hosts straight to the server again. A stopped company (`stop`) is answered 503 at once.
+`sleep --wake-at` (and the updater's POST /sleep) also records a timed wake in the company's record: the wake service
+starts the company when that time is due, rather than waiting for a request. Starting, waking or stopping a company
+clears it.
 
 Each company also has an updater, so its Update now, an update service key (the Release Manager's rollout) and Tico
 support's idle-time target work as on any install: `init` runs one host service (setup/cell_updater.py, systemd unit
@@ -63,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import errno
 import fcntl
 import http.client
@@ -167,6 +171,13 @@ HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 STREAM_CLOSE_DELAY = "5m"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
 HEALTH_POLL = 0.15                      # seconds between /healthz probes while a server starts
+# A timed wake (`sleep --wake-at`): the record's wake_at, always UTC in this format, at most WAKE_AT_DAYS out when set.
+WAKE_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+WAKE_AT_DAYS = 31
+WAKE_AT_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
+                           r"(Z|[+-][0-9]{2}:[0-9]{2})")
+# A company's sleep policy (`set-sleep`, `add --sleep-minutes`): whole minutes idle before it sleeps; 0 = never sleeps.
+SLEEP_MINUTES_MAX = 1440
 
 
 class CellError(Exception):
@@ -279,6 +290,14 @@ def check_memory(value: str) -> str:
     if not MEMORY_MIN_MB <= mb <= MEMORY_MAX_MB:
         raise CellError("bad_args", f"--memory is a size such as 2g or 1536m, from {MEMORY_MIN_MB}m to 16g")
     return value.strip().lower()
+
+
+def check_sleep_minutes(value: str, flag: str) -> int:
+    text = (value or "").strip()
+    if not re.fullmatch(r"[0-9]{1,4}", text) or int(text) > SLEEP_MINUTES_MAX:
+        raise CellError("bad_args", f"{flag} is a whole number of minutes from 0 to {SLEEP_MINUTES_MAX} "
+                                    "(0 = never sleeps)")
+    return int(text)
 
 
 def read_secret(path: str, flag: str) -> str:
@@ -428,6 +447,8 @@ def parser() -> Parser:
                    "in extra.env, replaced when given again")
     a.add_argument("--import-data", metavar="FILE", help="a moved install's /data as .tar or .tar.gz, unpacked into an "
                    "empty data folder before the first start")
+    a.add_argument("--sleep-minutes", metavar="N", help=f"the sleep policy: idle minutes before it sleeps, 0 to "
+                   f"{SLEEP_MINUTES_MAX} (0 = never); kept from the record when left out")
     a.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     cmd("list", "every company on this host")
     for name, help in (("status", "one company"), ("stop", "stop one company's server; its data stays"),
@@ -438,6 +459,13 @@ def parser() -> Parser:
         c.add_argument("--company", required=True, metavar="SLUG")
         if name in ("start", "wake"):
             c.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT)
+        if name == "sleep":
+            c.add_argument("--wake-at", metavar="TIME", help="a timed wake: an ISO-8601 UTC time such as "
+                           "2026-10-30T18:00:00Z, at most 31 days out; the wake service starts the company then")
+    z = cmd("set-sleep", "a company's sleep policy, which its server reads (GET /sleep); no policy until set")
+    z.add_argument("--company", required=True, metavar="SLUG")
+    z.add_argument("--minutes", required=True, metavar="N|default",
+                   help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -1052,6 +1080,8 @@ class Cell:
         if args.version is not None and not VERSION_RE.fullmatch(args.version):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
         memory = check_memory(args.memory) if args.memory is not None else None
+        sleep_minutes = check_sleep_minutes(args.sleep_minutes, "--sleep-minutes") \
+            if args.sleep_minutes is not None else None
         backup_given = [args.backup_url, args.backup_region, args.backup_credentials_file]
         if any(backup_given) and not all(backup_given):
             raise CellError("bad_args", "--backup-url, --backup-region and --backup-credentials-file go together")
@@ -1124,6 +1154,9 @@ class Cell:
                      "state": "running"}
                 if aliases:
                     c["aliases"] = aliases
+                sleep_minutes = sleep_minutes if sleep_minutes is not None else (old or {}).get("sleep_minutes")
+                if sleep_minutes is not None:
+                    c["sleep_minutes"] = sleep_minutes
                 if (old or {}).get("pending"):  # an update not yet seen healthy: this start is still guarded by it
                     c["pending"] = old["pending"]
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
@@ -1359,6 +1392,7 @@ class Cell:
             self.ensure_stopped(slug)
             route = c.get("state") != "stopped"
             c["state"] = "stopped"
+            _set_wake_at(c, None)           # no longer asleep, so no timed wake
             self.save(c)
             if route:
                 self.routed()
@@ -1372,6 +1406,7 @@ class Cell:
             before = self.containers(slug).get(slug, {})
             route = c.get("state") != "running"     # stopped (503) or sleeping (the wake service): to the server now
             c["state"] = "running"
+            _set_wake_at(c, None)
             self.save(c)
             if route:
                 self.routed()               # the router holds requests until the server answers
@@ -1381,20 +1416,30 @@ class Cell:
     def sleep(self, args) -> dict:
         """Stop the server and send its hosts to the wake service, whose first request starts it again (`wake`). The
         route moves first: a request that comes while the server stops waits for this lock in the wake service, then
-        starts it again, which is what a request should do."""
+        starts it again, which is what a request should do.
+
+        `wake_at` (`--wake-at`, or the updater's POST /sleep) is the time the wake service starts the company by itself
+        (`cell_wake.py`, `timed_wakes`). Every sleep sets it: one without a time clears the one an earlier sleep set. A
+        company already asleep gets a new time without a stop."""
         slug = check_slug(args.company)
+        wake_at = wake_at_text(getattr(args, "wake_at", None))
         with self.lock("company-" + slug):
             c = self.live(slug)
-            was = c.get("state")
+            was, before = c.get("state"), c.get("wake_at")
             if was == "sleeping" and self.containers(slug).get(slug, {}).get("state", "") in STOPPED:
+                if before != wake_at:
+                    _set_wake_at(c, wake_at)
+                    self.save(c)
                 return {"ok": True, "company": slug, "state": "sleeping", "changed": False}
             c["state"] = "sleeping"
+            _set_wake_at(c, wake_at)
             self.save(c)
             try:
                 self.routed()
                 self.ensure_stopped(slug)
             except CellError:
                 c["state"] = was
+                _set_wake_at(c, before)
                 self.save(c)
                 with contextlib.suppress(CellError):
                     self.routed()
@@ -1406,12 +1451,17 @@ class Cell:
         c, ready, changed = self.wake_company(check_slug(args.company), args.timeout, started)
         return self.answer(c, ready, changed)
 
-    def wake_company(self, slug: str, timeout: int, started: float | None = None) -> tuple[dict, int, bool]:
+    def wake_company(self, slug: str, timeout: int, started: float | None = None,
+                     due=None) -> tuple[dict, int, bool]:
         """A sleeping company's server started under its lock, as `start` starts it (a pending update is finished or
         rolled back there too), healthy on its own port, then marked running and routed straight to it. A running one
         is only checked. A start that does not come up is stopped again, so the company sleeps and the next request
         tries again; one rolled back to the release before an update is awake on that release (update_failed is raised
-        after the route, as `start` raises it). (record, ready_ms, changed)."""
+        after the route, as `start` raises it). (record, ready_ms, changed).
+
+        `due` is a timed wake's own test, `due(record) -> bool`, made under the lock on the record as it is now: a
+        sweep read the record without the lock, and staff may have moved or cleared the time since (`sleep
+        --wake-at`). False: CellError not_due and nothing is started. A request's wake passes none: it always wakes."""
         started = self.system.monotonic() if started is None else started
         with self.lock("company-" + slug):
             c = self.live(slug)
@@ -1420,6 +1470,8 @@ class Cell:
                 return c, self.wait_healthy(c, started, timeout), False
             if state != "sleeping":
                 raise CellError("not_sleeping", f"{slug} is {state}; `start` starts a stopped company")
+            if due is not None and not due(c):
+                raise CellError("not_due", f"{slug}'s timed wake was moved or cleared; it sleeps on")
             self.direct = True
             failed = None
             try:
@@ -1432,11 +1484,29 @@ class Cell:
             finally:
                 self.direct = False
             c["state"] = "running"
+            _set_wake_at(c, None)
             self.save(c)
             self.routed()
             if failed:
                 raise failed
         return c, ready, True
+
+    def set_sleep(self, args) -> dict:
+        """The company's sleep policy on its record (its server reads it through GET /sleep): N idle minutes, 0 for
+        never, or `default` to remove it. Under the company's lock, as the other per-company commands; a no-op changes
+        nothing."""
+        slug = check_slug(args.company)
+        minutes = None if args.minutes == "default" else check_sleep_minutes(args.minutes, "--minutes")
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            changed = c.get("sleep_minutes") != minutes
+            if minutes is None:
+                c.pop("sleep_minutes", None)
+            else:
+                c["sleep_minutes"] = minutes
+            if changed:
+                self.save(c)
+        return {"ok": True, "company": slug, "sleep_minutes": minutes, "changed": changed}
 
     def update(self, args) -> dict:
         """Another release, with the database safe first. The image is pulled before anything changes (a release that
@@ -1601,6 +1671,49 @@ class Cell:
         return {"ok": True, "company": slug, "removed": True, "kept_data": bool(args.keep_data)}
 
 
+def wake_at_text(value) -> str | None:
+    """A timed wake's time as the record keeps it (WAKE_AT_FORMAT), or None when `value` is None (no timed wake).
+    The time must say what zone it is in (a Z or an offset; a naive time is refused) and be at most WAKE_AT_DAYS from
+    now. A time already past is kept: the wake service starts the company at its next sweep. CellError bad_wake_at
+    for anything else, so the updater's POST /sleep and `sleep --wake-at` refuse the same values."""
+    if value is None:
+        return None
+    bad = CellError("bad_wake_at", "wake_at is an ISO-8601 UTC time such as 2026-10-30T18:00:00Z, at most "
+                    f"{WAKE_AT_DAYS} days out")
+    if not isinstance(value, str) or not WAKE_AT_SHAPE.fullmatch(value):   # ISO-8601 shape, not a loose parse
+        raise bad
+    text = value
+    if text.endswith("Z"):              # fromisoformat takes an offset, not the Z (before Python 3.11)
+        text = text[:-1] + "+00:00"
+    try:
+        when = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        raise bad from None
+    if when.tzinfo is None:
+        raise bad
+    when = when.astimezone(datetime.timezone.utc)
+    if when.timestamp() - time.time() > WAKE_AT_DAYS * 86400:
+        raise bad
+    return when.strftime(WAKE_AT_FORMAT)
+
+
+def wake_at_time(c: dict) -> float | None:
+    """The record's timed wake as a Unix time, or None when it has none. ValueError for one not in WAKE_AT_FORMAT."""
+    if not c.get("wake_at"):
+        return None
+    if not isinstance(c["wake_at"], str):
+        raise ValueError("wake_at is not a string")
+    return datetime.datetime.strptime(c["wake_at"], WAKE_AT_FORMAT).replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
+def _set_wake_at(c: dict, wake_at: str | None) -> None:
+    """The record's timed wake: set, or removed (None). Only a sleeping company has one."""
+    if wake_at:
+        c["wake_at"] = wake_at
+    else:
+        c.pop("wake_at", None)
+
+
 def _read(path: Path) -> str:
     try:
         return path.read_text()
@@ -1621,7 +1734,7 @@ def main(argv: list[str], *, system: System | None = None, root: str | Path | No
     cell = Cell(Path(root or os.environ.get("TICO_CELL_ROOT") or ROOT), system or System(), Path(host_root), compose_source)
     try:
         args = parser().parse_args(argv)
-        result = getattr(cell, args.action)(args)
+        result = getattr(cell, args.action.replace("-", "_"))(args)     # set-sleep is set_sleep
     except CellError as e:
         result = {"ok": False, "error": e.code, "detail": cell.scrub(e.detail), **e.extra}
     except Exception as e:  # noqa: BLE001  an answer HQ can read, even for a bug; the secrets scrubbed out of it

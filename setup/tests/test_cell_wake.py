@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from setup import cell, cell_wake as W
-from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, record  # noqa: F401
+from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, record, utc_in  # noqa: F401
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -271,3 +271,133 @@ def test_the_wake_unit_runs_this_module():
     assert "ExecStart=/usr/bin/python3 -m setup.cell_wake --root /srv/tico-cell" in unit
     assert "Restart=always" in unit and "RestartSec=1" in unit
     assert (W.__name__, cell.WAKE_PORT) == ("setup.cell_wake", 8082)
+
+
+# --- timed wakes: the record's wake_at starts the company without a request (WAKE_SWEEP loop) ----------------------
+
+def settled(svc, slug="boatyard"):
+    """The start the last sweep began (or joined) has finished, one way or the other."""
+    a = svc.attempts.get(slug)
+    assert a is not None and a.done.wait(30)
+    return a
+
+
+def test_a_timed_wake_due_within_a_minute_starts_the_company(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))     # already asleep: only the time changes
+    assert svc.sweep() == ["boatyard"]
+    assert settled(svc).ok
+    assert record(asleep)["state"] == "running" and "wake_at" not in record(asleep)
+    assert slow.ups == 1 and svc.starts == 1
+    assert "reverse_proxy 127.0.0.1:20000" in (asleep.root / "router" / "Caddyfile").read_text()
+
+
+def test_a_timed_wake_not_yet_due_leaves_the_company_asleep(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    later = utc_in(3600)
+    asleep("sleep", "--company", "boatyard", "--wake-at", later)
+    assert svc.sweep() == [] and svc.starts == 0 and slow.ups == 0
+    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"] == later
+
+
+def test_a_stored_wake_at_that_is_not_a_time_wakes_nothing(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    c = record(asleep)
+    c["wake_at"] = "soon"
+    (asleep.root / "companies" / "boatyard" / "company.json").write_text(json.dumps(c))
+    assert svc.sweep() == [] and svc.starts == 0 and slow.ups == 0 and record(asleep)["state"] == "sleeping"
+
+
+def test_a_failed_timed_wake_is_tried_again_on_a_later_sweep_not_at_once(asleep):
+    asleep.system.health["boatyard.tico.team"] = 500
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(10))
+    assert svc.sweep() == ["boatyard"] and not settled(svc).ok
+    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"]      # the time stays until it works
+    assert svc.sweep() == ["boatyard"] and svc.starts == 1                     # within FAILED_FOR: no start loop
+    asleep.system.health.pop("boatyard.tico.team")
+    svc.failed_for = 0                                                         # as if FAILED_FOR had passed
+    assert svc.sweep() == ["boatyard"] and settled(svc).ok
+    assert slow.ups == 2 and svc.starts == 2 and record(asleep)["state"] == "running"
+    assert "wake_at" not in record(asleep)
+
+
+def test_the_timed_wake_loop_sweeps_at_once_and_returns_when_stopped(asleep):
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(5))
+    stopping = threading.Event()
+    stopping.set()
+    svc.timed_wakes(stopping)                                                  # one sweep, then it returns
+    assert settled(svc).ok and record(asleep)["state"] == "running"
+
+
+def held_wake(svc):
+    """The service with each start held before it takes the company's lock: the event that lets them go."""
+    go, real = threading.Event(), svc.wake
+    svc.wake = lambda slug, a: (go.wait(10), real(slug, a))
+    return go
+
+
+@pytest.mark.parametrize("how", ["postponed", "cleared"])
+def test_a_stale_sweep_never_wakes_a_company_whose_wake_at_was_moved_or_cleared(asleep, how):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))
+    go = held_wake(svc)
+    assert svc.sweep() == ["boatyard"]                          # read due, without the lock
+    tomorrow = utc_in(86400)
+    asleep("sleep", "--company", "boatyard", *(["--wake-at", tomorrow] if how == "postponed" else []))
+    go.set()
+    a = settled(svc)
+    assert a.skipped and not a.ok and slow.ups == 0
+    assert record(asleep)["state"] == "sleeping" and record(asleep).get("wake_at") == \
+        (tomorrow if how == "postponed" else None)
+    r, _ = send(svc)                                            # a request still wakes it, with a start of its own
+    assert r.status == 201 and slow.ups == 1 and svc.starts == 2 and record(asleep)["state"] == "running"
+
+
+def test_a_request_that_joins_a_timed_start_wakes_the_company_whatever_wake_at_says(asleep, upstream):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))
+    go = held_wake(svc)
+    assert svc.sweep() == ["boatyard"]
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))     # postponed, then a visitor comes
+    joined, attempt = threading.Event(), svc.attempt
+    svc.attempt = lambda slug, timed=False: (attempt(slug, timed), joined.set())[0]
+    answer = {}
+    visitor = threading.Thread(target=lambda: answer.update(r=send(svc)[0]))
+    visitor.start()
+    assert joined.wait(10) and svc.attempts["boatyard"].asked     # the request has joined the timed start
+    go.set()
+    visitor.join(30)
+    assert answer["r"].status == 201 and settled(svc).ok
+    assert slow.ups == 1 and svc.starts == 1 and record(asleep)["state"] == "running"
+
+
+def test_a_request_that_joins_after_the_timed_check_said_not_due_still_wakes_it(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))
+    checked, go, real = threading.Event(), threading.Event(), svc.due
+
+    def due(c):
+        found = real(c)
+        checked.set()
+        go.wait(10)
+        return found
+    svc.due = due
+    held = held_wake(svc)
+    assert svc.sweep() == ["boatyard"]
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))
+    held.set()
+    assert checked.wait(10)                                     # the timed start found it not due, under the lock
+    a = svc.attempt("boatyard")                                 # a request joins before the start gives up
+    assert a is svc.attempts["boatyard"] and a.asked and svc.starts == 1
+    go.set()
+    assert a.done.wait(30) and a.ok and not a.skipped
+    assert slow.ups == 1 and record(asleep)["state"] == "running" and "wake_at" not in record(asleep)
