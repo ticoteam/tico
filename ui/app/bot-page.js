@@ -75,6 +75,7 @@ async function botPauseLoad() {
     const value = await get(`/v2/bots/${encodeURIComponent(view.slug)}/pause-state`, {fresh: true});
     if (BOT !== view || view.pauseBusy || generation !== (view.pauseGeneration || 0)) return;
     view.pauseState = value;
+    view.pauseLoadedAt = Date.now();
     if (!view.pauseRetry) view.pauseError = '';
   } catch (error) {
     if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
@@ -277,9 +278,16 @@ function botLimitHTML(slug) {
   return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/strategy/budget/${encodeURIComponent('bot:' + slug)}">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
+// The pause strip re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
+const PAUSE_STALE_MS = 60_000;
+function botPauseStale(view) {
+  if (!view.pauseState || view.pauseLoadedAt == null) return true;
+  if ((stateOf(view.slug) === 'paused') !== (view.pauseState.state === 'paused')) return true;
+  return Date.now() - view.pauseLoadedAt >= PAUSE_STALE_MS;
+}
 function botAlertDraw() {
   if (!BOT) return;
-  void botPauseLoad();
+  if (botPauseStale(BOT)) void botPauseLoad();
   const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
   if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
