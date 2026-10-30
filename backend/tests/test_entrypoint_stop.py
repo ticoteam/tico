@@ -28,11 +28,12 @@ def new_bash() -> bool:
 pytestmark = [pytest.mark.slow, pytest.mark.skipif(not new_bash(), reason="needs bash 5.1 or later")]
 
 # The server: logs that it is up, and on SIGTERM logs it and keeps running (as the real one does, for many seconds),
-# or exits at once with STUB_SERVER_EXIT. The attachment loop: sleeps. Anything else: the real interpreter.
+# or exits with STUB_SERVER_EXIT once Litestream is up (so the stop comes after its trap is set). The attachment loop:
+# sleeps. Anything else: the real interpreter.
 PYTHON = """#!/bin/sh
 if [ "$1 $2" = "-m backend.server" ]; then
   echo "server up" >> "$STUB_LOG"
-  [ -z "$STUB_SERVER_EXIT" ] || exit "$STUB_SERVER_EXIT"
+  [ -z "$STUB_SERVER_EXIT" ] || { until grep -qx "litestream up" "$STUB_LOG" 2>/dev/null; do sleep 0.05; done; exit "$STUB_SERVER_EXIT"; }
   trap 'echo "server TERM" >> "$STUB_LOG"' TERM
   while :; do sleep 0.05; done
 fi
@@ -43,9 +44,9 @@ exec %s "$@"
 # Litestream: restore finds no replica; replicate runs until SIGTERM, then takes a moment for its last sync.
 LITESTREAM = """#!/bin/sh
 [ "$1" = replicate ] || exit 0
+trap 'echo "litestream TERM" >> "$STUB_LOG"; sleep 0.3; echo "litestream synced" >> "$STUB_LOG"; exit 0' TERM
 echo "litestream up" >> "$STUB_LOG"
 [ -z "$STUB_LITESTREAM_EXIT" ] || { sleep 1; echo "litestream died" >> "$STUB_LOG"; exit 2; }
-trap 'echo "litestream TERM" >> "$STUB_LOG"; sleep 0.3; echo "litestream synced" >> "$STUB_LOG"; exit 0' TERM
 while :; do sleep 0.05; done
 """
 
