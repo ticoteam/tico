@@ -252,7 +252,9 @@ def codex_app_server():
             items = params.get("input", [])
             text = " ".join(part.get("text", "") for part in items if isinstance(part, dict))
             with open(os.path.join(ROOT, "codex-protocol.log"), "a") as trace:
-                trace.write("  %s text: %s\n" % (method, text[:160].replace("\n", " ")))
+                at = text.find("harness-run")
+                shown = text[at:at + 220] if at >= 0 else "NO harness-run in %d chars: %s" % (len(text), text[-160:])
+                trace.write("  %s text: %s\n" % (method, shown.replace("\n", " ")))
             if method == "turn/start":
                 send({"id": rid, "result": {"turn": {"id": turn}}})
             else:
