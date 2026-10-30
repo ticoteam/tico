@@ -153,7 +153,8 @@ def record_command_line_check(results_path, leaks):
 
 
 def run_probe(text, servers, argv):
-    found = RUN.search(text)
+    # A stream-json prompt carries its newlines as \n escapes, which would run a value on into the next words.
+    found = RUN.search(text.replace("\\n", "\n"))
     if not found:
         return None
     nonce, phase, args = found.group(1), found.group(2), found.group(3)
