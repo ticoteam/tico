@@ -157,7 +157,8 @@ def state(budget: Budget, period: tuple[date, date], amount: int | None, actual:
 def decide(chain: Sequence[tuple[Budget, State]], amount: int) -> Decision:
     """A hold of `amount` against a budget and every parent at once. Passing a budget triggers its at-limit action;
     the strictest one wins, and only `warn` lets the hold through. A refund (negative amount) always goes through."""
-    action, limit, warns = "ok", "", []
+    action, limit = "ok", ""
+    warns: list[str] = []
     for budget, s in chain:
         if s.amount is None:
             continue

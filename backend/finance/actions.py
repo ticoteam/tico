@@ -10,6 +10,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from . import budgeting, handlers, posting, setup as setup_mod
 from .context import Ctx, load
@@ -68,8 +69,7 @@ def _canonical(payload: object) -> dict[str, object]:
         loaded: object = json.loads(json.dumps(payload, sort_keys=True))
     except (TypeError, ValueError):
         raise FinanceError(INVALID, "payload is plain JSON") from None
-    assert isinstance(loaded, dict)
-    return {str(k): v for k, v in loaded.items()}  # pyright: ignore[reportUnknownVariableType]
+    return dict(cast(dict[str, object], loaded))
 
 
 def _stored(row: Mapping[str, object]) -> ActionResult:

@@ -5,8 +5,11 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any, cast
 
-from ... import hubdb as _H
+from ... import hubdb as _hubdb
 from ..core.org import Org, Team
+
+# Tico's own modules are untyped: Finance reaches them only through this file, typed at each call.
+_H: Any = _hubdb
 
 Row = Mapping[str, Any]
 Refused: type[Exception] = _H.Refused
@@ -36,7 +39,7 @@ def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     """The install owner as `human:<id>`: the stored owner record's person, else `fallback` (the person Finance was
     set up for). Admins are not owners."""
     stored = _metadata(c, "owner")
-    email = str(stored.get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+    email = str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
     if email:
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
         if row:
@@ -61,8 +64,9 @@ def _actor(value: str, bots: set[str]) -> str:
 def org(c: sqlite3.Connection, owner: str) -> Org:
     """The org chart now: groups with their leads, who is in which group, and who reports to whom. Archived bots are
     off it."""
-    from ... import groups as G
-    from ... import people as P
+    from ... import groups, people
+    G: Any = groups
+    P: Any = people
     doc = _metadata(c, "people")
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
@@ -110,42 +114,37 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
 def company_monthly_cap(c: sqlite3.Connection) -> object | None:
     """The company pool's monthly usage cap in USD (backend/usage_limits.py), or None when none is set."""
     from ... import usage_limits
-    caps = cast(Mapping[str, object], usage_limits.pool(c, usage_limits.COMPANY))
+    U: Any = usage_limits
+    caps = cast(Mapping[str, object], U.pool(c, U.COMPANY))
     return caps.get("monthly_usd")
 
 
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
     """The `events` row every Finance write leaves, in the same transaction."""
-    from ... import hubdb as H
-    H.event(c, actor, action, target, dict(detail))
+    _H.event(c, actor, action, target, dict(detail))
 
 
 def approval_request(c: sqlite3.Connection, requester: str, kind: str, payload: Mapping[str, object],
                      to: str) -> str:
     """A Tico approval with no task, decided by `to` (one person). The id."""
-    from ... import hubdb as H
-    row = cast(Row, H.approval_request(c, requester, kind, dict(payload), to=to))
+    row = cast(Row, _H.approval_request(c, requester, kind, dict(payload), to=to))
     return str(row["id"])
 
 
 def approval(c: sqlite3.Connection, approval_id: str) -> Row | None:
-    from ... import hubdb as H
-    return cast(Row | None, H.approval(c, approval_id))
+    return cast(Row | None, _H.approval(c, approval_id))
 
 
 def approval_consume(c: sqlite3.Connection, actor: str, approval_id: str) -> None:
-    from ... import hubdb as H
-    H.approval_consume(c, actor, approval_id)
+    _H.approval_consume(c, actor, approval_id)
 
 
 def approval_withdraw(c: sqlite3.Connection, approval_id: str, note: str) -> None:
-    from ... import hubdb as H
-    H.approval_withdraw(c, approval_id, note)
+    _H.approval_withdraw(c, approval_id, note)
 
 
 def payload_hash(payload: Mapping[str, object]) -> str:
-    from ... import hubdb as H
-    return str(H.payload_hash(dict(payload)))
+    return str(_H.payload_hash(dict(payload)))
 
 
 def known_actor(c: sqlite3.Connection, actor: str) -> bool:

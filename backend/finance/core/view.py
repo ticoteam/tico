@@ -181,7 +181,7 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
             continue
         used.append(grant.id)
         below = org.below(grant.whose_team) if grant.whose == "team" else frozenset[str]()
-        ids = frozenset().union(*(descendants(accounts, a) for a in grant.account_ids)) if grant.account_ids \
+        ids = frozenset[str]().union(*(descendants(accounts, a) for a in grant.account_ids)) if grant.account_ids \
             else frozenset[str]()
         if grant.what == "everything":
             everything = True

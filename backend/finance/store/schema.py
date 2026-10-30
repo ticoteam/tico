@@ -4,6 +4,7 @@ including the ones later phases fill, so the schema has one starting point.
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
 """
+import re
 import sqlite3
 
 TABLES = """
@@ -301,6 +302,11 @@ WHEN EXISTS (SELECT 1 FROM fin_periods p WHERE p.book_id = NEW.book_id AND p.sta
              AND NEW.entry_date BETWEEN p.start_date AND p.end_date)
 BEGIN SELECT RAISE(ABORT, 'period closed'); END;
 """
+
+
+def table_names() -> list[str]:
+    """Every fin_* table the migration makes."""
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES)
 
 
 def statements(script: str) -> list[str]:
