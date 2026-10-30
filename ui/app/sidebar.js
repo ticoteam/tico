@@ -736,26 +736,10 @@ function orgTopPerson(byParent) {
   return tops.find(n => S.me?.owner_id && n.id === S.me.owner_id) || tops.find(n => me && n.id === me)
     || (roles.length === 1 ? roles[0] : tops.length === 1 ? tops[0] : null);
 }
-// Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
-// hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
-let MY_AGENT, MY_AGENT_AT = 0;
-async function loadMyAgent() {
-  MY_AGENT_AT = Date.now();
-  try {
-    const data = await get('/v2/me/tokens'), rows = data.tokens || [], now = Date.now();
-    MY_AGENT = data.can_create === false ? null : rows.some(r => r.last_used && !r.revoked_at && !(r.expires_at && new Date(r.expires_at) < now));
-  } catch { MY_AGENT = null; }
-  renderTree();
-}
-window.addEventListener('tico:agents-changed', () => void loadMyAgent());
-// An agent set up after the dialog closed reports in later: check again on return to the app, at most once a minute.
-window.addEventListener('focus', () => { if (MY_AGENT === false && Date.now() - MY_AGENT_AT > 60e3) void loadMyAgent(); });
 function renderTree() {
   if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
   ensureCollapsed();
-  if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
   const byParent = orgTreeWithHelpers(orgTreeByParent());
-  const myId = mePerson()?.id;
   let needCounts;                                   // counted once per render, on first use
   const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -801,6 +785,8 @@ function renderTree() {
   const row = (node, depth, flat = false, at = {parent: '', order: []}) => {
     if (node.kind === 'group') {
       const key = 'g:' + node.id, manage = orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
+      // The plus opens the add menu for this group (ui/app/team-add.js): recruit a bot, an existing one, or a group.
+      const plus = !flat && teamAddAny(node.id), menuOpen = plus && teamAddOpenFor(node.id);
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
@@ -808,7 +794,7 @@ function renderTree() {
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
         ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false">${esc(node.name)}</a>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>${orgConfirmHTML(key)}
+        ${plus && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-plus="${esc(node.id)}" title="Add" aria-label="Add to ${esc(node.name)}" aria-haspopup="menu" aria-expanded="${menuOpen}" aria-controls="team-add-menu"><span class="org-plus" aria-hidden="true">+</span></button>${manage ? `<button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button>` : ''}</span>` : ''}</div>${orgConfirmHTML(key)}
         ${manage && ORG_BET === node.id && orgMayBet() ? orgBetPopHTML({id: node.id, bet_id: orgGroupBet(node.id)}) : ''}
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
@@ -831,7 +817,6 @@ function renderTree() {
         <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
-        ${!flat && p.id === myId && MY_AGENT === false ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
@@ -886,7 +871,6 @@ function renderTree() {
     }
   };
   $('#tree').onclick = ev => {
-    if (ev.target.closest('[data-connect-agent]')) { ev.preventDefault(); window.connectAgent?.(); return; }
     const seat = ev.target.closest('[data-seat-open]');
     if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
     const confirm = ev.target.closest('[data-org-confirm]');
@@ -898,8 +882,17 @@ function renderTree() {
     if (ORG_BET) { ORG_BET = null; renderTree(); }
     const remove = ev.target.closest('[data-group-delete]');
     if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
-    const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');
-    if (add || rename) { ev.preventDefault(); orgGroupEdit(add ? {add: add.dataset.groupAdd} : {rename: rename.dataset.groupRename}); return; }
+    const plus = ev.target.closest('[data-group-plus]');
+    if (plus) { ev.preventDefault(); teamAddToggle(plus.dataset.groupPlus); return; }
+    const rename = ev.target.closest('[data-group-rename]');
+    if (rename) { ev.preventDefault(); orgGroupEdit({rename: rename.dataset.groupRename}); return; }
+    // A group's name opens its page and unfolds it; only the arrow folds it again.
+    const label = ev.target.closest('a.dept-label');
+    if (label) {
+      const k = label.closest('[data-org]')?.dataset.org;
+      if (k && collapsed.delete(k)) { saveCollapsed(); renderTree(); }
+      return;
+    }
     const b = ev.target.closest('[data-toggle]'); if (!b) return;
     ev.preventDefault(); const k = b.dataset.toggle; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k);
     saveCollapsed();

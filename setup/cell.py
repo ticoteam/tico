@@ -15,16 +15,30 @@ the owner link as break-glass, the recommended preset), minus its own Caddy, clo
     <root>/companies/<slug>/.env            0600, the server's settings
     <root>/companies/<slug>/compose.yaml    the stock compose.yaml, unchanged
     <root>/companies/<slug>/compose.cell.yaml   memory limit, data folder, networks: what makes it one of many
-    <root>/companies/<slug>/company.json    what the cell knows about it (no secrets): port, index, version, state
+    <root>/companies/<slug>/extra.env       0600, settings carried from an install moved here (`add --env-file`)
+    <root>/companies/<slug>/company.json    what the cell knows about it (no secrets): port, index, version, state,
+                                            aliases
     <root>/companies/<slug>/data/           the server's /data (owned by the server's user, 10001)
     <root>/locks/                           one lock for the host's shared files, one per company
 
 A company's index (the smallest free one, kept until `remove` without --keep-data) gives it its loopback port
 (20000 + index) and its two private networks, so no two companies ever share one, across restarts too. The router maps
-the Host header to that port; cloudflared sends `*.<domain>` to the router. Containers cannot reach the EC2 metadata
-service (a DOCKER-USER rule, first in its chain, that `init` installs and `add` checks), so no company can use the
-host's AWS role. `update` snapshots the database before a new release first starts, and puts it back if that release
-does not come up. The app is told Tico runs its updates (TICO_UPDATES=tico), so it has no Update now of its own.
+the Host header to that port: the company's domain and its aliases (`--alias`), no host on two companies. cloudflared
+sends `*.<domain>` to the router, and before that wildcard, each company host it does not match (it matches exactly one
+label: hub.tico.team yes; a.b.tico.team, tidy.rocks no). `add` and `remove` rewrite that list when it changes and
+restart cloudflared then (it reads its config only when it starts; every company drops for those seconds). DNS for such
+a host (a proxied CNAME to the tunnel, or a record of its own that points elsewhere today) is staff's job. Containers
+cannot reach the EC2 metadata service (a DOCKER-USER rule, first in its chain, that `init` installs and `add` checks), so
+no company can use the host's AWS role. `update` snapshots the database before a new release first starts, and puts it
+back if that release does not come up. The app is told Tico runs its updates (TICO_UPDATES=tico), so it has no Update
+now of its own.
+
+Moving an existing install here (staff only; HQ never does): `--own-domain` lets --domain be any hostname instead of
+<slug>.<domain>; `--alias` adds hostnames (its runner and visual addresses); `--env-file` carries its other settings
+(kept in extra.env and merged into every .env `add` and `update` write; a key the cell writes with a value, or owns, is
+refused and named in "ignored"); `--import-data` unpacks its /data archive, checked whole first (no absolute names, no
+`..`, no symlinks, hard links only to its own files, no special files), into an empty data folder before the first
+start, through a staging folder renamed into place.
 
 All Docker and system calls go through one `System`, so the tests run every command with a fake.
 """
@@ -41,9 +55,12 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
+import tarfile
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,6 +90,25 @@ MEMORY_DEFAULT, MEMORY_MIN_MB, MEMORY_MAX_MB = "2g", 512, 16 * 1024
 CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 SECRET_MAX = 64 * 1024
 HOSTED_DEFAULT, SIGNIN_LABEL = "invited", "Tico account"
+MAX_ALIASES = 5
+
+# --env-file: what a moved install brings. Never carried: keys the cell sets itself (with a value, in this render: see
+# `add`), the ones below (the cell's own or read back from .env by the next `add`, so a carried one would feed back),
+# and what belongs to a single-company install only.
+ENV_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+CELL_ENV_KEYS = frozenset({
+    "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "TICO_DOMAIN", "TICO_GATEWAY_INVITE",
+    "TICO_OWNER_LINK_HASH", "TICO_BACKUP_URL", "TICO_BACKUP_REGION", "TICO_BACKUP_ENDPOINT", "LITESTREAM_ACCESS_KEY_ID",
+    "LITESTREAM_SECRET_ACCESS_KEY", "TICO_COMPANY_FILE", "TICO_COMPANY_FILE_SHA256", "TICO_COMPANY_FILE_B64",
+    "TICO_COMPANY_FILE_S3", "TICO_COMPANY_FILE_S3_REGION", "TICO_COMPANY_FILE_DIR", "TICO_SAMPLE_COMPANY",
+    "TICO_UPDATES", "TICO_HOSTED", "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID",
+    "TICO_OIDC_CLIENT_SECRET", "TICO_OIDC_LABEL", "TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE", "TICO_TRUSTED_PROXIES",
+    "TICO_CLIENT_IP_HEADER", "TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE", "TICO_CLOUDFLARED_ADDRESS",
+    "TICO_INSTALL_PRESET", "TICO_MODELS_PRESET", "TICO_SUPPORT",
+    "CLOUDFLARE_TUNNEL_TOKEN", "COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME", "TICO_UPDATER_URL", "TICO_TAG", "TICO_PORT",
+    "TICO_EXPECTED_AWS_ACCOUNT", "TICO_EXPECTED_AWS_ROLE"})
+CELL_ENV_PREFIXES = ("TICO_CADDY", "TICO_TUNNEL")
+IMPORT_STAGING = ".data-import"         # beside data/: an import is unpacked here, then renamed into place
 
 # Index i: port 20000+i, default network the i-th /24 of 10.208.0.0/12, edge network the i-th /28 of 10.224.0.0/16.
 PORT_BASE, MAX_COMPANIES = 20000, 4000
@@ -146,6 +182,20 @@ class System:
     def chown(self, path: Path, uid: int, gid: int) -> None:
         os.chown(path, uid, gid)
 
+    def open_archive(self, path: str):
+        """--import-data's archive, open for reading: a regular file (not through a symlink) that only its owner can
+        read, or root's (an install's /data holds its keys)."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            raise CellError("bad_archive", "--import-data: cannot open the file (missing, or a symlink)") from None
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or (info.st_mode & 0o077 and info.st_uid != 0):
+            os.close(fd)
+            raise CellError("secret_file", "--import-data: a regular file readable by its owner only (chmod 600), "
+                                           "or owned by root")
+        return os.fdopen(fd, "rb")
+
     def linux(self) -> bool:
         return sys.platform.startswith("linux")
 
@@ -202,6 +252,66 @@ def read_secret(path: str, flag: str) -> str:
     return text
 
 
+def check_host(value: str, flag: str, cell_domain: str) -> str:
+    """--own-domain's --domain or an --alias: a plain lowercase hostname (DNS labels, a dot, no IP), not the cell's own."""
+    host = (value or "").strip().lower()
+    if not st.DOMAIN_RE.fullmatch(host) or host in (cell_domain, ROUTER_HEALTH_HOST):
+        raise CellError("bad_domain", f"{flag} is a plain hostname such as hub.example.com (not {cell_domain} itself)")
+    return host
+
+
+def carried_env(text: str) -> dict[str, str]:
+    """--env-file: KEY=VALUE lines (comments and blank lines allowed), read as the cell reads .env. The errors name the
+    line, never a value."""
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        key, eq, _ = line.partition("=")
+        if line and not line.startswith("#") and not (eq and ENV_KEY_RE.fullmatch(key.strip())):
+            raise CellError("secret_file", f"--env-file: line {n} is not KEY=VALUE with KEY like TICO_RUNNER_URL")
+    values = envfile.parse(text)
+    for k, v in values.items():
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in v):
+            raise CellError("secret_file", f"--env-file: {k}'s value is not one line of text")
+    return values
+
+
+def cell_owned(key: str) -> bool:
+    return key in CELL_ENV_KEYS or key.startswith(CELL_ENV_PREFIXES)
+
+
+def check_members(members: list) -> int:
+    """An install's /data as a tar: regular files and directories, and hard links to a file earlier in it. Refused
+    whole: an absolute name, a `..`, any symlink (the server makes none), a device, fifo or other special file, and an
+    archive without hub.sqlite at its top (a tar of the folder itself, not its contents, would start an empty company).
+    The size of its files in bytes."""
+    def inside(name: str) -> str:
+        parts = [p for p in name.split("/") if p not in ("", ".")]
+        if name.startswith("/") or ".." in parts:
+            raise CellError("bad_archive", "--import-data: a name in it is absolute or has ..")
+        return "/".join(parts)
+
+    files, total = set(), 0
+    for m in members:
+        name = inside(m.name)
+        if m.issym():
+            raise CellError("bad_archive", "--import-data: it has a symlink")
+        if m.islnk():
+            if inside(m.linkname) not in files:
+                raise CellError("bad_archive", "--import-data: a hard link in it points outside its own files")
+            files.add(name)
+        elif m.isreg():
+            files.add(name)
+            total += m.size
+        elif not m.isdir():
+            raise CellError("bad_archive", "--import-data: it has a device, fifo or other special file")
+        if not name and not m.isdir():
+            raise CellError("bad_archive", "--import-data: a member has no name")
+    if "hub.sqlite" not in files:
+        raise CellError("bad_archive", "--import-data: no hub.sqlite at its top; archive the contents of /data "
+                                       "(tar -C /data .)")
+    return total
+
+
 def backup_keys(text: str) -> tuple[str, str]:
     """--backup-credentials-file: KEY=VALUE lines (LITESTREAM_ or AWS_ACCESS_KEY_ID and _SECRET_ACCESS_KEY), or the
     JSON `aws iam create-access-key` prints ({"AccessKey": {"AccessKeyId", "SecretAccessKey"}}, or that object alone)."""
@@ -244,7 +354,10 @@ def parser() -> Parser:
     i.add_argument("--domain", help="the domain every company is a name under (default tico.team, or the saved one)")
     a = cmd("add", "create or converge one company's server; answers once /healthz answers through the router")
     a.add_argument("--company", required=True, metavar="SLUG")
-    a.add_argument("--domain", required=True, help="<slug>.<the cell's domain>")
+    a.add_argument("--domain", required=True, help="<slug>.<the cell's domain>, or with --own-domain any hostname")
+    a.add_argument("--own-domain", action="store_true", help="staff, moving an install: --domain is its own hostname")
+    a.add_argument("--alias", action="append", metavar="HOST",
+                   help=f"another hostname for the same server (repeat, at most {MAX_ALIASES}); replaces the saved list")
     a.add_argument("--owner-email", required=True)
     a.add_argument("--auth", required=True, choices=["oidc"])
     a.add_argument("--issuer", required=True)
@@ -260,6 +373,10 @@ def parser() -> Parser:
     a.add_argument("--version", help="the release to run, vX.Y.Z (default the installer's own release)")
     a.add_argument("--hosted", choices=list(st.HOSTED), help=f"TICO_HOSTED (default {HOSTED_DEFAULT})")
     a.add_argument("--signin-label", help=f"the sign-in button's name (default \"{SIGNIN_LABEL}\")")
+    a.add_argument("--env-file", metavar="F", help="settings carried from a moved install, KEY=VALUE (0600); kept "
+                   "in extra.env, replaced when given again")
+    a.add_argument("--import-data", metavar="FILE", help="a moved install's /data as .tar or .tar.gz, unpacked into an "
+                   "empty data folder before the first start")
     a.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     cmd("list", "every company on this host")
     for name, help in (("status", "one company"), ("stop", "stop one company's server; its data stays"),
@@ -319,24 +436,39 @@ def networks(index: int) -> dict[str, str]:
 
 
 def router_config(companies: list[dict]) -> str:
-    """The router's Caddyfile: each company's domain to its loopback port, anything else a 404. Plain HTTP on loopback
-    only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used."""
+    """The router's Caddyfile: each company's domain and aliases to its loopback port, anything else a 404. Plain HTTP on
+    loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used."""
     lines = ["# Written by `python3 -m setup cell`; regenerated whenever a company is added or removed. Do not edit.",
              "{", "\tadmin localhost:2019", "\tauto_https off", "\tpersist_config off", f"\thttp_port {ROUTER_PORT}",
              f"\tdefault_bind {ROUTER_ADDRESS}", "}", ""]
     for c in sorted(companies, key=lambda c: c["domain"]):
-        lines += [f"http://{c['domain']}:{ROUTER_PORT} {{", f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
+        sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in hosts_of(c))
+        lines += [f"{sites} {{", f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
                   "\t\theader_up X-Forwarded-Proto https", "\t}", "}", ""]
     lines += [f"http://:{ROUTER_PORT} {{", f"\trespond {ROUTER_HEALTH_PATH} \"ok\" 200",
               "\trespond \"No Tico company at this address.\" 404", "}"]
     return "\n".join(lines) + "\n"
 
 
-def tunnel_config(domain: str) -> str:
-    return "\n".join([
-        "# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.",
-        "ingress:", f"  - hostname: \"*.{domain}\"", f"    service: http://{ROUTER_ADDRESS}:{ROUTER_PORT}",
-        "  - service: http_status:404"]) + "\n"
+def hosts_of(c: dict) -> list[str]:
+    return [c["domain"], *c.get("aliases", [])]
+
+
+def tunnel_hosts(domain: str, companies: list[dict]) -> list[str]:
+    """The company hosts the tunnel's `*.<domain>` does not match: Cloudflare's wildcard covers exactly one label."""
+    return sorted({h for c in companies for h in hosts_of(c)
+                   if not (h.endswith("." + domain) and "." not in h[:-len(domain) - 1])})
+
+
+def tunnel_config(domain: str, hosts: list[str] = ()) -> str:
+    """cloudflared's routes: `hosts` (see tunnel_hosts), then the wildcard, all to the router; anything else a 404.
+    Without `hosts` it is the file every cell had before them, byte for byte (so no restart on upgrade)."""
+    service = f"    service: http://{ROUTER_ADDRESS}:{ROUTER_PORT}"
+    lines = ["# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.",
+             "ingress:"]
+    for h in hosts:
+        lines += [f"  - hostname: \"{h}\"", service]
+    return "\n".join(lines + [f"  - hostname: \"*.{domain}\"", service, "  - service: http_status:404"]) + "\n"
 
 
 def edge_compose(root: Path, tunnel: bool) -> str:
@@ -507,7 +639,7 @@ class Cell:
         """Regenerate the Caddyfile from every company not removed and reload the router. A config the router refuses
         is replaced by the one it had, so a bad change never takes every company down."""
         path = self.root / "router" / "Caddyfile"
-        text = router_config([c for c in self.companies() if c.get("state") != "removed"])
+        text = router_config(self.live_companies())
         try:
             old = path.read_text()
         except OSError:
@@ -521,6 +653,41 @@ class Cell:
             if old is not None:
                 _write_atomic(path, old)
             raise CellError("router_failed", self.scrub("the router refused the new config: " + (r.stderr or r.stdout).strip()[-400:]))
+        return True
+
+    def edge(self) -> list[str]:
+        return ["docker", "compose", "--project-name", EDGE_PROJECT, "-f", str(self.root / "edge.yaml")]
+
+    def live_companies(self) -> list[dict]:
+        return [c for c in self.companies() if c.get("state") != "removed"]
+
+    def tunnel_text(self, domain: str) -> str:
+        return tunnel_config(domain, tunnel_hosts(domain, self.live_companies()))
+
+    def write_tunnel(self) -> bool:
+        """Under the cell lock: regenerate cloudflared's routes and, when the file changed and the tunnel runs, restart
+        it (cloudflared reads them only when it starts, as `init` does). A restart that fails puts the old file back,
+        so the next `add` or `remove` tries again."""
+        path = self.root / "tunnel" / "cloudflared.yml"
+        text = self.tunnel_text(self.load_cell()["domain"])
+        try:
+            old = path.read_text()
+        except OSError:
+            old = None
+        if old == text:
+            return False
+
+        def put(body: str) -> None:
+            _write_atomic(path, body)
+            self.system.chown(path, TUNNEL_UID, TUNNEL_UID)     # a rewritten file comes back root-owned
+        put(text)
+        if (self.root / "tunnel.env").exists():
+            r = self.system.run([*self.edge(), "restart", "tunnel"])
+            if r.returncode:
+                if old is not None:
+                    put(old)
+                raise CellError("docker_failed", self.scrub("restarting the tunnel with its new routes: "
+                                                            + (r.stderr or r.stdout).strip()[-400:]))
         return True
 
     def image_present(self, version: str) -> bool:
@@ -628,7 +795,7 @@ class Cell:
         if token:
             changed += ["tunnel token"] if _write_atomic(self.root / "tunnel.env", f"TUNNEL_TOKEN={token}\n", 0o600) else []
         tunnel = (self.root / "tunnel.env").exists()
-        routes_changed = _write_atomic(self.root / "tunnel" / "cloudflared.yml", tunnel_config(domain))
+        routes_changed = _write_atomic(self.root / "tunnel" / "cloudflared.yml", self.tunnel_text(domain))
         # cloudflared runs as TUNNEL_UID and cannot read a root-owned directory: every init sets the owner again
         # (a file this run rewrote comes back root-owned, so it is covered too)
         os.chmod(self.root / "tunnel", 0o700)
@@ -639,7 +806,7 @@ class Cell:
             _write_atomic(caddyfile, router_config([c for c in self.companies() if c.get("state") != "removed"]))
         if _write_atomic(self.root / "edge.yaml", edge_compose(self.root, tunnel)):
             changed.append("edge")
-        edge = ["docker", "compose", "--project-name", EDGE_PROJECT, "-f", str(self.root / "edge.yaml")]
+        edge = self.edge()
         self.run([*edge, "up", "-d", "--remove-orphans"], "docker_failed", "starting the router and tunnel")
         if tunnel and routes_changed:   # cloudflared reads its routes only when it starts
             self.run([*edge, "restart", "tunnel"], "docker_failed", "restarting the tunnel with its routes")
@@ -701,8 +868,18 @@ class Cell:
         slug = check_slug(args.company, new=True)
         cell = self.load_cell()
         domain = (args.domain or "").strip().lower()
-        if domain != f"{slug}.{cell['domain']}":
-            raise CellError("bad_domain", f"--domain must be {slug}.{cell['domain']}")
+        if args.own_domain:
+            domain = check_host(domain, "--domain", cell["domain"])
+        elif domain != f"{slug}.{cell['domain']}":
+            raise CellError("bad_domain", f"--domain must be {slug}.{cell['domain']} (or, moving an install of its own, "
+                                          "pass --own-domain)")
+        aliases = None
+        if args.alias is not None:          # given: replaces the saved list (--alias "" alone clears it)
+            aliases = [check_host(a, "--alias", cell["domain"]) for a in args.alias if a.strip()]
+            if len(aliases) > MAX_ALIASES:
+                raise CellError("bad_args", f"--alias is given at most {MAX_ALIASES} times")
+            if len(set(aliases)) != len(aliases):
+                raise CellError("bad_domain", "--alias names the same host twice")
         email = (args.owner_email or "").strip()
         if not st.EMAIL_RE.fullmatch(email) or re.search(r"[^A-Za-z0-9.@_+-]", email):
             raise CellError("bad_args", "--owner-email is not a plain email address")
@@ -741,6 +918,10 @@ class Cell:
         if args.backup_credentials_file:
             keys = backup_keys(read_secret(args.backup_credentials_file, "--backup-credentials-file"))
             self.secrets.append(keys[1])
+        carried = None
+        if args.env_file:
+            carried = carried_env(read_secret(args.env_file, "--env-file"))
+            self.secrets += [v for v in carried.values() if v]
         plan = None
         if args.company_file:
             from .wizard import gather_company_file
@@ -751,7 +932,11 @@ class Cell:
                 raise CellError("company_file", str(e)) from None
             plan = (probe.company_file_data, probe.company)
 
-        with self.lock("company-" + slug):
+        with self.lock("company-" + slug), contextlib.ExitStack() as cleanup:
+            # Unpacked under this company's lock only (it can take minutes), then renamed into place under the cell's.
+            staged = self.stage_import(args.import_data, self.dir(slug)) if args.import_data else None
+            if staged:
+                cleanup.callback(self.drop_import, staged)     # whatever is left of it, once this is done
             with self.lock("cell"):
                 if not self.imds_blocked():
                     raise CellError("not_initialized", "containers on this host can reach the EC2 metadata service "
@@ -762,9 +947,14 @@ class Cell:
                     # A new release migrates the database: that is `update`, with its snapshot and rollback.
                     raise CellError("use_update", f"{slug} runs {old['version']}; change its release with `python3 -m "
                                                   f"setup cell update --company {slug} --version {args.version}`")
-                for other in self.companies():
-                    if other["slug"] != slug and other["domain"] == domain and other.get("state") != "removed":
-                        raise CellError("domain_taken", f"{domain} belongs to {other['slug']}")
+                aliases = (old or {}).get("aliases", []) if aliases is None else aliases
+                if domain in aliases:
+                    raise CellError("bad_domain", f"--alias {domain} is the company's --domain")
+                mine = {domain, *aliases}
+                for other in self.live_companies():
+                    clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
+                    if clash:
+                        raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
                 index = old["index"] if old else self.allocate()
                 d = self.dir(slug)
                 old_env = envfile.parse(_read(d / ".env"))
@@ -774,6 +964,8 @@ class Cell:
                      "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
                      "created": (old or {}).get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                      "state": "running"}
+                if aliases:
+                    c["aliases"] = aliases
                 if (old or {}).get("pending"):  # an update not yet seen healthy: this start is still guarded by it
                     c["pending"] = old["pending"]
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
@@ -811,7 +1003,21 @@ class Cell:
                 env.update(TICO_PORT=str(c["port"]), COMPOSE_PROFILES="", COMPOSE_PROJECT_NAME=project(slug),
                            TICO_UPDATER_URL="", TICO_UPDATES=UPDATES_BY,
                            TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR))
-                changed = self.write_company(c, envfile.render(env), s.company_file_data)
+                # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
+                written = {k for k, v in env.items() if v}
+                extra = self.extra_env(slug) if carried is None else carried
+                ignored = sorted(k for k in extra if k in written or cell_owned(k))
+                extra = {k: v for k, v in extra.items() if v and k not in ignored}
+                env.update(extra)
+                changed = False
+                if carried is not None:
+                    changed = _write_atomic(d / "extra.env", "# Carried from the install this company moved from "
+                                            "(`python3 -m setup cell add --env-file`). Keep it private (0600).\n"
+                                            + envfile.render(extra).split("\n", 1)[1], 0o600)
+                if staged:
+                    self.place_import(staged, d)
+                    changed = True
+                changed = self.write_company(c, envfile.render(env), s.company_file_data) or changed
                 self.save(c)
             before = self.containers(slug).get(slug, {})
             routed = []
@@ -819,9 +1025,80 @@ class Cell:
             def route():
                 with self.lock("cell"):
                     routed.append(self.write_router())
+                    routed.append(self.write_tunnel())
             ready = self.launch(c, started, args.timeout, route)
             changed = changed or any(routed) or before.get("state") != "running" or before.get("health") != "healthy"
-            return self.answer(c, ready, changed)
+            answer = self.answer(c, ready, changed)
+            if carried is not None:
+                answer["ignored"] = ignored
+                answer["unused"] = sorted(set(extra) - self.compose_keys())
+            if staged:
+                answer.update(imported=True, imported_bytes=staged[1])
+            return answer
+
+    def extra_env(self, slug: str) -> dict[str, str]:
+        """extra.env (settings carried from a moved install), minus anything the cell owns; its values are secrets."""
+        values = {k: v for k, v in envfile.parse(_read(self.dir(slug) / "extra.env")).items()
+                  if v and not cell_owned(k)}
+        self.secrets += [v for v in values.values() if v not in self.secrets]
+        return values
+
+    def compose_keys(self) -> set[str]:
+        """The settings the stock compose.yaml passes on: a carried key outside them reaches no container."""
+        text = _read(self.compose_source)
+        return set(re.findall(r"^\s+([A-Z][A-Z0-9_]*):", text, re.M)) | set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", text))
+
+    def stage_import(self, path: str, d: Path) -> tuple[Path, int, bool]:
+        """--import-data, under the company's lock: refused (data_exists) unless data/ is empty or missing; the whole
+        archive checked (check_members) before anything is written; then unpacked into d/IMPORT_STAGING, everything
+        owned by the server's user. (staging, bytes, whether d was made for it); `place_import` renames it into place,
+        `drop_import` removes what is left of it."""
+        data = d / "data"
+        if data.is_symlink() or (data.exists() and (not data.is_dir() or any(data.iterdir()))):
+            raise CellError("data_exists", f"{d.name}'s data folder is not empty; an import goes only into a new one")
+        if not hasattr(tarfile, "data_filter"):
+            raise CellError("unsupported_host", "--import-data needs Python 3.12 (tarfile's data filter)")
+        with self.system.open_archive(path) as f, contextlib.ExitStack() as stack:
+            try:
+                tar = stack.enter_context(tarfile.open(fileobj=f, mode="r:*"))
+                members = tar.getmembers()
+            except (tarfile.TarError, OSError, EOFError, zlib.error):
+                raise CellError("bad_archive", "--import-data: not a readable .tar or .tar.gz") from None
+            size = check_members(members)
+            created = not d.exists()
+            d.mkdir(parents=True, exist_ok=True)
+            os.chmod(d, 0o700)
+            staging = d / IMPORT_STAGING
+            shutil.rmtree(staging, ignore_errors=True)     # left by a run that died half-way
+            staging.mkdir(mode=0o700)
+            staged = (staging, size, created)
+            try:
+                tar.extractall(staging, members=members, filter="data")
+                os.chmod(staging, 0o700)
+                for top, dirs, files in os.walk(staging):
+                    for name in [*dirs, *files]:
+                        self.system.chown(Path(top) / name, SERVER_UID, SERVER_UID)
+                self.system.chown(staging, SERVER_UID, SERVER_UID)
+            except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
+                self.drop_import(staged)
+                if not isinstance(e, OSError):
+                    raise CellError("bad_archive", "--import-data: refused while unpacking it") from None
+                raise CellError("import_failed", f"--import-data: unpacking it failed ({e.strerror or e})") from None
+            return staged
+
+    def place_import(self, staged: tuple[Path, int, bool], d: Path) -> None:
+        """The unpacked archive becomes data/ in one rename (data/ is missing or empty: an empty one is replaced)."""
+        data = d / "data"
+        with contextlib.suppress(FileNotFoundError):
+            data.rmdir()            # empty (stage_import checked, under the same lock); refuses if it is not
+        os.rename(staged[0], data)
+
+    def drop_import(self, staged: tuple[Path, int, bool]) -> None:
+        staging, _, created = staged
+        shutil.rmtree(staging, ignore_errors=True)
+        if created:                 # the folder was made only for the import: nothing else of the company is left
+            with contextlib.suppress(OSError):
+                staging.parent.rmdir()
 
     def allocate(self) -> int:
         used = {c["index"] for c in self.companies()}
@@ -866,16 +1143,16 @@ class Cell:
     def list(self, args) -> dict:
         ps = self.containers() if self.companies() else {}
         return {"ok": True, "companies": [
-            {"company": c["slug"], "url": f"https://{c['domain']}", "port": c["port"], "version": c["version"],
-             "memory": c["memory"], "state": self.state_of(c, ps)} for c in self.companies()]}
+            {"company": c["slug"], "url": f"https://{c['domain']}", "aliases": c.get("aliases", []), "port": c["port"],
+             "version": c["version"], "memory": c["memory"], "state": self.state_of(c, ps)} for c in self.companies()]}
 
     def status(self, args) -> dict:
         c = self.company(args.company)
         ps = self.containers(c["slug"])
         state = self.state_of(c, ps)
         healthy = state != "removed" and self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200
-        return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "port": c["port"], "version": c["version"],
-                "memory": c["memory"], "state": state, "healthy": healthy,
+        return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "aliases": c.get("aliases", []),
+                "port": c["port"], "version": c["version"], "memory": c["memory"], "state": state, "healthy": healthy,
                 "container": ps.get(c["slug"], {"state": "", "health": ""})}
 
     def live(self, slug: str) -> dict:
@@ -924,6 +1201,7 @@ class Cell:
             d = self.dir(slug)
             env_text = _read(d / ".env")
             self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
+            extra = self.extra_env(slug)
             running = c.get("state") != "stopped"
             pending = c.get("pending")
             if c["version"] == args.version:
@@ -944,7 +1222,7 @@ class Cell:
                 self.rollback(c, args.timeout, restart=running)
                 return self.answer(c, self.wait_healthy(c, started, args.timeout) if running else 0, True)
             try:
-                _write_atomic(d / ".env", _with_tag(env_text, args.version), 0o600)
+                _write_atomic(d / ".env", _with_tag(env_text, args.version, extra), 0o600)
             except OSError as e:
                 raise self.restarted(c, CellError("internal", f"writing .env: {e}"), running) from None
             c["version"], c["pending"] = args.version, snap
@@ -1046,6 +1324,7 @@ class Cell:
                     c["state"] = "removed"
                     self.save(c)
                 self.write_router()
+                self.write_tunnel()
                 if not args.keep_data:
                     shutil.rmtree(d)
         return {"ok": True, "company": slug, "removed": True, "kept_data": bool(args.keep_data)}
@@ -1058,9 +1337,10 @@ def _read(path: Path) -> str:
         return ""
 
 
-def _with_tag(env_text: str, version: str) -> str:
-    """The same .env with another release, written exactly as `add` would write it."""
-    return envfile.render({**envfile.parse(env_text), "TICO_TAG": version})
+def _with_tag(env_text: str, version: str, extra: dict[str, str] | None = None) -> str:
+    """The same .env with another release, written exactly as `add` would write it (carried settings fill only keys
+    the .env leaves unset, as in `add`)."""
+    return envfile.render({**(extra or {}), **envfile.parse(env_text), "TICO_TAG": version})
 
 
 def main(argv: list[str], *, system: System | None = None, root: str | Path | None = None,

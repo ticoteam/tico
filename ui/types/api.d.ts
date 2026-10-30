@@ -4549,6 +4549,13 @@ export type GetBotInstructionsParams = {
 export type GetBotInstructionsBody = never;
 export type GetBotInstructionsResponse = BotInstructions;
 
+/** GET /api/v2/bots/{bot}/pause-state */
+export type GetBotPauseStateParams = {
+  bot: string;
+};
+export type GetBotPauseStateBody = never;
+export type GetBotPauseStateResponse = unknown;
+
 /** GET /api/v2/bots/{bot}/profile */
 export type GetBotProfileParams = {
   bot: string;

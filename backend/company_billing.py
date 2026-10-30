@@ -32,8 +32,10 @@ company staff shut down answers `deactivated`. An install HQ hosts nothing for a
 hidden.
 """
 
+import hashlib
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -55,6 +57,9 @@ CLOUD = "/cloud"             # a Tico Cloud company's access (backend/cloud_acce
 SERVER_ID = re.compile(r"pv-[0-9a-f]{16}")
 KINDS = ("tico", "bot_computer")
 PAUSED = "Paused: out of credit. Add credit to start this computer."
+PAUSE_TTL = 60               # seconds a pause bit is reused: the bot page asks on every refresh
+CLOCK = time.monotonic       # tests replace it
+_pause = {}                  # (sha256 of the gateway key, base) -> (expires, paused)
 
 
 def _no_float(text):
@@ -212,6 +217,20 @@ def read(key, base, month=""):
         return parse(answer[0])
     except (ValueError, TypeError, AttributeError):
         return {"state": "unreachable"}
+
+
+def paused(key, base):
+    """Whether HQ says the company is paused for credit (the bit the bot pause banner shows), kept PAUSE_TTL seconds per
+    gateway key and base. Only this bit is cached: `read` is uncached, the billing page shows its balance live."""
+    slot = (hashlib.sha256((key or "").encode()).hexdigest(), base)
+    now = CLOCK()
+    hit = _pause.get(slot)
+    if hit and hit[0] > now:
+        return hit[1]
+    billing = read(key, base)
+    value = billing.get("state") == "paused" and billing.get("record_only") is False
+    _pause[slot] = (now + PAUSE_TTL, value)
+    return value
 
 
 def day(key, base, when):

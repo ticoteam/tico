@@ -20,7 +20,8 @@ const shot = async (page, name) => { if (shots) await page.screenshot({animation
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const PHONE_BAR = ['Team', 'Search', 'Tasks', 'Updates', 'More'];
-const railKeys = page => page.$$eval('#side .side-scroll > *', els => els.map(el =>
+// The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
+const railKeys = page => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => els.map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && el.querySelector(':scope > [data-nav]')?.dataset.nav) || el.id || el.className.split(' ')[0]));
 const shownRail = page => page.$$eval('#side .side-scroll a.nav-link, #side .side-scroll .rd-lib a.nav-link', els =>
   [...new Set(els)].filter(el => el.checkVisibility()).map(el => {

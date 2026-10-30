@@ -155,11 +155,16 @@ def prime_ancestry(conn, task_ids):
 
 def live_blocker(conn, task_id, statuses):
     """The first blocker still in one of `statuses`, or None."""
-    marks = ",".join("?" * len(statuses))
-    row = conn.execute("SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                       f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
-                       "ORDER BY r.created, r.rowid LIMIT 1", (task_id, *statuses)).fetchone()
+    from .read_cache import one
+    row = one(conn, live_blocker_sql(len(statuses)), (task_id, *statuses))
     return row[0] if row else None
+
+
+def live_blocker_sql(count):
+    """live_blocker's read for `count` statuses (auto_tasks.prime_waits seeds it for many tasks)."""
+    return ("SELECT t.id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({','.join('?' * count)}) "
+            "ORDER BY r.created, r.rowid LIMIT 1")
 
 
 def live_blockers(conn, task_id, statuses):

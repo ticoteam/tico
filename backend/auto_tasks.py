@@ -8,6 +8,15 @@ PUT_BACK_MINUTES = 60
 START_NOTE = 'Automatic start on a free turn'
 
 
+PUT_BACK_SQL = ("SELECT rowid,ts,actor,old,new FROM task_events WHERE task_id=? AND actor=? "
+                "AND field IN ('status','queue_return') AND new='open' ORDER BY rowid DESC LIMIT 1")
+STEP_SQL = 'SELECT name FROM task_steps WHERE id=?'
+WORKTREE_SQL = "SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1"
+APPROVAL_SQL = 'SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1'      # H.wait_detail's too
+OTHER_CHILD_SQL = ("SELECT 1 FROM tasks WHERE id IN (" + H.TR.CHILD_IDS + ") "
+                   "AND status IN ('open','doing','waiting','review','ready') AND owner<>? LIMIT 1")
+
+
 def put_back_held(c, row):
     """An owner's queue return holds until its hour expires or new task input arrives.
 
@@ -16,9 +25,8 @@ def put_back_held(c, row):
     """
     if not row or row['status'] != 'open':
         return False
-    move = c.execute("SELECT rowid,ts,actor,old,new FROM task_events WHERE task_id=? AND actor=? "
-                     "AND field IN ('status','queue_return') AND new='open' ORDER BY rowid DESC LIMIT 1",
-                     (row['id'], row['owner'])).fetchone()
+    from .read_cache import one
+    move = one(c, PUT_BACK_SQL, (row['id'], row['owner']))
     if (not move or move['actor'] != row['owner'] or move['old'] not in ('doing', 'waiting', 'done', 'review')
             or move['new'] != 'open' or move['ts'] <= H.shift(H.now(), minutes=-PUT_BACK_MINUTES)):
         return False
@@ -79,7 +87,8 @@ def startable(c, row, steps=None):
     if not row or row['status'] != 'open':
         return False
     if steps is None:
-        step = c.execute('SELECT name FROM task_steps WHERE id=?', (row.get('step_id'),)).fetchone()
+        from .read_cache import one
+        step = one(c, STEP_SQL, (row.get('step_id'),))
         name = step[0] if step else None
     else:
         name = steps.get(row.get('step_id'))
@@ -94,6 +103,100 @@ def step_names(c, rows):
         names.update({sid: name for sid, name in c.execute(
             f"SELECT id,name FROM task_steps WHERE id IN ({_marks(part)})", part)})
     return names
+
+
+def prime_checks(c, rows):
+    """Seed the one-row reads `put_back_held` and `startable` make for each of these tasks (read_cache.prime), one
+    query a table for all of them: Health checks every queued job of every bot whose work is old. A batch row carries
+    its task after the columns the one-row read selects; those are read by name and position only."""
+    from .read_cache import cache, prime
+    rows = [r for r in rows if r]
+    if cache(c) is None or not rows:
+        return
+    opened = {r['id']: r['owner'] for r in rows if r['status'] == 'open' and r['owner']}
+    moves = {}
+    for part in H.chunks(sorted(opened)):
+        for move in c.execute("SELECT rowid,ts,actor,old,new,task_id FROM task_events WHERE task_id IN (%s) "
+                              "AND field IN ('status','queue_return') AND new='open' ORDER BY rowid DESC"
+                              % _marks(part), part):
+            if move['actor'] == opened[move['task_id']]:
+                moves.setdefault(move['task_id'], move)
+    prime(c, PUT_BACK_SQL, {(tid, owner): moves.get(tid) for tid, owner in opened.items()})
+    steps = sorted({r.get('step_id') for r in rows if r['status'] == 'open'}, key=str)
+    found = {}
+    for part in H.chunks([s for s in steps if s is not None]):
+        found.update((row['id'], row) for row in c.execute(
+            f"SELECT name,id FROM task_steps WHERE id IN ({_marks(part)})", part))
+    prime(c, STEP_SQL, {(sid,): found.get(sid) for sid in steps})
+
+
+def prime_waits(c, rows):
+    """Seed the first reads `waiting` and H.wait_detail make for each of these tasks, one query a table for all of
+    them (read_cache): `maybe_waiting`'s suspects, which Health asks `waiting` about for every queued job. A read is
+    seeded where the batch gives exactly the one-task answer: an empty one, or a single row (a tie on the one-task
+    read's order is left to that read). A batch row carries its key after the columns the one-task read selects;
+    those are read by name and position only."""
+    from .milestone_waits import PENDING_SQL, _present as milestones_present
+    from .read_cache import cache, prime, prime_rows
+    from .task_relations import live_blocker_sql
+    rows = [r for r in rows if r]
+    if cache(c) is None or not rows:
+        return
+    ids = sorted({r['id'] for r in rows})
+
+    def batch(sql, args=()):
+        for part in H.chunks(ids):
+            yield from c.execute(sql.replace('{m}', _marks(part)), (*part, *args))
+
+    def absent(sql, select):
+        have = {row[0] for row in batch(select)}
+        prime(c, sql, {(tid,): None for tid in ids if tid not in have})
+    if H._has_table(c, 'worktree_waits'):
+        absent(WORKTREE_SQL, "SELECT DISTINCT task_id FROM worktree_waits WHERE task_id IN ({m}) "
+                             "AND state IN ('waiting','reserved')")
+    if milestones_present(c):
+        absent(PENDING_SQL, "SELECT DISTINCT task_id FROM task_milestone_waits WHERE task_id IN ({m}) AND woke_at IS NULL")
+    absent(APPROVAL_SQL, "SELECT DISTINCT task_id FROM approvals WHERE task_id IN ({m}) AND decision IS NULL")
+    first = {}
+    for row in batch("SELECT t.id,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                     "WHERE r.to_task IN ({m}) AND r.kind='blocks' AND t.status IN (" + _marks(H.ACTIVE_STATUSES) + ") "
+                     "ORDER BY r.created, r.rowid", H.ACTIVE_STATUSES):
+        first.setdefault(row['to_task'], row)
+    prime(c, live_blocker_sql(len(H.ACTIVE_STATUSES)),
+          {(tid, *H.ACTIVE_STATUSES): first.get(tid) for tid in ids})
+    # Open subtasks (wait_detail), and whether one has another owner (`waiting` when starting).
+    kids, other = {tid: [] for tid in ids}, set()
+    owner_of = {r['id']: r['owner'] for r in rows}
+    for row in batch("SELECT t.id,t.owner,t.title,t.status,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                     "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created,t.id"):
+        if row['status'] is not None and row['status'] not in ('done', 'closed', 'declined'):
+            kids[row['to_task']].append(row)
+        if (row['status'] in H.ACTIVE_STATUSES and None not in (row['owner'], owner_of[row['to_task']])
+                and row['owner'] != owner_of[row['to_task']]):
+            other.add(row['to_task'])
+    prime_rows(c, H.OPEN_CHILDREN_SQL, {(tid,): found for tid, found in kids.items()})
+    prime(c, OTHER_CHILD_SQL, {(tid, owner_of[tid]): (1,) if tid in other else None for tid in ids})
+    # The owner's unanswered questions about each task (wait_detail), and what answered them (answers_to).
+    asks = {(r['owner'], r['id']): [] for r in rows}
+    for part in H.chunks(sorted({owner for owner, _ in asks})):
+        for row in c.execute(
+                f"SELECT m.id,m.to_actor,m.from_actor,{H.MESSAGE_TASK_SQL} task FROM messages m "
+                f"JOIN conversations cv ON cv.id=m.conversation_id WHERE m.from_actor IN ({_marks(part)}) "
+                "AND m.kind='ask' AND m.superseded_at IS NULL", part):
+            if (row['from_actor'], row['task']) in asks:
+                asks[(row['from_actor'], row['task'])].append(row)
+    prime_rows(c, H.WAIT_ASKS_SQL, {pair: found for pair, found in asks.items() if len(found) <= 1})
+    asked = sorted({found[0]['id'] for found in asks.values() if len(found) == 1})
+    answers = {}
+    for part in H.chunks(asked):
+        for row in c.execute(f"SELECT * FROM messages WHERE in_reply_to IN ({_marks(part)}) AND kind='answer' "
+                             "AND deleted_at IS NULL", part):
+            answers.setdefault(row['in_reply_to'], []).append(row)
+    prime(c, H.ANSWER_SQL, {(mid,): answers[mid][0] if mid in answers else None
+                            for mid in asked if len(answers.get(mid, ())) <= 1})
+    for part in H.chunks(asked):
+        prime(c, H.ANSWERED_BY_SQL, {(row['id'],): row for row in c.execute(
+            f"SELECT answered_by,id FROM messages WHERE id IN ({_marks(part)})", part)})
 
 
 def _marks(values):
@@ -226,22 +329,18 @@ def waiting(c, row, starting=False, *, include_next_run=True, result=False):
     that back, or a parent waiting on two subtasks hears from neither until both finish; every other wait does."""
     if snoozed(row) or put_back_held(c, row) or include_next_run and next_run_held(c, row):
         return True
-    if H._has_table(c, 'worktree_waits') and c.execute(
-            "SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1",
-            (row['id'],)).fetchone():
+    from .read_cache import one
+    if H._has_table(c, 'worktree_waits') and one(c, WORKTREE_SQL, (row['id'],)):
         return True
     from .milestone_waits import pending
     if (row.get('waiting_on') or H.live_blocker(c, row['id'], children=not result)
-            or pending(c, row['id']) or c.execute(
-                'SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1', (row['id'],)).fetchone()):
+            or pending(c, row['id']) or one(c, APPROVAL_SQL, (row['id'],))):
         return True
     why = H.waiting_for(c, row, children=not result)
     # A new parent and the work someone filed beneath it may share the same bot's session.
     # Let that session coordinate its own work; another owner's child remains an awaited result.
     if starting and why == 'an open child task':
-        return bool(c.execute("SELECT 1 FROM tasks WHERE id IN (" + H.TR.CHILD_IDS + ") "
-                              "AND status IN ('open','doing','waiting','review','ready') AND owner<>? LIMIT 1",
-                              (row['id'], row['owner'])).fetchone())
+        return bool(one(c, OTHER_CHILD_SQL, (row['id'], row['owner'])))
     return bool(why)
 
 

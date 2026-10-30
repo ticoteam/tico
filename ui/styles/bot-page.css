@@ -107,7 +107,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
 .rail-fold>summary{cursor:pointer;list-style:none;margin:0}
 .rail-fold>summary::-webkit-details-marker{display:none}
-.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
+.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
 .rail-fold[open]>summary::before{transform:var(--chev-open)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
@@ -298,3 +298,15 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-settings-panel :is(.owner-picker-body,.access-body){padding:14px}
 
 .bot-settings-panel .access-body{max-height:none;overflow:visible}
+
+/* Always above the bot name and tabs; a personal pause and company pause stay separate. */
+.bot-control-strip{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:10px 16px;margin-bottom:12px;border:1px solid var(--line);border-radius:8px}
+.bot-control-state{display:flex;align-items:center;gap:9px}
+.bot-running-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#24984b}
+.bot-control-strip.is-paused,.bot-company-pause{background:#fff0c2;color:#563800;border:1px solid #b87d15;padding:22px;margin-bottom:12px;border-radius:8px}
+.bot-control-strip.is-paused strong{font-size:1.2rem}
+.bot-control-strip p,.bot-company-pause p{margin:8px 0 0}
+.bot-control-strip.is-paused a,.bot-company-pause a{color:inherit;text-decoration:underline}
+.bot-control-strip.is-paused>button{min-height:48px;min-width:110px}
+.bot-control-copy{min-width:0;overflow-wrap:anywhere}
+@media(max-width:600px){.bot-control-strip{align-items:stretch;flex-direction:column;gap:12px}.bot-control-strip>button{width:100%;min-height:44px}}

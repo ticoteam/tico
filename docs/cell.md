@@ -1,7 +1,8 @@
 # Many companies on one host (cell mode)
 
 `python3 -m setup cell` runs many companies' Tico servers on one shared Linux host. Tico uses it for its cloud
-companies (`<slug>.tico.team`); Tico HQ drives it over AWS SSM. Each company gets the same server a
+companies (`<slug>.tico.team`); Tico HQ drives it over AWS SSM. Staff also use it to move an existing install onto the
+host, with its own domain, settings and data ([Moving an install in](#moving-an-install-in)). Each company gets the same server a
 [hosted install](install-advanced.md) gets: the stock `ghcr.io/ticoteam/tico` image at a pinned release, the stock
 entrypoint and `compose.yaml`, its own data folder, `.env` and Compose project, sign-in through its own OpenID
 Connect client, the owner sign-in link kept as break-glass, and the recommended setup. It does not get its own Caddy,
@@ -40,7 +41,8 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    not first.
 4. Starts the router and the tunnel in Compose project `tico-cell` (`/srv/tico-cell/edge.yaml`). The router is Caddy,
    serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port, and
-   answers anything else with a 404. The tunnel sends `*.<domain>` to the router. Both containers use the host's
+   answers anything else with a 404. The tunnel sends `*.<domain>` to the router, and before that wildcard, every
+   company host it does not match (see [Moving an install in](#moving-an-install-in)). Both containers use the host's
    network and listen on loopback only. Both drop all Linux capabilities, set `no-new-privileges` and a read-only
    root filesystem. The router adds back only `NET_BIND_SERVICE` (Caddy's binary needs it to exec). The tunnel
    directory `/srv/tico-cell/tunnel` is 0700 and owned by uid/gid 65532, the user cloudflared runs as; every `init`
@@ -58,7 +60,8 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   --auth oidc --issuer https://accounts.tico.team --client-id tc_... --client-secret-file /root/boatyard/client-secret \
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
-  [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] --json
+  [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
+  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
@@ -76,10 +79,13 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `bad_args` | A flag is missing or a value is invalid |
 | `bad_slug` | The slug is not 1 to 40 lowercase letters, digits and single hyphens |
 | `reserved_name` | The name is one of Tico's own (the list below) |
-| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` |
-| `domain_taken` | Another company has this domain |
+| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` (without `--own-domain`), or `--domain`/`--alias` is not a plain hostname, is the cell's domain, or repeats a host |
+| `domain_taken` | Another company has this host as its domain or an alias |
 | `secret_file` | A secret file is missing, empty, readable by others or has the wrong content |
 | `company_file` | The company file is not a valid company YAML |
+| `data_exists` | `--import-data`, but the company's data folder is not empty. Nothing was touched |
+| `bad_archive` | `--import-data`'s file is missing, a symlink, not a .tar/.tar.gz, or has a member it refuses. Nothing was written |
+| `import_failed` | Unpacking the archive failed (for example, the disk is full). Nothing is left of it |
 | `not_initialized` | `init` has not run, or the metadata firewall rule is missing or not first |
 | `not_found` | No such company, or it was removed |
 | `busy` | Another command holds the lock too long |
@@ -104,10 +110,14 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
  "version": "v0.5.1", "changed": true, "owner_link_file": "/srv/tico-cell/companies/boatyard/owner-link.txt"}
 ```
 
+`add` adds `"ignored"` (the `--env-file` keys it did not keep, names only) and `"unused"` (kept keys the stock
+`compose.yaml` does not pass to the server, so they do nothing) when given `--env-file`, and `"imported": true` with
+`"imported_bytes"` (the size of the files unpacked) when given `--import-data`.
+
 They return only once `/healthz` answers through the router. `ready_ms` is the time from the start of the command
 until then. `changed` is false when nothing needed doing. The other commands answer like this:
 
-- `list`: `{"ok": true, "companies": [{"company", "url", "port", "version", "memory", "state"}]}`.
+- `list`: `{"ok": true, "companies": [{"company", "url", "aliases", "port", "version", "memory", "state"}]}`.
 - `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now) and
   `container` (`{"state", "health"}`).
 - `stop`: `{"ok": true, "company", "state": "stopped", "changed"}`.
@@ -122,7 +132,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   on stdout: every detail and log line is scrubbed. They are written only to the company's `.env` (0600).
 - **Every command is idempotent.** Running `add` again with the same settings changes nothing and gives the same answer
   (`changed: false`). Running it with new settings, such as a rotated client secret, applies them. An optional input
-  that is left out keeps its saved value: the release, memory, Gateway invite, backup settings and company file. A
+  that is left out keeps its saved value: the release, memory, Gateway invite, backup settings, company file,
+  aliases and carried settings (`--env-file`). A
   failed `add` leaves the company in place, so the same `add` resumes it. `add` never changes a company's release:
   `--version` with another release is refused (`use_update`), since a new release migrates the database.
 - **Reserved names:** hub, admin, accounts, updates, preview, runner, www, api, app, mail, status, docs, help,
@@ -150,6 +161,60 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
 - **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
   router config share a lock. A command reads a company's record only once it holds that company's lock.
 
+## Moving an install in
+
+Staff only; HQ never passes these. To move a self-hosted install (for example Tico's own at `hub.tico.team`) onto the
+cell:
+
+1. Stop the old server, then archive its data folder's contents: `tar -C /data -czf /root/data.tar.gz .` (0600, or
+   owned by root). Copy its `.env` keys that the cell does not write to a 0600 file.
+2. Run `add` with the old install's sign-in settings and these flags:
+
+```sh
+python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team \
+  --alias runner.tico.team --alias hub.ticofiles.com --company-name "Tico Team" --signin-label "..." \
+  --env-file /root/ticoteam/extra.env --import-data /root/data.tar.gz \
+  --owner-email ... --auth oidc --issuer ... --client-id ... --client-secret-file F --version vX.Y.Z --json
+```
+
+3. Point DNS at the tunnel (below), then check the answer's `ignored` and `unused`.
+
+- **`--own-domain`**: `--domain` may be any plain hostname (lowercase DNS labels with at least one dot, not an IP, not
+  the cell's domain) instead of `<slug>.<the cell's domain>`. Reserved names limit only slugs, so the slug is
+  `ticoteam` and the domain can still be `hub.tico.team`. Pass the flag on every `add` for that company.
+- **`--alias HOST`** (up to 5): more hostnames for the same server, such as the runner address (`TICO_RUNNER_URL`'s
+  host) and the visual address (`TICO_VISUAL_ORIGIN`'s host). The same rules as an own domain; not the domain itself
+  and not twice. No host (domain or alias) belongs to two companies that are not removed. Passing `--alias` replaces
+  the saved list; `--alias ""` alone clears it; leaving it out keeps it. The router sends the domain and every alias to
+  the server's port.
+- **The tunnel and DNS.** Cloudflare's `*.<domain>` matches exactly one label: `hub.tico.team` and `runner.tico.team`
+  yes; `a.b.tico.team` or `tidy.rocks` no. `add` and `remove` write every host it misses into the tunnel's routes,
+  ahead of the wildcard, and restart the tunnel when that list changes (cloudflared reads its routes only when it
+  starts, so every company drops for a few seconds; a restart that fails puts the old routes back, and the next run
+  tries again). DNS is staff's job: give each such host a proxied CNAME to the tunnel (`<tunnel id>.cfargotunnel.com`),
+  in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
+  (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
+  Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
+- **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
+  write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN`, `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
+  `TYPESAFE_API_KEY`, `TICO_STALE_REVIEW`, `TICO_SUPPORT_ACCESS`, `TICO_OIDC_ALLOWED_DOMAINS`. They are kept in
+  `extra.env` (0600) and added to `.env` on every `add` and `update`. The cell refuses (lists in `ignored`, never
+  keeps) every key it writes with a value, the keys a later `add` reads back from `.env` (team name, owner, Gateway
+  invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
+  to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
+  `TICO_UPDATER_URL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`, `TICO_EXPECTED_AWS_ROLE`, and
+  `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
+  `extra.env`; leaving it out keeps it.
+- **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
+  `-wal`, `credential.key`, `github-app.key`, `tico-session-secret`, `visual-secret`, `registry/`, `blobs/` and the
+  rest): only into an empty or missing data folder (else `data_exists`). The whole archive is checked first and refused
+  (`bad_archive`) for an absolute name, a `..`, any symlink (the server makes none), a hard link to anything but a file
+  earlier in it, a device, fifo or other special file, or no `hub.sqlite` at its top (an archive of the folder rather
+  than its contents). It is unpacked into `.data-import/` beside `data/`, with Python's `tarfile` data filter as a
+  second check, owned by user 10001, and renamed to `data/` in one step before the server first starts, so a failed
+  import leaves nothing. Once imported, run `add` again without `--import-data`.
+
 ## Layout
 
 | Path | What it is |
@@ -160,10 +225,12 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data`, `TICO_UPDATES`, the default network and the `tico.cell.company` label |
-| `.../company.json` | The slot, port, release, memory, state, and a pending update (the release before it and its snapshot). No secrets |
+| `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
+| `.../company.json` | The slot, port, release, memory, state, aliases, and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../owner-link.txt` | The owner's break-glass sign-in link (0600). It is never printed |
 | `.../snapshots/` | Database copies taken before each update |
+| `.../.data-import/` | An archive being unpacked (`--import-data`); renamed to `data/` when done |
 
 Each company's Compose project is `tico-<slug>`. To look at one by hand:
 

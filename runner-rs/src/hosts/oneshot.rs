@@ -174,6 +174,16 @@ impl<W: Wire> OneShot<W> {
         self.inner().up
     }
 
+    /// Whether the harness compacted `thread_id`'s session in a turn since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        self.inner().compacted.remove(thread_id)
+    }
+
+    /// The session's size after `thread_id`'s last turn, once (Host::context_tokens).
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        self.inner().context.remove(thread_id)
+    }
+
     pub fn record(&self, thread_id: &str, settings: &Settings, started: bool) -> String {
         let t = Thread { bot: settings.slug.clone(), settings: settings.clone(), started };
         self.inner().threads.insert(thread_id.into(), t);

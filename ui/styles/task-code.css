@@ -102,7 +102,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-line{display:flex;align-items:center;gap:5px;min-height:24px}
 .sub-list .sub-list{margin-left:14px}
 .sub-chev,.sub-chev-pad{flex:none;width:12px}
-.sub-chev{display:grid;place-items:center;width:24px;height:24px;margin:0 -6px;border:0;background:none;padding:0;color:var(--muted);cursor:pointer;font-size:12px;line-height:var(--lh-none);transition:transform var(--dur-fast) var(--ease)}
+.sub-chev{display:grid;place-items:center;width:24px;height:24px;margin:0 -6px;border:0;background:none;padding:0;color:var(--muted);cursor:pointer;font-size:12px;line-height:var(--lh-none)}
 .sub-chev.open{transform:var(--chev-open)}
 .sub-open{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;border:0;background:none;padding:2px 0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
 .sub-open:hover .sub-title{color:var(--accent)}

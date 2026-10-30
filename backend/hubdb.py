@@ -1006,8 +1006,14 @@ def connect(path=None, adopt_legacy=False):
     target = Path(target).expanduser()
     if str(target) != ":memory:":
         target.parent.mkdir(parents=True, exist_ok=True)
+    # A file that does not exist yet (or is empty) is new: it takes auto_vacuum=INCREMENTAL before its first table, so
+    # the sweeps' freed pages can go back to the disk (store.reclaim_free_pages). An existing file keeps its mode;
+    # changing that needs a VACUUM.
+    fresh = str(target) == ":memory:" or not target.exists() or target.stat().st_size == 0
     conn = sqlite3.connect(str(target), timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    if fresh:
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
@@ -5025,9 +5031,11 @@ def check_model(conn, task_id, bot=None):
     if bot is None:
         return _one(conn, "SELECT runtime,model,harness,effort,role FROM task_check_models WHERE task_id=?", (task_id,))
     actor = "bot:" + bot
-    return _one(conn, "SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task_check_models m "
-                      "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner=?",
-                (task_id, actor, actor))
+    return _one(conn, CHECK_MODEL_SQL, (task_id, actor, actor))
+
+
+CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task_check_models m "
+                   "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner=?")
 
 
 def _subtask_result_parent(conn, row):
@@ -7071,11 +7079,8 @@ def wait_detail(conn, row, *, children=True):
     `children=False` leaves out its open subtasks, as children and as blockers: what still holds a subtask's
     result back from it (auto_tasks.waiting with `result`).
     """
-    live = "('done','closed','declined')"
-    asks = _rows(conn.execute(
-        "SELECT m.id, m.to_actor FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? ORDER BY m.created",
-        (row["owner"], row["id"])))
+    from .read_cache import rows as cached_rows
+    asks = [dict(r) for r in cached_rows(conn, WAIT_ASKS_SQL, (row["owner"], row["id"]))]
     if asks:
         answered = answers_to(conn, [a["id"] for a in asks])
         open_ask = next((a for a in asks if a["id"] not in answered), None)
@@ -7083,9 +7088,7 @@ def wait_detail(conn, row, *, children=True):
             return {"why": "an unanswered question", "on": open_ask["to_actor"]}
     from . import profiles, review_gate
     engineering = review_gate.engineering(conn, row)
-    open_children = _rows(conn.execute(
-        f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
-        "ORDER BY created,id", (row["id"],))) if children else []
+    open_children = [dict(r) for r in cached_rows(conn, OPEN_CHILDREN_SQL, (row["id"],))] if children else []
     check = None
     for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
@@ -7288,6 +7291,14 @@ def unheld_sql(alias="j"):
 
 
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
+# wait_detail's and answers_to's one-task reads (auto_tasks.prime_waits seeds them for many tasks)
+WAIT_ASKS_SQL = ("SELECT m.id, m.to_actor FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                 f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? "
+                 "ORDER BY m.created")
+ANSWER_SQL = "SELECT * FROM messages WHERE in_reply_to=? AND kind='answer' AND deleted_at IS NULL ORDER BY created LIMIT 1"
+ANSWERED_BY_SQL = "SELECT answered_by FROM messages WHERE id=?"
+OPEN_CHILDREN_SQL = (f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN ('done','closed','declined') "
+                     "ORDER BY created,id")
 
 
 def _mirror_task_note(conn, actor, task_row, note):
@@ -9018,10 +9029,9 @@ def answers_to(conn, message_ids):
     """
     out = {}
     for mid in message_ids or []:
-        row = _one(conn, "SELECT * FROM messages WHERE in_reply_to=? AND kind='answer' AND deleted_at IS NULL "
-                         "ORDER BY created LIMIT 1", (mid,))
+        row = _one(conn, ANSWER_SQL, (mid,))
         if not row:
-            asked = _one(conn, "SELECT answered_by FROM messages WHERE id=?", (mid,))
+            asked = _one(conn, ANSWERED_BY_SQL, (mid,))
             if asked and asked.get("answered_by"):
                 row = _one(conn, "SELECT * FROM messages WHERE id=? AND deleted_at IS NULL", (asked["answered_by"],))
         if row:

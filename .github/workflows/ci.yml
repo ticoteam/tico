@@ -80,9 +80,15 @@ jobs:
           (cd runner-rs && cargo build --release --locked --target "$TARGET")
           (cd relay-rs && cargo build --release --locked --target "$TARGET")
           # The binary must report the release it is built for (build.rs stamps TICO_VERSION), or the release stops here.
-          want="${TICO_VERSION#v}"
-          got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
-          [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
+          # Release validation runs this file from main against the frozen candidate, so a candidate from before the
+          # stamp (#1905: its build.rs does not read TICO_VERSION, and the runner has no --release) skips the check.
+          if grep -q TICO_VERSION runner-rs/build.rs; then
+            want="${TICO_VERSION#v}"
+            got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
+            [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
+          else
+            echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"
+          fi
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
