@@ -552,14 +552,72 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     return deleted
 
 
+TOKEN_RETENTION_DAYS = 7
+
+
+def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+    """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
+    transactions like `sweep_deltas`; returns the count.
+
+    Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
+    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result_json. The rows go only
+    once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
+    and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
+    sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
+    at = now or H.now()
+    cutoff = H.shift(at, days=-TOKEN_RETENTION_DAYS)
+    created_before = H.shift(at, days=-TOKEN_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    with store.read() as c:
+        mark = c.execute("SELECT value_json FROM registry_metadata WHERE key='tokens-sweep-mark'").fetchone()
+    mark = json.loads(mark[0]) if mark else ["", ""]
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,EXISTS(SELECT 1 FROM turns t WHERE t.id=a.id AND t.finished IS NOT NULL "
+                "AND (t.input_tokens IS NOT NULL OR t.usage_reason IS NOT NULL)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        if not rows:
+            break
+        done = [r["id"] for r in rows if r["recorded"] and r["finished"] and r["finished"] < cutoff]
+        while done:
+            with store.transaction() as c:
+                removed = c.execute("DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
+                                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
+                                    (*done, batch)).rowcount
+            deleted += removed
+            if removed < batch:
+                break
+        mark = [rows[-1]["created"], rows[-1]["id"]]
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES('tokens-sweep-mark',?) "
+                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        if len(rows) < 200:
+            break
+    return deleted
+
+
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
-# than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
+# than their tier's days. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source). `credential.revealed` and `credential.sent_to_computer`
-# are not swept: they are the credential's audit trail, and their repeats are written less often (credentials.record_use).
-# Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
-EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
-                       "message.notice")
+# runtime of an old limited run that kept no limit_source), `judge.call` (a budget counts its day, decide_readout reads
+# 31 days, and the row repeats the cost), `mcp.call` (tool-call stats up to 90 days, and the weekly SQL view),
+# `github.token` and `inbound.read` (security and read audits, like `mail.read`). `credential.revealed` and
+# `credential.sent_to_computer` are not swept: they are the credential's audit trail, and their repeats are written less
+# often (credentials.record_use). Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
+# Seven days: writers only, or readers that look back no further than a week (bot.drain: deploy_draining reads the
+# last hour, release_deploy_drains a week at most).
+EVENT_NOISE_ACTIONS = ("sql.query", "wake.skipped", "message.delivered", "message.read", "status.set", "turn.start",
+                       "turn.finish", "github.checks_read", "rate_limit.set", "attempt.fallback", "attempt.lease-held",
+                       "job.suppress", "bot.drain", "operator.deployment-undrain", "listen.judgment",
+                       "bot.repository_read")
+EVENT_NOISE_RETENTION_DAYS = 7
+# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
+# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
+# since the old one had walked past every github.pull_request row already on disk.
+EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
 # held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
@@ -568,23 +626,38 @@ EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger ba
 
 
 def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
-    """Delete the EVENT_SWEEP_ACTIONS rows older than EVENT_RETENTION_DAYS; returns the count.
+    """Delete the bookkeeping rows past their tier's days (EVENT_NOISE_ACTIONS after EVENT_NOISE_RETENTION_DAYS,
+    EVENT_SWEEP_ACTIONS after EVENT_RETENTION_DAYS); returns the count. The tiers share no action and keep separate
+    marks, so each one's walk is its own. The noise tier goes first within the one `most` budget, so a large first
+    backlog drains there and the 30-day tier follows."""
+    at = now or H.now()
+    deleted = 0
+    for key, actions, days in (("events-noise-mark", EVENT_NOISE_ACTIONS, EVENT_NOISE_RETENTION_DAYS),
+                               ("events-sweep-30-mark", EVENT_SWEEP_ACTIONS, EVENT_RETENTION_DAYS)):
+        deleted += _sweep_event_tier(store, key, actions, H.shift(at, days=-days), batch, most - deleted)
+    return deleted
 
-    The scan walks the `events_ts` index forward from a mark kept in registry_metadata, so a pass reads only the
-    time since the last one (and not the kept rows before it again). The scan runs outside the write lock; each
-    batch's delete is its own short transaction, like `sweep_idempotency`. Events are only ever written with the
-    current time, so once a pass has reached the cutoff, nothing older than it is left behind."""
-    cutoff = H.shift(now or H.now(), days=-EVENT_RETENTION_DAYS)
-    marks = ",".join("?" * len(EVENT_SWEEP_ACTIONS))
+
+def _sweep_event_tier(store, key, actions, cutoff, batch, most):
+    """One tier of sweep_events: the `actions` rows older than `cutoff`, walked forward on `events_ts` from the mark
+    kept under `key`; returns the count.
+
+    The scan walks the index from the mark, so a pass reads only the time since the last one (and not the kept rows
+    before it again). The scan runs outside the write lock; each batch's delete is its own short transaction, like
+    `sweep_idempotency`. Events are only ever written with the current time, so once a pass has reached the cutoff,
+    nothing older than it is left behind."""
+    if most <= 0:
+        return 0
+    marks = ",".join("?" * len(actions))
     with store.read() as c:
-        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key='events-sweep-mark'").fetchone()
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
     mark = json.loads(saved[0]) if saved else ""
     deleted = 0
     while deleted < most:
         with store.read() as c:
             rows = c.execute(f"SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? "
                              f"AND action IN ({marks}) ORDER BY ts LIMIT ?",
-                             (mark, cutoff, *EVENT_SWEEP_ACTIONS, batch)).fetchall()
+                             (mark, cutoff, *actions, batch)).fetchall()
         if not rows:
             mark = cutoff
             break
@@ -599,8 +672,8 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
         if not removed:
             break               # the rows left the table under the scan: the next pass starts again from the mark
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
-                  "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (key, json.dumps(mark)))
     return deleted
 
 
