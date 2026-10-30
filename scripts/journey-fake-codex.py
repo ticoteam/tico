@@ -16,7 +16,8 @@ import subprocess
 import sys
 import uuid
 
-ASK = re.compile(r"journey-ask (\S+)((?: [a-z]+=\S+)*)")
+# Values end at a quote or a comma, as in e2e/browser/fake-codex.py: a task's body arrives wrapped as JSON.
+ASK = re.compile(r"journey-ask (\S+)((?: [a-z]+=[^\s\",]+)*)")
 
 
 def send(message):
