@@ -184,5 +184,6 @@ def test_the_bot_gate_counts_the_whole_entry(books):
         act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
         split = {"date": "2026-10-03", "lines": [{"account_id": account(c, "6900"), "amount": 300_000},
                                                  {"account_id": account(c, "6100"), "amount": 300_000},
-                                                 {"account_id": account(c, "1000"), "amount": -600_000}]}
+                                                 {"account_id": account(c, "1000"), "amount": -300_000},
+                                                 {"account_id": account(c, "2000"), "amount": -300_000}]}
         assert act(c, "bot:coder", "journal", split).status == "needs_approval"
