@@ -87,6 +87,13 @@ def _build():
     add("org_rule.retired", "A rule was retired and no longer applies to anyone.",
         {"id": "r1", "kind": "internal", "text": "Send a status note by Friday.", "source_id": None,
          "retired_by": "human:ana"})
+    checked = {"hold": "h1", "operation": "message", "rules": ["r1"], "cached": False, "reviewer": "human:ana"}
+    add("rules.blocked", "A bot's output broke a rule and was held.", checked)
+    add("rules.escalated", "A bot's output broke a rule and was held for a person to review.", {**checked, "task": _TASK})
+    add("rules.warned", "A bot's output broke a rule and went through with a warning.",
+        {"operation": "message", "rules": ["r1"], "cached": False})
+    add("rules.unchecked", "A bot's output went through without a rule check.",
+        {"operation": "message", "reason": "deadline", "rules": ["r1"]})
 
     add("release.published", "A Tico release was published.",
         {"release": "v1.4.0", "url": "https://github.com/acme/app/releases/tag/v1.4.0", "tickets": [_TASK]},

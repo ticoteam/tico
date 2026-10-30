@@ -999,6 +999,12 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running"):
             parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
                 "SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+        if parts:
+            # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
+            # is checked and delivered (backend/org_rule_check.py).
+            from .org_rule_check import watched
+            if watched(c, job["bot"]):
+                parts = [p for p in parts if p["kind"] == "tool"]
         parts, omitted = live_parts(parts)
         execution = {"job_id": job["id"], "message_id": job["message_id"], "bot": job["bot"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
@@ -2504,6 +2510,11 @@ def install_views(app, store, auth, mutate, task_view):
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
             events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
+            if attempt and attempt["state"] in ("leased", "running"):
+                # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
+                from .org_rule_check import watched
+                if watched(c, turn["bot"]):
+                    events = [e for e in events if e["kind"] not in ("delta", "message")]
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
                      "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
                      "Outcome: " + str(turn["exit"])]

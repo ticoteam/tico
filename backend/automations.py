@@ -1337,6 +1337,47 @@ def _held(c, aid, rid):
     return out
 
 
+# The automation steps whose words go to someone, and the arguments that hold them, checked against org rules
+# (backend/org_rule_check.py) when the automation acts as a bot.
+RULE_CHECKED = {"create_task": ("title", "body"), "assign": ("text", "note"), "label": ("text", "note"),
+                "note": ("text", "note"), "wake_bot": ("text", "prompt"), "post_update": ("text", "body"),
+                "send_reply": ("body", "text")}
+
+
+def _rule_audience(c, auto, do, args, values):
+    """Who a step's words reach, for a rule's With: a new task's owner, the run's task's owner and requester, the bot
+    a note or wake goes to. An update or a Slack or mail reply reaches no teammate by name."""
+    out = []
+    try:
+        task = A.task_of(c, auto, values)
+    except ValueError:
+        task = None
+    if do in ("create_task", "assign") and args.get("owner"):
+        owner = str(args["owner"]).replace("person:", "human:")
+        out.append(H.resolve_actor(c, owner) or (owner if ":" in owner else "bot:" + owner))
+    if do in ("assign", "label", "note") and task:
+        out += [task["owner"], task["requester"]]
+    if do in ("note", "wake_bot") and args.get("bot"):
+        out.append("bot:" + str(args["bot"]).removeprefix("bot:"))
+    if do == "wake_bot" and not args.get("bot") and A._owner_bot(c, auto):
+        out.append("bot:" + A._owner_bot(c, auto))
+    return [a for a in out if a]
+
+
+def replay_step(c, bot, hold, replay, ingest):
+    """Send anyway on a held automation step: the step runs once, as its automation acts now, with no second check."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
+    if not row:
+        raise Problem("not_found", "The automation is gone", 409)
+    auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
+    try:
+        return A.run(c, auto, replay["run"], replay["do"], replay["args"], replay["values"])
+    finally:
+        H.VIA.reset(via)
+        CHAIN.reset(chain)
+
+
 class HubServices:
     """The executor's services in the hub. Each call with an effect takes its own short transaction, acting as the
     automation's owner with `via: automation:<id>` on what it logs and its chain on what it writes."""
@@ -1423,12 +1464,55 @@ class HubServices:
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
-        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        rule = self._rule_check(do, args, ctx["values"])
+        result = self._once(ctx, lambda c: self._ruled(c, rule, do, args, ctx["values"]))
         if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
             from . import screening
             self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
                                                  to=args.get("owner") if found["action"] == "hold" else None))
         return result
+
+    def _rule_text(self, do, args, values):
+        keys = RULE_CHECKED.get(do)
+        if not keys:
+            return "", None
+        key = next((k for k in keys if args.get(k)), None)
+        text = "\n\n".join(str(args[k]) for k in keys if args.get(k))
+        if do == "post_update" and not text:
+            text = str(A._turn_output(values).get("text") or "")
+        return text, key
+
+    def _rule_check(self, do, args, values):
+        """The org rule check of what this step writes, when the automation acts as a bot (backend/org_rule_check.py):
+        outside every transaction, as Decide's own calls are. A person's automation is never checked."""
+        from . import org_rule_check
+        from .auth import Identity
+        text, _ = self._rule_text(do, args, values)
+        if not text:
+            return None
+        store = self.hub.store
+        with store.read() as c:
+            author = A.acts_as(c, self.auto)
+            if not author or not H.is_bot(author):
+                return None
+            recipients = _rule_audience(c, self.auto, do, args, values)
+        return org_rule_check.preflight(store, self.hub.app.state.judge, Identity(author, "bot"), "automation", text,
+                                        recipients, context={"automation": self.flow.get("name") or self.row["id"],
+                                                             "step": do})
+
+    def _ruled(self, c, rule, do, args, values):
+        """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed."""
+        if rule:
+            from . import org_rule_check
+            text, key = self._rule_text(do, args, values)
+            gate = org_rule_check.apply(c, rule, text, {"automation": self.row["id"], "run": self.run_id, "do": do,
+                                                        "args": args, "values": _trim(values),
+                                                        "chain": list(self.chain)}, tell=True)
+            if gate and gate.get("held"):
+                return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
+            if gate and gate.get("warn") and key:
+                args = {**args, key: org_rule_check.warned_text(gate, str(args[key]))}
+        return A.run(c, self.auto, self.run_id, do, args, values)
 
     def _screened_task(self, found, bot, args, values):
         """A create_task step's arguments after screening: held for a person, or with the warning line first."""
