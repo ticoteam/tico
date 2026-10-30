@@ -5,9 +5,11 @@
      colour and background over --dur-fast --ease. Hover never moves, resizes or borders anything, with one exception:
      a clickable card lifts 1px and firms its border (motion.css).
    - Focus: var(--focus-ring) at --focus-offset, or --focus-inset on a row that meets its container's edge. A text field
-     turns its border the accent and wears --focus-halo. outline:none only where one of these replaces it.
+     turns its border --focus and wears --focus-halo. outline:none only where one of these replaces it.
+   - Colour: --accent is for Tico's Liquid Dot, the one primary action on a view and a chart's one series. Links,
+     counts, selection, focus and done or idle marks are ink; only states that need someone (blocked, failed) take a hue.
    - Selected / current: --surface2 and weight 600, as the sidebar's .cur. No accent fills, no bars, with one exception:
-     the sidebar's current row carries the one sliding accent bar (ui/app/motion.js).
+     the sidebar's current row carries the one sliding ink bar (ui/app/motion.js).
    - Chevrons: chevron_right, turned --chev-open when open, transform over --dur-fast --ease.
    - Card headers: sentence case, --t-base 600 --ink, one row of --s3 under it. The uppercase label (.label: --t-label
      600 --track-caps --muted) is for section and table heads and field keys, never a card's title.
@@ -50,7 +52,7 @@ td.tags .pill{margin-right:2px}
 .pill.ok,.pill.active{background:var(--ok-bg);color:var(--ok)}
 .pill.p0,.pill.p1{background:var(--fail-bg);color:var(--fail)}
 /* Beta: a feature on the server's Beta list (backend/beta.py); sits beside a nav item, a heading or a menu entry */
-.pill.beta,.pill.unreleased{margin-left:6px;vertical-align:1px;background:color-mix(in srgb,var(--accent) 13%,var(--surface));color:var(--accent);font-weight:600}
+.pill.beta,.pill.unreleased{margin-left:6px;vertical-align:1px;background:color-mix(in srgb,var(--ink) 8%,var(--surface));color:var(--ink);font-weight:600}
 .empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:var(--lh)}
 /* A page or list with nothing in it yet: an optional icon, one line, one muted line, one action. */
 :is(.empty-state,.upd-empty,.tl-empty,.notes-empty){display:flex;flex-direction:column;align-items:center;gap:var(--s1);padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
@@ -65,4 +67,4 @@ td.tags .pill{margin-right:2px}
 /* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
    sets left and top to the thread's foot). */
 .stick-pill{position:absolute;z-index:3;transform:translate(-50%,-100%);padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-sm) var(--sans);box-shadow:0 2px 8px rgba(0,0,0,.12);cursor:pointer;white-space:nowrap}
-.stick-pill:hover,.stick-pill:focus-visible{border-color:var(--accent)}
+.stick-pill:hover,.stick-pill:focus-visible{border-color:var(--focus)}

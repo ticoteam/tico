@@ -10,22 +10,22 @@
 .upd-chip{display:inline-flex;align-items:center;gap:6px}
 .upd-seg button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .upd-chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
-.upd-chip[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.upd-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .upd-allread{font-size:var(--t-base)}
 .upd-feed{display:flex;flex-direction:column;gap:8px;contain:layout}   /* a story redrawn lays out only the feed; layout only, so nothing in it is clipped */
 /* A card's padding and avatar, which its thread's lines are measured from (below). */
 :root{--upd-pad:16px;--upd-pad-y:14px;--upd-av:36px;--upd-none-av:24px;
   --upd-cx:calc(1px + var(--upd-pad) + var(--upd-av) / 2);--upd-in:calc(var(--tree-r) + var(--s1))}
 .upd-card{display:grid;grid-template-columns:var(--upd-av) minmax(0,1fr);gap:12px;padding:var(--upd-pad-y) var(--upd-pad);background:var(--surface);border:1px solid var(--line);border-radius:14px;position:relative;outline:none;transition:border-color var(--dur-fast) var(--ease)}
-.upd-card.unread{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.upd-card.unread::before{content:"";position:absolute;z-index:2;left:-1px;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--accent)}
-.upd-card.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 40%,transparent)}
+.upd-card.unread{border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
+.upd-card.unread::before{content:"";position:absolute;z-index:2;left:-1px;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--ink)}
+.upd-card.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--ink) 40%,transparent)}
 .upd-card.swipeable{touch-action:pan-y}
 .upd-av .av{width:var(--upd-av)!important;height:var(--upd-av)!important}
 .upd-meta{display:flex;align-items:center;gap:6px;font-size:var(--t-base);flex-wrap:wrap}
 .upd-name{color:var(--ink);font-weight:600}
 .upd-pill{font-size:var(--t-xs);font-weight:600;padding:1px 8px;border-radius:999px;background:color-mix(in srgb,var(--run) 15%,transparent);color:var(--run)}
-.upd-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);margin-left:2px}
+.upd-dot{width:8px;height:8px;border-radius:50%;background:var(--ink);margin-left:2px}
 .upd-body{font-size:var(--t-base);line-height:var(--lh-read);color:var(--ink);cursor:pointer;margin-top:4px}
 .upd-body p{margin:0 0 6px}.upd-body ul{margin:0;padding-left:18px}.upd-body li{margin:2px 0}.upd-body h1,.upd-body h2,.upd-body h3{font-size:var(--t-md);margin:6px 0 2px}
 /* A week in review: five slides side by side, one in view, swiped or stepped. */
@@ -49,7 +49,7 @@
 .upd-deck-btn .nav-icon{font-size:20px;width:20px;height:20px}
 .upd-deck-dot{border:0;padding:0;width:22px;height:22px;background:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .upd-deck-dot::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--line);transition:background var(--dur-fast) var(--ease),width var(--dur-fast) var(--ease)}
-.upd-deck-dot[aria-current]::after{background:var(--accent);width:16px;border-radius:3px}
+.upd-deck-dot[aria-current]::after{background:var(--ink);width:16px;border-radius:3px}
 .upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
 /* icons only: the name is the title (a long press on a phone shows it, data-tip-on) */
 .upd-act{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:34px;height:34px;flex:none;border:0;background:none;border-radius:999px;padding:0 8px;color:var(--muted);font-size:var(--t-sm);cursor:pointer;-webkit-touch-callout:none;user-select:none}
@@ -72,7 +72,8 @@
 /* A card-sized skeleton block (skeleton.css) with the cards' own corners. */
 .upd-skel{height:108px;border-radius:14px}
 .upd-more{align-self:center;margin:8px 0}
-.nav-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center;margin-left:auto}
+/* a count, not an action: ink on a raised gray */
+.nav-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--g4);color:var(--ink);font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center;margin-left:auto}
 .mobile-nav-item{position:relative}
 .mobile-nav-item .nav-badge{position:absolute;top:2px;left:calc(50% + 6px);margin:0}
 .upd-switch{display:flex;align-items:center;gap:8px;padding:4px 0}
@@ -141,8 +142,8 @@
 .upd-chat[hidden]{display:none}
 .updc-head{display:flex;align-items:center;gap:8px;min-height:34px}
 .updc-head h2{font-size:var(--t-md);margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.updc-open{margin-left:auto;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet)}
-.updc-open:hover{color:var(--accent)}
+.updc-open{margin-left:auto;font-size:var(--t-sm);white-space:nowrap;color:var(--link-quiet)}
+.updc-open:hover{color:var(--ink)}
 .updc-thread{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding-right:4px}
 .updc-thread .conv-run.chat{border:0;padding:6px 0}
 .updc-thread .conv-run-head{display:none}
@@ -154,7 +155,7 @@
 .updc-x,.upd-x{font-size:20px;line-height:var(--lh-none)}
 .upd-x{display:inline-block;font-size:16px;margin-right:-2px}
 .upd-card.upd-flash{animation:upd-flash 2.4s var(--ease)}
-@keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}}
+@keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--ink);background:color-mix(in srgb,var(--ink) 6%,var(--surface))}}
 @media (min-width:761px){
   #main.upd-chat-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-chat);padding:0;height:100%;overflow:hidden;position:relative}
   #main.upd-chat-layout>.upd-col{min-width:0;min-height:0;overflow-y:auto;padding:8px var(--s4) 60px 28px}
@@ -166,4 +167,4 @@
   body.upd-chat-full #mobile-nav{display:none}
   body.upd-chat-full{overflow:hidden}
 }
-@media (prefers-reduced-motion:reduce){.upd-card.upd-flash{animation:none;box-shadow:0 0 0 3px var(--accent)}}
+@media (prefers-reduced-motion:reduce){.upd-card.upd-flash{animation:none;box-shadow:0 0 0 3px var(--ink)}}

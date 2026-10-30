@@ -50,13 +50,13 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-researching{width:min(560px,100%);display:flex;align-items:flex-start;gap:14px}
 .market-researching strong{display:block;font-size:16px;font-weight:600;color:var(--ink)}
 .market-researching p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
-.market-spin{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:marketspin .9s linear infinite}
+.market-spin{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--ink);animation:marketspin .9s linear infinite}
 @keyframes marketspin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.market-spin{animation:none;border-color:var(--accent)}}
+@media (prefers-reduced-motion:reduce){.market-spin{animation:none;border-color:var(--ink)}}
 .market-read-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .market-research{flex:none;padding:3px 10px;border-radius:6px;background:none;border:1px solid var(--line);color:var(--ink);font-size:12.5px;cursor:pointer}
 .market-research:hover{background:var(--surface2)}
-.market-research:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.market-research:focus-visible{outline:var(--focus-ring);outline-offset:1px}
 .market-none{margin:0;color:var(--muted);font-size:14px}
 .market-blank{margin:0;color:var(--muted)}
 @media (max-width:600px){.market-shell.market-shell-blank{align-items:flex-start;padding:28px 16px}.market-start-actions .primary{flex:1}}`;

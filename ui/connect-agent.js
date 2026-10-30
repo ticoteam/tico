@@ -80,7 +80,7 @@
 .ca-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:var(--s2);margin:0;padding:0;list-style:none}
 .ca-tile{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;padding:14px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:500 13px/1.2 var(--sans);cursor:pointer}
 .ca-tile:hover{background:var(--surface2)}
-.ca-tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ca-tile:focus-visible{outline:var(--focus-ring);outline-offset:2px}
 .ca-logo{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--ink)}
 .ca-logo svg{width:18px;height:18px}
 .ca-logo .ca-initials{font:600 12px/1 var(--sans)}
@@ -103,7 +103,7 @@
 [data-copied]{color:var(--ok);border-color:var(--ok)}
 .ca-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;counter-reset:ca;font-size:14px;line-height:1.45}
 .ca-steps li{display:flex;align-items:baseline;gap:10px;counter-increment:ca}
-.ca-steps li::before{content:counter(ca);flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--ok-bg);color:var(--accent);font-size:11.5px;font-weight:600;transform:translateY(-1px)}
+.ca-steps li::before{content:counter(ca);flex:none;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--surface2);color:var(--ink);font-size:11.5px;font-weight:600;transform:translateY(-1px)}
 .ca-steps code{font:12.5px var(--mono)}
 .ca-block{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);min-width:0;overflow:hidden}
 .ca-block-head{display:flex;align-items:center;gap:var(--s2);padding:6px 6px 6px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}

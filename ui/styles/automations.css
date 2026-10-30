@@ -30,7 +30,7 @@
 .au-fb{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 6px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
 .au-fb:hover{background:var(--surface2)}
 .au-fb[aria-pressed="true"]{background:var(--surface2);color:var(--ink)}
-.au-fb[aria-pressed="true"] .nav-icon{color:var(--accent)}
+.au-fb[aria-pressed="true"] .nav-icon{color:var(--ink)}
 .au-fb .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 .au-fb .au-dot{margin:0 5px}
 .au-ft{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -151,7 +151,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-track{max-width:620px}
 .au-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer}
 .au-card:hover{border-color:var(--g4)}
-.au-card.sel{border-color:var(--accent)}
+.au-card.sel{border-color:var(--ink)}
 .au-card.off>*{opacity:.5}
 .au-card.off .au-sw{opacity:1}
 .au-trig{background:var(--surface2)}
@@ -159,7 +159,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-cr>.nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 .au-ct{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-tag{flex:none;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:600 var(--t-2xs)/16px var(--mono);letter-spacing:var(--track-caps);text-transform:uppercase}
-.au-tag.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.au-tag.acc{color:var(--ink);border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
 .au-chips{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
 .au-c1{padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--bg);font-size:var(--t-sm);line-height:18px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .au-rule{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:var(--t-base)}
@@ -171,7 +171,7 @@ button.au-chip:hover{background:var(--surface2)}
 /* the "+" between steps: small, its hit area 36px wide; the gap it sits in lights it up, as does focus */
 .au-add{position:relative;width:20px;height:20px;padding:0;border:1px solid var(--g4);border-radius:50%;background:var(--bg);color:var(--muted);font-size:14px;line-height:17px;cursor:pointer;transition:transform var(--dur-fast,.12s) var(--ease,ease-out)}
 .au-add::after{content:"";position:absolute;inset:-8px}
-.au-ln:hover .au-add,.au-add:hover,.au-add:focus-visible{color:var(--accent);border-color:var(--accent);transform:scale(1.2)}
+.au-ln:hover .au-add,.au-add:hover,.au-add:focus-visible{color:var(--ink);border-color:var(--focus);transform:scale(1.2)}
 .au-add:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 /* the end of a list: a line down to an Add step button */
 .au-ln-end{height:auto;padding-top:16px}
@@ -187,9 +187,9 @@ button.au-chip:hover{background:var(--surface2)}
 .au-pth>.au-chips{margin-top:6px}
 /* a narrow path column wraps its condition rather than cutting it */
 .au-pth .au-c1{white-space:normal;overflow-wrap:anywhere;border-radius:10px}
-.au-pname{padding:1px 8px;border:0;border-radius:6px;background:var(--ok-bg);color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
+.au-pname{padding:1px 8px;border:0;border-radius:6px;background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .au-pth.fb .au-pname{background:var(--surface2);color:var(--muted)}
-.au-cond{color:var(--accent)}
+.au-cond{color:var(--ink)}
 /* a step inside a path: the tag and a small switch on top, the name below on up to two lines */
 .au-pth .au-card{padding:7px 9px}
 .au-pth .au-cr{flex-wrap:wrap;row-gap:4px}
@@ -223,7 +223,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-lb{color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .au-f textarea{min-height:150px}
 .au-rb{display:grid;gap:6px;padding:8px;border:1px solid var(--line);border-radius:8px}
-.au-rb.focus{border-color:var(--accent)}
+.au-rb.focus{border-color:var(--focus)}
 .au-rb.fb{border-style:dashed}
 .au-rbh{display:flex;align-items:center;gap:8px}
 .au-rbh select{width:auto}
@@ -269,7 +269,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-ro{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .au-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--idle)}
-.au-dot.ok{background:var(--ok)}
+.au-dot.ok{background:var(--g7)}
 .au-dot.fail{background:var(--fail)}
 .au-dot.wait{background:var(--wait)}
 .au-rx td{padding:2px 8px 10px 30px;background:var(--surface)}
@@ -314,7 +314,7 @@ button.au-chip:hover{background:var(--surface2)}
   .au-dots{display:flex;justify-content:center;gap:2px;margin-top:6px}
   .au-dots button{position:relative;width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
   .au-dots button::before{content:"";position:absolute;top:8px;left:7px;width:7px;height:7px;border-radius:4px;background:var(--g4)}
-  .au-dots button[aria-selected="true"]::before{left:3px;width:16px;background:var(--accent)}
+  .au-dots button[aria-selected="true"]::before{left:3px;width:16px;background:var(--ink)}
   .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
   .au-ln:not(.au-ln-end){height:32px}
   .au-add-end{height:40px;padding:0 16px 0 14px}

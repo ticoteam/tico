@@ -58,13 +58,14 @@
 .ob-hq{display:inline-flex;align-items:center;gap:10px;font-size:var(--t-base);color:var(--muted);cursor:pointer}
 .ob-hq input,.ob-helper input{-webkit-appearance:none;appearance:none;position:relative;width:34px;height:20px;margin:0;border-radius:10px;background:color-mix(in srgb,var(--ink) 22%,var(--surface));cursor:pointer;transition:background-color var(--dur) var(--ease);vertical-align:middle}
 .ob-hq input::after,.ob-helper input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform var(--dur) var(--ease)}
-.ob-hq input:checked,.ob-helper input:checked{background:var(--accent)}
+.ob-hq input:checked,.ob-helper input:checked{background:var(--ink)}
+.ob-hq input:checked::after,.ob-helper input:checked::after{background:var(--bg)}
 .ob-hq input:checked::after,.ob-helper input:checked::after{transform:translateX(14px)}
 .ob-hq input:focus-visible,.ob-helper input:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .ob-hq.off{cursor:default;opacity:.75}
 .ob-hq-off{font-size:var(--t-sm);color:var(--muted)}
 .ob-said{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin:0 0 18px}
-.ob-bubble{max-width:85%;padding:9px 15px;border-radius:18px 18px 5px 18px;background:var(--accent);color:var(--accent-ink);font-size:var(--t-md);line-height:var(--lh);overflow-wrap:anywhere;
+.ob-bubble{max-width:85%;padding:9px 15px;border-radius:18px 18px 5px 18px;background:var(--bubble);color:var(--ink);font-size:var(--t-md);line-height:var(--lh);overflow-wrap:anywhere;
   animation:obRise .3s ease-out both}
 .ob-said-edit{width:30px;height:30px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer}
 .ob-said-edit:hover{background:var(--surface2);color:var(--ink)}
@@ -133,7 +134,7 @@
 .oc-node{display:flex;align-items:center;gap:9px;min-width:0;padding:6px 10px 6px 6px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);
   font:inherit;text-align:left;box-shadow:0 1px 2px rgba(15,23,42,.06);transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
 button.oc-node{width:100%;cursor:pointer}
-button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,var(--line))}
+button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--muted)) 50%,var(--line))}
 .oc-text{display:flex;flex-direction:column;min-width:0;line-height:var(--lh-tight)}
 .oc-text strong{overflow:hidden;font-size:var(--t-base);font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .oc-text small{overflow:hidden;color:var(--muted);font-size:var(--t-xs);text-overflow:ellipsis;white-space:nowrap}
@@ -256,7 +257,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
 .ss{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,320px);gap:28px;align-items:start}
 .ss-main{min-width:0}
 .ss-job{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:var(--t-base)}
-.ss-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent);animation:ssdot 1.2s ease-in-out infinite}
+.ss-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--ink);animation:ssdot 1.2s ease-in-out infinite}
 @keyframes ssdot{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.ss-dot{animation:none}}
 .ss-bet-actions{display:flex;gap:6px;margin:8px 0 0 24px}
