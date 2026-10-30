@@ -57,6 +57,8 @@ enum AddStep {
 /// How long Send waits for the last words of a stopped recording.
 const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
+/// Shown when a recording or a send is asked for while an update installs.
+const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
 const BACKGROUND: [&str; 7] = [
     "live",
     "calendar",
@@ -263,6 +265,8 @@ pub struct Recorder {
     tx: mpsc::Sender<Reply>,
     rx: mpsc::Receiver<Reply>,
     pub busy: bool,
+    /// An update is installing (update.rs): recordings and sends don't start until it is done.
+    pub updating: bool,
     background: BTreeSet<String>,
     message: (String, Instant),
     pub error: String,
@@ -377,6 +381,7 @@ impl Recorder {
             tx,
             rx,
             busy: false,
+            updating: false,
             background: BTreeSet::new(),
             message: (String::new(), Instant::now()),
             error: String::new(),
@@ -537,6 +542,10 @@ impl Recorder {
             let _ = self.open(&id);
             return Some(id);
         }
+        if self.updating {
+            self.error = UPDATING.into();
+            return None;
+        }
         let title = event
             .as_ref()
             .and_then(|row| row["title"].as_str())
@@ -603,6 +612,15 @@ impl Recorder {
             let _ = handle.finish();
         }
         self.save_context();
+    }
+    #[cfg(test)]
+    pub fn mark_sending(&mut self, item: Option<&str>, meeting_step: Option<&str>) {
+        self.sending = item.map(str::to_owned);
+        *self
+            .send_step
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            meeting_step.map(|label| ("m1".to_owned(), label.to_owned()));
     }
     #[cfg(test)]
     pub fn set_active(&mut self, id: String, handle: RecordingHandle) {
@@ -1160,12 +1178,15 @@ impl Recorder {
             .any(|record| record.live_state == "live")
         {
             Some("After the live meeting ends")
-        } else if self.records.iter().any(|record| {
-            record
-                .deliveries
-                .iter()
-                .any(|entry| entry.status == "sending")
-        }) {
+        } else if self.sending.is_some()
+            || self.send_step().is_some()
+            || self.records.iter().any(|record| {
+                record
+                    .deliveries
+                    .iter()
+                    .any(|entry| entry.status == "sending")
+            })
+        {
             // A request to Tico is in flight; the outbox keeps unsent items and resumes them after a restart.
             Some("While a meeting is being sent")
         } else {
@@ -1377,6 +1398,10 @@ impl Recorder {
     }
     /// Sends one action item to `owner` as a private Tico task with its quote and the meeting link.
     pub fn send_item(&mut self, item_id: &str, owner: &str) {
+        if self.updating {
+            self.error = UPDATING.into();
+            return;
+        }
         let Some(id) = self.meeting.clone() else {
             return;
         };
@@ -1659,6 +1684,10 @@ impl Recorder {
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
+        if self.updating {
+            self.error = UPDATING.into();
+            return;
+        }
         let Ok(record) = self.store.get(id) else {
             return;
         };

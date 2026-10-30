@@ -813,6 +813,33 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
 }
 
 #[test]
+fn an_update_waits_for_every_send_from_its_first_step() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    // An action item on its way to Tico, before any delivery row says "sending".
+    app.mark_sending(Some("item-1"), None);
+    assert_eq!(app.update_hold(), Some("While a meeting is being sent"));
+    // A meeting send still waiting for its last words to be transcribed.
+    app.mark_sending(None, Some("Transcribing…"));
+    assert_eq!(app.update_hold(), Some("While a meeting is being sent"));
+    app.mark_sending(None, None);
+    assert_eq!(app.update_hold(), None);
+}
+
+#[test]
+fn nothing_starts_while_an_update_installs() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store.clone(), directory.path());
+    app.updating = true;
+    assert_eq!(app.record(None), None);
+    assert!(app.error.contains("updating"));
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(app.update_hold(), None);
+}
+
+#[test]
 fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();

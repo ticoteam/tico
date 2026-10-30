@@ -223,12 +223,28 @@ fn check(app: &AppHandle, updates: &Updates) {
 
 /// Applies the install policy for `intent`. Returns true when it installed or restarted.
 fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) -> bool {
-    let hold = lock_shared(recorder).update_hold();
-    let step = decide(intent, updates.build(), hold, updates.idle_for());
+    // The hold check and the reservation happen under one recorder lock, so no recording, live meeting or
+    // send can start in between; `updating` refuses them until the install is done. The lock itself is not
+    // kept: quitting (the restart below, too) takes it on the main thread.
+    let step = {
+        let mut shared = lock_shared(recorder);
+        let step = decide(
+            intent,
+            updates.build(),
+            shared.update_hold(),
+            updates.idle_for(),
+        );
+        if step != Step::Wait {
+            shared.updating = true;
+        }
+        step
+    };
     if step == Step::Wait {
         return false;
     }
-    if let Some((update, bytes)) = updates.lock().ready.take() {
+    // Taken in its own statement: the Pending lock must be free again before `updates.set` below.
+    let ready = updates.lock().ready.take();
+    if let Some((update, bytes)) = ready {
         let version = update.version.clone();
         if let Err(error) = update.install(&bytes) {
             eprintln!("update install failed: {error}");
@@ -238,14 +254,16 @@ fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) 
                 &version,
                 "The update could not be installed. It will be tried again.",
             );
+            lock_shared(recorder).updating = false;
             return false;
         }
         updates.set(app, "installed", &version, "");
     }
     if step == Step::InstallAndRestart {
-        // Restart is the last step: the process exits and the installed build starts.
+        // Restart is the last step: the process exits and the installed build starts. `updating` stays set.
         app.restart();
     }
+    lock_shared(recorder).updating = false;
     true
 }
 
