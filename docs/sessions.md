@@ -53,7 +53,7 @@ session other than the first also leaves a line in the run's diagnostics and in 
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
 
 A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
-notices. On a harness that says when it compacts (the `compaction_events` capability, Claude Code), the bot's standing
+notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
 session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
@@ -69,8 +69,8 @@ When a turn runs on a fallback harness or model, it runs in a side session of it
 never replaces the saved session; the next turn on the usual harness resumes that one and is told a side session ran.
 
 When a run fails because the session ran out of room, the next claim for it carries `compact_first`: the saved session
-is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, other harnesses with
-the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
+is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, pi's RPC `compact`,
+other harnesses with the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
 session (`compact_failed`). If the compacted run still fails the same way, or an older runner ignores the flag, Tico
 clears the session for the next run. `/compact` keeps its session.
 

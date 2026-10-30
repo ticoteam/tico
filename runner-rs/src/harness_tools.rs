@@ -1588,9 +1588,10 @@ mod tests {
         assert_eq!((caps.sign_in_status.check.as_str(), caps.sign_in_status.field.as_str(), caps.sign_in_status.timeout_s), ("json", "loggedIn", 30));
         assert!(caps.compaction && caps.repo_commands && caps.resume_after_interrupt && !caps.persistent_session);
         assert!(all["codex"].capabilities.resume_after_interrupt && all["codex"].capabilities.goal_runs_across_turns);
-        // Steering is declared, never inferred from a name: only Claude Code and Codex take input mid-turn.
+        // Steering is declared, never inferred from a name: only Claude Code, Codex and pi take input mid-turn.
         let steers: Vec<&str> = all.iter().filter(|(_, m)| m.capabilities.steer).map(|(id, _)| id.as_str()).collect();
-        assert_eq!(steers, vec!["claude-code", "codex"]);
+        assert_eq!(steers, vec!["claude-code", "codex", "pi"]);
+        assert!(all["pi"].capabilities.persistent_session && all["pi"].capabilities.compaction);
         assert!(!all["gemini-cli"].variants[0].capabilities.steer);
         let gemini = &all["gemini-cli"];
         assert_eq!(gemini.variants.len(), 1);

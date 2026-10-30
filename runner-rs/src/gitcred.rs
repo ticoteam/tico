@@ -551,7 +551,7 @@ pub fn credential(socket: Option<&str>, repository: Option<&str>) -> String {
         return held;
     }
     if let Some(s) = socket.filter(|s| !s.is_empty()) {
-        match socket_request(Path::new(s), &std::env::var("HUB_TOKEN").unwrap_or_default(), repository, "git") {
+        match socket_request(Path::new(s), &crate::client::bearer(&std::env::var("HUB_TOKEN").unwrap_or_default()).unwrap_or_default(), repository, "git") {
             Ok(t) => return t,
             Err(e) => eprintln!("Tico runner: no fresh GitHub App token (socket): {}", e.chars().take(300).collect::<String>()),
         }

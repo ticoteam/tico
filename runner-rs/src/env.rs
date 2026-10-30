@@ -218,7 +218,13 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
                 // Under isolation the state directory is closed to the bot user: the file goes where its turn reads.
                 let dir = if let Some(user) = &vault.turn_user { user.dir.clone() }
                     else if crate::isolation::enabled() { crate::isolation::turn_dir() } else { ctx.state_dir.to_path_buf() };
-                let path = dir.join(format!("tico-credential-{}", uuid::Uuid::new_v4().simple()));
+                // A leased user's own directory holds one turn's at a time: the same path every attempt, so a pi kept
+                // on that user (hosts/pi.rs Pool) is started with the same environment.
+                let name = if vault.turn_user.is_some() { key.to_string() } else { uuid::Uuid::new_v4().simple().to_string() };
+                let path = dir.join(format!("tico-credential-{name}"));
+                if vault.turn_user.is_some() {
+                    let _ = std::fs::remove_file(&path);
+                }
                 let mut f = std::fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)

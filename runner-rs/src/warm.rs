@@ -75,6 +75,11 @@ pub fn fingerprint(env: &Env) -> String {
 }
 
 pub fn write_token(path: &Path, token: &str) {
+    write_token_for(path, token, None)
+}
+
+/// `write_token`, the file owned by `owner` (a leased turn user) in place of the bot user.
+pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
@@ -85,7 +90,12 @@ pub fn write_token(path: &Path, token: &str) {
         .open(&tmp)
         .and_then(|mut f| {
             f.write_all(token.as_bytes())?;
-            crate::isolation::chown_file(&f)
+            match owner {
+                // SAFETY: fchown on a descriptor this process owns.
+                Some((uid, gid)) if unsafe { libc::fchown(std::os::fd::AsRawFd::as_raw_fd(&f), uid, gid) } != 0 => Err(std::io::Error::last_os_error()),
+                Some(_) => Ok(()),
+                None => crate::isolation::chown_file(&f),
+            }
         })
         .and_then(|_| std::fs::rename(&tmp, path));
     let _ = std::fs::remove_file(&tmp);
