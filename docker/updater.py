@@ -742,6 +742,8 @@ def settle(tag, outcome):
                         if not back:
                             raise RuntimeError("the restored server is not healthy; Caddy settlement remains pending")
                         reconcile_caddy(tag)
+                    if back and MODE == "server":
+                        reconcile_tunnel(tag)   # a cut cloudflared recreate may have left the tunnel stopped
                     set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="", settle_caddy=False,
                                message="%s. Docker then confirmed the %s on %s%s." % (
                                    outcome, SERVICE, tag, "" if back else ", but it did not come up healthy"))
