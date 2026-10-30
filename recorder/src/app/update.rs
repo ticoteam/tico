@@ -22,6 +22,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const LOOK_EVERY: Duration = Duration::from_secs(30);
 /// Without any focused window for this long, a downloaded build installs in the background.
 pub const IDLE_BEFORE_INSTALL: Duration = Duration::from_secs(10 * 60);
+/// How long quitting waits for a background install that is already running.
+const QUIT_WAIT: Duration = Duration::from_secs(60);
 
 /// Why an install is being considered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +71,24 @@ pub fn decide(intent: Intent, build: Build, hold: Option<&str>, idle: Option<Dur
     }
 }
 
+/// `decide` plus the install reservation, under the recorder's lock: a step other than Wait takes the
+/// reservation, and while another call owns it (the background thread and Restart can overlap) this one
+/// waits. Only the owner clears it.
+pub fn reserve(
+    updating: &mut bool,
+    intent: Intent,
+    build: Build,
+    hold: Option<&str>,
+    idle: Option<Duration>,
+) -> Step {
+    if *updating {
+        return Step::Wait;
+    }
+    let step = decide(intent, build, hold, idle);
+    *updating = step != Step::Wait;
+    step
+}
+
 /// What `status.update` shows. Shared by the view, the check thread, window events and the commands.
 #[derive(Clone)]
 pub struct Updates(Arc<Mutex<Pending>>);
@@ -80,6 +100,8 @@ struct Pending {
     /// A downloaded build waiting to be installed.
     ready: Option<(Update, Vec<u8>)>,
     checking: bool,
+    /// A build is being written to disk right now (quitting waits for it).
+    installing: bool,
     /// When no window had focus last; None while a window has focus.
     unfocused_since: Option<Instant>,
 }
@@ -92,6 +114,7 @@ impl Default for Updates {
             notes: String::new(),
             ready: None,
             checking: false,
+            installing: false,
             // The app starts unfocused; the first focus event clears this.
             unfocused_since: Some(Instant::now()),
         })))
@@ -228,16 +251,14 @@ fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) 
     // kept: quitting (the restart below, too) takes it on the main thread.
     let step = {
         let mut shared = lock_shared(recorder);
-        let step = decide(
+        let hold = shared.update_hold();
+        reserve(
+            &mut shared.updating,
             intent,
             updates.build(),
-            shared.update_hold(),
+            hold,
             updates.idle_for(),
-        );
-        if step != Step::Wait {
-            shared.updating = true;
-        }
-        step
+        )
     };
     if step == Step::Wait {
         return false;
@@ -246,7 +267,10 @@ fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) 
     let ready = updates.lock().ready.take();
     if let Some((update, bytes)) = ready {
         let version = update.version.clone();
-        if let Err(error) = update.install(&bytes) {
+        updates.lock().installing = true;
+        let installed = update.install(&bytes);
+        updates.lock().installing = false;
+        if let Err(error) = installed {
             eprintln!("update install failed: {error}");
             updates.set(
                 app,
@@ -269,6 +293,11 @@ fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) 
 
 /// Called when the app exits: installs a downloaded build if nothing holds the app. No restart.
 pub fn on_quit(app: &AppHandle, recorder: &Shared, updates: &Updates) {
+    // A background install in progress finishes first, so the app never exits halfway through one.
+    let deadline = Instant::now() + QUIT_WAIT;
+    while updates.lock().installing && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
     apply(app, recorder, updates, Intent::Quit);
 }
 

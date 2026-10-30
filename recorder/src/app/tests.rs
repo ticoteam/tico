@@ -828,15 +828,49 @@ fn an_update_waits_for_every_send_from_its_first_step() {
 }
 
 #[test]
-fn nothing_starts_while_an_update_installs() {
+fn one_install_owns_the_reservation_and_nothing_starts_until_it_is_done() {
+    use crate::update::{Build, Intent, Step, reserve};
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let mut app = app(store.clone(), directory.path());
-    app.updating = true;
+    let idle = Some(std::time::Duration::from_secs(60 * 60));
+    // The background thread reserves an idle install...
+    let hold = app.update_hold();
+    let background = reserve(
+        &mut app.updating,
+        Intent::Background,
+        Build::Downloaded,
+        hold,
+        idle,
+    );
+    assert_eq!(background, Step::Install);
+    // ...and a Restart click in the meantime neither installs too nor takes over the reservation.
+    let hold = app.update_hold();
+    let restart = reserve(
+        &mut app.updating,
+        Intent::Restart,
+        Build::Downloaded,
+        hold,
+        idle,
+    );
+    assert_eq!(restart, Step::Wait);
+    assert!(app.updating);
+    // Until the owner is done, no recording starts.
     assert_eq!(app.record(None), None);
     assert!(app.error.contains("updating"));
     assert!(store.list().unwrap().is_empty());
-    assert_eq!(app.update_hold(), None);
+    // The owner finishes; the next Restart may install and restart.
+    app.updating = false;
+    let hold = app.update_hold();
+    let restart = reserve(
+        &mut app.updating,
+        Intent::Restart,
+        Build::Installed,
+        hold,
+        idle,
+    );
+    assert_eq!(restart, Step::InstallAndRestart);
+    assert!(app.updating);
 }
 
 #[test]
