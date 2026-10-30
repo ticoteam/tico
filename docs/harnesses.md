@@ -88,6 +88,12 @@ takes an API key. Candidates:
   JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools (the bot reaches Tico
   with the `hub` CLI over bash), no permission prompts, an npm package, and keys for many providers by environment
   variable. Tico reaches every model through OpenRouter, so one key covers all of them.
+- **MCP**: a pi turn gets the same servers as a Claude Code or Codex turn (the hub, the bot's bot.yaml servers and the
+  repository's `.mcp.json`), written to the turn's `mcp.json` in its agent folder (`PI_CODING_AGENT_DIR`, under
+  `runtime/pi-agent/<bot>` unless the turn has its own, as a Tico model's does). pi takes streamable HTTP only, so an
+  SSE server is named as not passed. Each tool is declared directly (`exposure: direct`), so the bot calls it in one
+  step. Secrets stay `${VAR}`; the hub's variables are read from the turn's environment. Built-in MCP arrived in pi
+  0.99.0 (2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.
 - **aider**: edits a git repository well, but it is a chat-driven editor, not an agent with a shell; a bot's run
