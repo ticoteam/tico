@@ -23,14 +23,14 @@
 .ask-peek{position:fixed;z-index:24;left:calc(var(--rail-left) + 8px);bottom:calc(var(--ask-row-y,64px) - 20px);height:40px;
   max-width:min(300px,calc(100vw - var(--rail-left) - 24px));display:flex;align-items:center;border:1px solid var(--line);
   border-radius:999px;background:var(--ask-face);color:var(--ink);box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:var(--t-sm)}
-.ask-peek[hidden]{display:none}
+.ask-peek:not(.ask-on){display:none}   /* a class, not `hidden` (askOn) */
 .ask-peek-go{flex:1;min-width:0;height:100%;display:flex;align-items:center;padding:0 2px 0 14px;border:0;border-radius:999px 0 0 999px;
   background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
 .ask-peek-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ask-peek-x{flex:none;width:32px;height:32px;margin-right:4px;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;font-size:12px}
 .ask-peek-x:hover{color:var(--ink)}
 @media (prefers-reduced-motion:no-preference){
-  .ask-peek:not([hidden]){animation:ask-out .32s cubic-bezier(.2,0,0,1)}
+  .ask-peek.ask-on{animation:ask-out .32s cubic-bezier(.2,0,0,1)}
 }
 @keyframes ask-out{from{opacity:0;transform:translateX(-8px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes ask-rise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
@@ -49,7 +49,7 @@
 .ask-mark{margin:0 2px}
 .ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
   font-size:var(--t-xs);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.ask-sees[hidden]{display:none}
+.ask-sees:not(.ask-on){display:none}
 .ask-sees [data-ask-sees-name]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Who else is in the chat: Tico Support's chip, with its × (askPeople). It takes the place of the page the panel sees. */
 .ask-people{display:flex;align-items:center;min-width:0;margin-right:auto}
@@ -66,7 +66,7 @@
 .ask-sav.ask-fly,.ask-sup-chip.ask-fly{position:fixed;z-index:70;margin:0;will-change:transform;pointer-events:none}
 /* "Loop in Support": a plain link at the top right while support is out of the chat (askFlip). */
 .ask-loop{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet);cursor:pointer}
-.ask-loop[hidden]{display:none}
+.ask-loop:not(.ask-on){display:none}
 .ask-loop:hover{color:var(--accent)}
 .ask-loop:disabled{opacity:.6;cursor:default}
 .ask-ib{width:32px;height:32px;flex:0 0 32px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;
@@ -120,7 +120,7 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
   .mobile-ask .ask-glyph .ask-x{width:24px;height:24px;font-size:24px}
   /* a few words: centred over the dot, as wide as they are */
   .ask-peek{left:50%;translate:-50% 0;max-width:calc(100vw - 24px);bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
-  .ask-peek:not([hidden]){animation-name:ask-rise}
+  .ask-peek.ask-on{animation-name:ask-rise}
   .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}
   body.mobile-composer-focus .ask-panel{bottom:0}   /* typing: the tab bar makes way for the keyboard (layout.css) */

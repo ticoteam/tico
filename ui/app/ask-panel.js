@@ -47,9 +47,11 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.
 // Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
-// (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet).
+// (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet); what shows
+// and goes with it (the peek, the page it sees, Loop in Support) does so by a class, `ask-on` (askOn).
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
+const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!row || !panel) return;
@@ -70,7 +72,7 @@ function askSync() {
   askSet(panel.querySelector('#ask-title'), 'textContent', name);
   if (!open) return;
   const page = askPage(), sees = panel.querySelector('[data-ask-sees]');
-  askSet(sees, 'hidden', !page.title);
+  askOn(sees, page.title);
   askSet(sees.querySelector('[data-ask-sees-name]'), 'textContent', page.title);
   askSet(sees, 'title', 'Sees ' + page.title);
   askPeople();
@@ -141,7 +143,7 @@ function askPeople() {
   const panel = $('#ask-panel');
   if (!panel || !ASK) return;
   const sup = askSupport(), people = panel.querySelector('[data-ask-people]'), loop = panel.querySelector('[data-ask-loop]');
-  askSet(loop, 'hidden', !sup.available || !ASK.live || sup.on);   // in: the chip's × is the way out
+  askOn(loop, sup.available && ASK.live && !sup.on);   // in: the chip's × is the way out
   if (!sup.available && ASK.supId === undefined) return;     // support's requests not read yet
   const id = sup.on ? sup.ticket.id : '', was = ASK.supId;
   const box = ASK.composer && pq(ASK.composer, '.p-text');
@@ -350,11 +352,11 @@ function askPeek() {
   const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
     .concat((ASK?.pending || []).map(a => ({id: 'confirm:' + a.id, confirm: true})));
   const store = askPeekStore(), cur = el.dataset.item;
-  if (open || away) { askSet(el, 'hidden', true); delete el.dataset.item; return; }
-  if (cur && !el.hidden && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) { askPeekPlace(el); return; }
+  if (open || away) { askOn(el, false); delete el.dataset.item; return; }
+  if (cur && el.classList.contains('ask-on') && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) { askPeekPlace(el); return; }
   const {text, ids} = askPeekLine(askPeekFresh(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown}));
   if (!text) {
-    askSet(el, 'hidden', true); delete el.dataset.item;
+    askOn(el, false); delete el.dataset.item;
     if (now - ASK_LOADED < ASK_PEEK_WAIT_MS) ASK_PEEK_TIMER = setTimeout(askPeek, ASK_PEEK_WAIT_MS - (now - ASK_LOADED) + 50);
     return;
   }
@@ -363,7 +365,7 @@ function askPeek() {
   el.dataset.item = ids[0];
   el.dataset.items = ids.join(' ');
   askPeekPlace(el);
-  el.hidden = false;
+  askOn(el, true);
   askPeekSave({...store, shown: {...store.shown, ...Object.fromEntries(ids.map(id => [id, now]))}});
   ldotMove(askLiveDot(), 'hop');
 }
@@ -371,7 +373,7 @@ function askPeek() {
 function askPeekDone() {
   const el = $('#ask-peek'), store = askPeekStore();
   askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
-  el.hidden = true; delete el.dataset.item;
+  askOn(el, false); delete el.dataset.item;
 }
 $('#ask-peek')?.addEventListener('click', ev => {
   const el = $('#ask-peek'), id = el.dataset.item;
