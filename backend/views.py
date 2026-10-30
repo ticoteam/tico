@@ -1035,7 +1035,7 @@ def _prime_person_origins(c, visible_sql, ids):
                                      % (",".join("?" * len(part)), visible_sql), part).fetchone()[0])
         readable.update(found)
         if read_cache.cache(c) is not None:
-            H.prime_tasks(c, found, tags=False)
+            H.prime_tasks(c, found, with_tags=False)
             # The row `SELECT * FROM tasks WHERE id=? AND (rule)` answers: the task's row as stored, or None.
             rows = {tid: read_cache.one(c, H.TASK_SQL, (tid,)) for tid in found}
             read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql,
