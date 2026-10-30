@@ -68,6 +68,14 @@ def test_post_update_posts_as_the_owner(api):
     assert act(api, "post_update", {}) == {"ok": False, "detail": "post_update needs text"}
 
 
+def test_post_update_posts_a_daily_on_a_friday(api, monkeypatch):
+    """A Friday's week in review needs slides, which an automation never has: its text is still a daily."""
+    from backend import updates
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-30")
+    assert act(api, "post_update", {"text": "Shipped the fix"}, owner="bot:ops")["ok"]
+    assert sql(api, "SELECT kind FROM updates WHERE bot='ops'") == [{"kind": "daily"}]
+
+
 BRIEF = {"brief": {"ref": "task_9", "turn": {"bot": "librarian", "task": "task_9"},
                    "text": "# Acme market, Tuesday\n\n- Northwind cut its price.\n- No bet is touched."}}
 
