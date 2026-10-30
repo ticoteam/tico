@@ -190,3 +190,20 @@ def test_deleting_a_review_question_is_allowed_and_its_verdicts_stop_counting(ap
         assert "bot_file_activity.task_id" not in delete_tasks(c, [made["task"]["id"]])["refused"]
     assert post(api, f"tasks/{made['task']['id']}/delete", {}) == {"deleted": made["task"]["id"]}
     assert not approved(api, bot, file=v1["id"])["approved"]
+
+
+def test_a_reader_who_cannot_open_a_reviewed_file_sees_none_of_its_details_whatever_its_kind(api):
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    v1 = publish(api, bot, "# Cut one", "launch-cut.md")
+    made = ask(api, bot, [{"file": v1["id"]}], topic="cut-1")
+
+    def attachments(who):
+        listed = api.get(f"/api/v2/tasks/{made['task']['id']}/comments", headers=headers(who))
+        assert listed.status_code == 200, listed.text
+        return next(m for m in listed.json()["comments"] if m["id"] == made["question"]["id"])["refs"]["attachments"]
+    [mine] = attachments("ana-test")
+    assert mine["title"] and mine["name"] == "launch-cut.md" and mine["size"]
+    [theirs] = attachments("cara-test")
+    assert theirs == {"id": v1["id"], "file_id": v1["id"], "version": 1, "ref": f"{v1['id']}@1", "kind": mine["kind"],
+                      "removed": True, "current_version": None}

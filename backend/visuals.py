@@ -547,23 +547,27 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
+        if not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
         for a in items:
-            if not isinstance(a, dict) or a.get("kind") not in INLINE or not a.get("file_id"):
+            if not isinstance(a, dict) or not a.get("file_id"):
                 fresh.append(a)
                 continue
-            fid, number = a["file_id"], int(a["version"])
+            fid, number = a["file_id"], int(a.get("version") or 0)
             if fid not in rows:
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
+            if a.get("kind") not in INLINE and not hidden:
+                fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
+                continue
             removed = not row or bool(row["archived"]) or hidden
             v = None if removed else c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                                                (fid, number)).fetchone()
-            # A file this reader may not open says nothing of itself: not its name, title, type or size. A message
-            # can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader of its task.
+            # A file this reader may not open says nothing of itself: not its name, title, type or size, whatever its
+            # kind. A message can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader
+            # of its task.
             shown = {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} if hidden else a
             view = {**shown, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}

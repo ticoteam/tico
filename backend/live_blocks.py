@@ -9,7 +9,8 @@ is served, from the same rules as Needs you (tasks waiting on a person), the tas
 
 A file list links a page to its page view and any other file to its task. `video` and `audio` are aliases of
 `media`. `limit` defaults to 10 and is capped at 50. Attributes not listed are dropped when a page is published
-(backend/visuals.py clean). A tag with no answer for this viewer shows nothing, except tico-tasks, which says so."""
+(backend/visuals.py clean). A tag with no answer for this viewer shows nothing, except tico-tasks, which says so. A page
+fills at most LIVE_TAG_CAP tags; the rest render empty."""
 import html
 import re
 from urllib.parse import quote
@@ -21,6 +22,8 @@ LIVE_ATTRS = {"tico-tasks": ("waiting-on", "bot", "parent", "limit"), "tico-task
 DEFAULT_LIMIT, MAX_LIMIT = 10, 50
 # A file listing reads at most this many rows to find the ones the viewer may see.
 SCAN_LIMIT = 200
+# A page fills at most this many live tags, so one page cannot tie up a read for thousands of queries.
+LIVE_TAG_CAP = 50
 TAG = re.compile(r"<(tico-tasks|tico-task|tico-files)\b([^>]*?)/?>(?:\s*</\1\s*>)?", re.I)
 ATTR = re.compile(r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
 STYLE = ("<style>.tico-live-tasks,.tico-live-files{margin:0;padding-left:1.2em}"
@@ -126,6 +129,9 @@ def fill(text, c, who, auth, files):
     used = []
 
     def replace(match):
+        if len(used) >= LIVE_TAG_CAP:
+            return ""
+        used.append(True)
         name = match.group(1).lower()
         attrs = {key.lower(): html.unescape(quoted or single or bare)
                  for key, quoted, single, bare in ATTR.findall(match.group(2)) if key.lower() in LIVE_ATTRS[name]}
@@ -135,8 +141,5 @@ def fill(text, c, who, auth, files):
             body = _task(c, auth, who, attrs, base)
         else:
             body = _files(c, files, who, attrs, base)
-        if not used:
-            used.append(True)
-            body = STYLE + body
-        return body
+        return STYLE + body if len(used) == 1 else body
     return TAG.sub(replace, text)
