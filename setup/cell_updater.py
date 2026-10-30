@@ -6,6 +6,8 @@ POST /update {"version": "1.2.3" | "v1.2.3" | "latest", "from": "1.2.2"}   start
 GET  /status                           {"state", "from", "to", "message", "snapshot", "restored"}; state is idle,
                                        pulling, restarting, healthy, rolled_back or failed
 GET  /diagnostics                      {"mode": "cell", "version", "docker", "compose", "containers", "errors"}
+GET  /sleep                            {"minutes": N | null}: the company's sleep policy (`cell set-sleep`), idle
+                                       minutes before it sleeps; 0 = never sleeps, null = no policy
 POST /sleep {"wake_at": "2026-10-30T18:00:00Z" | null, "reason": "idle"}   put the company to sleep (`cell sleep`), with
                                        a timed wake at wake_at when given: 202 {"state": "sleeping", "wake_at"} and the
                                        work a second later, so the answer gets back before the server stops; 409
@@ -294,7 +296,17 @@ class Service:
                 return 200, dict(self.state(slug))
         if path == "/diagnostics":
             return 200, self.diagnostics(slug)
+        if path == "/sleep":
+            return 200, {"minutes": self.sleep_minutes(slug)}
         return 404, {"error": "not found"}
+
+    def sleep_minutes(self, slug: str) -> int | None:
+        """The company's sleep policy from its record, or None when there is none (or the record holds no valid one)."""
+        c = self.make_cell().load(slug) or {}
+        minutes = c.get("sleep_minutes")
+        if isinstance(minutes, int) and not isinstance(minutes, bool) and 0 <= minutes <= C.SLEEP_MINUTES_MAX:
+            return minutes
+        return None
 
     def post(self, slug: str, index: int, path: str, body: bytes) -> tuple[int, dict]:
         if path == "/sleep":

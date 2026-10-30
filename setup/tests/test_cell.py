@@ -786,6 +786,56 @@ def test_wake_at_is_stored_in_utc_and_may_be_up_to_31_days_out():
         assert e.value.code == "bad_wake_at"
 
 
+@pytest.mark.parametrize("value", ["", "abc", "-5", "1441", "99999", "1.5", "+30"])
+def test_sleep_minutes_must_be_a_whole_number_from_0_to_1440(ready, value):
+    before = ready(*add_args(ready))
+    answer = ready(*add_args(ready, "boatyard", "--sleep-minutes", value))
+    assert answer["ok"] is False and answer["error"] == "bad_args" and "--sleep-minutes" in answer["detail"]
+    assert "sleep_minutes" not in record(ready) and before["ok"]
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", value)["error"] == "bad_args"
+    assert "sleep_minutes" not in record(ready)
+
+
+@pytest.mark.parametrize("value", [0, 30, 1440])
+def test_add_stores_the_sleep_policy_and_set_sleep_changes_it(ready, value):
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", str(value)))["ok"]
+    assert record(ready)["sleep_minutes"] == value
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": 45, "changed": True}
+    assert record(ready)["sleep_minutes"] == 45
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45")["changed"] is False
+
+
+def test_set_sleep_zero_is_never_and_default_removes_the_policy(ready):
+    ready(*add_args(ready))
+    assert "sleep_minutes" not in record(ready)                       # no policy until staff set one
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default")["changed"] is False
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "0") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": 0, "changed": True}
+    assert record(ready)["sleep_minutes"] == 0
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default") == \
+        {"ok": True, "company": "boatyard", "sleep_minutes": None, "changed": True}
+    assert "sleep_minutes" not in record(ready)
+
+
+def test_set_sleep_refuses_an_unknown_or_removed_company_and_changes_nothing(ready):
+    assert ready("set-sleep", "--company", "nobody", "--minutes", "30")["error"] == "not_found"
+    ready(*add_args(ready))
+    ready("remove", "--company", "boatyard", "--keep-data")
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "30")["error"] == "not_found"
+    assert record(ready)["state"] == "removed" and "sleep_minutes" not in record(ready)
+
+
+def test_add_again_keeps_the_saved_sleep_policy_unless_the_flag_is_given(ready):
+    ready(*add_args(ready, "boatyard", "--sleep-minutes", "30"))
+    assert ready(*add_args(ready))["changed"] is False and record(ready)["sleep_minutes"] == 30
+    ready("set-sleep", "--company", "boatyard", "--minutes", "90")
+    assert ready(*add_args(ready))["ok"] and record(ready)["sleep_minutes"] == 90          # set by staff, kept
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "0"))["ok"] and record(ready)["sleep_minutes"] == 0
+    assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "12", "--memory", "3g"))["ok"]
+    assert record(ready)["sleep_minutes"] == 12 and record(ready)["memory"] == "3g"
+
+
 def test_init_installs_the_wake_service(host):
     first = host("init", "--json")
     unit = (host.etc / cell.WAKE_UNIT).read_text()
@@ -1688,6 +1738,80 @@ def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
     try:
         c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
         c.request("POST", "/sleep", body=b'{"wake_at": null}', headers={"Authorization": "Bearer " + token(ready)})
+        assert c.getresponse().status == 403
+        c.close()
+    finally:
+        listener.shutdown()
+        listener.server_close()
+
+
+def test_get_sleep_answers_the_company_policy(ready):
+    ready(*add_args(ready, "boatyard"))
+    ready(*add_args(ready, "alpha"))
+    svc = service(ready)
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # no policy yet
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
+    ready("set-sleep", "--company", "boatyard", "--minutes", "0")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 0})               # never sleeps
+    ready("set-sleep", "--company", "boatyard", "--minutes", "default")
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})
+    ready("set-sleep", "--company", "alpha", "--minutes", "1440")
+    assert ask(svc, "alpha", index=1, path="/sleep", method="GET") == (200, {"minutes": 1440})
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # its own record only
+
+
+@pytest.mark.parametrize("value", [5000, -1, "30", True, None])
+def test_get_sleep_answers_null_for_a_record_that_holds_no_valid_policy(ready, value):
+    ready(*add_args(ready))
+    path = ready.root / "companies" / "boatyard" / "company.json"
+    c = json.loads(path.read_text())
+    c["sleep_minutes"] = value
+    path.write_text(json.dumps(c))
+    assert status_of(service(ready), "/sleep") == {"minutes": None}
+
+
+def status_of(svc, path):
+    return svc.get("boatyard", path)[1]
+
+
+@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
+def test_get_sleep_is_gated_as_status_is(ready, auth):
+    ready(*add_args(ready))
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    svc = service(ready)
+    assert ask(svc, path="/sleep", method="GET", auth=auth) == (401, {"error": "unauthorized"})
+    assert ask(svc, path="/status", method="GET", auth=auth) == (401, {"error": "unauthorized"})
+    mine = "Bearer " + token(ready)
+    assert svc.gate("boatyard", 0, peer(1), mine)[0] == 403          # another company's container
+    assert svc.gate("boatyard", 1, peer(1), mine)[0] == 403          # a listener whose slot is not boatyard's
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
+
+
+def test_get_sleep_over_http_is_gated_as_status_is(ready):
+    import http.client
+    ready(*add_args(ready))
+    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
+    svc = service(ready, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
+    listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
+    try:
+        def call(auth):
+            c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+            c.request("GET", "/sleep", headers={"Authorization": auth})
+            r = c.getresponse()
+            out = (r.status, json.loads(r.read()))
+            c.close()
+            return out
+        assert call("Bearer nope") == (401, {"error": "unauthorized"})
+        assert call("Bearer " + token(ready)) == (200, {"minutes": 30})
+    finally:
+        listener.shutdown()
+        listener.server_close()
+    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+        c.request("GET", "/sleep", headers={"Authorization": "Bearer " + token(ready)})
         assert c.getresponse().status == 403
         c.close()
     finally:

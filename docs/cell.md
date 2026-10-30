@@ -68,11 +68,12 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
-  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] --json
+  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
 python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
+python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
@@ -202,6 +203,11 @@ moment or asleep.
   the wake service starts the company once that time is within a minute, checking every 20 s; a start that fails is
   logged and tried again at a later check, not at once. Starting, waking or stopping the company clears the time, and
   a sleep without one clears a time an earlier sleep set.
+- **Sleep policy.** A company's record can carry `sleep_minutes`: idle minutes before it sleeps, 0 to 1440, where 0 means
+  never sleeps and no value means no policy. Staff set it with `set-sleep --minutes N` (`--minutes default` removes
+  it) or `add --sleep-minutes N`; a re-run of `add` without the flag keeps the saved value. The company's updater
+  answers `GET /sleep` with `200 {"minutes": N | null}` from the record, behind the same token and network gate as
+  `GET /status`, so a change is seen on its next read. Nothing here sleeps a company by itself: the caller decides.
 - **Wake.** The wake service (`tico-cell-wake.service`, `setup/cell_wake.py`) listens on `127.0.0.1:8082`. The
   router reaches it for a sleeping company's hosts only, and the route itself names the company in a header
   (`X-Tico-Cell-Wake`; a copy the visitor sent is replaced). The service also checks that the request's `Host` is one
@@ -350,7 +356,7 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data` and `control/` as `/control`, `TICO_CELL`, the default network and the `tico.cell.company` label |
 | `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
-| `.../company.json` | The slot, port, release, memory, state, aliases, and a pending update (the release before it and its snapshot). No secrets |
+| `.../company.json` | The slot, port, release, memory, state, aliases, the sleep policy (`sleep_minutes`), and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../control/updater-token` | The company's updater token (0600, owned by 10001); its server reads it as `/control/updater-token` |
 | `.../updater-status.json` | The cell updater's last status for the company (0600) |

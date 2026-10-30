@@ -176,6 +176,8 @@ WAKE_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 WAKE_AT_DAYS = 31
 WAKE_AT_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
                            r"(Z|[+-][0-9]{2}:[0-9]{2})")
+# A company's sleep policy (`set-sleep`, `add --sleep-minutes`): whole minutes idle before it sleeps; 0 = never sleeps.
+SLEEP_MINUTES_MAX = 1440
 
 
 class CellError(Exception):
@@ -288,6 +290,14 @@ def check_memory(value: str) -> str:
     if not MEMORY_MIN_MB <= mb <= MEMORY_MAX_MB:
         raise CellError("bad_args", f"--memory is a size such as 2g or 1536m, from {MEMORY_MIN_MB}m to 16g")
     return value.strip().lower()
+
+
+def check_sleep_minutes(value: str, flag: str) -> int:
+    text = (value or "").strip()
+    if not re.fullmatch(r"[0-9]{1,4}", text) or int(text) > SLEEP_MINUTES_MAX:
+        raise CellError("bad_args", f"{flag} is a whole number of minutes from 0 to {SLEEP_MINUTES_MAX} "
+                                    "(0 = never sleeps)")
+    return int(text)
 
 
 def read_secret(path: str, flag: str) -> str:
@@ -437,6 +447,8 @@ def parser() -> Parser:
                    "in extra.env, replaced when given again")
     a.add_argument("--import-data", metavar="FILE", help="a moved install's /data as .tar or .tar.gz, unpacked into an "
                    "empty data folder before the first start")
+    a.add_argument("--sleep-minutes", metavar="N", help=f"the sleep policy: idle minutes before it sleeps, 0 to "
+                   f"{SLEEP_MINUTES_MAX} (0 = never); kept from the record when left out")
     a.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     cmd("list", "every company on this host")
     for name, help in (("status", "one company"), ("stop", "stop one company's server; its data stays"),
@@ -450,6 +462,10 @@ def parser() -> Parser:
         if name == "sleep":
             c.add_argument("--wake-at", metavar="TIME", help="a timed wake: an ISO-8601 UTC time such as "
                            "2026-10-30T18:00:00Z, at most 31 days out; the wake service starts the company then")
+    z = cmd("set-sleep", "a company's sleep policy, which its server reads (GET /sleep); no policy until set")
+    z.add_argument("--company", required=True, metavar="SLUG")
+    z.add_argument("--minutes", required=True, metavar="N|default",
+                   help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -1064,6 +1080,8 @@ class Cell:
         if args.version is not None and not VERSION_RE.fullmatch(args.version):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
         memory = check_memory(args.memory) if args.memory is not None else None
+        sleep_minutes = check_sleep_minutes(args.sleep_minutes, "--sleep-minutes") \
+            if args.sleep_minutes is not None else None
         backup_given = [args.backup_url, args.backup_region, args.backup_credentials_file]
         if any(backup_given) and not all(backup_given):
             raise CellError("bad_args", "--backup-url, --backup-region and --backup-credentials-file go together")
@@ -1136,6 +1154,9 @@ class Cell:
                      "state": "running"}
                 if aliases:
                     c["aliases"] = aliases
+                sleep_minutes = sleep_minutes if sleep_minutes is not None else (old or {}).get("sleep_minutes")
+                if sleep_minutes is not None:
+                    c["sleep_minutes"] = sleep_minutes
                 if (old or {}).get("pending"):  # an update not yet seen healthy: this start is still guarded by it
                     c["pending"] = old["pending"]
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
@@ -1463,6 +1484,23 @@ class Cell:
                 raise failed
         return c, ready, True
 
+    def set_sleep(self, args) -> dict:
+        """The company's sleep policy on its record (its server reads it through GET /sleep): N idle minutes, 0 for
+        never, or `default` to remove it. Under the company's lock, as the other per-company commands; a no-op changes
+        nothing."""
+        slug = check_slug(args.company)
+        minutes = None if args.minutes == "default" else check_sleep_minutes(args.minutes, "--minutes")
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            changed = c.get("sleep_minutes") != minutes
+            if minutes is None:
+                c.pop("sleep_minutes", None)
+            else:
+                c["sleep_minutes"] = minutes
+            if changed:
+                self.save(c)
+        return {"ok": True, "company": slug, "sleep_minutes": minutes, "changed": changed}
+
     def update(self, args) -> dict:
         """Another release, with the database safe first. The image is pulled before anything changes (a release that
         cannot be pulled leaves the company as it was). Then the server is stopped (Docker must say so), its database
@@ -1680,7 +1718,7 @@ def main(argv: list[str], *, system: System | None = None, root: str | Path | No
     cell = Cell(Path(root or os.environ.get("TICO_CELL_ROOT") or ROOT), system or System(), Path(host_root), compose_source)
     try:
         args = parser().parse_args(argv)
-        result = getattr(cell, args.action)(args)
+        result = getattr(cell, args.action.replace("-", "_"))(args)     # set-sleep is set_sleep
     except CellError as e:
         result = {"ok": False, "error": e.code, "detail": cell.scrub(e.detail), **e.extra}
     except Exception as e:  # noqa: BLE001  an answer HQ can read, even for a bug; the secrets scrubbed out of it
