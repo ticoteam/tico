@@ -5951,7 +5951,9 @@ def rules_list(api, args):
                       "with": args.get("with"), "source": args.get("source"), "bot": args.get("bot"),
                       "mine": "true" if args.get("mine") else None, "cursor": args.get("cursor"),
                       "limit": args.get("limit")})
-    return _as_person(api).get("rules", **query)
+    # `mine` is the caller's own bot: BotOps reads its own rules and settings, not its requester's. Anything else reads
+    # as the person (BotOps's requester), like the rest of the rules.
+    return (api if args.get("mine") else _as_person(api)).get("rules", **query)
 
 
 @tool("hub_rules_suggested", "The org rule suggestions waiting for a person to accept or skip.",
@@ -5967,18 +5969,20 @@ def rules_read(api, args):
 
 
 @tool("hub_rules_add", "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
-      "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an Everyone rule.",
+      "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an Everyone rule. The "
+      "Assistant adds one as the person, citing their words (on_behalf_of).",
       {"kind": {"type": "string", "enum": ["internal", "external"]},
        "text": _s("The rule in one sentence"), "description": _s("Optional, longer"),
        "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: who it is about"),
        "source_id": _s("External: the From, by name or id"),
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
-       "reviewer": _s("A person who reviews outputs under it")},
+       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text", "who"), writes=True)
 def rules_add(api, args):
     body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "if_broken",
                                               "reviewer")})
-    return _as_person(api).post("rules", body, key=_key(args))
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules", body, key=_key(args))
 
 
 @tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
@@ -6028,11 +6032,10 @@ def rules_due(api, args):
       "routine's lead time in days.",
       {"id": _s("The rule's id"), "first_due": _s("YYYY-MM-DD"),
        "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
-       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
-       "task_days": {"type": "integer", "minimum": 0, "maximum": 365}},
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago")},
       required=("id", "first_due", "repeats", "owner"), writes=True)
 def rules_due_set(api, args):
-    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone")})
     return _as_person(api).post(f"rules/{args['id']}/due", body, key=_key(args))
 
 
@@ -6113,6 +6116,8 @@ AUDIENCE = {
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
+    "hub_rules_add": KINDS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

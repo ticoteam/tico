@@ -3454,7 +3454,7 @@
     },
     "/api/v2/bots/{bot}/rules": {
       "get": {
-        "summary": "A bot's Rules tab: its settings as sentences, internal rules, external rules",
+        "summary": "A bot's Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor",
         "operationId": "getBotRules",
         "parameters": [
           {
@@ -3464,6 +3464,48 @@
             "schema": {
               "type": "string",
               "title": "Bot"
+            }
+          },
+          {
+            "name": "internal_cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Internal Cursor"
+            }
+          },
+          {
+            "name": "external_cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "External Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
             }
           }
         ],
@@ -16037,6 +16079,54 @@
       }
     },
     "/api/v2/rule-due/{due_id}": {
+      "get": {
+        "summary": "One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)",
+        "operationId": "getRuleDue",
+        "parameters": [
+          {
+            "name": "due_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Due Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Rules"
+        ]
+      },
       "post": {
         "summary": "Edit a due date; a change to first day or repeat starts a new row",
         "operationId": "updateRuleDue",
@@ -31349,17 +31439,6 @@
             "maxLength": 200,
             "minLength": 1,
             "title": "Owner"
-          },
-          "task_days": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task Days"
           }
         },
         "additionalProperties": false,
@@ -31426,17 +31505,6 @@
               }
             ],
             "title": "Owner"
-          },
-          "task_days": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task Days"
           }
         },
         "additionalProperties": false,

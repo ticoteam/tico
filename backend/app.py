@@ -806,7 +806,8 @@ def create_app(settings=None):
                 # The default applies only to what BotOps does for a person (the delegable routes). Its own run's
                 # plumbing (credentials, attempts, jobs, its status) and its own messages stay BotOps': a run's
                 # credential fetch as the person was refused, and every human-requested turn failed to start.
-                if not on_behalf and botops_act.default_delegable(request.method, request.url.path, body):
+                if not on_behalf and botops_act.default_delegable(request.method, request.url.path, body,
+                                                                       request.query_params):
                     on_behalf = "default"
             if (on_behalf and getattr(request.state, "identity", None) is not None
                     and request.state.identity.actor == "bot:" + BOTOPS

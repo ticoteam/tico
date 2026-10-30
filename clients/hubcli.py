@@ -214,9 +214,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules skip <id> --version N        set a suggestion aside
     hub rules retire <id> --version N      retire a rule in force; its due dates come back
     hub rules due [--next 90d] [--status overdue|due_soon|upcoming|satisfied] [--limit N]
-                                           the due dates of rules in force
+                                           the due dates of rules in force (`hub rules due list` is the same)
     hub rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
-                      [--timezone Z] [--task-days N]
+                      [--timezone Z]
     hub rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
@@ -1750,13 +1750,19 @@ def parser():
     s.add_argument("--version", type=int)
     s.set_defaults(fn="rules retire")
     due = rules.add_parser("due", help="due dates on rules: the next ones, add one, mark one satisfied")
+    # The list's flags work on `due` itself and on `list`, which is the same command. SUPPRESS keeps a flag given on
+    # one from being reset by the other's default.
+    due.add_argument("--next", default=argparse.SUPPRESS, help="days ahead to list, such as 90d (default 90d)")
+    due.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
+    due.add_argument("--cursor", default=argparse.SUPPRESS)
+    due.add_argument("--limit", type=int, default=argparse.SUPPRESS)
     due.set_defaults(fn="rules due")
     due_sub = due.add_subparsers(dest="subsub")
     s = due_sub.add_parser("list", help="the due dates of rules in force: overdue first, then those due within --next days")
-    s.add_argument("--next", default="90d")
-    s.add_argument("--status", choices=["overdue", "due_soon", "upcoming", "satisfied"])
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
+    s.add_argument("--next", default=argparse.SUPPRESS)
+    s.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
+    s.add_argument("--cursor", default=argparse.SUPPRESS)
+    s.add_argument("--limit", type=int, default=argparse.SUPPRESS)
     s.set_defaults(fn="rules due")
     s = due_sub.add_parser("add", help="a due date on a rule: first day, repeat, owner")
     s.add_argument("id", help="the rule's id")
@@ -1764,7 +1770,6 @@ def parser():
     s.add_argument("--repeats", required=True, choices=["once", "weekly", "monthly", "quarterly", "yearly"])
     s.add_argument("--owner", required=True, help="a bot or person, by name or id")
     s.add_argument("--timezone")
-    s.add_argument("--task-days", dest="task_days", type=int, help="a routine opens its task this many days before")
     s.set_defaults(fn="rules due set")
     s = due_sub.add_parser("satisfied", help="mark the current occurrence satisfied")
     s.add_argument("id", help="a due date's id, or its rule's when it has one due date")

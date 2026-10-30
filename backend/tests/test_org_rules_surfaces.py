@@ -4,11 +4,16 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
+
 from backend import rule_due as D
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_automation_cli import Client
-from backend.tests.test_org_rules import org
-from clients import hubcli, remotecli
+from backend.tests.test_member_bots import botops, turn as botops_turn  # noqa: F401  (the botops fixture)
+from backend.tests.test_org_rules import org, rule as post_rule
+from clients import hubcli, hubtools, remotecli
+from clients.tico import APIError
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -98,4 +103,79 @@ def test_a_retired_rule_is_no_longer_in_force_and_its_due_dates_come_back(api):
 
 def test_the_policy_line_is_the_fixed_one():
     text = (ROOT / "policies" / "shared-rules.md").read_text()
-    assert "Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`." in text
+    assert "- Rules apply to you. Read them: `hub rules list --mine`.\n" in text
+    assert "hub rules check" not in text
+
+
+class _Turn:
+    """The Assistant's client in its run, as test_assistant's Turn calls the API: `on_behalf_of` cites its message."""
+
+    def __init__(self, api, token):
+        self.api, self.token = api, token
+
+    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+        extra = {"X-Tico-On-Behalf-Of": delegate if isinstance(delegate, str) else "turn"} if delegate else {}
+        r = self.api.request(method, "/api/v2/" + path, json=body, params=query,
+                             headers={**headers(self.token), **extra})
+        if r.status_code >= 400:
+            raise APIError(r.json()["error"]["code"], r.json()["error"]["detail"], status=r.status_code)
+        return r.json()
+
+    def get(self, path, **query):
+        return self.call("GET", path, query=query)
+
+    def post(self, path, body=None, key=None):
+        return self.call("POST", path, body or {}, key)
+
+
+def _add_via_assistant(api, turn, args):
+    return hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {**args, "on_behalf_of": "turn"})
+
+
+def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one(api):
+    org(api)
+    _, attempt = assistant_turn(api, "ana-test", "Add a rule: everyone logs time.")
+    turn = _Turn(api, attempt["token"])
+    assert "hub_rules_add" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    everyone = _add_via_assistant(api, turn, {"kind": "internal", "text": "Everyone logs time.",
+                                              "who": {"everyone": True}})
+    assert everyone["status"] == "active"
+    group = _add_via_assistant(api, turn, {"kind": "internal", "text": "Support logs refunds.",
+                                           "who": {"groups": ["support"]}})
+    assert group["status"] == "active"
+    with pytest.raises(APIError):
+        hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {"kind": "internal", "text": "Uncited add.",
+                                                       "who": {"groups": ["support"]}})
+
+
+def test_the_assistant_refuses_an_everyone_rule_for_a_plain_member_and_suggests_a_group_rule(api):
+    org(api)
+    _, attempt = assistant_turn(api, "cara-test", "Add a rule: everyone has a badge.")
+    turn = _Turn(api, attempt["token"])
+    with pytest.raises(APIError) as refused:
+        _add_via_assistant(api, turn, {"kind": "internal", "text": "Everyone has a badge.", "who": {"everyone": True}})
+    assert refused.value.status == 403
+    suggested = _add_via_assistant(api, turn, {"kind": "internal", "text": "Support keeps a refund log.",
+                                               "who": {"groups": ["support"]}})
+    assert suggested["status"] == "suggested"
+
+
+def test_botops_mine_is_its_own_rules_and_settings_not_its_requesters(api, botops):
+    org(api)
+    post_rule(api, {"kind": "internal", "text": "BotOps answers in its own channel.", "who": {"bots": ["botops"]}})
+    post_rule(api, {"kind": "internal", "text": "Cara's own rule.", "who": {"people": ["cara"]}})
+    attempt = botops_turn(api, botops, person="cara-test", text="What rules apply to me?")
+    err, result = mcp(api, "hub_rules_list", {"mine": True}, token=attempt["token"])
+    assert not err, result
+    assert [item["text"] for item in result["rules"]] == ["BotOps answers in its own channel."]
+    assert result["settings"] and all("text" in s for s in result["settings"])
+
+
+def test_rules_due_takes_the_next_window_and_list_is_the_same_view(api):
+    org(api)
+    rule = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops answers within a day.", "--who", "ops")
+    soon = (D.local_today("America/Los_Angeles") + timedelta(days=3)).isoformat()
+    due = cli(api, "ana-test", "due", "add", rule["id"], "--first", soon, "--repeats", "once", "--owner", "ops")
+    upcoming = cli(api, "ana-test", "due", "--next", "30d")
+    assert [d["id"] for d in upcoming["due"]] == [due["id"]]
+    assert cli(api, "ana-test", "due", "list", "--next", "30d")["due"] == upcoming["due"]
