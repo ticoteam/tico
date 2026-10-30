@@ -912,6 +912,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             return view(c, request.state.identity, rid)
         return await asyncio.to_thread(write, request, body, uploads, work)
 
+    @app.post("/api/v2/meetings/{rid}/edit")
     @app.post("/api/meetings/{rid}/edit")
     def edit(request: Request, rid: str, body: Edit):
         def work(c):
