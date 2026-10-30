@@ -199,7 +199,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
               "detail_json) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
               (entry["file"], who.actor, getattr(who, "attempt_id", "") or None, task_id, entry["version"], entry["digest"],
                H.now(), H._dump({"verdict": verdict, "question": None, "task": task_id, "note": note or ""})))
-    return _verdict(c, who, row["id"], v["version"], entry["digest"], by=who.actor)
+    return _verdict(c, who, [(row["id"], v["version"], entry["digest"])], by=who.actor)
 
 
 def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="human"):
@@ -234,13 +234,7 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
                     "version": None, "digest": digest, "verdict": None}
     else:
         raise Problem("validation", "Give a file id, or a path and its digest", 422)
-    out = None
-    for row, v in found:
-        result = _verdict(c, who, row["id"], v["version"], v["source_digest"] or v["digest"], by=by)
-        if result["approved"]:
-            return result
-        out = out or result
-    return out
+    return _verdict(c, who, [(row["id"], v["version"], v["source_digest"] or v["digest"]) for row, v in found], by=by)
 
 
 def _counts(actor, by):
@@ -252,16 +246,25 @@ def _counts(actor, by):
     return actor == by
 
 
-def _verdict(c, who, fid, number, digest, by="human"):
-    for r in c.execute("SELECT * FROM bot_file_activity WHERE file_id=? AND action='reviewed' AND version=? "
-                       "ORDER BY id DESC", (fid, number)).fetchall():
+def _verdict(c, who, versions, by="human"):
+    """The newest verdict on any of `versions` (file id, version, digest; the newest version first) from whom `by`
+    names, on a task the caller reads. A later verdict on a newer version with the same bytes wins over an earlier
+    approval. With none counted, the first version is not approved."""
+    digests = {(fid, number): digest for fid, number, digest in versions}
+    marks = ", ".join("(?, ?)" for _ in versions)
+    args = [part for fid, number, _ in versions for part in (fid, number)]
+    rows = c.execute("SELECT * FROM bot_file_activity WHERE action='reviewed' AND (file_id, version) IN (VALUES "
+                     f"{marks}) ORDER BY id DESC", args).fetchall()
+    for r in rows:
         task = H.task(c, r["task_id"]) if r["task_id"] else None
         if not _counts(r["actor"], by) or not task or not privacy.task_readable(c, who, task):
             continue
         detail = H._json(r["detail_json"], {}) or {}
         verdict = detail.get("verdict")
+        digest = digests[(r["file_id"], r["version"])]
         return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created"],
-                "task": r["task_id"], "question": detail.get("question"), "file": fid, "version": number,
-                "digest": digest, "verdict": verdict}
+                "task": r["task_id"], "question": detail.get("question"), "file": r["file_id"],
+                "version": r["version"], "digest": digest, "verdict": verdict}
+    fid, number, digest = versions[0]
     return {"approved": False, "by": None, "at": None, "task": None, "question": None, "file": fid, "version": number,
             "digest": digest, "verdict": None}
