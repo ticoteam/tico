@@ -87,6 +87,7 @@ run `sudo apt-get install -y curl` first. That installs the newest release; to p
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
+To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` it replaces the sample company).
 
 It prints a reusable private owner sign-in link. Keep it private: anyone with the link on this computer can sign in as you.
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.
@@ -196,6 +197,10 @@ before a computer or an AI provider exists. Join this computer under **Settings 
 
 The server answers on this computer only: compose publishes the port on `127.0.0.1`, and a server with a domain and no
 sign-in refuses to start. A public address always needs sign-in.
+
+Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
+[Tico file hosting](files.md#tico-file-hosting) on the Gateway page and they show inline from your `ticofiles.com`
+address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
 
@@ -663,6 +668,10 @@ The runner enrolls, starts, and comes back by itself after a reboot or a server 
 bots' repositories live in a Docker volume, so running the line again never enrolls a second runner. If the server no
 longer knows the runner (a wiped database), start it again with a new code.
 
+**A server that moved** (a new address, such as `http://server:8765` to `https://hub.tico.team`): change `TICO_URL` in the
+runner's `.env` and restart it. The runner keeps its login and follows the new address, as long as it is the same server
+that enrolled it; any other address is left alone and the log says so.
+
 **Reinstalling a runner** (its volumes were wiped, or the server forgot it): make a new code in Settings > Computers > Add
 computer and run the installer again with it. `--code`, `--url` and `--label` given on that line replace their own keys in the
 existing `/opt/tico-runner/.env` (it says which), and every other setting stays; `--url` and `--code` are only required when there
@@ -1012,8 +1021,8 @@ the server; updating the image alone keeps the old environment list.
 
 ## Backups and restore
 
-Backups are on from the first start. Inside the server container, Litestream copies the database within seconds
-and attachments (`/data/blobs`) follow every 30 seconds.
+Backups are on from the first start. Inside the server container, Litestream copies the database about once a minute
+(`TICO_BACKUP_SYNC_INTERVAL`, default `1m`) and attachments (`/data/blobs`) follow every 30 seconds.
 
 | `.env` | Where the copies go | Survives |
 |---|---|---|
@@ -1032,6 +1041,10 @@ TICO_BACKUP_REGION=auto                                            # omit for AW
 LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
 ```
+
+`TICO_BACKUP_SYNC_INTERVAL` sets how often Litestream sends database changes: a whole number with `s`, `m` or `h`
+from `1s` to `1h` (for example `10s`, `5m`, `1h`). The default `1m` is the most that can be lost if the server is
+lost, and a shorter interval means more bucket writes. Any other value stops the container at start with an error.
 
 `python3 -m setup` offers to create that storage: on AWS a versioned, encrypted, private S3 bucket and an IAM user
 limited to it, on Cloudflare an R2 bucket (with an API token that has Workers R2 Storage: Edit), or a bucket you
@@ -1286,3 +1299,4 @@ model CLIs are not in the image; the runner installs them (see [harnesses](harne
 Everything above is the one way to install: Docker is the only supported way to run the server. Driving the wizard from a
 laptop, pasting cloud-init by hand, and putting your own load balancer or Cloudflare Access in front are in
 [install-advanced.md](install-advanced.md).
+Many companies' servers on one shared host (how Tico runs its cloud companies) are in [cell.md](cell.md).

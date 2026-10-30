@@ -214,7 +214,8 @@ Click a row to open its pop-up. Its sections, top to bottom:
    opens Settings → Bots, where a bot's computer is chosen.
 4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
    **Installation and updates**.
-5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Performance diagnostics** and
+5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
+   empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update

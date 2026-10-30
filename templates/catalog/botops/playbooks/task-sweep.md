@@ -37,7 +37,7 @@ Keep the rows whose owner is a human (`human:...`). For each, check whether what
 - **Already true or superseded:** `hub task close <id> --note "Done: <one line: what is now true, or what replaced it>"`.
 - **Cannot tell:** ask once, on the task: `hub task ask <id> "Is this still needed?"`. If a question from you is
   already the last thing on it, leave it; never ask twice.
-- **Still waiting:** leave it, but if its title or note breaks the rules in `Tasks you file for a human` (a long
+- **Still waiting:** leave it, but if its title or note breaks the rules in `human-tasks.md` (a long
   note, IDs, a list of inputs, "message BotOps with ..."), rewrite them: `hub task update <id> --title "..." --note "..."`.
 
 Never close a task because a notice about it arrived. Close it because you checked the condition. Never file a new

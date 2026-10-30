@@ -1,0 +1,14 @@
+{
+  "id": "25-listening-competitor-funding",
+  "kind": "listening",
+  "questions": "listening-item",
+  "level": "low",
+  "state": {
+    "source": "news",
+    "url": "https://news.example/northwind-series-b",
+    "author": "Trade Pulse staff desk",
+    "published_at": "2026-10-27T11:00:00Z",
+    "content": "Northwind, a task-tracking app for small teams, raised a $24m Series B led by Harbor Lane Ventures and plans to double its sales team by spring."
+  },
+  "note": "A competitor's funding: a market yes, not a lead."
+}

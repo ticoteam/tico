@@ -125,7 +125,6 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: []});
       if (p === '/api/v2/task-types') return json({types: []});
       if (p.startsWith('/api/v2/preferences/')) {
         const key = p.split('/').at(-1);

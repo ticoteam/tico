@@ -134,7 +134,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert(visualReqs.every(p => !/f-(funnel|logo|tpage|tlogo)$/.test(p)), `${label}: a page or SVG was read from the app's own visual route: ${visualReqs}`);
 
     // ---- Settings: one read-only line, no switch, for each setup
-    for (const [mode, words] of [['media', 'Visuals: pictures, video and audio only (no separate visual address)'], ['full', 'Visuals: full']]) {
+    for (const [mode, words] of [['media', "Visuals: pages and SVG can't show inline. Add a visual address or Tico file hosting."],
+      ['hosted', 'Visuals: full, from Tico file hosting'], ['full', 'Visuals: full']]) {
       config = {company_name: 'Acme', visuals: mode, visual_origin: mode === 'full' ? 'https://files.acme.example' : ''};
       await page.goto(ORIGIN + '/?setup=' + mode + '#/settings');
       await page.locator('[data-settings-tab="general"]').click();

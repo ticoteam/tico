@@ -1,13 +1,14 @@
-"""The Updates chat (backend/updates_chat.py; spec: CEO Bot v3, sections 10.8 and 10.9 tests 25, 28 and 29): a question
-asked from Updates is a turn of the person's own chat bot, in the same chat as their menu tab, handed the recent updates
-that person may read. The server leaves out every update they may not see, and any that links a task, chat or bot they
-may not open, so the bot can never quote or link one; each comes ranked by the default order and with its link."""
+"""The Updates chat (backend/updates_chat.py; spec: Strategy Bot v3, sections 10.8 and 10.9 tests 25, 28 and 29): a
+question asked from Updates is a turn of the person's own chat bot, in the same chat as their menu tab, handed the
+recent updates that person may read. The server leaves out every update they may not see, and any that links a task,
+chat or bot they may not open, so the bot can never quote or link one; each comes ranked by the default order and with
+its link."""
 
 import json
 
 from backend import updates
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_ceo_bot_chat import ceo
+from backend.tests.test_strategy_bot_chat import strategy_bot
 
 
 def ask(api, text, token, place="updates"):
@@ -32,7 +33,7 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
         bot(api, slug, name)
     hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True})
     with api.app.state.store.transaction() as c:
-        restrict(c, "finance", people=["ana"], bots=["goal-manager"])
+        restrict(c, "finance", people=["ana"], bots=["coo"])
         updates.post(c, "sales", "- Closed the Acme renewal", day="2026-09-29")
         updates.post(c, "finance", "- Runway is nine months", day="2026-09-29")
         updates.post(c, "fixer", f"- Sorted out [the agency](#/task/{hidden['id']})", day="2026-09-29")
@@ -52,11 +53,10 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     text = json.dumps(attempt)
     for secret in ("Runway", "agency", hidden["id"], "Finance"):
         assert secret not in text, secret + " reached the bot"
-    # The owner reads Finance's too, in her CEO Bot chat; not the ones that link a private task her CEO Bot is no party to.
-    ceo(api)
-    assign(api, r, "goal-manager")
-    ready(api, r, ["goal-manager"])
-    _, owner = claim(api, r, "goal-manager", "What's the top update today?", "ana-test")
+    # The owner reads Finance's too, in her own Assistant chat; not the ones that link a private task her Assistant is
+    # no party to.
+    strategy_bot(api)
+    _, owner = claim(api, r, "coo", "What's the top update today?", "ana-test")
     assert sorted(u["text"] for u in owner["updates"]["updates"]) == ["- Closed the Acme renewal", "- Runway is nine months"]
 
 

@@ -1,0 +1,61 @@
+{
+ "answer": {
+  "error": {
+   "code": "validation",
+   "detail": "body.from_the_future: Extra inputs are not permitted",
+   "retryable": false
+  }
+ },
+ "endpoint": "heartbeat",
+ "request": {
+  "agent_instructions": {},
+  "capabilities": [
+   "task_lanes_v2",
+   "session_roots_v1",
+   "task_goals_v1",
+   "capacity_continue_v1",
+   "source_continue_v1",
+   "model_sign_out_v1",
+   "model_keys_v1",
+   "model_switch_type_v1",
+   "model_remove_v1",
+   "model_switch_to_key_v1",
+   "turns_at_once_v1"
+  ],
+  "capacity": 4,
+  "from_the_future": true,
+  "kind": "docker",
+  "mail_agent_instructions": {},
+  "platform": "Linux-6.8-x86_64",
+  "profiles": [],
+  "readiness": {
+   "bots": {
+    "ops": {
+     "configuration_valid": true,
+     "published": true,
+     "ready": true,
+     "repository_present": true,
+     "runtime": "fake"
+    }
+   },
+   "runtimes": {
+    "fake": {
+     "authenticated": "ready",
+     "installed": true,
+     "version": "1.0.0"
+    }
+   },
+   "schema_version": 1,
+   "worktrees": true
+  },
+  "release": "0.5.0",
+  "update": {
+   "error": "",
+   "state": "idle",
+   "target": ""
+  },
+  "version": "0.5.0",
+  "worktrees": []
+ },
+ "status": 422
+}

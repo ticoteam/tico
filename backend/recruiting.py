@@ -3,21 +3,21 @@
 A Recruiting seat (backend/lifecycle.py) is filled in three steps, the same from the org chart and from Team > Add bot,
 which creates the seat first:
 
-1. **Open it.** The owner opening a seat asks the CEO Bot to draft its job description (`open_seat`): one task for the
-   CEO Bot, which answers with `hub seat draft` (`draft`). Until then, and for everyone else, the seat shows the text it
-   has: the chart model's, or what a person wrote. The draft never replaces a person's words: once someone writes the
-   description themselves, nothing is drafted over it. Anyone who may change the seat (lifecycle `_may_place`) edits it.
+1. **Open it.** The owner opening a seat asks the Strategy Bot to draft its job description (`open_seat`): one task for
+     the Strategy Bot, which answers with `hub seat draft` (`draft`). Until then, and for everyone else, the seat shows
+     the text it has: the chart model's, or what a person wrote. The draft never replaces a person's words: once someone
+     writes the description themselves, nothing is drafted over it. Anyone who may change the seat (lifecycle
+     `_may_place`) edits it.
 2. **Recruit.** `candidates` answers at once, on this server, from the template catalog: up to three Tico templates,
-   each with a one-line reason and a suggested model, exactly one of them recommended, and the models one may choose
-   instead. No trial task and no outside service (spec section 6 keeps those for later).
+     each with a one-line reason and a suggested model, exactly one of them recommended, and the models one may choose
+     instead. No trial task and no outside service (spec section 6 keeps those for later).
 3. **Pick.** `hire` fills the seat: the bot is created in Onboarding, in the seat's place on the chart with its
-   reporting line, under the same rules as any bot the person adds (backend/settings_admin.py `create_bot`). Its
-   repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
-   BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot.
-"""
+     reporting line, under the same rules as any bot the person adds (backend/settings_admin.py `create_bot`). Its
+     repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
+     BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 from dataclasses import replace
 
-from . import ceo_bot
+from . import strategy_bot
 from . import hubdb as H
 from . import lifecycle
 from . import models as M
@@ -25,7 +25,7 @@ from . import releases
 from . import recruit_rank as R
 from .store import Problem
 
-CEO = "bot:" + ceo_bot.SLUG
+STRATEGY_BOT = "bot:" + strategy_bot.SLUG
 CANDIDATES = 3
 DRAFT_MAX = lifecycle.DESCRIPTION_MAX
 CHART = "chart"                         # `description_by` for a chart model's text: drafted over like no text at all
@@ -43,8 +43,8 @@ def _live_task(c, task_id):
 
 
 def draft_state(c, row):
-    """`drafted` once the CEO Bot's draft is the description, `drafting` while its task is open, else `none`."""
-    if row["drafted_at"] and row["description_by"] == CEO:
+    """`drafted` once the Strategy Bot's draft is the description, `drafting` while its task is open, else `none`."""
+    if row["drafted_at"] and row["description_by"] == STRATEGY_BOT:
         return "drafted"
     return "drafting" if _live_task(c, row["draft_task"]) else "none"
 
@@ -60,8 +60,8 @@ def _may_edit(auth, c, who, row):
 def view(auth, c, who, row):
     seat = lifecycle._seat(row)
     by = str(row["description_by"] or "")
-    seat.update(draft={"state": draft_state(c, row), "by": ceo_bot.name(c), "at": row["drafted_at"] or ""},
-                description_by="ceo_bot" if by == CEO else "chart" if by in ("", CHART) else "person",
+    seat.update(draft={"state": draft_state(c, row), "by": strategy_bot.name(c), "at": row["drafted_at"] or ""},
+                description_by="strategy_bot" if by == STRATEGY_BOT else "chart" if by in ("", CHART) else "person",
                 can_edit=_may_edit(auth, c, who, row))
     return seat
 
@@ -70,9 +70,9 @@ def show(auth, c, who, seat_id):
     return view(auth, c, who, lifecycle.seat(c, seat_id))
 
 
-# ------------------------------------------------------------------ 1. the CEO Bot's draft
-def _ceo_ready(c):
-    bot = H.bot(c, ceo_bot.SLUG)
+# ------------------------------------------------------------------ 1. the Strategy Bot's draft
+def _strategy_ready(c):
+    bot = H.bot(c, strategy_bot.SLUG)
     return bool(bot) and bot.get("state") not in ("archived", "paused")
 
 
@@ -99,13 +99,14 @@ def _draft_body(c, row):
 
 
 def open_seat(auth, c, who, seat_id):
-    """The seat as its page shows it. The owner opening it, in person, asks the CEO Bot for a draft when no person has
-    written the description and none is drafted or being drafted; nobody else's open asks the CEO Bot anything (it
-    works for the owner alone)."""
+    """The seat as its page shows it. The owner opening it, in person, asks the Strategy Bot for a draft when no person
+    has written the description and none is drafted or being drafted; nobody else's open asks the Strategy Bot anything
+    (it works for the owner alone)."""
     row = lifecycle.seat(c, seat_id)
     if (who.role == "owner" and not who.via and not _person_wrote(row) and draft_state(c, row) == "none"
-            and _ceo_ready(c)):
-        task = H.task_create(c, CEO, "Draft the job description: " + row["title"][:200], _draft_body(c, row), CEO,
+            and _strategy_ready(c)):
+        task = H.task_create(c, STRATEGY_BOT, "Draft the job description: " + row["title"][:200],
+                             _draft_body(c, row), STRATEGY_BOT,
                              lane="company", lint=False, deduplicate=False)
         c.execute("UPDATE seats SET draft_task=? WHERE id=?", (task["id"], seat_id))
         H.event(c, who.actor, "seat.draft_requested", seat_id, {"task": task["id"]})
@@ -114,10 +115,10 @@ def open_seat(auth, c, who, seat_id):
 
 
 def draft(auth, c, who, seat_id, text):
-    """The CEO Bot's draft (`hub seat draft`): the seat's job description, unless a person wrote it since the owner
-    opened the seat. Only the CEO Bot, on its own credential, while its draft task is open."""
-    if who.role != "bot" or who.actor != CEO or who.via:
-        raise Problem("forbidden", f"Only the {ceo_bot.name(c)} drafts a seat's job description", 403)
+    """The Strategy Bot's draft (`hub seat draft`): the seat's job description, unless a person wrote it since the owner
+    opened the seat. Only the Strategy Bot, on its own credential, while its draft task is open."""
+    if who.role != "bot" or who.actor != STRATEGY_BOT or who.via:
+        raise Problem("forbidden", f"Only the {strategy_bot.name(c)} drafts a seat's job description", 403)
     row = lifecycle.seat(c, seat_id)
     if _person_wrote(row):
         raise Problem("draft", "Someone wrote this seat's job description themselves, so theirs stays; nothing to do",
@@ -131,18 +132,19 @@ def draft(auth, c, who, seat_id, text):
         raise Problem("draft", "Write the job description: a few sentences on what the role owns", 422)
     now = H.now()
     c.execute("UPDATE seats SET description=?,description_by=?,drafted_at=?,updated=?,updated_by=? WHERE id=?",
-              (text, CEO, now, now, CEO, seat_id))
-    H.task_update(c, CEO, task["id"], status="done", note="Drafted the job description for " + row["title"][:200])
-    H.event(c, CEO, "seat.drafted", seat_id, {"task": task["id"]})
+              (text, STRATEGY_BOT, now, now, STRATEGY_BOT, seat_id))
+    H.task_update(c, STRATEGY_BOT, task["id"], status="done",
+                  note="Drafted the job description for " + row["title"][:200])
+    H.event(c, STRATEGY_BOT, "seat.drafted", seat_id, {"task": task["id"]})
     return view(auth, c, who, lifecycle.seat(c, seat_id))
 
 
 def end_draft(c, row, why):
-    """Close the CEO Bot's open draft task when there is nothing left to draft: the seat was filled or closed, or a
+    """Close the Strategy Bot's open draft task when there is nothing left to draft: the seat was filled or closed, or a
     person wrote the description."""
     task = _live_task(c, row["draft_task"])
     if task:
-        H.task_update(c, CEO, task["id"], status="declined", note=why[:500])
+        H.task_update(c, STRATEGY_BOT, task["id"], status="declined", note=why[:500])
 
 
 # ------------------------------------------------------------------ 2. candidates

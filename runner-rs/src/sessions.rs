@@ -3,6 +3,11 @@
 //! `tico-session/<task>` and takes the checkout only to refresh it. A turn ends by committing what it left in
 //! memory/ and knowledge/, stamping its commits `Tico-Run:` and rebasing them onto the upstream, so the push lands
 //! beside what the other lanes pushed. A push the remote refused as behind is caught up and pushed again.
+//!
+//! A private meeting's lane (`private:<conversation>`, clients/sessions.py PRIVATE_LANE) has a worktree of its own
+//! too, `sessions/bot-<slug>/private-<conversation>` on a branch with no upstream, so the bot keeps what it changed for
+//! the rest of that meeting; it is never committed, pushed or reported, and goes, unsaved work and all, once the
+//! server says the meeting ended (sweep_sessions). Its turn never runs in the bot's checkout.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,23 +20,30 @@ use serde_json::{json, Value};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use crate::env::Env;
+use crate::prompt::Part;
 use crate::gitrun::{self, Fault, Out};
 use crate::repositories::Repositories;
 use crate::runner::Runner;
 use crate::util::{log, text_of, truthy};
 
 pub const BRANCH: &str = "tico-session/";
+pub const PRIVATE_LANE: &str = "private:";
+pub const PRIVATE: &str = "private-";
 pub const CLOSED: &[&str] = &["done", "closed", "declined"];
 pub const SESSION_SWEEP_S: u64 = 600;
 const RULES_CAP: usize = 16 * 1024;
 const MEMORY_FOLDERS: &[&str] = &["memory", "knowledge"];
 /// Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
-/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S).
+/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S). A private meeting's
+/// copy needs no upstream (ensure), and its turn never falls back to the checkout.
 pub const MISSING: &str = "the bot's checkout is missing";
 pub const NO_UPSTREAM: &str = "the bot's checkout has no upstream to share between tasks";
 /// How long a task turn that is not a person's waits for its worktree, retrying, before it runs in the bot's
 /// checkout: in the checkout it would hold every chat with the bot behind it for its whole turn.
 const WORKTREE_WAIT_S: u64 = 120;
+/// How a private meeting's turn with no copy of its own fails: the server ends that turn and says so in the meeting
+/// (backend/live_meetings.py `meeting.bot_turn_failed`) rather than resuming it, since every retry would fail alike.
+pub const PRIVATE_COPY_FAILED: &str = "A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, and none could be made here";
 const WORKTREE_RETRY_S: u64 = 10;
 
 #[cfg(test)]
@@ -48,6 +60,22 @@ fn slug_ok(name: &str) -> bool {
 pub fn task_of(lane: &str) -> String {
     let task = lane.strip_prefix("task:").unwrap_or("");
     if slug_ok(task) && !task.contains("..") { task.to_string() } else { String::new() }
+}
+
+/// A private meeting's checkout folder and branch name (`private-<conversation>`) for its `private:<conversation>` lane,
+/// or "" for any other lane or an id unfit for a path.
+pub fn private_of(lane: &str) -> String {
+    let id = lane.strip_prefix(PRIVATE_LANE).unwrap_or("");
+    let name = format!("{PRIVATE}{id}");
+    if !id.is_empty() && slug_ok(&name) && !name.contains("..") { name } else { String::new() }
+}
+
+/// The lane a session folder is the checkout of: a private meeting's, else a task's.
+fn lane_of_folder(name: &str) -> String {
+    match name.strip_prefix(PRIVATE) {
+        Some(id) => format!("{PRIVATE_LANE}{id}"),
+        None => format!("task:{name}"),
+    }
 }
 
 /// The lane a turn runs in: the server's word when it sent one, else its session key when task-keyed.
@@ -155,37 +183,51 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
     lines
 }
 
-/// prompt.rs hook after the opening lines: the shared-checkout lines first, the task checkout's line last.
-pub fn prompt_head(attempt: &Value, lines: &mut Vec<String>) {
+/// prompt.rs hook after the opening lines: the shared-checkout lines first, the task checkout's line last. A sync
+/// problem is this turn's own; the rest stands for the thread.
+pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
     let config = &attempt["config"];
     let problem = text_of(&attempt["branch_sync_problem"]);
     if is_shared(config) {
-        let mut head = shared_lines(&text_of(&attempt["bot"]), config, &problem);
+        let shared = shared_lines(&text_of(&attempt["bot"]), config, &problem);
+        let last = shared.len() - 1;
+        let mut head: Vec<(Part, String)> = shared
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| (if i == last && !problem.is_empty() { Part::Turn } else { Part::Standing }, l))
+            .collect();
         head.append(lines);
         *lines = head;
     } else if truthy(attempt.get("repo_sync_problem")) {
-        lines.insert(0, text_of(&attempt["repo_sync_problem"]));
+        lines.insert(0, (Part::Turn, text_of(&attempt["repo_sync_problem"])));
     }
     let session = &attempt["_session"];
-    if session.is_object() {
+    if session.is_object() && truthy(session.get("private")) {
+        lines.push((Part::Standing, format!(
+            "This private meeting has its own copy of your repository, `{}`, kept for this meeting alone: what you change there stays in it for the rest of the meeting, is never committed for you, pushed or seen by your other work, and is deleted when the meeting ends.",
+            text_of(&session["path"])
+        )));
+    } else if session.is_object() {
         let mut line = format!(
             "This task has its own checkout of your repository, `{}` on branch `{}`; your other tasks run at the same time in theirs. Commit here, then `git pull --rebase` and `git push`, which sends to `{}`. What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends.",
             text_of(&session["path"]),
             text_of(&session["branch"]),
             text_of(&session["upstream"])
         );
+        let mut part = Part::Standing;
         if !problem.is_empty() && !is_shared(config) {
             line.push_str(&format!(" The checkout could not sync before this turn ({problem}): commit or keep what is there, run `git pull --rebase`, and resolve conflicts first."));
+            part = Part::Turn;
         }
-        lines.push(line);
+        lines.push((part, line));
     }
 }
 
 /// prompt.rs hook below the bot's own lines: the repos' rules, unless a resumed thread already has them.
-pub fn prompt_rules(attempt: &Value, resumed: bool, lines: &mut Vec<String>) {
+pub fn prompt_rules(attempt: &Value, resumed: bool, lines: &mut Vec<(Part, String)>) {
     let rules = text_of(&attempt["_repo_rules"]);
     if !rules.is_empty() && (!resumed || truthy(attempt.get("_repo_rules_changed"))) {
-        lines.push(rules);
+        lines.push((Part::Turn, rules));
     }
 }
 
@@ -297,6 +339,8 @@ pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
 /// Make or reuse the task's worktree: (upstream ref, problem). A problem means the turn runs in the main checkout.
 pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String, String) {
     let env = crate::safegit::environment(turn);
+    // A private meeting's branch tracks nothing: a bare `git push` there has nowhere to go.
+    let private = task.starts_with(PRIVATE);
     if !main.join(".git").symlink_metadata().is_ok_and(|m| m.is_dir()) {
         return (String::new(), MISSING.into());
     }
@@ -314,7 +358,10 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         // Only this repository's real .git directory is adopted, never a mirror or an external gitdir.
         crate::isolation::adopt(&[main.join(".git")]);
         let tracked = upstream(main, &env).await?;
-        if tracked.is_empty() {
+        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
+        // own HEAD (a repository made on this computer with no remote yet).
+        let base = if tracked.is_empty() && private { "HEAD".to_string() } else { tracked.clone() };
+        if base.is_empty() {
             return Ok((String::new(), NO_UPSTREAM.into()));
         }
         if path.join(".git").exists() {
@@ -343,15 +390,23 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         let branch = format!("{BRANCH}{task}");
         let exists = g(main, &env, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")], 15).await?.ok();
         let p = path.display().to_string();
-        let args: Vec<&str> = if exists { vec!["worktree", "add", "--quiet", &p, &branch] } else { vec!["worktree", "add", "--quiet", "-b", &branch, &p, &tracked] };
+        let args: Vec<&str> = if exists {
+            vec!["worktree", "add", "--quiet", &p, &branch]
+        } else if private {
+            vec!["worktree", "add", "--quiet", "--no-track", "-b", &branch, &p, &base]
+        } else {
+            vec!["worktree", "add", "--quiet", "-b", &branch, &p, &tracked]
+        };
         let added = g(main, &env, &args, 60).await?;
         if !added.ok() {
             let last = added.stderr.trim().lines().last().unwrap_or("git failed").chars().take(160).collect::<String>();
             return Ok((String::new(), format!("could not add the task's worktree: {last}")));
         }
-        g(path, &env, &["branch", "--quiet", &format!("--set-upstream-to={tracked}")], 15).await?;
+        if !private {
+            g(path, &env, &["branch", "--quiet", &format!("--set-upstream-to={tracked}")], 15).await?;
+        }
         // A branch named unlike its upstream is refused by a bare `git push` under the default push.default.
-        if !g(main, &env, &["config", "--get", "push.default"], 15).await?.ok() {
+        if !private && !g(main, &env, &["config", "--get", "push.default"], 15).await?.ok() {
             g(main, &env, &["config", "push.default", "upstream"], 15).await?;
         }
         // Runner git runs as the supervisor with umask 022, so `worktree add` leaves the task's admin folder
@@ -445,6 +500,24 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
             return Ok(false);
         }
         g(main, &env, &["branch", "-D", &format!("{BRANCH}{task}")], 15).await?;
+        Ok(true)
+    }
+    .await;
+    gone.unwrap_or(false)
+}
+
+/// Take an ended private meeting's worktree and branch away, whatever is in it: nothing there is ever kept. True when gone.
+pub async fn remove_private(main: &Path, path: &Path, name: &str, turn: &Env) -> bool {
+    let env = crate::safegit::environment(turn);
+    if !name.starts_with(PRIVATE) {
+        return false;
+    }
+    let gone: Result<bool, Fault> = async {
+        if path.exists() && !g(main, &env, &["worktree", "remove", "--force", "--force", &path.display().to_string()], 60).await?.ok() {
+            return Ok(false);
+        }
+        g(main, &env, &["worktree", "prune"], 15).await?;
+        g(main, &env, &["branch", "-D", &format!("{BRANCH}{name}")], 15).await?;
         Ok(true)
     }
     .await;
@@ -861,6 +934,8 @@ pub struct Place {
     pub execution_path: PathBuf,
     pub add_dirs: Vec<String>,
     pub rules_digest: String,
+    /// A private meeting's turn (PRIVATE_LANE): it runs only in that meeting's own worktree, which nothing leaves.
+    pub private: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
     _lane: OwnedMutexGuard<()>,
@@ -879,8 +954,12 @@ impl Runner {
         let bot = text_of(&attempt["bot"]);
         let lane = turn_lane(attempt);
         let app = crate::appdriver::delivery(&attempt["config"]).is_some();
+        let private = lane.starts_with(PRIVATE_LANE);
         // A bot delivered through an app has no checkout: every turn runs in its empty folder, with no worktree.
-        let task = if slug_ok(&bot) && !app { task_of(&lane) } else { String::new() };
+        let task = if !slug_ok(&bot) || app { String::new() } else if private { private_of(&lane) } else { task_of(&lane) };
+        if private && !app && task.is_empty() {
+            return Err(format!("this private meeting's lane ({lane}) names no checkout this computer can keep for it"));
+        }
         let person = crate::drive::from_person(&attempt["message"]);
         let lane_guard = hold(self.lanes.lane(&bot, &lane), lost).await?;
         // A task turn skips its refresh of the checkout while a person waits for it.
@@ -895,7 +974,7 @@ impl Runner {
         if app {
             std::fs::create_dir_all(&main_path).map_err(|e| format!("cannot create {}: {e}", main_path.display()))?;
         }
-        Ok(Place { bot, task, execution_path: main_path.clone(), main_path, session_path: None, add_dirs: vec![], rules_digest: String::new(), person, _lane: lane_guard, checkout })
+        Ok(Place { bot, task, execution_path: main_path.clone(), main_path, session_path: None, add_dirs: vec![], rules_digest: String::new(), private, person, _lane: lane_guard, checkout })
     }
 
     /// Bring the checkout up to date before the turn: a shared one is rebased (its problem goes to the prompt),
@@ -919,7 +998,7 @@ impl Runner {
         ensure_reads(&self.config.projects_dir(), path).await;
         // A built-in bot's product files follow the release (crate::product_files); a task lane pushes them at once.
         crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
-        if !place.task.is_empty() && crate::product_files::unpushed(&place.bot) {
+        if !place.task.is_empty() && !place.private && crate::product_files::unpushed(&place.bot) {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             if self.push_checkout(path, env).await {
                 crate::product_files::pushed(&place.bot);
@@ -934,6 +1013,10 @@ impl Runner {
         if !place.task.is_empty() {
             let session = path_for(&self.config.projects_dir(), &place.bot, &place.task);
             let (mut tracked, mut problem) = self.task_worktree(place, &session, attempt, env).await?;
+            if place.private && !problem.is_empty() {
+                // Never in the bot's checkout: what it wrote there would reach its other work.
+                return Err(format!("{PRIVATE_COPY_FAILED} ({problem})"));
+            }
             if !problem.is_empty() && !place.person && problem != MISSING && problem != NO_UPSTREAM {
                 // In the checkout this turn would hold the bot's chats behind it for the whole turn, so it waits for
                 // its worktree first, holding nothing a chat needs.
@@ -973,7 +1056,7 @@ impl Runner {
             } else {
                 place.checkout = None;
                 ensure_reads(&self.config.projects_dir(), &session).await;
-                attempt["_session"] = json!({"path": session.display().to_string(), "branch": format!("{BRANCH}{}", place.task), "upstream": tracked});
+                attempt["_session"] = json!({"path": session.display().to_string(), "branch": format!("{BRANCH}{}", place.task), "upstream": tracked, "private": place.private});
                 place.execution_path = session.clone();
                 place.session_path = Some(session);
                 // Claude finds a session to resume by its working directory: the worktree keeps threads of its own.
@@ -991,7 +1074,7 @@ impl Runner {
     /// Add or reuse the task's worktree under the checkout's git lock and rebase it onto its upstream. Err only when
     /// a drain hands the claim back while it waits for the lock: that is no worktree problem to wait out.
     async fn task_worktree(&self, place: &Place, session: &Path, attempt: &mut Value, env: &Env) -> Result<(String, String), String> {
-        if crate::product_files::unpushed(&place.bot) {
+        if !place.private && crate::product_files::unpushed(&place.bot) {
             // The worktree would sync from an upstream without the refreshed product files.
             return Ok((String::new(), "its refreshed product files are not pushed yet".into()));
         }
@@ -999,7 +1082,8 @@ impl Runner {
             Ok(self.lanes.git_lock(&place.main_path).lock_owned().await)
         }).await.map_err(|e| e.text)?;
         let (tracked, problem) = ensure(&place.main_path, session, &place.task, env).await;
-        if problem.is_empty() {
+        // A private meeting's copy keeps what the meeting changed: it is not moved onto the upstream mid-meeting.
+        if problem.is_empty() && !place.private {
             attempt["branch_sync_problem"] = json!(sync_shared(session, env).await);
         }
         Ok((tracked, problem))
@@ -1059,6 +1143,9 @@ impl Runner {
     /// After a completed turn: unless a commit holds a secret, a task lane's commits are finished and pushed under
     /// the checkout's git lock, any other lane pushes its checkout; a closed task's clean worktree then goes.
     pub async fn finish_place(&self, place: &Place, attempt: &Value, env: &Env, skipped: &[String], secret: bool) -> bool {
+        if place.private {
+            return false; // a private meeting's copy is never committed or pushed
+        }
         let aid = text_of(&attempt["id"]);
         let Some(session) = &place.session_path else {
             let pushed = !secret && self.push_checkout(&place.main_path, env).await;
@@ -1116,7 +1203,8 @@ impl Runner {
             entries.sort();
             for path in entries {
                 let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if path.is_dir() && !path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) && task_of(&format!("task:{name}")) == name {
+                if path.is_dir() && !path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+                    && (task_of(&format!("task:{name}")) == name || private_of(&lane_of_folder(&name)) == name) {
                     found.push(((bot.clone(), name), path));
                 }
             }
@@ -1140,16 +1228,21 @@ impl Runner {
         for row in reply["sessions"].as_array().into_iter().flatten() {
             let (bot, task) = (text_of(&row["bot"]), text_of(&row["task"]));
             let Some((_, path)) = found.iter().find(|((b, t), _)| *b == bot && *t == task) else { continue };
-            if !CLOSED.contains(&text_of(&row["status"]).as_str()) || running.contains(&(bot.clone(), format!("task:{task}"))) {
+            let lane = lane_of_folder(&task);
+            if !CLOSED.contains(&text_of(&row["status"]).as_str()) || running.contains(&(bot.clone(), lane.clone())) {
                 continue;
             }
-            let Ok(_lane) = self.lanes.lane(&bot, &format!("task:{task}")).try_lock_owned() else { continue }; // a turn is in it
+            let Ok(_lane) = self.lanes.lane(&bot, &lane).try_lock_owned() else { continue }; // a turn is in it
             if crate::files_publish::pending_under(&self.state, path) {
                 continue; // a file still waiting to upload is read from the worktree, so the worktree waits for it
             }
             let main = local_path(&self.config, &bot, &configs[&bot]);
             let _git = self.lanes.git_lock(&main).lock_owned().await;
-            if remove(&main, path, &task, &crate::env::process_environment()).await {
+            if task.starts_with(PRIVATE) {
+                if remove_private(&main, path, &task, &crate::env::process_environment()).await {
+                    log(&format!("Tico runner: {bot}: deleted {task}, the checkout of a private meeting that ended"));
+                }
+            } else if remove(&main, path, &task, &crate::env::process_environment()).await {
                 log(&format!("Tico runner: {bot}: task {task} is finished; removed its worktree"));
             }
         }
@@ -1194,6 +1287,10 @@ mod tests {
         assert_eq!(task_of("task:abc-1"), "abc-1");
         assert_eq!(task_of("task:../x"), "");
         assert_eq!(task_of("main"), "");
+        assert_eq!(private_of("private:c-1"), "private-c-1");
+        assert_eq!((private_of("private:../x"), private_of("private:"), private_of("task:t1")), (String::new(), String::new(), String::new()));
+        assert_eq!((lane_of_folder("private-c-1"), lane_of_folder("t1")), ("private:c-1".to_string(), "task:t1".to_string()));
+        assert_eq!(turn_lane(&json!({"bot": "ops", "lane": "private:c-1", "config": {}})), "private:c-1");
         let a = json!({"bot": "ops", "config": {}, "task": {"id": "t1"}, "conversation": {"id": "c"}});
         assert_eq!(turn_lane(&a), "task:t1");
         assert_eq!(turn_lane(&json!({"bot": "ops", "config": {}, "conversation": {"id": "c"}})), "main");

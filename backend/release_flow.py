@@ -341,10 +341,6 @@ def published(c, target, url="", release_repo=""):
             H._wake(c, ticket, ticket["owner"], f"Shipped in {tag}.", quiet_bots=True, quiet=True, trigger=EVENT,
                     refs={"wake": EVENT, "release": tag, "role": "note"}, source=target)
     docs = _docs_task(c, writer, tag, tickets, url) if writer and tickets else None
-    from . import routines
-    listing = _listing(c, tickets, f"at {tag}")
-    routines.emit(c, EVENT, target, {"release": tag, "url": url, "tickets": len(tickets)},
-                  title=tag, content=listing)
     H.event(c, H.KEEPER, "release.published", target, {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs})
     H.hook(c, "release.published", target, lambda: {"release": tag, "url": url, "tickets": [t["id"] for t in tickets]},
            H.KEEPER, revision=0)

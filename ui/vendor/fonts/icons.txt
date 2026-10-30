@@ -15,6 +15,7 @@ assignment_turned_in
 assistant
 auto_awesome
 balance
+bolt
 bug_report
 calendar_month
 campaign
@@ -27,6 +28,7 @@ check
 check_circle
 chevron_left
 chevron_right
+close
 co_present
 code
 code_blocks
@@ -80,6 +82,7 @@ lightbulb
 link
 local_library
 local_shipping
+lock
 logout
 loyalty
 mail
@@ -104,8 +107,8 @@ percent
 person
 person_add
 person_search
+play_arrow
 podium
-power
 price_check
 psychology
 query_stats

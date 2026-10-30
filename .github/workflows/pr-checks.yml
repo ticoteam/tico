@@ -135,6 +135,71 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  static:
+    # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
+    # the UI's generated API types and the runner wire contract. Seconds each; tools are pinned in the scripts.
+    name: static checks
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
+      - name: Python lint
+        env:
+          LINT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/lint.sh
+      - name: Boundary types
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
+      - name: UI types
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh
+      - name: Runner wire contract
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+
+  rust-lint:
+    # rustfmt and clippy -D warnings (scripts/rust_checks.sh), when a crate it checks changed. Always reported, so it
+    # can be required: a PR without Rust changes passes it in seconds.
+    name: rust lint
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=4cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Rust changed
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" != pull_request ] || git diff --name-only "$BASE"...HEAD | grep -qE '^(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|^scripts/rust(_checks\.sh|-fmt-pending\.txt)$'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            runner-rs -> target
+            relay-rs -> target
+            tools/release-command -> target
+            tools/trust-list-check -> target
+          shared-key: pr-rust-lint
+      - if: steps.changed.outputs.run == 'true'
+        run: bash scripts/rust_checks.sh
+
   caddy-linux:
     needs: plan
     if: needs.plan.outputs.caddy == 'true'
@@ -198,7 +263,7 @@ jobs:
     # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
     # in the same concurrency group.
     if: ${{ !cancelled() }}
-    needs: [plan, tests, caddy-linux]
+    needs: [plan, tests, caddy-linux, static, rust-lint]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 3
     steps:
@@ -232,7 +297,11 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           TESTS: ${{ needs.tests.result }}
           CADDY: ${{ needs.caddy-linux.result }}
+          STATIC: ${{ needs.static.result }}
+          RUST_LINT: ${{ needs.rust-lint.result }}
         run: |
           test "$PLAN" = success
           test "$TESTS" = success
+          test "$STATIC" = success
+          test "$RUST_LINT" = success
           case "$CADDY" in success|skipped) ;; *) exit 1 ;; esac

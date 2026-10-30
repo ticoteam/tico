@@ -3,7 +3,7 @@
 A company starts with four built-in bots: the assistant, which is each person's private Assistant
 chat (backend/assistant.py) and works in the background (Slack routing, meetings' Auto delivery),
 BotOps, which builds every other bot, the Librarian, which answers questions from the company's
-docs (backend/librarian.py), and the CEO Bot, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
+docs (backend/librarian.py), and the Strategy Bot, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
 created at once, `needs_onboarding`, and its repository is materialized by the computer; every other template is
@@ -25,7 +25,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, hosted_updates, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import ceo_bot, lifecycle, rooms, routines, statuses
+from . import strategy_bot, lifecycle, rooms, routines, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -90,9 +90,10 @@ def render(card, names, bot_name=""):
     """One card as a person reads it. A card is written for whichever company adopts it, so
     every word it shows carries the placeholders, not only its AGENT.md."""
     name = fill(bot_name or card["name"], names)
+    instructions = fill(card["instructions"], names, name)
     return {**card, "name": name,
             "summary": fill(card["summary"], names, name),
-            "instructions": fill(card["instructions"], names, name),
+            "instructions": instructions,
             "onboarding": [{key: fill(text, names, name) for key, text in item.items()}
                            for item in card.get("onboarding", [])],
             "first_routine": {key: fill(value, names, name) if isinstance(value, str) else value
@@ -333,6 +334,11 @@ def config_view(c, settings, who=None):
         value["readiness_turn_user"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
+        # Pages and SVG from Tico file hosting: the desktop app follows a frame to this origin, only on its signed
+        # visual paths (app/src/visual_origin.rs), when the install has no visual address of its own.
+        from . import tico_storage, visuals
+        value["visuals"] = visuals.shown(settings, c)
+        value["visual_files"] = "" if settings.visual_origin else tico_storage.visual_address(c)[0]
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
     value["ui_build"] = ui_bundle.build_id(settings.ui_dir)      # an open page compares it with its own (ui/app/notices.js)
@@ -580,11 +586,11 @@ class Onboarding:
 
     def complete(self, c, who, models=None, seats=True):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
-        Librarian, the CEO Bot and the Assistant) are created as bots, Active from day one, and every other role is laid
-        out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until someone
-        recruits it. `seats` False creates every pick as a bot, as the sample company does (backend/sample_company.py).
-        `models` names the model a new bot runs on, by slug, in place of its card's (the sample company spreads its
-        bots over two subscriptions); a model whose provider is off is ignored."""
+        Librarian, the Strategy Bot and the Assistant) are created as bots, Active from day one, and every other role is
+        laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
+        someone recruits it. `seats` False creates every pick as a bot, as the sample company does
+        (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
+        sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
         self._owner(who)
         record = load(c)
         names = display_names(self.settings, record)
@@ -718,7 +724,7 @@ class Onboarding:
                        "description": job_description(cards.get(choice["template"]) or {}, names, choice.get("reason", ""),
                                                       choice.get("instructions", ""), choice["display_name"]),
                        # The owner reviewed the setup description and edited duties/limits before it became a seat.
-                       # Keep those words instead of asking the CEO Bot to replace them on the first open.
+                       # Keep those words instead of asking the Strategy Bot to replace them on the first open.
                        "description_by": who.actor,
                        "reports_to": line(choice)}
                 for slug, choice in todo.items()}
@@ -874,8 +880,8 @@ class Onboarding:
         return self._turn_on(c, who, SLUG, SLUG, NAME, "health_monitor.turned_on")
 
     def turn_on_goal_manager(self, c, who):
-        """The same for the built-in CEO Bot (docs/ceo-bot.md)."""
-        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
+        """The same for the built-in Strategy Bot (docs/strategy-bot.md)."""
+        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def ensure_librarian(self, c):
         """A company set up before the Librarian was built in gets it without anyone clicking, once
@@ -886,8 +892,8 @@ class Onboarding:
         return self._ensure_builtin(c, LIBRARIAN, "Librarian", "librarian.turned_on")
 
     def ensure_goal_manager(self, c):
-        """The same for the CEO Bot: a company from before it was built in gets it once it can run it."""
-        return self._ensure_builtin(c, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
+        """The same for the Strategy Bot: a company from before it was built in gets it once it can run it."""
+        return self._ensure_builtin(c, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def ensure_task_manager(self, c):
         """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
@@ -1020,16 +1026,17 @@ class Onboarding:
         if declared.get("routine_armed") or not declared.get("template"):
             return None
         first = next(iter(self._template_routines(c, declared["template"])), None)
-        found = first and c.execute("SELECT s.id,coalesce(sc.enabled,1) AS enabled FROM schedules s "
-                                    "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
-                                    "WHERE s.bot=? AND s.routine_key=? AND s.deleted_at IS NULL",
-                                    (slug, first["id"])).fetchone()
-        if not found:
+        sid = first and c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?",
+                                  (slug, first["id"])).fetchone()
+        # The routine as it is now: its automation once it moved (backend/routines.py `row`).
+        found = sid and routines.row(c, sid["id"])
+        if not found or found["deleted_at"]:
             return None
         declared["routine_armed"] = first["id"]
         self._write_config(c, slug, declared)
         explicitly_disabled = c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? "
                                         "AND json_extract(detail_json,'$.enabled')=0 LIMIT 1", (found["id"],)).fetchone()
+
         if not found["enabled"] and not explicitly_disabled:
             routines.update(c, who.actor, found["id"], {"enabled": True})
             H.event(c, who.actor, "bot.routine_armed", slug, {"routine": first["id"]})
@@ -1159,7 +1166,8 @@ class Onboarding:
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
         if slug == GOAL_MANAGER:
-            choice = {**choice, "display_name": ceo_bot.name(c)}   # "CEO Bot", or the owner's name for it: never back
+            # "Strategy Bot", or the owner's name for it: never back
+            choice = {**choice, "display_name": strategy_bot.name(c)}
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not existing:
             picked = self._runtime(c, card)

@@ -8,18 +8,18 @@ optional. Bots read theirs with `hub goal list`; nothing is pushed into a run.
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
 Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
-back, and the CEO Bot may only *suggest* a different one. Every colour is stored with who set
+back, and the Strategy Bot may only *suggest* a different one. Every colour is stored with who set
 it (`status_by`) and how (`status_source`, auto or person), in `goals` and in `goal_events`.
 
 Rows are appended, never deleted: `dropped` is a status. Every change leaves a `goal_events` row, as
-`task_events` does for tasks. Changes to a definition or a target that the CEO Bot wants are
+`task_events` does for tasks. Changes to a definition or a target that the Strategy Bot wants are
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
 from datetime import datetime, timedelta, timezone
 
 from .batch_work import isolated
-from . import ceo_bot
+from . import strategy_bot
 from . import hubdb as H
 from . import kpis as K
 from . import people as P
@@ -36,8 +36,8 @@ SIGNAL_COLOUR = {"on_track": "green", "at_risk": "yellow", "off_track": "red"}
 CHECKIN_DAYS = 21                         # a check-in colours a goal for three weeks
 TASK_DAYS = 14                            # no task done for two weeks, on a goal at least that old: yellow
 SOURCES = ("measured", "estimate")        # legacy names of a reading's quality; a connector name is a source
-# goal_why: the CEO Bot's one line tying a goal to the company's vision (backend/company.py).
-# recovery: the CEO Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/ceo_suggest.py).
+# goal_why: the Strategy Bot's one line tying a goal to the company's vision (backend/company.py). recovery: the
+# Strategy Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
 # strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
 PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
@@ -157,7 +157,7 @@ def for_actor(conn, actor, roster=None, entries=None, archived=()):
                 seen.add(parent["id"])
                 above.append(parent)
     below = []
-    for report in reports_of(actor, roster, entries, archived):
+    for report in reports_of(actor, roster, entries, archived, True):
         below.extend(goals(conn, owner=report, live_only=True))
     company = goals(conn, owner=COMPANY, live_only=True) if not mine and not above else []
     return {"owner": actor, "goals": mine, "chain": above, "reports": below, "company": company}
@@ -174,14 +174,15 @@ def _actor(key):
     return H.bot_actor(rest) if head == "b" else H.human_actor(rest) if head == "p" else None
 
 
-def above(actor, roster, entries, archived=()):
+def above(actor, roster, entries, archived=(), bare_people=False):
     """Actors above this one on the org chart, nearest first: the same walk as
-    `people.manages`, over people and bots alike. Department groups are stepped through."""
+    `people.manages`, over people and bots alike. Department groups are stepped through. `bare_people`: the redesign's
+    switch (backend/people.py `org_parent`)."""
     kind = H.actor_kind(actor)
     if kind not in ("bot", "human"):
         return []
     out, seen = [], set()
-    parent = P.org_parent("bot" if kind == "bot" else "person", H.actor_id(actor), roster, entries, archived)
+    parent = P.org_parent("bot" if kind == "bot" else "person", H.actor_id(actor), roster, entries, archived, bare_people)
     while parent and parent not in seen:
         seen.add(parent)
         head, _, rest = parent.partition(":")
@@ -191,11 +192,11 @@ def above(actor, roster, entries, archived=()):
             parent = ("p:" + boss) if boss else ""
             continue
         out.append(_actor(parent))
-        parent = P.org_parent("person" if head == "p" else "bot", rest, roster, entries, archived)
+        parent = P.org_parent("person" if head == "p" else "bot", rest, roster, entries, archived, bare_people)
     return out
 
 
-def reports_of(actor, roster, entries, archived=()):
+def reports_of(actor, roster, entries, archived=(), bare_people=False):
     """Direct reports on the org chart: people whose boss this is, bots whose `reports_to` this
     is, and, for a person, the bots that hang under them or their department."""
     kind = H.actor_kind(actor)
@@ -209,12 +210,12 @@ def reports_of(actor, roster, entries, archived=()):
                 keys.add("g:" + gid)
     out = []
     for p in P.visible_people(roster):
-        if P.org_parent("person", p["id"], roster, entries, archived) in keys:
+        if P.org_parent("person", p["id"], roster, entries, archived, bare_people) in keys:
             out.append(H.human_actor(p["id"]))
     for slug in entries or {}:
         if slug in archived:
             continue
-        if P.org_parent("bot", slug, roster, entries, archived) in keys:
+        if P.org_parent("bot", slug, roster, entries, archived, bare_people) in keys:
             out.append(H.bot_actor(slug))
     return out
 
@@ -327,8 +328,8 @@ def _before_drop(conn, goal_id):
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     """A done or dropped goal back in the live list. `status` is a colour, which sticks as one set by hand does, or
-    `auto`: the colour it had is put back and the CEO Bot works it out again (a goal that never had one gets it from
-    its data, if any). The goals that moved up when it was dropped stay where they are. The history says it was
+    `auto`: the colour it had is put back and the Strategy Bot works it out again (a goal that never had one gets it
+    from its data, if any). The goals that moved up when it was dropped stay where they are. The history says it was
     reopened, and why. `undo` is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its
     note, setter and time when a person set it, read from the history; it takes no colour or note."""
     H._writer(conn, actor)
@@ -565,7 +566,7 @@ def kpi_unlink(conn, actor, goal_id, kpi_id):
 
 
 def arm_pass(conn):
-    """The CEO Bot's daily pass starts paused, like a starter bot's first routine, and may start once a
+    """The Strategy Bot's daily pass starts paused, like a starter bot's first routine, and may start once a
     KPI exists. Once: a person who pauses it afterwards is not overruled."""
     from . import routines
     sid = f"{GOAL_MANAGER}:kpi-pass"
@@ -640,14 +641,14 @@ def score(conn, row, at=None):
 
 
 def apply_auto(conn, goal_id, at=None):
-    """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a
-    visible suggestion when the arithmetic disagrees, never a change. Done and dropped goals
-    are left alone. Nothing at all while the owner has the CEO Bot's regular checks off (backend/ceo_bot.py `checks`):
-    turning them back on works every colour out again. Returns what happened, or None."""
+    """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a visible suggestion when
+    the arithmetic disagrees, never a change. Done and dropped goals are left alone. Nothing at all while the owner has
+    the Strategy Bot's regular checks off (backend/strategy_bot.py `checks`): turning them back on works every colour
+    out again. Returns what happened, or None."""
     row = goal(conn, goal_id)
     if not row or row["status"] in ("done", "dropped"):
         return None
-    if not ceo_bot.checks(conn):
+    if not strategy_bot.checks(conn):
         return None
     result = score(conn, row, at)
     ts = H.now()
@@ -679,7 +680,7 @@ def apply_auto(conn, goal_id, at=None):
 
 
 def refresh(conn, goal_ids=None, at=None):
-    """The CEO Bot's status pass: every live goal (or the ones named) gets its automatic colour
+    """The Strategy Bot's status pass: every live goal (or the ones named) gets its automatic colour
     worked out again, which is how time passing turns fresh data stale."""
     rows = [goal(conn, g) for g in goal_ids] if goal_ids else goals(conn, live_only=True)
     changed, suggested = [], []
@@ -695,7 +696,7 @@ def refresh(conn, goal_ids=None, at=None):
 
 
 def hand_back(conn, actor, goal_id):
-    """A person lets the CEO Bot set the colour again: the override ends and it is worked out now."""
+    """A person lets the Strategy Bot set the colour again: the override ends and it is worked out now."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -705,7 +706,7 @@ def hand_back(conn, actor, goal_id):
                  if row["status_source"] != "person" else "a done or dropped goal is not handed back: set a colour first")
     conn.execute("UPDATE goals SET status_source='auto', suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, "
                  "updated=? WHERE id=?", (H.now(), goal_id))
-    _event(conn, goal_id, actor, "status_source", "person", "auto", "Let " + ceo_bot.name(conn) + " set it",
+    _event(conn, goal_id, actor, "status_source", "person", "auto", "Let " + strategy_bot.name(conn) + " set it",
            status_by=actor, status_source="auto")
     H.event(conn, actor, "goal.hand_back", goal_id, {})
     apply_auto(conn, goal_id)
@@ -745,7 +746,7 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
     try:
         if kind == "goal_wording":
-            # A bet alone links the goal to the strategy bet it serves (the CEO Bot's goals per bet).
+            # A bet alone links the goal to the strategy bet it serves (the Strategy Bot's goals per bet).
             if not (payload.get("title") or payload.get("body") or payload.get("bet_id")):
                 return "propose a new title, body or bet_id"
             if payload.get("bet_id"):
@@ -783,8 +784,8 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
             from . import company as C
             return C.why_payload_error(payload)
         elif kind == "recovery":
-            from . import ceo_suggest
-            return ceo_suggest.payload_error(conn, goal_id, payload)
+            from . import strategy_suggest
+            return strategy_suggest.payload_error(conn, goal_id, payload)
         elif kind == "strategy_draft":
             from . import strategy
             return strategy.proposal_error(conn, payload)
@@ -852,19 +853,20 @@ WHY_REPLACED = "Replaced by a newer Why"
 
 
 def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason=""):
-    """A change somebody may not make themselves (the CEO Bot, above all, may not change a target it
+    """A change somebody may not make themselves (the Strategy Bot, above all, may not change a target it
     is judged against): stored for the goal's or KPI's owner to confirm. The same proposal twice is one."""
     H._writer(conn, actor)
     payload = payload if isinstance(payload, dict) else {}
     if kind not in PROPOSALS:
         H.refuse(conn, actor, "kind", f"a proposal is {'|'.join(PROPOSALS)}, not {kind}")
     if kind == "recovery":
-        from . import ceo_suggest
-        if actor != ceo_suggest.CEO:
-            H.refuse(conn, actor, "identity", f"Only the {ceo_bot.name(conn)} proposes a recovery")
-        if not ceo_suggest.suggests(conn):
-            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} suggests recoveries at level 2 or 3; the owner "
-                                           "chooses the level in Settings")
+        from . import strategy_suggest
+        if actor != strategy_suggest.STRATEGY_BOT:
+            H.refuse(conn, actor, "identity", f"Only the {strategy_bot.name(conn)} proposes a recovery")
+        if not strategy_suggest.suggests(conn):
+            H.refuse(conn, actor, "state",
+                     f"The {strategy_bot.name(conn)} suggests recoveries at level 2 or 3; the owner "
+                     "chooses the level in Settings")
         kpi_id = None
     error = _payload_error(conn, kind, goal_id, kpi_id, payload)
     if error:
@@ -895,9 +897,9 @@ def proposal(conn, proposal_id):
 
 
 def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None, target=None):
-    """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once.
-    A Why may be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options
-    (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py). A strategy realignment is
+    """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once. A Why may
+    be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options (`option`, the
+    Strategy Bot's pick when None), made as the Strategy Bot (backend/strategy_suggest.py). A strategy realignment is
     confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py). An Add a KPI suggestion may be
     confirmed with the person's own `target` for the link, checked as any link's target is, in place of its own."""
     H._writer(conn, actor)
@@ -927,9 +929,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             _lint(conn, actor, error)
     result = None
     if row["kind"] == "recovery" and decision == "confirm":
-        from . import ceo_suggest
-        if not ceo_suggest.suggests(conn):
-            H.refuse(conn, actor, "state", f"The {ceo_bot.name(conn)} is at Passive now, where it changes no tasks")
+        from . import strategy_suggest
+        if not strategy_suggest.suggests(conn):
+            H.refuse(conn, actor, "state",
+                     f"The {strategy_bot.name(conn)} is at Passive now, where it changes no tasks")
         pick = row["payload"]["pick"]
         chosen = pick if option is None else option
         if not isinstance(chosen, int) or not 0 <= chosen < len(row["payload"]["options"]):
@@ -963,10 +966,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             C.set_why(conn, actor, goal_id, kept, settled_by=proposal_id)
             result = {"why": kept, "edited": kept != proposed}
         elif row["kind"] == "recovery":
-            applied = ceo_suggest.apply(conn, actor, row, chosen)
+            applied = strategy_suggest.apply(conn, actor, row, chosen)
             # Settled before its follow-up is filed: a retry of a retry is a new proposal, not this one found again.
             conn.execute("UPDATE goal_proposals SET status='confirmed' WHERE id=?", (proposal_id,))
-            again = ceo_suggest.follow_up(conn, row, applied["left"])
+            again = strategy_suggest.follow_up(conn, row, applied["left"])
             result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
         elif row["kind"] == "strategy_draft":
             # A bot's proposed strategy, written to the draft and its bets as the owner. Never published.
@@ -988,6 +991,35 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         changed = decision == "confirm" and any(v in ("retired", "moved") for v in (result or {}).get("goals", {}).values())
         strategy.settle_card(conn, actor, proposal_id, "Resolved: the goals were realigned with the strategy."
                              if changed else "Resolved: the goals stay as they are.")
+    return proposal(conn, proposal_id)
+
+
+REASON_MAX = 280         # one line: a tweet's length is room for "no billing yet, don't track revenue" and its why
+
+
+def add_reason(conn, actor, proposal_id, note):
+    """The reason someone adds after turning a suggestion down ("Tell the Strategy Bot why?"): theirs alone, once, while
+    the rejection has none. One line; the Strategy Bot reads it before suggesting again (hub proposal list --status rejected)."""
+    H._writer(conn, actor)
+    row = proposal(conn, proposal_id)
+    if not row:
+        H.refuse(conn, actor, "not-found", f"no proposal {proposal_id}")
+    if row["status"] != "rejected":
+        H.refuse(conn, actor, "state", f"Only a suggestion that was turned down takes a reason; this one is {row['status']}")
+    if row["decided_by"] != actor:
+        H.refuse(conn, actor, "identity", "Only the person who turned the suggestion down adds its reason")
+    if row["decision_note"]:
+        H.refuse(conn, actor, "duplicate", "It already has a reason; a reason is added once")
+    text = " ".join(str(note or "").split())
+    if not text:
+        H.refuse(conn, actor, "lint", "The reason is empty; leave the box instead, and the suggestion stays turned down")
+    if len(text) > REASON_MAX:
+        H.refuse(conn, actor, "lint", f"A reason is one line of at most {REASON_MAX} characters, not {len(text)}")
+    # Checked again in the write: two Sends at once save one reason, never the second over the first.
+    if conn.execute("UPDATE goal_proposals SET decision_note=? WHERE id=? AND status='rejected' AND decided_by=? "
+                    "AND decision_note=''", (text, proposal_id, actor)).rowcount != 1:
+        H.refuse(conn, actor, "duplicate", "It already has a reason; a reason is added once")
+    H.event(conn, actor, "goal.reason", proposal_id, {"kind": row["kind"]})
     return proposal(conn, proposal_id)
 
 

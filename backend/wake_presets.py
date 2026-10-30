@@ -109,10 +109,17 @@ def ensure(c):
     H.add_column(c, "jobs", "wake_class", "TEXT")
     H.add_column(c, "jobs", "held", "INTEGER NOT NULL DEFAULT 0")
     H.add_column(c, "jobs", "hold_until", "TEXT")
+    # Why a claim holds a job it could not start, its Needs-you item, and how many tries in a row failed
+    # (backend/claim_holds.py). Unversioned like the others: an older release never reads them.
+    H.add_column(c, "jobs", "hold_reason", "TEXT")
+    H.add_column(c, "jobs", "hold_task_id", "TEXT")
+    H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
     # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
     H.add_column(c, "jobs", "wake_carrier", "TEXT")
     H.add_column(c, "attempts", "wake_json", "TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot,hold_until) WHERE held=1")
+    # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
+    c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created, id) WHERE held=1 AND state='queued'")
     # The duplicate check seeks a room's messages before the new one by rowid (the index's implicit suffix), not a walk
     # through every earlier message from the same sender in every room.
     c.execute("CREATE INDEX IF NOT EXISTS messages_room_rowid ON messages(conversation_id)")
@@ -202,7 +209,20 @@ def sweep_key(refs):
 def release_quota_resets(c, at=None):
     """A quota retry keeps its job and becomes claimable at the reset even between scheduler ticks."""
     c.execute("UPDATE jobs SET held=0 WHERE held=1 AND state='queued' AND wake_class='quota-reset' "
-              "AND hold_until<=?", (at or H.now(),))
+              "AND hold_reason IS NULL AND hold_until<=?", (at or H.now(),))
+
+
+# Read on every scheduler tick under the write lock. INDEXED BY jobs_held_queued: the planner otherwise scans
+# messages and seeks each job, because the stale sqlite_stat1 row for messages (16k rows when analysed, 72k
+# now) makes that look cheapest. 40-44 ms a tick on TIDY v0.5.1, 480 ticks an hour.
+HELD_NEW_SQL = ("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.created,m.conversation_id,m.refs_json "
+                "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
+                "WHERE j.held=1 AND j.hold_until IS NULL AND j.hold_reason IS NULL AND j.state='queued' "
+                "ORDER BY j.created,j.id")
+HELD_DUE_SQL = ("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.message_id,m.conversation_id,m.refs_json "
+                "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
+                "WHERE j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.hold_until<=? "
+                "AND j.hold_reason IS NULL ORDER BY j.created,j.id")
 
 
 def tick(c, at=None):
@@ -210,9 +230,7 @@ def tick(c, at=None):
     transaction every tick; a release is an UPDATE of `held`, which tells the bot's computer there is work."""
     at = at or H.now()
     cache = {}
-    for job in c.execute("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.created,m.conversation_id,m.refs_json "
-                         "FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.held=1 AND j.hold_until IS NULL AND j.state='queued' ORDER BY j.created,j.id").fetchall():
+    for job in c.execute(HELD_NEW_SQL).fetchall():
         values_of = numbers_for(c, job["bot"], job["wake_preset"], cache)
         if not values_of:
             c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
@@ -227,9 +245,8 @@ def tick(c, at=None):
             due = _batch_slot(c, job, values_of)
         c.execute("UPDATE jobs SET hold_until=? WHERE id=?", (due, job["id"]))
     groups = {}
-    for job in c.execute("SELECT j.id,j.bot,j.wake_preset,j.wake_class,j.message_id,m.conversation_id,m.refs_json "
-                         "FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.held=1 AND j.state='queued' "
-                         "AND j.hold_until IS NOT NULL AND j.hold_until<=? ORDER BY j.created,j.id", (at,)).fetchall():
+    # A run a claim holds (backend/claim_holds.py) has a wait of its own, and only its claim releases it.
+    for job in c.execute(HELD_DUE_SQL, (at,)).fetchall():
         if job["wake_class"] in ("sweep", "quota-reset"):
             # A quota retry is the same job, not news to batch, fold into another request or turn into a digest.
             c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
@@ -270,7 +287,8 @@ def _batch_slot(c, job, values_of):
     kinds = ",".join(f"'{k}'" for k in HELD_CLASSES)
     waiting = c.execute("SELECT min(j.hold_until) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
                         f"AND j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.wake_class IN ({kinds}) "
-                        "AND (? OR m.conversation_id=?)", (job["bot"], per_bot, job["conversation_id"])).fetchone()[0]
+                        "AND j.hold_reason IS NULL AND (? OR m.conversation_id=?)",
+                        (job["bot"], per_bot, job["conversation_id"])).fetchone()[0]
     if waiting:
         return waiting
     if hour is not None:
@@ -278,7 +296,8 @@ def _batch_slot(c, job, values_of):
     due = H.shift(job["created"], seconds=gap)
     if per_bot:
         last = c.execute(f"SELECT max(hold_until) FROM jobs WHERE bot=? AND wake_class IN ({kinds},'digest') "
-                         "AND held=0 AND hold_until>?", (job["bot"], H.shift(job["created"], seconds=-gap))).fetchone()[0]
+                         "AND held=0 AND hold_until>? AND hold_reason IS NULL",
+                         (job["bot"], H.shift(job["created"], seconds=-gap))).fetchone()[0]
         if last:
             due = max(due, H.shift(last, seconds=gap))
     return due
@@ -363,7 +382,7 @@ def replan(c, bot):
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     name = preset_of(H._json(config[0], {}) if config else {})
     c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot=? AND held=1 AND state='queued' "
-              "AND coalesce(wake_class,'')<>'quota-reset'", (name, bot))
+              "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL", (name, bot))
 
 
 def classify(message):
@@ -387,7 +406,8 @@ def classify(message):
     if body.startswith(("New task from", "Open:", "Next-run task:")) or refs.get("auto_start"):
         return "assignment", "An assignment"
     if body.startswith(("Unblocked:", "All subtasks done")) or refs.get("subtask") or refs.get("worktree_wait") \
-            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval") or refs.get("milestone"):
+            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval") or refs.get("milestone") \
+            or refs.get("reconnected"):
         return "dependency", "An awaited result"
     if body.startswith(("Stuck:", "Your task for")) or refs.get("setup_held") or wake == "stuck_cause":
         return "blocker", "A blocker"
@@ -395,9 +415,9 @@ def classify(message):
         return "gate", "A review request"
     if refs.get("run_now"):
         return "person", "Run now"
-    if wake in ("due", "snooze", "next-run", "update", "restate_ask"):
+    if wake in ("due", "snooze", "next-run", "update", "restate_ask", "deferred"):
         return "scheduled", {"due": "A due date", "snooze": "A snooze ending", "update": "An update request",
-                             "restate_ask": "An unanswered ask"}.get(wake, "A next-run task")
+                             "restate_ask": "An unanswered ask", "deferred": "A defer deadline"}.get(wake, "A deferred task")
     return "notice", "A Tico notice"
 
 

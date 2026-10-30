@@ -43,6 +43,7 @@ from clients.gateway import user_agent
 
 from . import gateway_connection as GC
 from . import hubdb as H
+from . import outbound_tls
 from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
@@ -170,7 +171,8 @@ class Link:
         if idempotency:
             headers["Idempotency-Key"] = idempotency[:200]
         try:
-            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False) as client:
+            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
+                              verify=outbound_tls.context(trust_env=False)) as client:
                 with client.stream(method, f"{self.base}/{area}/{path}", json=body, headers=headers) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():

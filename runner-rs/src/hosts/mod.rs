@@ -594,7 +594,7 @@ impl Host {
             Host::Gemini(h) => h.start_turn(thread_id, text, effort),
             Host::Antigravity(h) => h.start_turn(thread_id, text, effort),
             Host::MuseCode(h) => h.start_turn(thread_id, text, effort),
-            Host::Pi(h) => h.start_turn(thread_id, text, effort),
+            Host::Pi(h) => h.start_turn(thread_id, text, effort).await,
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),
             Host::Grok(h) => h.start_turn(thread_id, text).await,
             Host::AppDriver(h) => h.start_turn(thread_id, text, effort),
@@ -608,7 +608,7 @@ impl Host {
             Host::Gemini(_) => Err(failed("Gemini runtime cannot steer a running turn")),
             Host::Antigravity(h) => h.steer(),
             Host::MuseCode(_) => Err(HostError::SteerRefused("Muse Code cannot steer a running turn".into())),
-            Host::Pi(_) => Err(failed("Pi runtime cannot steer a running turn")),
+            Host::Pi(h) => h.steer(thread_id, turn_id, text).await,
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
             Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
             Host::AppDriver(_) => Err(failed("a turn in a Mac app cannot be steered")),
@@ -658,7 +658,7 @@ impl Host {
     }
 
     /// Whether this host says when a thread it started is up (a `thread_confirmed` event: Claude's system init,
-    /// Gemini's init, Pi's session line, Codex's first turn/started). A new thread on one is kept only then.
+    /// Gemini's init, pi's reply to its first prompt, Codex's first turn/started). A new thread on one is kept only then.
     pub fn confirms_threads(&self) -> bool {
         matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
     }
@@ -670,6 +670,48 @@ impl Host {
             Host::Claude(h) => h.restored(thread_id),
             Host::Gemini(h) => h.restored(thread_id),
             _ => false,
+        }
+    }
+
+    /// Whether the harness says in its stream when it compacts a session (`compaction_events`), so a resumed turn
+    /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
+    pub fn reports_compaction(&self) -> bool {
+        let (runtime, harness) = self.harness();
+        crate::harness_tools::caps(runtime, harness).compaction_events && matches!(self, Host::Claude(_) | Host::Pi(_))
+    }
+
+    /// Whether the harness compacted `thread_id` since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.compacted(thread_id),
+            Host::Pi(h) => h.compacted(thread_id),
+            _ => false,
+        }
+    }
+
+    /// The size in tokens of `thread_id`'s context after its last turn here (its newest model request of the bot's
+    /// own, else the turn's usage), once; None when the host does not say.
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        match self {
+            Host::Claude(h) => h.context_tokens(thread_id),
+            Host::Pi(h) => h.context_tokens(thread_id),
+            _ => None,
+        }
+    }
+
+    /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
+    /// harness starts a new one in its place (`restored`): a new session's whole prompt.
+    pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
+        if let Host::Claude(h) = self {
+            h.full_prompt(thread_id, text);
+        }
+    }
+
+    /// What a turn whose prompt left parts out (crate::prompt::Built::restore) is given at once if the harness compacts
+    /// the session during it.
+    pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
+        if let Host::Claude(h) = self {
+            h.compaction_refresh(thread_id, text);
         }
     }
 

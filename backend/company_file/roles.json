@@ -1186,7 +1186,7 @@
   {
    "slug": "goal-manager",
    "template": "goal-manager",
-   "name": "CEO Bot",
+   "name": "Strategy Bot",
    "department": "core",
    "lead": false,
    "core": true,
@@ -3611,6 +3611,43 @@
     "calendar",
     "docs",
     "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "video-producer",
+   "template": "video-producer",
+   "name": "Video Producer",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next starts. Nothing is published until the owner approves the exact final file.",
+   "when": "A team that wants product explainers, demos, ads or social videos made and checked, and has no one with the hours to make them.",
+   "tags": [
+    "video",
+    "explainer",
+    "demo",
+    "ads",
+    "social",
+    "b2b",
+    "b2c",
+    "saas",
+    "smb"
+   ],
+   "pains": [
+    "we need a product video and nobody has time to make one",
+    "our demos are out of date the week we ship",
+    "video ideas never get past the script",
+    "we pay an agency for every short clip"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_software",
+    "sells_to_consumers"
+   ],
+   "first_routine": "First video storyboard · On request, not on a schedule",
+   "tools": [
+    "docs"
    ],
    "default": false
   }

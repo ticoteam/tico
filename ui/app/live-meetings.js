@@ -14,23 +14,23 @@ function liveMeetingsStop() {
 }
 window.liveMeetingsStop = liveMeetingsStop;
 
-async function pageLiveMeetings() {
+async function pageLiveMeetings(selected = '') {
   meetStop();
-  const state = LIVE_MEETINGS = {list: [], selected: '', detail: null, sources: new Map(), cursor: {},
+  const state = LIVE_MEETINGS = {list: [], selected, detail: null, sources: new Map(), cursor: {},
     poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: '',
     listVersion: 0, detailVersions: {}, chatSending: new Set()};
   $('#main').innerHTML = `<section class="live-page">
     <header class="live-head"><div><h1>Live now${betaPill('live_meetings')}</h1><p class="muted">Transcript text stays in Tico. Audio is never sent.</p></div>
       <button type="button" class="ghost" id="live-back">Meetings</button></header>
     <form id="live-connect" class="live-connect"><label>Meeting title<input name="title" required maxlength="200" placeholder="Weekly team sync"></label>
-      <label>Bot reply cap<input name="reply_cap" type="number" min="1" max="20" value="3" required></label>
+      <label>Bot reply cap<input name="reply_cap" type="number" min="1" max="20" value="5" required></label>
       <label>Reply cooldown (seconds)<input name="cooldown_seconds" type="number" min="0" max="3600" value="60" required></label>
       <button class="primary" type="submit">Connect live meeting</button></form>
     <div class="live-layout"><nav class="live-list" aria-label="Live meetings"><div class="empty">Loading live meetings…</div></nav>
       <section class="live-detail"><div class="empty">Connect or choose a live meeting.</div></section></div>
     <div class="live-status" role="status" aria-live="polite"></div>
   </section>`;
-  $('#live-back').onclick = () => pageNotes();
+  $('#live-back').onclick = () => { location.hash = MEETINGS; if (S.route === MEETINGS) void pageNotes(); };
   $('#live-connect').onsubmit = event => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     void liveConnect(state, {title: form.get('title'), reply_cap: Number(form.get('reply_cap')),
@@ -94,7 +94,7 @@ function livePaintList(state) {
   const host = $('.live-list');
   if (!state.list.length) { host.innerHTML = '<div class="empty">No connected meetings.</div>'; return; }
   host.innerHTML = state.list.map(meeting => `<button type="button" class="live-list-item${meeting.id === state.selected ? ' selected' : ''}" data-live-id="${esc(meeting.id)}">
-    <b>${esc(meeting.title)}</b><span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
+    <b>${esc(meeting.title)}</b>${meeting.client === 'tico-recorder' ? '<small>From Tico Recorder</small>' : ''}<span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
     <small>${meeting.seq || 0} transcript chunks · ${meeting.bots?.length || 0} bots</small></button>`).join('');
   host.querySelectorAll('[data-live-id]').forEach(button => button.onclick = () => {
     state.selected = button.dataset.liveId; state.detail = null; livePaintList(state); void liveLoadDetail(state, state.selected);
@@ -165,7 +165,7 @@ function livePaintDetail(state, detail) {
   const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.bot)}${me && active ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
-    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2><span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
+    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
       ${controls && detail.state === 'paused' ? '<button class="ghost" data-live-control="resume">Resume</button>' : ''}
       ${controls && active ? '<button class="danger" data-live-control="end">End</button>' : ''}
@@ -179,7 +179,7 @@ function livePaintDetail(state, detail) {
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length ? chat.map(message => `<p><b>${esc(liveActor(message.actor))}</b><span>${esc(message.text)}</span>${message.transcript_seq ? `<small><button type="button" class="live-transcript-link" data-live-transcript-seq="${message.transcript_seq}">Transcript #${message.transcript_seq}</button></small>` : ''}</p>`).join('') : '<p class="muted">No chat messages yet.</p>'}</div>
       ${me && active ? '<form id="live-chat-form" class="live-chat-form"><input name="text" data-live-focus-key="chat-input" maxlength="20000" required aria-label="Meeting chat" placeholder="Write to the meeting"><button class="primary" type="submit">Send</button></form>' : ''}</section>
-    <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 3} turns per window</p>
+    <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 5} turns per window</p>
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
       ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
       ${router.bypasses?.length ? `<div class="live-bypasses"><b>Named mentions</b>${router.bypasses.map(bypass => `<pre>${esc(JSON.stringify(bypass, null, 2))}</pre>`).join('')}</div>` : ''}</div>

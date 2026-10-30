@@ -5,13 +5,15 @@
 // ----------------------------------------------------------------- Models
 // Which model vendors this team uses and the default model (backend/providers.py). One form
 // serves the first-run step and Settings; the server derives the runtime from the model.
-function providersModels(view, models, enabled) {
+function providersModels(view, models, enabled, meeting = false) {
   const labels = Object.fromEntries((view.providers || []).map(row => [row.id, row.label]));
   const gateway = providersGatewayIds(view);
   // The saved default stays offered after its model retires, so a save about something else never moves it.
   const saved = view.default?.model || '';
   // The Gateway's tiers are 60 rows; the company default offers General at each level, and a bot's own Model picker the rest.
-  const general = model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
+  // The meeting models (Settings' Meeting model select) are only the meeting ones; a default or a bot's pick never is.
+  const general = meeting ? model => !!model.meeting
+    : model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
   return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider) && general(model))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
@@ -59,6 +61,7 @@ function providersFormHTML(view, models, id, editable = true) {
     ${id === 'set-prov' && view.decide_levels?.length ? `<label class="onb-field"><span class="k">Decisions</span><select data-provider-decide${dis}>${view.decide_levels.map(level =>
       `<option value="${esc(level)}"${level === (view.decide_level || view.decide_levels[0]) ? ' selected' : ''}>${esc(level.charAt(0).toUpperCase() + level.slice(1))}</option>`).join('')}</select>
       <span class="muted">How carefully Tico judges approvals and checks. Higher is slower and costs more.</span></label>` : ''}
+    ${id === 'set-prov' ? `<label class="onb-field"><span class="k">Meeting model</span><select data-provider-meeting${dis}></select></label>` : ''}
     ${id === 'set-prov' ? `<label class="prov"><input type="checkbox" data-provider-fallback ${view.auto_fallback !== false ? 'checked' : ''}${dis}>
       <strong>Fall back when a plan runs out</strong><span class="muted">A bot with no fallback of its own runs on another provider signed in on its computer</span></label>
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
@@ -71,11 +74,20 @@ function providersFillModels(root, view, models, keep) {
   const enabled = [...[...root.querySelectorAll('[data-provider]:checked')].map(input => input.value), ...gateway];
   const select = root.querySelector('[data-provider-model]');
   const options = providersModels(view, models, enabled);
+  const meetingOptions = providersModels(view, models, enabled, true);
   const wanted = options.some(row => row.id === keep) ? keep
     : (options.find(row => row.recommended) || options[0] || {}).id || '';
   select.innerHTML = options.length ? options.map(row =>
     `<option value="${esc(row.id)}" ${row.id === wanted ? 'selected' : ''}${row.description ? ` title="${esc(row.description)}"` : ''}>${esc(row.label)}</option>`).join('')
     : '<option value="">Tick a provider first</option>';
+  const meeting = root.querySelector('[data-provider-meeting]');
+  if (meeting) {
+    // Live-meeting replies: the bot's own model, or one of the models above; the saved one stays selected.
+    const keepMeeting = meeting.options.length ? meeting.value : (view.meeting_model || '');
+    meeting.dataset.saved = view.meeting_model || '';
+    meeting.innerHTML = `<option value="">Bot's own model</option>` + meetingOptions.map(row =>
+      `<option value="${esc(row.id)}" ${row.id === keepMeeting ? 'selected' : ''}>${esc(row.label)}</option>`).join('');
+  }
 }
 function providersWire(root, view, models) {
   if (!root) return;
@@ -93,9 +105,12 @@ function providersWire(root, view, models) {
 const providersCollect = root => {
   const fallback = root.querySelector('[data-provider-fallback]'), check = root.querySelector('[data-provider-check]');
   const preset = root.querySelector('[data-provider-preset]:checked'), decide = root.querySelector('[data-provider-decide]');
+  const meeting = root.querySelector('[data-provider-meeting]');
   return {enabled: [...root.querySelectorAll('[data-provider]:checked')].map(input => input.value),
     ...(preset ? {preset: preset.value} : {}),
     model: root.querySelector('[data-provider-model]').value, ...(decide ? {decide_level: decide.value} : {}), ...(fallback ? {auto_fallback: fallback.checked} : {}),
+    // Sent only when changed, so a save about something else keeps an unset meeting model unset.
+    ...(meeting && meeting.value !== meeting.dataset.saved ? {meeting_model: meeting.value} : {}),
     // Sent only when edited, so a save about something else never re-checks a saved entry.
     ...(check && check.value !== check.defaultValue ? {check_models: check.value.split(',').map(item => item.trim()).filter(Boolean)} : {})};
 };
@@ -104,7 +119,8 @@ async function providersSave(view, chosen) {
     ...('auto_fallback' in chosen ? {auto_fallback: chosen.auto_fallback} : {}),
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
     ...('preset' in chosen ? {preset: chosen.preset} : {}),
-    ...('decide_level' in chosen ? {decide_level: chosen.decide_level} : {})});
+    ...('decide_level' in chosen ? {decide_level: chosen.decide_level} : {}),
+    ...('meeting_model' in chosen ? {meeting_model: chosen.meeting_model} : {})});
 }
 let SETTINGS_PROVIDERS_VIEW = null;
 function renderSettingsProviderNext() {

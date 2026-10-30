@@ -1,4 +1,4 @@
-// Decide: a bot's question that says what it will do if nobody answers shows it on the card, in plain words, with the
+// The Needs you card: a bot's question that says what it will do if nobody answers shows it on the card, in plain words, with the
 // day it goes ahead (backend/ask_deadlines.py), as a small line at the card's foot, never as the recommendation. A send
 // waits for the answer, and the card says so.
 const {chromium} = require('playwright');
@@ -21,7 +21,7 @@ const items = [
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
-    await page.evaluate(async () => { await v2Refresh(); location.hash = DECIDE; });
+    await page.evaluate(async () => { await v2Refresh(); decideOpen('task:t-archive'); });
     const line = async id => {
       await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
       return page.locator('.decide .dc-card .qc-fallback').textContent();

@@ -98,14 +98,8 @@ def announce(c, auth, rid, meta):
     done = get(rid, c)
     if not done['transcript_original'] and not meta.get('turns'):
         return
-    from .routines import emit
     meta['ready_announced'] = True
     snapshot(meta, conn=c, readable=done['transcript_readable'])
-    content = '\n\n'.join(part for part in (done['notes'], done['transcript_readable'], context(done)) if part)
-    facts = {'kind': 'meeting', 'recorded_by': meta.get('recorded_by'), 'source': meta.get('source'),
-             'ended': meta.get('ended'), 'duration_ms': meta.get('duration_ms')}
-    for event in ('meeting.ready', 'recording.ready'):
-        emit(c, event, rid, facts, title=meta.get('title') or rid, content=content, auth=auth)
     H.hook(c, 'meeting.ready', rid, lambda: {'id': rid, 'title': meta.get('title') or rid, 'source': meta.get('source'),
                                               'ended': meta.get('ended')}, 'keeper', revision=0)
 

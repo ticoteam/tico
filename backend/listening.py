@@ -495,6 +495,8 @@ def route(conn, row, scored, dests):
                            "VALUES (?,?,?,?, 'new', ?)", (intake_id, name, row["id"], scored["id"], H.now()))
         if cur.rowcount:
             opened.append(intake_row(conn, intake_id))
+            from . import automations
+            automations.on_listening(conn, opened[-1], row)
     return opened
 
 
@@ -634,6 +636,35 @@ def stats(conn, since=None):
     saved = conn.execute("SELECT count(*) FROM listen_items WHERE first_seen_at>=?", (since,)).fetchone()[0]
     routed = conn.execute("SELECT count(DISTINCT item_id) FROM intake_items WHERE created_at>=?", (since,)).fetchone()[0]
     return {"since": since, "coverage": coverage, "destinations": verdicts, "saved": saved, "routed": routed}
+
+
+RECENT_MAX = 25
+RECENT_TEXT = 240
+
+
+def timeline(conn, who, dests, since):
+    """Market › Listening's chart and list (redesign only): posts first seen each UTC day by source, and the newest
+    posts routed to a destination the caller reads, one row per post, its text clipped."""
+    days = {}
+    for r in conn.execute("SELECT substr(first_seen_at,1,10) day, source, count(*) n FROM listen_items "
+                          "WHERE first_seen_at>=? GROUP BY day, source", (since,)):
+        days.setdefault(r["day"], {})[r["source"]] = r["n"]
+    allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
+    recent = []
+    if allowed:
+        marks = ",".join("?" * len(allowed))
+        for r in conn.execute(f"SELECT item_id, group_concat(destination) dests, max(created_at) at FROM intake_items "
+                              f"WHERE destination IN ({marks}) AND created_at>=? GROUP BY item_id "
+                              f"ORDER BY at DESC LIMIT ?", (*allowed, since, RECENT_MAX)):
+            post = item(conn, r["item_id"])
+            if not post:
+                continue
+            text = " ".join(str(post["content"] or "").split())
+            recent.append({"item_id": post["id"], "source": post["source"], "url": post["url"],
+                           "author": post["author"] or "", "published_at": post["published_at"],
+                           "text": text if len(text) <= RECENT_TEXT else text[:RECENT_TEXT - 1] + "…",
+                           "destinations": sorted(set(r["dests"].split(","))), "at": r["at"]})
+    return {"daily": [{"day": d, "sources": days[d]} for d in sorted(days)], "recent": recent}
 
 
 # ----------------------------------------------------------------------------- Decisions
@@ -849,8 +880,11 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            require_reader(who, destinations(store.settings, c))
-            return stats(c, since)
+            dests = destinations(store.settings, c)
+            require_reader(who, dests)
+            out = stats(c, since)
+            out.update(timeline(c, who, dests, out["since"]))
+            return out
 
     @app.get("/api/v2/intake")
     def intake_list(request: Request, destination: str | None = None, status: str | None = "new", limit: int = 100):

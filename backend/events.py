@@ -54,6 +54,7 @@ RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another pro
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
+SIGN_IN_RECHECK_SECONDS = 5  # a stream's sign-in is re-checked at most this often (SignIn)
 GATHER_SECONDS = 1.0      # coalesce busy teams' writes before per-viewer hydration
 GATHER_CHAT_SECONDS = 0.25  # a stream following a conversation: its messages and run output stay prompt
 LEAD_SECONDS = 0.02       # a ring after a quiet window waits only this long, for the rest of its request's writes
@@ -92,6 +93,11 @@ def _needs(kind, *actors, where=None):
 
 def _changed(*columns):
     return " OR ".join(f"OLD.{column} IS NOT NEW.{column}" for column in columns)
+
+
+# A WHEN that is true when any column of its table changed. ensure() fills it in from PRAGMA table_info, so a
+# column added later is covered without a change here, and the trigger is rebuilt because its SQL changed.
+_ANY_COLUMN = "__any_column_changed__"
 
 
 FAN_CAP = 100      # more tasks than this in one change: one `bulk` row, and lists read in full
@@ -135,7 +141,9 @@ TRIGGERS = [
     ("changes_tasks_delete", "DELETE", "tasks", None,
      _row("tasks", "delete", "OLD.id", ref=_WAS) + _needs("task", *("OLD." + p for p in _PARTIES))),
     ("changes_task_links_insert", "INSERT", "task_links", None, _row("tasks", "link", "NEW.task_id")),
-    ("changes_task_links_update", "UPDATE", "task_links", None, _row("tasks", "link", "NEW.task_id")),
+    # Only a write that changes a column: a rewrite with the same values wakes no stream (a worktree heartbeat did this
+    # every few minutes per closed task).
+    ("changes_task_links_update", "UPDATE", "task_links", _ANY_COLUMN, _row("tasks", "link", "NEW.task_id")),
     ("changes_task_links_delete", "DELETE", "task_links", None, _row("tasks", "link", "OLD.task_id")),
     # A relation (parent, blocks, related, duplicate, follow-up) changes how both ends show.
     ("changes_task_relations_insert", "INSERT", "task_relations", None,
@@ -334,7 +342,7 @@ RUNNER_TRIGGERS = [
     ("changes_runner_task_links_insert", "INSERT", "task_links", _WORKTREE_LINK.format(row="NEW"),
      _tell("worktrees", _TASK_COMPUTERS.format(task="NEW.task_id"))),
     ("changes_runner_task_links_update", "UPDATE", "task_links",
-     _WORKTREE_LINK.format(row="NEW") + " OR " + _WORKTREE_LINK.format(row="OLD"),
+     f"({_WORKTREE_LINK.format(row='NEW')} OR {_WORKTREE_LINK.format(row='OLD')}) AND {_ANY_COLUMN}",
      _tell("worktrees", _TASK_COMPUTERS.format(task="NEW.task_id") + " UNION SELECT OLD.computer_id")),
     ("changes_runner_task_links_delete", "DELETE", "task_links", _WORKTREE_LINK.format(row="OLD"),
      _tell("worktrees", _TASK_COMPUTERS.format(task="OLD.task_id") + " UNION SELECT OLD.computer_id")),
@@ -397,13 +405,16 @@ def ensure(c):
                                                    "AND name LIKE 'changes\\_%' ESCAPE '\\'")}
     columns = {}
 
+    def table_columns(table):
+        if table not in columns:
+            columns[table] = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+        return columns[table]
+
     def has(need):
         table, _, column = need.partition(".")
         if table not in tables:
             return False
-        if column and table not in columns:
-            columns[table] = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
-        return not column or column in columns[table]
+        return not column or column in table_columns(table)
     # What the triggers look tasks up by: a next-run task by the attempt carrying it, a cover by its blob.
     for need, index in (("tasks.carried_by", "tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL"),
                         ("task_assets", "task_assets_blob ON task_assets(blob_id)"),
@@ -417,6 +428,8 @@ def ensure(c):
         if table not in tables or not all(has(need) for need in NEEDS.get(name, ())):
             continue
         wanted.add(name)
+        if when and _ANY_COLUMN in when:
+            when = when.replace(_ANY_COLUMN, _changed(*sorted(table_columns(table))))
         sql = _trigger_sql(name, event, table, when, body)
         if installed.get(name) == sql:
             continue
@@ -780,7 +793,9 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     ids = list(last)
     if not ids:
         return out
-    visible_sql = view.auth.task_sql(c, who)
+    # The viewer's own bot access, read once for the whole read (task_sql would read it again): the same answer.
+    unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
+    visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
     found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
@@ -1048,6 +1063,31 @@ class Beat:
             self.pending.add_done_callback(lambda task: task.cancelled() or task.exception())
 
 
+class SignIn:
+    """A stream's sign-in check, run by each poll and keepalive. Re-authenticating costs several lookups and a parse of
+    the people roster, and a busy team's polls come in bursts, so a check at most SIGN_IN_RECHECK_SECONDS old answers
+    for the next poll. A revoked sign-in or a changed role therefore ends the stream within that many seconds of its
+    next poll, and at the next keepalive at the latest (a quiet stream's check is never skipped that long). A refused
+    check raises Problem and is never remembered."""
+
+    def __init__(self, auth, headers, who, clock=time.monotonic):
+        self.auth, self.headers, self.who, self.clock = auth, headers, who, clock
+        self.checked_at = None
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            now = self.clock()
+            if self.checked_at is not None and now - self.checked_at < SIGN_IN_RECHECK_SECONDS:
+                return
+            fresh = self.auth.authenticate(self.headers)
+            # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
+            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
+            if fresh.actor == self.who.actor and fresh.role != self.who.role:
+                raise Problem("unauthenticated", "Sign in again", 401)
+            self.checked_at = now
+
+
 def install(app, store, auth, task_views, task_view):
     doorbell = bell(store)
 
@@ -1081,12 +1121,7 @@ def install(app, store, auth, task_views, task_view):
                     held.update(needs_baseline(c, auth, who, task_view))
                 return latest(c)
 
-        def check():
-            fresh = auth.authenticate(request.headers)
-            # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
-            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
-            if fresh.actor == who.actor and fresh.role != who.role:
-                raise Problem("unauthenticated", "Sign in again", 401)
+        check = SignIn(auth, request.headers, who)
 
         def poll(cursor):
             check()

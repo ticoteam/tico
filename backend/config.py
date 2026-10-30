@@ -360,6 +360,9 @@ class Settings:
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
     rehearsal: bool = False
+    # This install's routines and rules move to Automations at this start, once (backend/redesign_migration.py
+    # `cutover`). On by default: once the move is done the cutover returns at once, so later starts do nothing.
+    migrate_to_automations: bool = True
 
     def __post_init__(self):
         self.hosted = self.hosted.strip()

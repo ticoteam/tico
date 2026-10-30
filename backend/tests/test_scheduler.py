@@ -2,39 +2,47 @@ from datetime import datetime, timezone
 
 import pytest
 
+from backend import routines
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
 
 
 def test_schedule_survives_restart_without_duplicate_work(api):
+    """A routine (its schedule automation) fires each occurrence once, across a restart of the scheduler."""
     finished_status = 'done'
     at = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) "
-                  "VALUES('morning','coo','0 9 * * *','Review daily work','Review work',NULL,?)",
-                  ('2026-09-09T16:00:00.000000Z',))
-    first = Scheduler(store, api.app.state.execution).tick(at)
-    second = Scheduler(store, api.app.state.execution).tick(at)
-    assert len(first["fired"]) == 1
-    assert not second["fired"]
+        aid = routines.create(c, H.KEEPER, 'coo', {'title': 'Review daily work', 'cron': '0 9 * * *',
+                                                   'timezone': 'America/Los_Angeles', 'text': 'Review work'},
+                              key='morning')['automation']
+        c.execute("UPDATE automations SET next_due=? WHERE id=?", ('2026-09-09T16:00:00.000000Z', aid))
+
+    def tasks(c):
+        return [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner='bot:coo' AND title='Review daily work' "
+                                        "ORDER BY created, rowid")]
+    Scheduler(store, api.app.state.execution).tick(at)
+    Scheduler(store, api.app.state.execution).tick(at)
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM schedule_occurrences").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 1
+        fired = tasks(c)
+        assert len(fired) == 1
         # The day's update request (backend/updates.py) is a job of its own, not the routine's.
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE json_extract(m.refs_json,'$.update_request') IS NULL").fetchone()[0] == 1
-        assert c.execute("SELECT next_due FROM schedules").fetchone()[0] == '2026-09-11T16:00:00.000000Z'
+        assert c.execute("SELECT next_due FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
     # A finished occurrence keeps its status; the next occurrence gets its own task and is deduplicated after restart.
     with store.transaction() as c:
-        previous = H.task_update(c, 'bot:coo', first['fired'][0], status=finished_status, note='Daily work reviewed.')
+        previous = H.task_update(c, 'bot:coo', fired[0], status=finished_status, note='Daily work reviewed.')
     next_at = datetime(2026, 9, 11, 17, tzinfo=timezone.utc)
-    next_run = Scheduler(store, api.app.state.execution).tick(next_at)
-    assert len(next_run['fired']) == 1 and next_run['fired'][0] != previous['id']
-    assert not Scheduler(store, api.app.state.execution).tick(next_at)['fired']
+    Scheduler(store, api.app.state.execution).tick(next_at)
+    Scheduler(store, api.app.state.execution).tick(next_at)
     with store.read() as c:
         assert H.task(c, previous['id']) == previous
-        assert c.execute('SELECT count(*) FROM schedule_occurrences').fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 2
+        again = tasks(c)
+        assert len(again) == 2 and again[1] != previous['id']
 
 
 def test_due_reminder_deduplicates_across_scheduler_restart(api):
@@ -132,9 +140,9 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     def select_again(*args, **kwargs):
         selections.append(1)
         return candidate(*args, **kwargs)
-    def reassign_after_read(*args):
-        result = idle(*args)
-        selected.extend(args[-1])
+    def reassign_after_read(c, who, body, picked, failed):
+        result = idle(c, who, body, picked, failed)
+        selected.extend(picked)
         with store.transaction() as c:
             H.task_update(c, 'human:ana', task['id'], owner='bot:finance')
         return result
@@ -142,7 +150,8 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     monkeypatch.setattr(execution, "candidate", select_again)
     assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is None
     assert selected and selected[0]['bot'] == 'ops'
-    assert selections == [1, 1]
+    # The read's pick, its recheck under the writer, then one more pick that passes over the reassigned job.
+    assert selections == [1, 1, 1]
     with store.read() as c:
         assert H.task(c, task['id'])['private']
         assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1

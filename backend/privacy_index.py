@@ -8,6 +8,7 @@ from functools import cached_property, lru_cache
 import re
 
 from .store import H, Problem
+from . import row_clock
 from . import task_privacy as privacy
 from .live_privacy import ROOM_PREFIX, Sources as MeetingSources
 
@@ -24,10 +25,17 @@ class ReadIndex:
         self.meetings = MeetingSources(c)
         # Read private rows by their partial index. Ordinary task identifiers and
         # room references load lazily, without task bodies or room participants.
-        self.private = {r["id"]: dict(r) for r in c.execute(
-            "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties "
-            "WHERE private IS NOT 0")}
-        self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+        self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
+        # A private task's answer depends only on its parties, guest and private flag, and many tasks share them
+        # (one bot owns most). Ask once per distinct set rather than once per task.
+        answers = {}
+        self.denied = set()
+        for tid, row in self.private.items():
+            key = (row["owner"], row["requester"], row["guest"], row["private"])
+            if key not in answers:
+                answers[key] = privacy.task_readable(c, who, row)
+            if not answers[key]:
+                self.denied.add(tid)
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
@@ -63,16 +71,16 @@ class ReadIndex:
 
     @cached_property
     def task_ids(self):
-        # Provenance validates task existence, even when no private task is denied.
-        # Reuse identifiers from this snapshot rather than thrash a per-row LRU.
-        # The primary key is already a covering index for this. A second id index would not change the plan.
-        return {row[0] for row in self.c.execute("SELECT id FROM tasks")}
+        # Provenance validates task existence, even when no private task is denied. Every SQL request and task list
+        # used to read the whole tasks table here (SELECT id FROM tasks, 207/h on TIDY). The set is shared between
+        # requests until a task is added or removed (backend/row_clock.py).
+        return row_clock.refs(self.c)[0]
 
     @cached_property
     def conversation_tasks(self):
-        # Message provenance needs only the task reference, never room content.
-        return dict(self.c.execute(
-            "SELECT id,task_id FROM conversations INDEXED BY conversations_id_task"))
+        # Message provenance needs only the task reference, never room content. Shared like task_ids: the whole
+        # conversations read (156/h on TIDY, 76-121 ms each) ran once per privacy-checked request.
+        return row_clock.refs(self.c)[1]
 
     def known_task(self, tid):
         return tid in self.task_ids
@@ -338,7 +346,8 @@ class ReadIndex:
             rows = defaultdict(set)
             for tag, tid in self.c.execute("SELECT tag_id,task_id FROM task_tags"):
                 rows[tag].add(tid)
-            for target, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action='tag.attach'"):
+            for target, detail in self.c.execute("SELECT target,detail_json FROM events INDEXED BY events_tag_attach "
+                                                 "WHERE action='tag.attach'"):
                 data = H._json(detail, {}) or {}
                 # Tag history contains explicit task references, not arbitrary prose.
                 rows[target].update(v for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "") if self.known_task(v))

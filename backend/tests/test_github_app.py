@@ -345,6 +345,28 @@ def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh)
 
 
 
+def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_write_one(api, gh):
+    connect(api)
+    runner_token(api, "cmo")
+    with api.app_state.store.transaction() as c:
+        for rid, visibility in (("m-private", "private"), ("m-team", "team")):
+            c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created,updated,started_at,visibility) "
+                      "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)", (rid, H.now(), H.now(), H.now(), visibility))
+        conv = H.open_conversation(c, H.KEEPER, ["bot:cmo"], room_key="live-meeting:m-private")
+        H.feed(c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}})
+        job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+                  "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
+    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
+    assert r.status_code == 200, r.text
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "read"
+    assert {t["access"] for t in r.json()["tokens"]} == {"read"}
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE live_meetings SET visibility='team' WHERE id='m-private'")
+    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
+    assert r.status_code == 200 and gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
+
+
 def test_turn_token_reads_pull_request_checks_and_statuses(api, gh):
     # `gh pr checks` reads check runs and commit statuses; a private repository refuses both without them.
     asked = manifest(api)["manifest"]["default_permissions"]

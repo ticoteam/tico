@@ -207,7 +207,8 @@ def mark_delivery(c, messages):
     """Say what happens to a message still queued while its bot answers in the same conversation.
 
     `delivery.mode` is "steer" when the bot's harness writes it into the running turn (`steer`), "next_turn" when
-    it waits for that turn to end, and "redirect" once its sender chose Stop and redirect. `delivery.attempt_id`
+    it waits for that turn to end (its harness cannot steer, or it was sent with queue: backend/delivery.py), and
+    "redirect" once its sender chose Stop and redirect. `delivery.attempt_id`
     is the running turn. A message a run took already has `run` instead (mark_runs)."""
     pending = {m["id"]: m for m in messages if "run" not in m and str(m.get("to_actor", "")).startswith("bot:")}
     if not pending:
@@ -217,7 +218,7 @@ def mark_delivery(c, messages):
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         for row in c.execute(
-                "SELECT j.message_id,j.bot,j.redirect,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
+                "SELECT j.message_id,j.bot,j.redirect,json_extract(m.refs_json,'$.delivery') AS way,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
                 " JOIN messages am ON am.id=aj.message_id WHERE a.bot=j.bot AND a.state IN ('leased','running')"
                 " AND (am.conversation_id=m.conversation_id OR EXISTS(SELECT 1 FROM attempt_conversations ac"
                 " WHERE ac.attempt_id=a.id AND ac.conversation_id=m.conversation_id)) ORDER BY a.created LIMIT 1) AS live"
@@ -229,7 +230,8 @@ def mark_delivery(c, messages):
                 config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
                 configs[row["bot"]] = json.loads(config[0]) if config else {}
             config = configs[row["bot"]]
-            mode = "redirect" if row["redirect"] else "steer" if steers(config, config.get("runtime")) else "next_turn"
+            mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"
+                    and steers(config, config.get("runtime")) else "next_turn")
             pending[row["message_id"]]["delivery"] = {"attempt_id": row["live"], "mode": mode}
 
 
@@ -282,9 +284,9 @@ def annotate(c, auth, who, messages):
     refs = {v for m in messages for v in task_refs(m)}
     H.prime_tasks(c, refs)
     for tid in refs:
-        row = H.task(c, tid)
-        if row and readable(lambda: auth.task_row(c, who, row)):
-            titles[tid] = {"title": row["title"], "owner": row["owner"], "status": row["status"]}
+        task = H.task(c, tid)
+        if task and readable(lambda: auth.task_row(c, who, task)):
+            titles[tid] = {"title": task["title"], "owner": task["owner"], "status": task["status"]}
     for m in messages:
         known = {v: titles[v] for v in task_refs(m) if v in titles}
         if known:

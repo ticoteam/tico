@@ -4,8 +4,8 @@
 
 // ----------------------------------------------------------------- tasks (#/tasks)
 // One page for every piece of work the team owes: Tico's tasks, shown as **Needs you**, **Open** (a list),
-// a **Board**, **Recurring** (the routines, one row each) and **Done**. `#/board`, `#/issues` and `#/recurring`
-// open the matching view. No priority: every task has a rank in its owner's queue. Labels stand in for projects.
+// a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
+// No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
 // The list (ui/app/task-list.js) draws one line per task; this file holds what the list, the board, the
 // task's header and the subtask rows share, so a task reads the same wherever it shows.
@@ -17,15 +17,16 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-const BOARD_COLS = [...COMPANY_COLS, ['done', 'Done', 'Finished in the last 7 days']];   // legacy name, kept for the routine rows
 // The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['recurring', 'Routines'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
 const ACTIVE_TASK_STATUSES = 'open,doing,waiting,review,ready,declined';
 let TASKS_ST = null;
 const teamOf = slug => S.emps.find(e => e.name === slug)?.team || '';
+// A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
+const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
 const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');
 const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
@@ -184,8 +185,10 @@ function taskOlderAsk(t) {
   return !!me && !!t && !taskFinished(t) && t.ask?.to_actor === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
+// Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
 function taskWaitingOn(t) {
-  return t?.status === 'waiting' && actorPerson(t.waiting_on) ? t.waiting_on : '';
+  if (t?.status !== 'waiting') return '';
+  return actorPerson(t.waiting_on) ? t.waiting_on : actorPerson(t.reconnect?.person) ? t.reconnect.person : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {
@@ -383,7 +386,7 @@ function taskCard(it) {
   const t = it.task, st = TASKS_ST;
   const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '', refused = taskRefused(st, t);
   void st;   // selection, cursor and peek are painted on (task-list.js), so the card's signature only changes with its content
-  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
+  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}"${t?.status === 'done' ? ' data-done' : ''}>${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}

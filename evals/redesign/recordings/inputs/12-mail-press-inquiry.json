@@ -1,0 +1,24 @@
+{
+  "id": "12-mail-press-inquiry",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "tess.adeyemi@acme.example",
+    "from_name": "Tess Adeyemi, Ledger Trade Weekly",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T17:25:00Z",
+    "subject": "Comment for a piece on project-tracking tools, due Thursday",
+    "snippet": "Hi Dana, I am writing about the shutdowns in team-tracking apps. Could you give a quote on the market and say whether Tico is hiring? Deadline Thursday at noon.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A press request with a deadline: needs the owner."
+}

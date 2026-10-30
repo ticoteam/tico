@@ -7,6 +7,7 @@ Slow: it builds the release binary once per session (cargo) and starts runner pr
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -785,8 +786,9 @@ def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
     assert [s["runtime"] for s in made["segments"]] == segments
 
 
-# Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
-@pytest.mark.parametrize("harness", ["claude", "codex"])
+# Steering is a Claude Code, Codex and pi feature (steer in drive); subscription profiles are Claude Code and Codex
+# ones (runner-rs/src/profiles.rs).
+@pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_SLOW": "8"}}])
 def test_a_message_sent_mid_turn_is_steered_into_it_once(api, computer):
     computer.start()
@@ -1178,7 +1180,7 @@ def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, li
         from runner.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))
-        assert "Tico runner 0" in machine.output.read_text() and "(rust) started" in machine.output.read_text()
+        assert re.search(r"Tico runner \S+ \(rust\) started", machine.output.read_text())
     finally:
         machine.stop()
 

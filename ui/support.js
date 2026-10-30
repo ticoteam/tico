@@ -1,5 +1,5 @@
-/* Support is a pop-up over the current screen, opened by the ? at the foot of the sidebar (the ? tab on a phone), by
-   Report this, Chat with us and Want help setting up?, and by old #/help links. It uses the existing ticket transport.
+/* Support is a pop-up over the current screen, opened from Ask's + (Tico support, ui/app/ask-panel.js), by a #/support link, by
+   Report this and Want help setting up?, and by old #/help links. It uses the existing ticket transport.
    Drafts stay on this page's account in memory; an attachment is an immutable server preview, never silently replaced
    when Send is pressed. */
 'use strict';
@@ -56,7 +56,7 @@
       detail: clip(c.detail, 600), fix: String(c.fix ?? '').slice(0, 1200), source: c.source === 'health' ? 'health' : 'doctor'}));
     return out;
   }
-  // Chat with us or Report this pressed anywhere: the pop-up opens on a new request, the report attached as diagnostics.
+  // Report this pressed anywhere: the pop-up opens on a new request, the report attached as diagnostics.
   let pending = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const statuses = {open: 'Open', answered: 'Answered', closed: 'Closed', gone: 'Removed'};
@@ -82,8 +82,12 @@
   const last = t => (t.messages || []).at(-1)?.created || t.created;
   const newestFirst = list => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
   const ended = t => ['closed', 'gone'].includes(t.status);
-  // The pop-up opens on the request with the most recent message that isn't Closed or Removed.
+  // The request with the most recent message that isn't Closed or Removed.
   const latest = () => newestFirst(state.tickets).find(t => !ended(t));
+  // The pop-up opens on the newest of those with an unread reply or a message in the last day. An older one (say a
+  // week-old alert) is not opened on its own: Your requests is shown instead (a new request when none is open).
+  const RECENT_MS = 24 * 3600 * 1000;
+  const landing = () => newestFirst(state.tickets).find(t => !ended(t) && (t.unread || Date.now() - (Date.parse(last(t)) || 0) < RECENT_MS));
   const isOpen = () => !!pop?.open;
   const draft = () => {
     if (!drafts.has(selected)) drafts.set(selected, {message: '', email: compose?.email || '', ids: true, diag: !selected, perf: 24, bundle: null, key: uid(), kind: 'support', report: null, open: false});
@@ -98,18 +102,17 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
-  // The ? (and the phone's ? tab) carries the number of unread replies.
+  // The number of unread replies shows only inside Ask's panel: on Tico support in its + menu here, and on the
+  // support chip (ui/app/ask-panel.js, which hears `tico:support` to show an open request as in its chat). Ask's
+  // button and the phone's Ask tab carry no count.
   function mark() {
-    const n = state.unread, label = n ? `Support, ${n} new ${n === 1 ? 'reply' : 'replies'}` : 'Support';
-    for (const id of ['help-open', 'mobile-support']) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      if (n) { el.setAttribute('data-support-unread', n); el.setAttribute('data-support-count', n > 9 ? '9+' : String(n)); }
-      else { el.removeAttribute('data-support-unread'); el.removeAttribute('data-support-count'); }
-      el.setAttribute('aria-label', label);
+    const n = state.unread, item = document.getElementById('ask-support');
+    if (item) {
+      if (n) item.setAttribute('data-support-count', n > 9 ? '9+' : String(n));
+      else item.removeAttribute('data-support-count');
+      item.setAttribute('aria-label', n ? `Tico support, ${n} new ${n === 1 ? 'reply' : 'replies'}` : 'Tico support');
     }
-    const badge = document.querySelector('#mobile-support [data-support-badge]');
-    if (badge) { badge.hidden = !n; badge.textContent = n > 9 ? '9+' : String(n); }
+    document.dispatchEvent(new CustomEvent('tico:support'));
   }
   function accept(data) {
     state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread || 0};
@@ -136,7 +139,9 @@
     busyRefresh = (async () => {
       const revision = stateRevision;
       try {
-        const data = await call('POST', '/support/tickets/refresh');
+        // The conversation in view is asked about every time; the server paces the rest by how recently each was written on.
+        const shown = isOpen() && view === 'chat' ? current()?.id : '';
+        const data = await call('POST', '/support/tickets/refresh', shown ? {ticket: shown} : undefined);
         // A refresh started before a send/read/delete settled can return an older ticket list. Keep the local change;
         // the next refresh will reconcile it with the server.
         if (revision === stateRevision) accept(data);
@@ -199,7 +204,7 @@
     const total = state.tickets.length;
     pop.querySelector('[data-whats-new]').textContent = news ? `What's new (${news})` : "What's new";
     const mine = pop.querySelector('[data-mine]');
-    // The number of requests the list shows; the unread replies are the dots in it and the count on the ?.
+    // The number of requests the list shows; the unread replies are the dots in it and the count on Ask.
     mine.textContent = total ? `Your requests (${total})` : 'Your requests';
     mine.setAttribute('aria-pressed', String(view === 'list'));
   }
@@ -244,7 +249,7 @@
   // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; under an open request,
   // the button that starts one from it, for an owner or admin; and under each request, every request support made in
   // the sessions started from it.
-  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0;
+  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0, accessRevision = 0;
   const accessLogs = new Map();
   const TIERS = {app: 'App only', full: 'Full access'};
   // Why the backend says support access is off (backend/support_access.py off_reason).
@@ -306,7 +311,11 @@
   async function pollAccess() {
     clearTimeout(accessTimer);
     if (typeof S !== 'undefined' && S.me && !document.hidden) {
-      try { access = {...await call('GET', '/support/access'), at: Date.now()}; } catch (_) { /* the next poll asks again */ }
+      const revision = ++accessRevision;
+      try {
+        const data = await call('GET', '/support/access');
+        if (revision === accessRevision) access = {...data, at: Date.now()};    // an older answer never undoes a Stop
+      } catch (_) { /* the next poll asks again */ }
       renderBanner(); renderAccess();
     }
     // Every 30 s while support is in, for the time left; otherwise every 5 minutes (access is given from this app, and a
@@ -315,8 +324,14 @@
   }
   async function stopAccess() {
     if (!access.active) return;
-    try { await call('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {}); say('Tico support no longer has access.'); }
-    catch (e) { say(e.message, true); }
+    try {
+      const stopped = await call('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {});
+      // Show it ended at once, on the banner and under the request, whatever a poll still in flight answers.
+      accessRevision++;
+      access = {...access, active: null, sessions: (access.sessions || []).map(x => x.id === stopped?.id ? stopped : x)};
+      renderBanner(); renderAccess();
+      say('Tico support no longer has access.');
+    } catch (e) { say(e.message, true); }
     await pollAccess();
   }
   function openAccess(t) {
@@ -561,13 +576,12 @@
   window.reportThisHTML = (report, icon = false) => icon
     ? `<button type="button" class="report-this report-this-icon" data-report-this="${escape(JSON.stringify(report))}" aria-label="Report this" title="Report this"><span class="nav-icon" aria-hidden="true">bug_report</span></button>`
     : `<button type="button" class="linkish report-this" data-report-this="${escape(JSON.stringify(report))}">Report this</button>`;
-  window.talkLineHTML = () => state.enabled === false ? '' : '<p class="talk-line">Stuck or curious? A person at Tico reads every message. <button type="button" class="linkish" data-chat-with-us>Chat with us</button></p>';
   document.addEventListener('click', e => {
-    const talk = e.target.closest?.('[data-chat-with-us]'), report = e.target.closest?.('[data-report-this]');
-    if (!talk && !report) return;
+    const report = e.target.closest?.('[data-report-this]');
+    if (!report) return;
     e.preventDefault(); e.stopPropagation();
     let value = null;
-    try { value = report ? JSON.parse(report.dataset.reportThis) : null; } catch (_) {}
+    try { value = JSON.parse(report.dataset.reportThis); } catch (_) {}
     window.talkToUs(value);
   });
   // "Want help setting up?" starts a new request from text the person reads, edits and sends themselves.
@@ -585,6 +599,39 @@
       {message, email: compose?.email || '', ids: true, diag: true, perf: 24, bundle: null, key: uid(), kind, open: false});
     render(); renderThread(true); renderComposer(); focusBox();
   }
+  window.supportState = () => ({enabled: state.enabled, unread: state.unread,
+                                 open: state.tickets.filter(t => !ended(t)).map(t => ({id: t.id, unread: !!t.unread}))});
+  // Ask's panel (ui/app/ask-panel.js) shows an open request's messages in its chat, writes to it and reads its replies.
+  window.supportTicket = id => state.tickets.find(t => t.id === id) || null;
+  window.supportReply = async (id, message) => {
+    const next = await call('POST', `/support/tickets/${encodeURIComponent(id)}/messages`, {message, diagnostics: ''});
+    stateRevision++;
+    state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
+    mark(); if (isOpen()) render(); schedule();
+    return next;
+  };
+  // Ask's "Loop in Tico Support" switch with no open request: a new request, sent at once, holding the chat it shares
+  // (the switch is the consent; ui/app/ask-rules.js askShareText scrubs it). The reply email and install details are
+  // the same defaults the form starts with.
+  window.supportFile = async message => {
+    const body = {message, email: compose?.email || '', include_ids: true, ...(appVersion() ? {app_version: appVersion()} : {})};
+    const next = await call('POST', '/support/tickets', body, uid());
+    stateRevision++;
+    state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
+    mark(); if (isOpen()) render(); schedule();
+    return next;
+  };
+  window.supportRead = async id => {
+    const revision = stateRevision;
+    try {
+      const next = await call('POST', `/support/tickets/${encodeURIComponent(id)}/read`);
+      if (revision !== stateRevision) return;
+      stateRevision++;
+      state.tickets = state.tickets.map(x => x.id === next.id ? next : x);
+      state.unread = state.tickets.reduce((n, x) => n + (x.unread || 0), 0);
+      toasted = state.unread; mark();
+    } catch (_) { /* unread until it is seen again */ }
+  };
   window.supportStart = (message, kind = 'support') => {
     starting = {message, kind};
     void open({fresh: true});
@@ -601,7 +648,7 @@
   });
 
   // The pop-up: a modal dialog beside the sidebar on a computer, a bottom sheet on a phone. Focus moves into the box,
-  // Tab stays inside, and Esc, ✕ or a click outside closes it and gives focus back to whatever opened it (the ?).
+  // Tab stays inside, and Esc, ✕ or a click outside closes it and gives focus back to whatever opened it (Ask).
   function build() {
     if (pop) return pop;
     pop = document.createElement('dialog');
@@ -683,7 +730,7 @@
     });
     return pop;
   }
-  const visibleQuestion = () => ['help-open', 'mobile-support'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
+  const visibleQuestion = () => ['ask-fab', 'mobile-ask'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
   // On a phone the sheet sits on the bottom of what is visible: with the keyboard up, the space above it. The browser
   // reports that space in the visual viewport, whose height shrinks both for the keyboard and for pinch zoom, so
   // height × scale is the visible height in page pixels with zoom taken out. At normal scale the sheet follows the
@@ -720,8 +767,8 @@
       note('');
     } catch (e) { if (state.enabled === null) note(e.message, true); else note(POLL_FAILED, true); }
   }
-  // how: {ticket} opens that request, {fresh} a new one, {list} Your requests; nothing opens the latest request,
-  // unless the person left words unsent in the one they had open.
+  // how: {ticket} opens that request, {fresh} a new one, {list} Your requests; nothing opens the latest recent request
+  // (or Your requests, see `landing`), unless the person left words unsent in the one they had open.
   async function open(how = {}) {
     build();
     if (!isOpen()) {
@@ -743,7 +790,7 @@
       view = 'chat';
       if (how.ticket && state.tickets.some(t => t.id === how.ticket)) selected = how.ticket;
       else if (how.fresh) selected = '';
-      else if (!kept) selected = latest()?.id || '';
+      else if (!kept) { selected = landing()?.id || ''; if (!selected && latest()) view = 'list'; }
     }
     if (selected && !current()) selected = latest()?.id || '';
     render(); renderThread(true);
@@ -754,10 +801,6 @@
     if (state.enabled) { await refresh(); schedule(); }
   }
   window.supportOpen = open;
-  document.addEventListener('click', e => {
-    if (!e.target.closest?.('#help-open, #mobile-support')) return;
-    e.preventDefault(); void open();
-  });
   window.supportPoll = refresh;
   // Replies are checked when the app comes back into view or focus, and on the poll above; there is no Refresh button.
   // Only with a ticket still open (as the poll above), and once for a focus and a visibilitychange that come together.

@@ -473,6 +473,65 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
+    // A repository made on this computer with no remote: a task has no upstream to share, a private meeting's copy,
+    // never pushed, starts from the checkout's own HEAD.
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("projects");
+    let main = projects.join("bot-ops");
+    std::fs::create_dir_all(&main).unwrap();
+    sh(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("AGENT.md"), "# Ops\n").unwrap();
+    sh(&main, &["add", "-A"]);
+    sh(&main, &["commit", "-qm", "start"]);
+    let env = turn_env(&tmp.0, &[]);
+    let task = sessions::path_for(&projects, "ops", "t1");
+    assert_eq!(sessions::ensure(&main, &task, "t1", &env).await, (String::new(), sessions::NO_UPSTREAM.into()));
+    let name = sessions::private_of("private:c-1");
+    let session = sessions::path_for(&projects, "ops", &name);
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()));
+    assert_eq!(sh(&session, &["rev-parse", "HEAD"]), sh(&main, &["rev-parse", "HEAD"]));
+    assert!(session.join("AGENT.md").is_file());
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()), "reused");
+    assert!(sessions::remove_private(&main, &session, &name, &env).await);
+}
+
+#[tokio::test]
+async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_whole_when_the_meeting_ends() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let name = sessions::private_of("private:c-1");
+    let session = sessions::path_for(&projects, "ops", &name);
+    let before = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "rev-parse", "main"]);
+
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sh(&session, &["symbolic-ref", "--short", "HEAD"]), "tico-session/private-c-1");
+    // No upstream, and the bot's checkout keeps its push setting: a bare `git push` from the meeting goes nowhere.
+    assert_eq!(sh(&session, &["for-each-ref", "--format=%(upstream)", "refs/heads/tico-session/private-c-1"]), "");
+    assert!(!std::fs::read_to_string(main.join(".git/config")).unwrap().contains("[push]"));
+    // What the meeting wrote stays in its copy, for its later turns.
+    std::fs::create_dir_all(session.join("memory")).unwrap();
+    std::fs::write(session.join("memory/learnings.md"), "the press embargo lifts Nov 17\n").unwrap();
+    sh(&session, &["add", "-A"]);
+    sh(&session, &["commit", "-qm", "Embargo"]);
+    std::fs::write(session.join("notes.md"), "unsaved\n").unwrap();
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await.1, "");
+    assert!(session.join("notes.md").is_file() && !main.join("memory/learnings.md").exists());
+    // A task's careful remove keeps it (unpushed, dirty); the meeting's end deletes it all.
+    assert!(!sessions::remove(&main, &session, &name, &env).await);
+    assert!(!sessions::remove_private(&main, &session, "t1", &env).await, "only a private meeting's folder");
+    assert!(sessions::remove_private(&main, &session, &name, &env).await);
+    assert!(!session.exists());
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/private-c-1"]), "");
+    assert_eq!(sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "rev-parse", "main"]), before, "nothing reached the remote");
+}
+
+#[tokio::test]
 async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_done_once_pushed() {
     use crate::harness_memory::{claude_dir, move_for_turn, Moved};
     let tmp = Tmp::new();
@@ -557,15 +616,16 @@ async fn a_bots_own_diverged_checkout_is_named_in_its_prompt() {
     assert_eq!(problem, "it has 1 commits `origin/main` doesn't, and `origin/main` has 2 it doesn't; conflicting files: AGENT.md");
     assert_eq!(sh(&mine, &["rev-parse", "HEAD"]), before, "nothing moved");
     let mut attempt = json!({"bot": "coo", "config": {}, "repo_sync_problem": sessions::own_sync_line(&mine, &problem)});
-    let mut lines = vec!["You are coo.".to_string()];
+    let mut lines = vec![(crate::prompt::Part::Standing, "You are coo.".to_string())];
     sessions::prompt_head(&attempt, &mut lines);
-    assert!(lines[0].starts_with(&format!("Before anything else: your repository `{}` has diverged", mine.display())), "{lines:?}");
-    assert!(lines[0].ends_with("keeping both sides' facts, and push."));
+    assert!(lines[0].1.starts_with(&format!("Before anything else: your repository `{}` has diverged", mine.display())), "{lines:?}");
+    assert!(lines[0].1.ends_with("keeping both sides' facts, and push."));
+    assert_eq!(lines[0].0, crate::prompt::Part::Turn, "a sync problem is the turn's own, never left out as standing");
     // A shared checkout says it its own way; an up-to-date one says nothing.
     attempt["config"] = json!({"shared": true});
     let mut lines = vec![];
     sessions::prompt_head(&attempt, &mut lines);
-    assert!(!lines.iter().any(|l| l.contains("has diverged")));
+    assert!(!lines.iter().any(|(_, l)| l.contains("has diverged")));
     sh(&mine, &["reset", "-q", "--hard", "origin/main"]);
     assert_eq!(sessions::divergence(&mine, &env).await, "");
 }

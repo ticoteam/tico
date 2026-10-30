@@ -49,13 +49,18 @@ def _gone(c, row):
     return row['bot'] not in bots and not any(bot == row['bot'] for bot, _ in lanes)
 
 
+# INDEXED BY: the OR defeats the live-run index, and the plain plan scanned every attempt ever made (45-150 ms on
+# 92k attempts, inside the write transaction turn_fixer.free holds). The index holds only live runs, so this reads those.
+DEAD_SQL = ("SELECT * FROM attempts INDEXED BY attempts_live_lease WHERE state IN ('leased','running') AND "
+            "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
+            "ORDER BY created,id")
+
+
 def dead(c, now=None):
     """[(attempt row, why)] for every proven-dead turn: 'stopped' or 'gone'."""
     now = now or H.now()
     out = []
-    for row in c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND "
-                         "(lease_until<=? OR (state='leased' AND started IS NULL AND stop_requested IS NOT NULL)) "
-                         "ORDER BY created,id", (now,)).fetchall():
+    for row in c.execute(DEAD_SQL, (now,)).fetchall():
         if row['state'] == 'leased' and row['started'] is None and row['stop_requested']:
             out.append((row, 'stopped'))
         elif row['lease_until'] <= now and _gone(c, row):
@@ -219,7 +224,7 @@ def tend(c, settings, owner_id='', freed=0, draft=None):
     incident is still active; otherwise this pass rebuilds under the lock so a cleared incident cannot keep a stale
     finding.
     """
-    value = org_turns.observe(c, settings, detailed=False)
+    org_turns.observe(c, settings, detailed=False)
     incident = org_turns.saved(c, org_turns.INCIDENT)
     if not incident.get('id'):
         return incident

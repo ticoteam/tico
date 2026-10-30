@@ -35,6 +35,7 @@ SAMPLES = {
     "computer.harness": {"harness": "claude", "choice": "on"},
     "computer.harness.action": {"harness": "claude", "action": "update"},
     "computer.performance": "fast",
+    "computer.turns_at_once": {"turns_at_once": 3},
     "sleep.hours": 2,
     "bot.fallback": "",
     "bot.task_model": "",
@@ -60,11 +61,6 @@ SAMPLES = {
     "release.writer": "finance",
     "rules.task_rule": {"on": False},
     "rules.task_rule.create": {"name": "Parity rule", "when": {}, "then": {}},
-    "rules.wake": {"expected_revision": 1, "on": True},
-    "rules.wake.create": {"scope_kind": "team", "event": "task.created", "then": "note", "on": False},
-    "rules.routine": {"title": "Daily queue check"},
-    "rules.routine.create": {"title": "Parity check", "text": "Check the queue.", "cron": "0 9 * * *",
-                             "timezone": "UTC"},
     "rules.system": {"enabled": True},
     "webhooks.incoming.create": {"name": "Orders"},
     "webhooks.incoming": {"name": "Orders again"},
@@ -84,12 +80,14 @@ NOT_PROVEN = {
     "computer.performance": "422: the mode sample", "sleep.hours": "409: needs a Gateway",
     "bot.fallback": "422: needs a model id", "bot.task_model": "422: needs a model id",
     "bot.change": "422: a transition body", "bot.restore": "409: finance is not archived",
-    "bots.create": "422: needs a model", "bot.compact_at": "422: the value's bounds",
+    "bot.compact_at": "422: the value's bounds",
     "bot.keep_tasks_going": "422: the body shape", "bot.definition": "422: needs expected_revision",
+    "bot.turns_at_once": "422: the body needs expected_revision",
+    "bot.manages_reports": "422: the body needs expected_revision",
     "bot.owners": "422: the entry sends owners without expected_revision",
     "bot.profile": "422: the body shape", "rules.system": "422: the body shape",
     "rules.task_rule": "404: no synthetic task rule yet", "rules.task_rule.create": "422: the body shape",
-    "rules.wake.create": "422: the event name", "tasks.tag": "422: the body shape",
+"tasks.tag": "422: the body shape",
     "inbound.inbox.create": "422: the body shape", "inbound.inbox": "422: no synthetic inbox yet",
     "inbound.phone_request.cancel": "409: inbound is not configured",
     # Confirm entries: the card is made, but the tap can't run on this fixture.
@@ -105,8 +103,6 @@ KNOWN_GAPS = {
     ("computer.revoke", "member"): "card, then refused", ("webhooks.incoming.rotate", "member"): "card, then refused",
     ("webhooks.incoming.delete", "member"): "card, then refused",
     ("webhooks.gateway.wake", "member"): "card, then refused", ("webhooks.outgoing", "member"): "card, then refused",
-    # "Anyone", but the route keeps a team rule to the people who manage it.
-    ("rules.wake", "member"): "refused",
     # An admin changes a person's role, but only the owner makes or removes admins (Review 2 of PR #1700 had the sweep
     # tap its cards, which found it).
     ("people.person.role", "admin"): "card, then refused",
@@ -127,10 +123,6 @@ def _objects(api, machine):
     ids["task-types"] = post(api, "task-types", {"name": "Parity type"}, "ana-test")
     ids["tags"] = post(api, "tags", {"key": "parity", "label": "parity"}, "ana-test")
     ids["triggers"] = post(api, "triggers", {"name": "Parity trigger"}, "ana-test")
-    ids["rules"] = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "note",
-                                       "on": False}, "ana-test")
-    ids["routines"] = post(api, "bots/finance/routines", {"title": "Parity", "text": "Check.", "cron": "0 9 * * *",
-                                                          "timezone": "UTC"}, "ana-test")
     ids["webhooks"] = post(api, "webhooks", {"name": "Parity hook", "url": "https://hooks.acme.example/parity",
                                              "events": ["custom.*"]}, "ana-test")["webhook"]
     found = {}

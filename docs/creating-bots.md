@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and CEO Bot are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
 
-The 98 role templates, in nine groups with a Leadership extra, are described in
+The 99 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -56,6 +56,23 @@ Built-in bots cannot be archived.
 ![Archive confirmation naming Account Executive as the recipient of the bot’s open tasks](images/settings-stage1/settings-archive-bot-confirm.png)
 
 *Synthetic Acme example. The confirmation names who gets the work; Cancel leaves the bot unchanged.*
+
+## Pause or unpause a bot
+
+Open the bot's page to stop it from taking new work or to start it again.
+
+1. Click **Pause** in the strip at the top of the bot's page. The strip stays above the tabs; an active bot shows **Running** or **Idle** beside the button.
+2. To start the bot again, click **Unpause** in the full-width amber banner, which says **<Bot name> is paused**.
+
+The strip changes state after one click, without a confirmation. For example, `hub bot pause support-helper` pauses Support helper; `hub bot resume support-helper` starts it again.
+
+While paused, the bot will not start tasks, answer messages or run work from its Automations. A turn in progress is interrupted when the computer receives the pause. If the bot has open tasks assigned to it, the banner links to them and says how many are waiting.
+
+When Tico has a pause record, the banner shows who paused the bot and when, in UTC. If there is no record, it says **Paused**. The strip uses the existing bot-management permissions: if you can see the bot but cannot manage it, you see the banner without a button and a prompt to ask its operator to unpause it. The existing command-line controls remain available to people with their current permissions: `hub bot pause <bot>` and `hub bot resume <bot>`.
+
+A company pause for billing is separate from a bot pause. Its banner links to **Add credit** in **Settings > Billing**. While company billing is paused, bot-level controls are unavailable; the bot's own paused state remains separate.
+
+If a control fails, the strip keeps the current state, shows the reason and offers **Retry**.
 
 ## Edit Instructions
 
@@ -176,7 +193,7 @@ A message bot is assigned to one human on the roster. **Settings → Bots → Ad
 the Finish setup cards) show a human picker when the template is `inbox`. The chosen address is
 appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
 `bot.yaml` from that line. The bot is created `planned`, with `outbound_send: false`, one
-routine, the weekday 07:30 email brief in America/Los_Angeles (change its timezone in Settings → Rules),
+routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
 declared off and switched on when its setup starts, and gmail `read`/`draft` plus calendar `read` on that mailbox. It reads only that mailbox;
 `org_read: true`, which also reads everyone who reports to the human, is added by the owner
 deliberately. It starts with filing off (no labels, no archive) and shows what it would do.
@@ -435,30 +452,30 @@ it is optional, decided by a human and used once. See [Permissions](permissions.
 
 ## 5. Routines
 
-A routine is a row in Tico owned by the bot: a cron (or a Tico event), a title, and the text the
-bot is told. The server runs the clock and turns each occurrence into a normal task
-(`docs/routines.md`). Humans add them on the site (Settings → Rules); a bot adds its own from a
-run:
+A routine is an automation: a Schedule (a cron in a time zone) or an Event trigger, and a Bot turn step with the text
+the bot is told. Each run is a normal task for the bot ([Routines](routines.md)). Humans add one on the Automations page
+(**New automation**); a bot adds its own from a run with `hub automation create --file -` (`hub automation guide` shows
+the flow format):
 
-```
-hub routine set daily-stock-pass --title "Daily stock pass" --cron "0 7 * * 1-5" \
-    --text-file playbooks/daily-stock-pass.md
+```json
+{"name": "Daily stock pass", "owner": "bot:acme-stock", "enabled": true,
+ "trigger": {"type": "schedule", "cron": "0 7 * * 1-5", "tz": "America/Los_Angeles"},
+ "steps": [{"id": "pass", "type": "bot_turn", "enabled": true, "bot": "acme-stock",
+            "prompt": "Run the daily stock pass. Follow playbooks/daily-stock-pass.md."}]}
 ```
 
 A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
-`enabled: false`); `hub bot create` seeds the new bot's routines from it once, and from then on
-Tico's rows are the routines. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible under Settings → Rules, and is switched on when the bot's setup starts (**Set up**, go-live),
+`enabled: false`); `hub bot create` seeds the new bot's automations from it once, and from then on
+the automations are what run. The starter templates declare their first routine with `enabled: false`:
+it exists and is visible on the Automations page, and is switched on when the bot's setup starts (**Set up**, go-live),
 so nobody approves it separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 
-- **`key`** (the `id` in a template) is stable. Keep it when you change the title: setting the
-  same key again updates the routine in place, and the server keeps its settings and history.
-- **`cron`** is five fields. The default timezone is America/Los_Angeles, not the computer's.
-- **The text** is the playbook: keep the method in `playbooks/` and pass it with `--text-file`,
-  so the repository still says how the bot works and Tico says when.
-- Deleting a routine keeps its history; setting the same key again brings it back.
+- **`cron`** is five fields, in the time zone you give (`tz`), not the computer's.
+- **The text** points at the playbook: keep the method in `playbooks/`, so the repository still says how the bot works
+  and Tico says when.
+- Change one with `hub automation update <id>`; each change is a new version (`hub automation versions <id>`).
 - Give each occurrence its own title when two passes of the same playbook run in one day, so a run
   can never be mislabelled and one pass cannot hide behind another.
 
@@ -638,8 +655,8 @@ Levers set in **Settings → Bots**, not in the repository:
   window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a person's message, a question,
   an approval and a gate verdict wake the bot at once, and only once when the same event repeats before its run is over.
   A stall check on a task that has not changed waits 30 minutes after the last one, doubling to at most 8 hours.
-  **Custom** adds **Pulls**, **Takes** and **Sweeps**, and a **Wake rules** link to the Rules page filtered to this
-  bot, with the profile's rows copied there to edit; choosing a named profile again deletes them after a confirm that
+  **Custom** adds **Pulls**, **Takes** and **Sweeps**, and copies the profile's rows into the bot's **What wakes**
+  automation to edit; choosing a named profile again deletes them after a confirm that
   says how many. A profile turns on no routine, hook, subscription or permission, and leaves
   Compact at alone. The line under the picker shows what the bot runs on. Each run in a task's **Runs** says what woke it.
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only

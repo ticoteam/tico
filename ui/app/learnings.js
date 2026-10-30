@@ -46,7 +46,7 @@ function learnSubject(kind, x) {
   const more = x.entries.length - 1;
   const av = kind === 'bots' ? botAvatar(x.id, 22) : `<span class="lrn-sq" aria-hidden="true">${esc((x.name || '?')[0])}</span>`;
   const name = kind === 'bots' ? `<a href="#/bot/${encodeURIComponent(x.id)}">${esc(x.name)}</a>` : esc(x.name);
-  return `<details class="lrn-subj"><summary>${av}<span class="nm">${name}</span><span class="first">${esc(x.entries[0]?.title || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">expand_more</span></span></summary>
+  return `<details class="lrn-subj"><summary>${av}<span class="nm">${name}</span><span class="first">${esc(x.entries[0]?.title || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">chevron_right</span></span></summary>
     <div class="lrn-body">${x.saw ? `<div class="saw">${esc(x.saw)}</div>` : ''}${x.entries.map(learnEntry).join('')}</div></details>`;
 }
 

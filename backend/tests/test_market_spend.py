@@ -6,7 +6,7 @@ import pytest
 from backend import market_spend as MS
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_ceo_bot
+from backend.tests.test_company import with_strategy_bot
 from backend.tests.test_market import _librarian, _seed
 from backend.tests.test_sql import query
 from backend.tests.test_strategy import publish, ready
@@ -232,7 +232,7 @@ def test_the_tree_is_capped_and_a_segment_needs_a_defined_root(api):
 
 
 def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_proposed_one_does_not(api):
-    with_ceo_bot(api)
+    with_strategy_bot(api)
     first, _, _ = defined(api)
     ready(api, cites=[first], wrong_if={"kind": "thesis", "market_id": first})
     publish(api)
@@ -249,7 +249,7 @@ def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_pro
 
 
 def test_a_shared_parameter_change_trips_a_bet_on_a_segment_that_uses_it(api):
-    with_ceo_bot(api)
+    with_strategy_bot(api)
     first, _, _ = defined(api)
     proof = evidence(api)
     post(api, "market/sizes", {"segment_id": first, "method": "bottom_up", "spend_usd": 0, "low_usd": 1, "high_usd": B,
