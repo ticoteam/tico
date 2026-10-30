@@ -17,9 +17,9 @@
     { actor: 'bot:librarian', name: 'Librarian', bot: true },
     { actor: 'bot:head-of-engineering', name: 'Head of Engineering', bot: true },
     { actor: 'bot:marketing-lead', name: 'Marketing Lead', bot: true },
-    { actor: 'human:steven', name: 'Steven Park', bot: false },
-    { actor: 'human:arthur', name: 'Arthur Silva', bot: false },
-    { actor: 'human:matheus', name: 'Matheus Costa', bot: false },
+    { actor: 'human:dana', name: 'Dana Reyes', bot: false },
+    { actor: 'human:sam', name: 'Sam Okafor', bot: false },
+    { actor: 'human:mara', name: 'Mara Novak', bot: false },
     { actor: 'bot:tico-support', name: 'Tico Support', bot: true },
     { actor: 'human:tina', name: 'Tina Alvarez', bot: false },
     { actor: 'human:martin', name: 'Martin Diaz', bot: false },
@@ -40,22 +40,22 @@
   // ---- A long meeting with several speakers ----
   const lines = [
     ['Me', true, "Okay, let's start. The goal today is to agree on how the recorder hands action items to bots."],
-    ['Steven Park', false, 'Before that, can we look at the onboarding numbers? Activation went up after the setup page shipped.'],
-    ['Steven Park', false, 'About a third of new companies finish setup in the first session now.'],
+    ['Dana Reyes', false, 'Before that, can we look at the onboarding numbers? Activation went up after the setup page shipped.'],
+    ['Dana Reyes', false, 'About a third of new companies finish setup in the first session now.'],
     ['Me', true, 'Nice. That matches what the Librarian summarized yesterday.'],
-    ['Arthur Silva', false, 'For the recorder, I think every drafted item should stay unselected until someone picks an owner.'],
-    ['Matheus Costa', false, 'Agreed. And sending should be one item at a time, as a private task with the quote attached.'],
-    ['Me', true, 'Right, nothing goes to Tico until a person sends it. Arthur, can you check the task link format?'],
-    ['Arthur Silva', false, "Yes, I'll confirm the transcript link opens at the quoted moment."],
-    ['Steven Park', false, 'One concern: meeting audio on speakers echoes into the mic. Are we dropping duplicates?'],
+    ['Sam Okafor', false, 'For the recorder, I think every drafted item should stay unselected until someone picks an owner.'],
+    ['Mara Novak', false, 'Agreed. And sending should be one item at a time, as a private task with the quote attached.'],
+    ['Me', true, 'Right, nothing goes to Tico until a person sends it. Sam, can you check the task link format?'],
+    ['Sam Okafor', false, "Yes, I'll confirm the transcript link opens at the quoted moment."],
+    ['Dana Reyes', false, 'One concern: meeting audio on speakers echoes into the mic. Are we dropping duplicates?'],
     ['Me', true, 'We drop mic words that repeat meeting audio within a second.'],
-    ['Matheus Costa', false, "Good. Then the remaining work is the calendar prompt. I'll draft the copy for the Record button."],
-    ['Arthur Silva', false, 'Also the Library should flag recordings whose delivery failed, without losing the local copy.'],
+    ['Mara Novak', false, "Good. Then the remaining work is the calendar prompt. I'll draft the copy for the Record button."],
+    ['Sam Okafor', false, 'Also the Library should flag recordings whose delivery failed, without losing the local copy.'],
     ['Me', true, "Let's make that an action item for the Head of Engineering."],
-    ['Steven Park', false, 'And someone should update the recovery plan doc with the two-source capture test.'],
+    ['Dana Reyes', false, 'And someone should update the recovery plan doc with the two-source capture test.'],
     ['Me', true, "I'll send that one to the Librarian; it owns the docs."],
-    ['Matheus Costa', false, 'Last thing: pricing for hosted. We said 1.25x on provider cost with a cap per feature.'],
-    ['Steven Park', false, "Let's keep the cap visible in the admin console so we can tune it."],
+    ['Mara Novak', false, 'Last thing: pricing for hosted. We said 1.25x on provider cost with a cap per feature.'],
+    ['Dana Reyes', false, "Let's keep the cap visible in the admin console so we can tune it."],
     ['Me', true, 'Great. I think that covers it. Thanks everyone.'],
   ];
   const longBlocks = [];
@@ -69,7 +69,7 @@
   const items = [
     {
       id: 'i1', title: 'Confirm the transcript link opens at the quoted moment', quote: "I'll confirm the transcript link opens at the quoted moment.",
-      at_ms: 172000, owner: 'human:arthur', owner_name: 'Arthur Silva', sent: false, sent_to: '', task_url: '', sending: false, can_send: true, error: '',
+      at_ms: 172000, owner: 'human:sam', owner_name: 'Sam Okafor', sent: false, sent_to: '', task_url: '', sending: false, can_send: true, error: '',
     },
     {
       id: 'i2', title: 'Flag recordings whose delivery failed in the Library', quote: 'The Library should flag recordings whose delivery failed, without losing the local copy.',
@@ -101,7 +101,7 @@
   const libraryRows = [
     { id: 'm1', title: 'Recorder hand-off review', started_at: iso(-95), duration_ms: 1296000, recording: false, status: null, sync_error: '', sent: false, can_send: true },
     { id: 'm2', title: 'Weekly product sync', started_at: iso(-200), duration_ms: 2710000, recording: false, status: { label: 'Live in Tico', tone: 'accent' }, sync_error: '', sent: false, can_send: true },
-    { id: 'm3', title: 'Hosting pricing with Steven', started_at: iso(-60 * 24 - 30), duration_ms: 1840000, recording: false, status: { label: 'In Tico', tone: 'accent' }, sync_error: '', sent: true, can_send: false },
+    { id: 'm3', title: 'Hosting pricing with Dana', started_at: iso(-60 * 24 - 30), duration_ms: 1840000, recording: false, status: { label: 'In Tico', tone: 'accent' }, sync_error: '', sent: true, can_send: false },
     { id: 'm4', title: 'Customer call · Northwind', started_at: iso(-60 * 26), duration_ms: 3320000, recording: false, status: { label: 'Transcribing 3', tone: 'muted' }, sync_error: '', sent: false, can_send: true },
     { id: 'm5', title: 'Mic check', started_at: iso(-60 * 24 * 3), duration_ms: 42000, recording: false, status: { label: 'No signal', tone: 'amber' }, sync_error: '', sent: false, can_send: true },
     { id: 'm6', title: 'Design pass notes', started_at: iso(-60 * 24 * 4), duration_ms: 960000, recording: false, status: { label: 'In Tico', tone: 'accent' }, sync_error: '', sent: true, can_send: false },
@@ -122,6 +122,9 @@
   const status = {
     busy: false, demo: false, error: '', message: '', signing_in: false, connect: null, first_run: false,
     suggested: '', recording: null, meeting: null, sending: null,
+    // Speech through the signed-in Tico; `none` before sign-in without keys of your own.
+    speech: { source: 'tico', stream: true, transcribe: true, tico: 'Acme' },
+    update: { state: 'none', version: '', notes: '', blocked: '' },
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true },
@@ -136,30 +139,38 @@
     people: {
       rows: [
         { kind: 'person', name: 'Me', me: true },
-        { kind: 'person', name: 'Steven Park' },
-        { kind: 'person', name: 'Arthur Silva', actor: 'human:arthur', removable: true },
+        { kind: 'person', name: 'Dana Reyes' },
+        { kind: 'person', name: 'Sam Okafor', actor: 'human:sam', removable: true },
         { kind: 'bot', name: 'Librarian' },
         { kind: 'bot', name: 'Head of Engineering' },
         { kind: 'person', name: 'Dana (guest)', local: true },
       ],
       stage: 'add', orgs, org: 'Acme', team: true, started: true, can_share: true, blocked: '',
-      candidates: owners.filter((o) => !['bot:librarian', 'bot:head-of-engineering', 'human:arthur', 'human:steven'].includes(o.actor)),
+      candidates: owners.filter((o) => !['bot:librarian', 'bot:head-of-engineering', 'human:sam', 'human:dana'].includes(o.actor)),
     },
     // Two people and two bots; the Head of Engineering has taken a turn and is writing.
     chat: {
       ...chatEmpty, connected: true, bots: 2,
       messages: [
-        msg('c1', 'Steven Park', 'Can someone pull the activation numbers from last week before we decide?', 9),
+        msg('c1', 'Dana Reyes', 'Can someone pull the activation numbers from last week before we decide?', 9),
         msg('c2', 'Librarian', 'Activation was 34% of new companies finishing setup in the first session, up from 21%. Source: the onboarding dashboard, Oct 22–28.', 8.5, { bot: true }),
         msg('c3', 'You', 'Thanks. @Head of Engineering, what would it take to flag failed deliveries in the Library?', 6, { me: true }),
-        msg('c4', 'Arthur Silva', 'I can take the transcript link check.', 5),
+        msg('c4', 'Sam Okafor', 'I can take the transcript link check.', 5),
         msg('c5', 'Head of Engineering', 'A status column on the summary plus a retry button on the row. About a day, mostly tests.', 4.5, { bot: true }),
         msg('c6', 'Head of Engineering', 'I can open the task now if you want it this week.', 4.4, { bot: true }),
-        msg('c7', 'Steven Park', 'Yes, please do. And keep the local copy no matter what.', 2),
+        msg('c7', 'Dana Reyes', 'Yes, please do. And keep the local copy no matter what.', 2),
       ],
       replying: ['Head of Engineering'],
     },
   });
+  // Bot-turn notices (`live.notices`), newest last: waits, a turn put off, an empty reply asked again, a failure.
+  const at = (minutesAgo) => now - minutesAgo * 60000;
+  const liveNotices = [
+    { id: 'n1', kind: 'waiting', bot: 'Librarian', text: 'Librarian is waiting for its computer to update before it can reply.', at: at(8.8) },
+    { id: 'n2', kind: 'deferred', bot: 'Head of Engineering', text: 'Head of Engineering will reply after the answer it is giving.', at: at(4.45) },
+    { id: 'n3', kind: 'retried', bot: 'Head of Engineering', text: 'Empty reply, asked again.', at: at(4.42) },
+    { id: 'n4', kind: 'failed', bot: 'Marketing Lead', text: "Marketing Lead couldn't make a private copy of its repository, so it can't reply in this meeting.", at: at(1) },
+  ];
   // Live text while recording: finished turns, streamed far-end speakers (S1, S2), and a partial tail.
   const liveTurns = [
     { speaker: 'Me', me: true, start_ms: 2000, paragraphs: ['Thanks for joining. Quick one today: the streaming rollout.'], streamed: false },
@@ -196,12 +207,12 @@
   const scenes = {
     library: () => { state.status.demo = false; },
     empty: () => {
-      Object.assign(state.status, { first_run: true, suggested: '' });
+      Object.assign(state.status, { first_run: true, suggested: '', speech: { source: 'none', stream: false, transcribe: false, tico: '' } });
       state.library = { rows: [], events: [], calendar_stale: false, connected: false };
       state.settings = { ...settings, connections: [], calendar: false, calendar_available: false, key_saved: false, xai_saved: false, streaming: false };
     },
     signing: () => {
-      Object.assign(state.status, { first_run: true, signing_in: true, busy: true });
+      Object.assign(state.status, { first_run: true, signing_in: true, busy: true, speech: { source: 'none', stream: false, transcribe: false, tico: '' } });
       state.status.suggested = 'tico.example.com';
       state.library = { rows: [], events: [], calendar_stale: false, connected: false };
     },
@@ -259,6 +270,31 @@
     // A meeting not in Tico yet: the first message would connect it, private to you.
     'chat-first': () => {},
     settings: () => {},
+    // Own providers: the key fields show.
+    'settings-own': () => { state.status.speech = { source: 'own', stream: true, transcribe: true, tico: 'Acme' }; },
+    // This Tico transcribes but has no live text yet.
+    'settings-nostream': () => { state.status.speech = { source: 'tico', stream: false, transcribe: true, tico: 'Acme' }; },
+    // The live meeting with bot-turn notices between the messages.
+    notices: () => {
+      scenes.live();
+      state.meetings.m2.live_notices = clone(liveNotices);
+    },
+    // An update waiting for the recording to end (update.js draws the banner).
+    update: () => {
+      scenes.recording();
+      state.status.update = { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording' };
+    },
+    'update-error': () => { state.status.update = { state: 'error', version: '0.6.0', notes: '', blocked: '' }; },
+    // Long names and titles everywhere they show.
+    long: () => {
+      scenes.live();
+      const m = state.meetings.m2;
+      m.title = 'Quarterly planning with the platform, infrastructure and developer experience teams (EMEA + Americas)';
+      m.actions.items[1].owner_name = 'Head of Engineering, Platform and Developer Experience';
+      m.chat.messages[1].name = 'Librarian for the Engineering Knowledge Base and Docs';
+      m.people.rows.push({ kind: 'person', name: 'Maria-Fernanda Gonçalves de Albuquerque', local: true });
+      state.library.rows[0].title = 'A very long recording title that keeps going past the edge of the window to check truncation';
+    },
     // People being added: one on its way, and the reason the last one was refused.
     adding: () => {
       scenes.live();
@@ -267,14 +303,14 @@
       p.candidates = p.candidates.filter((c) => c.actor !== 'bot:marketing-lead');
       p.error = 'Not added: Server returned HTTP 403 (forbidden). Check the connection or retry.';
     },
-    // The top bar's stack as Chris saw it: Me, then a bot, then a person.
+    // The top bar's stack as reported: Me, then a bot, then a person.
     avatars: () => {
       scenes.live();
       const rows = state.meetings.m2.people.rows;
       state.meetings.m2.people.rows = [rows[0], rows[3], rows[2], rows[1], rows[4]];
     },
     mentions: () => {
-      state.meetings.m1.notes.text = 'Decided: one item at a time, private tasks, quote attached.\n@Arthur Silva confirms the transcript link; @Librarian files the recovery plan.\nFollow up on hosted pricing cap next week.';
+      state.meetings.m1.notes.text = 'Decided: one item at a time, private tasks, quote attached.\n@Sam Okafor confirms the transcript link; @Librarian files the recovery plan.\nFollow up on hosted pricing cap next week.';
     },
     // Send on a live meeting: it finishes the meeting in Tico first, then files it.
     sending: () => {
@@ -399,8 +435,9 @@
     },
     set_chat_private: ({ private: value }) => { open().chat.private = value; },
     save_settings: ({ form }) => {
-      const { key, xai_key, ...rest } = form;
+      const { key, xai_key, speech_source, ...rest } = form;
       Object.assign(state.settings, rest);
+      if (speech_source) state.status.speech = { ...state.status.speech, source: speech_source };
       if (key) state.settings.key_saved = true;
       if (xai_key) state.settings.xai_saved = true;
       toast('Settings saved');

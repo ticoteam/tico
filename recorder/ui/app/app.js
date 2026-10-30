@@ -205,7 +205,7 @@
   function errorNotice() {
     const error = S.status.error;
     if (!error) return '';
-    return `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(error)}</span><button class="icon-btn" style="width:20px;height:20px;margin:-1px -4px 0 0;color:inherit" data-act="dismiss-error" aria-label="Dismiss">${icon('close', 12)}</button></div>`;
+    return `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(error)}</span><button class="icon-btn dismiss" data-act="dismiss-error" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>`;
   }
 
   // ---- Library ----
@@ -219,7 +219,12 @@
     if (lib.rows.length) html += `<label class="search">${icon('search', 14)}<input data-model="search" placeholder="Search" spellcheck="false"></label>`;
     html += `</div>${errorNotice()}`;
     if (st.first_run) {
-      html += `<div class="card"><div class="signin-row"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in with Tico</button></div>${st.signing_in ? `<div class="waiting"><span class="spin"></span>Choose Allow in your browser…</div>` : ''}</div>`;
+      // First run: sign in to a Tico, then macOS asks for the mic and meeting audio on the first recording.
+      const signin = st.signing_in
+        ? `<div class="waiting"><span class="spin"></span>Choose Allow in your browser…</div>`
+        : `<div class="signin-row"><input class="field" data-model="signin" data-enter="signin" placeholder="your-tico.example" spellcheck="false" aria-label="Your Tico's address"><button class="btn primary" data-act="signin" ${st.busy ? 'disabled' : ''}>Sign in</button></div>`;
+      html += `<div class="card setup"><div class="step"><span class="step-mark">${ticoDot()}</span><div class="grow"><div class="step-title">Sign in with Tico</div>${signin}</div></div>`;
+      html += `<div class="step"><span class="step-mark">${icon('mic', 16)}</span><div class="grow step-line"><div class="step-title">Microphone and meeting audio</div><span class="faint">Asked on first recording</span></div></div></div>`;
     }
     if (!st.recording && lib.events.length && !q) {
       html += `<div class="group-label">Coming up${lib.calendar_stale ? ` · <span style="color:var(--amber)">Calendar out of date</span>` : ''}</div>`;
@@ -262,7 +267,7 @@
     }
     const menu = S.ui.pop?.anchorId === row.id ? 'menu-open' : '';
     const sub = [isNaN(date) ? '' : timeOf(date), length(row.duration_ms)].filter(Boolean).map(esc).join(' · ');
-    return `<div class="row ${menu}" data-act="open" data-id="${id}" role="button" aria-label="${esc(row.title)}">
+    return `<div class="row ${menu}" data-act="open" data-id="${id}" role="button" tabindex="0" aria-label="${esc(row.title)}">
       <div class="tile ${row.recording ? 'live' : ''}">${icon('wave', 18)}</div>
       <div class="body"><div class="title">${esc(row.title)}</div><div class="sub">${sub}</div></div>
       <div class="tail">${row.can_send ? `<button class="btn small hover-only" data-act="pop" data-pop="send" data-id="${id}">Send</button>` : ''}${row.recording ? '' : `<button class="icon-btn trash hover-only" data-act="ask-delete" data-id="${id}" title="Delete" aria-label="Delete ${esc(row.title)}">${icon('trash', 15)}</button>`}${statusHtml}</div>
@@ -287,30 +292,63 @@
     html += chatSection(m.chat);
     return html + '</div>';
   }
-  /** The meeting's chat: people, bots and private questions to Tico, in time order. */
+  /** The meeting's chat: people, bots and private questions to Tico, in time order, with bot-turn notices between. */
   function chatSection(c) {
+    const notices = liveNotices(S.meeting);
     let html = `<section class="section chat-section" id="chat"><div class="section-head"><h2>Chat</h2></div>`;
-    if (!c.messages.length && !c.replying.length) html += `<div class="chat-empty">Bots you add can reply here.</div>`;
+    if (!c.messages.length && !c.replying.length && !notices.length) html += `<div class="chat-empty">Bots you add can reply here.</div>`;
     let last = null;
+    let n = 0;
+    // Notices are newest last, like the messages; each goes in before the first message after it.
+    const flush = (until) => {
+      while (n < notices.length && !(notices[n].at > until)) {
+        html += chatNotice(notices[n++]);
+        last = null;
+      }
+    };
     for (const msg of c.messages) {
       const date = new Date(msg.time);
+      if (!isNaN(date)) flush(date.getTime());
       const cont = last && last.name === msg.name && last.private === msg.private && !msg.pending;
       const head = cont ? '' : `<div class="msg-head"><b>${esc(msg.name)}</b>${msg.bot && !msg.private ? '<span class="tag">Bot</span>' : ''}${msg.private ? `<span class="tag private">${icon('lock', 11)}Only you</span>` : ''}${msg.time && !isNaN(date) ? `<span class="time">${esc(timeOf(date))}</span>` : ''}</div>`;
-      const who = msg.private && !msg.me ? `<span class="avatar tico">${icon('wave', 13)}</span>` : avatar({ name: msg.name, bot: msg.bot, me: msg.me });
+      const who = msg.private && !msg.me ? ticoDot() : avatar({ name: msg.name, bot: msg.bot, me: msg.me });
       const text = esc(msg.text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
       html += `<div class="msg ${msg.private ? 'private' : ''} ${msg.pending ? 'pending' : ''} ${cont ? 'cont' : ''}">${cont ? '<span class="avatar-gap"></span>' : who}<div class="msg-body">${head}<div class="msg-text selectable">${text}</div></div></div>`;
       last = msg;
     }
+    flush(Infinity);
     const typing = '<span class="dots"><i></i><i></i><i></i></span>';
     for (const name of c.replying) html += `<div class="msg replying">${avatar({ name, bot: true })}<div class="msg-body"><div class="msg-line"><b>${esc(name)}</b> is replying${typing}</div></div></div>`;
-    if (c.thinking) html += `<div class="msg replying private"><span class="avatar tico">${icon('wave', 13)}</span><div class="msg-body"><div class="msg-line"><b>Tico</b> is answering privately${typing}</div></div></div>`;
+    if (c.thinking) html += `<div class="msg replying private">${ticoDot(true)}<div class="msg-body"><div class="msg-line"><b>Tico</b> is answering privately${typing}</div></div></div>`;
     if (c.error) html += `<div class="notice inline">${icon('alert')}<span class="grow selectable">${esc(c.error)}</span>${c.retry && c.ready ? `<button class="link" data-act="chat-retry">Retry</button>` : ''}</div>`;
     return html + '</section>';
   }
+  /** Tico's own mark: the Liquid Dot, flat. Bots get the bot avatar, never the dot. */
+  const ticoDot = (thinking = false) => `<span class="avatar tico" aria-label="Tico"><i class="ldot ${thinking ? 'thinking' : ''}"></i></span>`;
+  /** What the meeting's live state reads as: a string today, an object with a label if it grows one. */
+  const liveLabel = (m) => (typeof m.live === 'string' ? m.live : m.live?.label || null);
+  /** Bot turns that failed, wait, were put off or were retried (`live.notices`), newest last. */
+  function liveNotices(m) {
+    if (!m) return [];
+    const list = (m.live && typeof m.live === 'object' ? m.live.notices : null) || m.live_notices || m.chat?.notices || [];
+    return Array.isArray(list) ? list : [];
+  }
+  /** One quiet line in the chat: a failed turn in the warning tone, the rest muted. */
+  function chatNotice(notice) {
+    const failed = notice.kind === 'failed';
+    const glyph = failed ? 'alert' : notice.kind === 'retried' ? 'retry' : 'clock';
+    const bot = String(notice.bot || '');
+    const text = String(notice.text || '');
+    // The sentence usually names the bot already; only add the name when it does not.
+    const lead = bot && !text.startsWith(bot) ? `<b>${esc(bot)}</b> · ` : '';
+    const at = new Date(notice.at);
+    return `<div class="chat-notice ${failed ? 'failed' : ''}" role="status">${icon(glyph, 13)}<span class="grow selectable">${lead}${esc(text)}</span>${notice.at && !isNaN(at) ? `<span class="time">${esc(timeOf(at))}</span>` : ''}</div>`;
+  }
   function visibility(m) {
-    if (!m.live) return badge(`${icon('lock', 12)}Private`, 'muted', 'title="On this Mac only"');
-    const team = m.live === 'Team can join';
-    return badge(`${icon(team ? 'globe' : 'lock', 12)}${esc(m.live)}`, m.live === 'Ended in Tico' ? 'muted' : 'accent', `data-act="pop" data-pop="people" title="${esc(m.place)}"`);
+    const live = liveLabel(m);
+    if (!live) return badge(`${icon('lock', 12)}Private`, 'muted', 'title="On this Mac only"');
+    const team = live === 'Team can join';
+    return `<button class="badge ${live === 'Ended in Tico' ? 'muted' : 'accent'} badge-btn" data-act="pop" data-pop="people" title="${esc(m.place)}">${icon(team ? 'globe' : 'lock', 12)}${esc(live)}</button>`;
   }
   function actions(a) {
     let aside = '';
@@ -337,7 +375,7 @@
       return `<li class="item sent"><span class="bullet">${icon('check', 14)}</span><div class="content"><div class="line1"><span class="title selectable">${esc(it.title)}</span></div>${detail}<div class="sent-line">Sent to ${esc(it.sent_to)}${open}</div></div></li>`;
     }
     const owner = it.owner_name
-      ? `<button class="owner" data-act="pop" data-pop="owner" data-id="${id}" title="Who gets it">${icon(it.owner.startsWith('bot:') ? 'bot' : 'person', 12)}${esc(it.owner_name)}</button>`
+      ? `<button class="owner" data-act="pop" data-pop="owner" data-id="${id}" title="${esc(it.owner_name)}">${icon(it.owner.startsWith('bot:') ? 'bot' : 'person', 12)}<span>${esc(it.owner_name)}</span></button>`
       : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Who gets it?</button>`;
     const send = it.sending
       ? `<span class="spin" style="margin:7px 8px"></span>`
@@ -358,14 +396,20 @@
         transcription_model: s.transcription_model, transcription_language: s.transcription_language, calendar: s.calendar,
         streaming: s.streaming, streaming_model: s.streaming_model,
       };
+      // Where speech goes: through the signed-in Tico, or to the person's own providers.
+      const speech = S.status.speech;
+      if (speech) S.ui.form.speech_source = speechSource(speech, s);
     }
     return S.ui.form;
   }
+  const speechSource = (speech, s) => (speech.source === 'own' || (speech.source === 'none' && !s.connections.length) ? 'own' : 'tico');
   const FORM_KEYS = ['microphone', 'meeting_audio', 'transcription_url', 'transcription_model', 'transcription_language', 'calendar', 'streaming', 'streaming_model'];
   function formDirty() {
     const s = S.settings;
     const f = S.ui.form;
     if (!f) return false;
+    const speech = S.status.speech;
+    if (speech && f.speech_source !== speechSource(speech, s)) return true;
     return S.ui.key !== '' || S.ui.xai !== '' || FORM_KEYS.some((k) => f[k] !== s[k]);
   }
   function settingsPage() {
@@ -390,17 +434,7 @@
     if (st.signing_in) html += `<div class="line"><div class="waiting" style="margin:0"><span class="spin"></span>Choose Allow in your browser…</div></div>`;
     html += line('<span title="Shows upcoming meetings and names recordings after them">Use my Tico calendar</span>', toggle('calendar', f.calendar, !s.calendar_available));
     html += `</div></div>`;
-    html += `<div class="settings-group"><div class="label">Transcription</div><div class="inset">`;
-    html += line('Endpoint', field('form.transcription_url', 'https://openrouter.ai/api/v1'));
-    html += line('Model', field('form.transcription_model', 'elevenlabs/scribe-v2'));
-    html += line('Language', field('form.transcription_language', 'Auto'));
-    html += line('API key', field('key', s.key_saved ? 'Saved' : 'Not set', 'password'));
-    html += `</div></div>`;
-    html += `<div class="settings-group"><div class="label">Live text</div><div class="inset">`;
-    html += line('Show words as they are spoken', toggle('streaming', f.streaming));
-    html += line('xAI key', field('xai', s.xai_saved ? 'Saved' : 'Not set', 'password'));
-    html += line('Model', field('form.streaming_model', 'grok-voice-transcribe-2.0'));
-    html += `</div></div>`;
+    html += speechGroup(s, f, line, field, toggle);
     const mics = ['', ...s.microphones.filter((name) => name)];
     if (f.microphone && !mics.includes(f.microphone)) mics.push(f.microphone);
     html += `<div class="settings-group"><div class="label">Audio</div><div class="inset">`;
@@ -409,9 +443,41 @@
     html += `</div></div>`;
     html += `<div class="settings-group"><details class="more" ${S.ui.importOpen ? 'open' : ''} data-details="importOpen"><summary>${icon('right', 12)}Import an older recorder library</summary><div class="inset" style="margin-top:8px"><div class="line">${field('legacy', 'Folder path')}<button class="btn" data-act="import" ${st.busy || s.recording ? 'disabled' : ''}>Import</button></div></div></details></div>`;
     const dirty = formDirty();
-    const foot = S.status.message || 'Keys are kept in the macOS keychain.';
+    const foot = S.status.message || (!S.status.speech || f.speech_source === 'own' ? 'Keys are kept in the macOS keychain.' : '');
     html += `<div class="settings-foot"><span class="grow">${esc(foot)}</span><button class="btn" data-act="back" ${dirty ? '' : 'hidden'}>Cancel</button><button class="btn primary" data-act="save-settings" ${dirty && !st.busy ? '' : 'disabled'}>Save</button></div>`;
     return html + '</div>';
+  }
+
+  /** Speech: through your Tico (no keys of your own), or your own providers and keys. */
+  function speechGroup(s, f, line, field, toggle) {
+    const speech = S.status.speech;
+    const own = !speech || f.speech_source === 'own';
+    let html = `<div class="settings-group"><div class="label">Speech</div><div class="inset">`;
+    if (speech) {
+      const seg = (value, label) => `<button class="${f.speech_source === value ? 'on' : ''}" data-act="speech-source" data-source="${value}" aria-pressed="${f.speech_source === value}">${label}</button>`;
+      html += line('Source', `<div class="seg" role="group" aria-label="Speech source">${seg('tico', 'Your Tico')}${seg('own', 'Own keys')}</div>`);
+    }
+    if (!own) {
+      const name = speech.tico || s.connections[0]?.name || '';
+      const state = !s.connections.length
+        ? `<span class="value faint">Sign in first</span>`
+        : speech.transcribe ? `<span class="value">${esc(name)}</span>` : `<span class="value warn">Not available on ${esc(name || 'this Tico')}</span>`;
+      html += line('Transcription', state);
+      html += line('Language', field('form.transcription_language', 'Auto'));
+      const stream = !!speech.stream;
+      html += line(`<span ${stream ? '' : `title="Not available on ${esc(name || 'this Tico')}"`}>Live text</span>`, toggle('streaming', f.streaming && stream, !stream));
+    } else {
+      html += line('Endpoint', field('form.transcription_url', 'https://openrouter.ai/api/v1'));
+      html += line('Model', field('form.transcription_model', 'elevenlabs/scribe-v2'));
+      html += line('Language', field('form.transcription_language', 'Auto'));
+      html += line('API key', field('key', s.key_saved ? 'Saved' : 'Not set', 'password'));
+      html += line('Live text', toggle('streaming', f.streaming));
+      if (f.streaming) {
+        html += line('xAI key', field('xai', s.xai_saved ? 'Saved' : 'Not set', 'password'));
+        html += line('Live model', field('form.streaming_model', 'grok-voice-transcribe-2.0'));
+      }
+    }
+    return html + `</div></div>`;
   }
 
   // ---- Dock ----
@@ -1096,6 +1162,7 @@
       S.ui.saving = true;
       act('save_settings', { form: { ...S.ui.form, key: S.ui.key, xai_key: S.ui.xai } });
     },
+    'speech-source': (el) => { S.ui.form.speech_source = el.dataset.source; render(); },
     'set-mic': (el) => act('set_audio', { microphone: el.dataset.mic, meeting: S.settings.meeting_audio }),
     'toggle-meeting-audio': () => act('set_audio', { microphone: S.settings.microphone, meeting: !S.settings.meeting_audio }),
   };
@@ -1246,6 +1313,12 @@
         closeMention();
         return;
       }
+    }
+    // Rows that open something take Enter and Space like a button.
+    if ((event.key === 'Enter' || event.key === ' ') && el.getAttribute?.('role') === 'button' && el.dataset?.act && el === event.target && !event.repeat) {
+      event.preventDefault();
+      el.click();
+      return;
     }
     if (event.key === 'Enter' && event.shiftKey && el.dataset?.model === 'tq') {
       event.preventDefault();

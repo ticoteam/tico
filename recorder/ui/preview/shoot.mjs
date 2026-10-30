@@ -35,6 +35,7 @@ const transcript = async (page) => {
   await page.click('[data-act="toggle-transcript"]');
   await page.waitForSelector('#tbody > *');
 };
+const toChat = async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }));
 const scenes = {
   library: [],
   empty: [],
@@ -89,9 +90,16 @@ const scenes = {
     await page.keyboard.press('Enter');
   }],
   settings: [async (page) => page.click('[data-act="settings"]')],
+  'settings-own': [async (page) => page.click('[data-act="settings"]')],
+  'settings-nostream': [async (page) => page.click('[data-act="settings"]')],
+  notices: [open('m2'), toChat],
+  long: [open('m2')],
+  'long-library': ['long'],
+  'long-chat': ['long', open('m2'), toChat],
+  'long-people': ['long', open('m2'), async (page) => page.click('.people-btn')],
   sources: [async (page) => page.click('.caret')],
 };
-const sizes = [[1040, 690], [760, 490]];
+const sizes = [[1040, 690], [760, 490], [640, 460]];
 const themes = ['light', 'dark'];
 const only = process.argv.slice(2);
 const browser = await webkit.launch();
@@ -161,7 +169,7 @@ if (!only.length || only.includes('checks')) {
   await page.waitForSelector('.item');
   await page.hover('.item:has-text("Confirm the transcript link")');
   await page.click('.item:has-text("Confirm the transcript link") [data-act="send-item"]');
-  await page.waitForSelector('.item.sent:has-text("Sent to Arthur Silva")');
+  await page.waitForSelector('.item.sent:has-text("Sent to Sam Okafor")');
   // Esc goes back to the library.
   await page.keyboard.press('Escape');
   await page.waitForSelector('.lib-head');
@@ -202,13 +210,13 @@ if (!only.length || only.includes('checks')) {
   await people.keyboard.press('Meta+ArrowDown');
   await people.keyboard.type(' @ma');
   const names = await people.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => row.dataset.name));
-  if (names.join('|') !== 'Marketing Lead|Matheus Costa|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
+  if (names.join('|') !== 'Marketing Lead|Mara Novak|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
   await people.keyboard.press('ArrowDown');
   await people.keyboard.press('Enter');
   const notes = await people.locator('textarea.notes').inputValue();
-  if (!notes.endsWith(' @Matheus Costa ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
+  if (!notes.endsWith(' @Mara Novak ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
   if (await people.locator('#mention').count()) errors.push('mention: list stayed open');
-  if ((await people.locator('.notes-backdrop mark').allInnerTexts()).join('|') !== '@Matheus Costa') errors.push('mention: no chip');
+  if ((await people.locator('.notes-backdrop mark').allInnerTexts()).join('|') !== '@Mara Novak') errors.push('mention: no chip');
   await people.keyboard.type('@ju');
   await people.keyboard.press('Escape');
   if (await people.locator('#mention').count()) errors.push('mention: Esc left it open');
@@ -259,6 +267,32 @@ if (!only.length || only.includes('checks')) {
   await people.waitForSelector('.topbar .sending:has-text("Finishing…")');
   await people.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 4000 });
   if (await people.locator('[data-act="finish"]').count()) errors.push('send: Finish meeting still offered after sending');
+
+  // Bot-turn notices sit between the messages in time order; only the failed one is in the warning tone.
+  await people.goto(`${base}?scene=notices`);
+  await people.waitForSelector('.row');
+  await open('m2')(people);
+  const notices = await people.locator('#chat > *').evaluateAll((rows) => rows.map((row) => row.className.includes('chat-notice') ? (row.className.includes('failed') ? 'F' : 'N') : row.className.includes('msg') ? 'm' : ''));
+  if (notices.filter(Boolean).join('') !== 'mNmmmmNNmmFm') errors.push(`notices: order ${notices.join('')}`);
+
+  // Speech: Your Tico hides the key fields; Own keys shows them and makes the form savable.
+  await people.goto(`${base}?scene=settings`);
+  await people.waitForSelector('.row');
+  await people.click('[data-act="settings"]');
+  if (await people.locator('[data-model="key"]').count()) errors.push('speech: key field shown under Your Tico');
+  await people.click('[data-act="speech-source"][data-source="own"]');
+  if (!(await people.locator('[data-model="key"]').count())) errors.push('speech: no key field under Own keys');
+  if (await people.locator('[data-act="save-settings"]').isDisabled()) errors.push('speech: switching source left Save off');
+  await people.click('[data-act="save-settings"]');
+  await people.waitForTimeout(400);
+  if ((await people.evaluate(() => window.__PREVIEW__.state.status.speech.source)) !== 'own') errors.push('speech: source not saved');
+
+  // Library rows open from the keyboard.
+  await people.goto(`${base}?scene=library`);
+  await people.waitForSelector('.row');
+  await people.focus('.row[data-id="m1"]');
+  await people.keyboard.press('Enter');
+  await people.waitForSelector('.title-input', { timeout: 1000 }).catch(() => errors.push('keyboard: Enter on a row did not open it'));
 }
 await browser.close();
 server.close();
