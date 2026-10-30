@@ -85,15 +85,20 @@ export async function loadPlaywright() {
   fail('playwright not found: run `npm i playwright@1.63.0` in the folder you run from, or set VP_PLAYWRIGHT');
 }
 
-// Launches Chromium. A missing browser prints one line instead of a stack trace.
+// Launches the installed Google Chrome when there is one, else Playwright's bundled Chromium. A missing browser
+// prints one line instead of a stack trace.
+const missing = (err) => /Executable doesn't exist|playwright install|is not found at/i.test(String(err && err.message ? err.message : err));
+
 export async function launchChromium(pw, options) {
+  try {
+    return await pw.chromium.launch({ ...options, channel: 'chrome' });
+  } catch (err) {
+    if (!missing(err)) throw err;
+  }
   try {
     return await pw.chromium.launch(options);
   } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    if (/Executable doesn't exist|playwright install/i.test(msg)) {
-      fail('Chromium not installed: run `npx playwright install chromium`');
-    }
+    if (missing(err)) fail('no browser found: install Google Chrome, or run `npx playwright install chromium`');
     throw err;
   }
 }

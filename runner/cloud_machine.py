@@ -14,9 +14,11 @@ so no other computer gets it), turns on lingering so the user's systemd starts a
 /etc/tico/cloud-machine.json and enables tico-cloud-machine.service. It refuses a computer that is already enrolled:
 every machine made from the snapshot would be the same runner.
 
-`base` also installs the tools bots need, so they are in the snapshot and no boot waits for them (`tools()`): Google
-Chrome stable (Chromium on any other architecture), the computer screen's Xvfb, x11vnc and matchbox (the runner starts
-them on :99 and up when the screen is on), fonts, ffmpeg, Node.js 22 with npm, and Playwright's Chromium for the user.
+`base` also installs the tools every bot's computer needs, so they are in the snapshot and no boot waits for them
+(`tools()`): Google Chrome stable (Chromium on any other architecture), the computer screen's Xvfb, x11vnc and matchbox
+(the runner starts them on :99 and up when the screen is on), fonts, and Node.js 22 with npm. Anything else a bot needs
+it installs itself with sudo, and that stays on the machine's disk across stops (on the shared machine, for every
+member bot).
 
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
 Not enrolled and both variables found: it enrolls once to that hub and runs `scripts/tico install` (the systemd user
@@ -59,7 +61,6 @@ APT = Path("/etc/apt")
 DISPLAY_PACKAGES = ("xvfb", "x11vnc", "matchbox-window-manager")
 FONT_PACKAGES = ("fonts-liberation", "fonts-noto-color-emoji")
 NODE_MAJOR = 22
-PLAYWRIGHT = "1.64.1"                                       # the repo's pin (package.json devDependencies)
 CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
 NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico install's units (runner/systemd_units.py)
@@ -362,7 +363,7 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str]]]:
     if arch == "x86_64":
         keys.insert(0, ("Google's signing key",
                         ["curl", "-fsSL", CHROME_KEY_URL, "-o", str(keyrings / "google-chrome.asc")]))
-    packages = [browser_package(arch), *DISPLAY_PACKAGES, *FONT_PACKAGES, "ffmpeg", "nodejs"]
+    packages = [browser_package(arch), *DISPLAY_PACKAGES, *FONT_PACKAGES, "nodejs"]
     return [
         ("the package lists", [*get, "update", "-qq"]),
         ("curl and ca-certificates", [*install, "ca-certificates", "curl"]),
@@ -376,14 +377,12 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str]]]:
     ]
 
 
-def playwright_command() -> list[str]:
-    """Run as the sandbox user, so the browser lands in that user's cache, where bot tools look for it."""
-    return ["npx", "-y", f"playwright@{PLAYWRIGHT}", "install", "chromium"]
-
-
 def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
-    """The tools bots need, installed as root by `base` (see the module docstring). A failed step refuses the base."""
-    m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, ffmpeg, Node.js {NODE_MAJOR}")
+    """The tools every bot's computer needs, installed as root by `base` (see the module docstring). Node stays because
+    the runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) on demand with npm
+    (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml), so only the harness a bot uses lands on the machine. Nothing
+    else is here: a bot that needs ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
+    m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR}")
     for path, text in tool_files(arch, apt).items():
         write_root_file(path, text, 0o644)
     for what, argv in tool_commands(arch, apt):
@@ -394,9 +393,6 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
                 if line.strip():
                     m.say("  " + line)
             raise Refused(f"installing {what} failed (above)")
-    m.say(f"installing Playwright's Chromium for {m.user}")
-    if m.as_user(*playwright_command(), timeout=1800).returncode:
-        raise Refused("installing Playwright's Chromium failed (above)")
 
 
 def checkout_release(root: Path, run=subprocess.run) -> str:

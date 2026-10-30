@@ -1,7 +1,8 @@
 # Video toolkit
 
 Four Node scripts that make video from HTML and from a browser session, then cut it together.
-No npm dependencies except `playwright`. Needs `ffmpeg` and `ffprobe` on PATH and a Chromium.
+No npm dependencies except `playwright`. Needs `ffmpeg` and `ffprobe` on PATH and a browser: the installed Google Chrome
+when there is one, else Playwright's Chromium.
 
 | Script | What it does |
 | --- | --- |
@@ -15,10 +16,10 @@ No npm dependencies except `playwright`. Needs `ffmpeg` and `ffprobe` on PATH an
 ```sh
 ffmpeg -version            # must be on PATH
 npm i playwright@1.63.0    # in the folder you run from, or set VP_PLAYWRIGHT=/path/to/node_modules/playwright
-npx playwright install chromium
+npx playwright install chromium   # only without Google Chrome
 ```
 
-Each script stops with one line when ffmpeg, Playwright or Chromium is missing.
+Each script stops with one line when ffmpeg, Playwright or a browser (Chrome or Chromium) is missing.
 ffmpeg needs libass for SRT/ASS burn-in with the `subtitles` filter. Without it, `edit.mjs` draws
 SRT captions as images instead (same look, one note on stderr). ASS captions need libass.
 

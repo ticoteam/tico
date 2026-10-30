@@ -163,11 +163,11 @@ def test_tools_get_google_chrome_on_x86_64_and_chromium_elsewhere(tmp_path):
     install_arm = next(argv for _, argv in arm if "xvfb" in argv)
     assert "google-chrome-stable" in install_x86 and "chromium" not in install_x86
     assert "chromium" in install_arm and "google-chrome-stable" not in install_arm
-    shared = {*cm.DISPLAY_PACKAGES, *cm.FONT_PACKAGES, "ffmpeg", "nodejs"}
+    shared = {*cm.DISPLAY_PACKAGES, *cm.FONT_PACKAGES, "nodejs"}
     assert shared <= set(install_x86) and shared <= set(install_arm)
+    assert "ffmpeg" not in install_x86 and "ffmpeg" not in install_arm
     assert any("google-chrome.asc" in " ".join(argv) for _, argv in x86)
     assert not any("google-chrome.asc" in " ".join(argv) for _, argv in arm)
-    assert cm.playwright_command() == ["npx", "-y", "playwright@1.64.1", "install", "chromium"]
 
 
 def test_tool_sources_add_google_only_on_x86_64(tmp_path):
@@ -179,18 +179,13 @@ def test_tool_sources_add_google_only_on_x86_64(tmp_path):
     assert "node_22.x" in x86[node] and "node_22.x" in arm[node]
 
 
-def test_the_playwright_pin_is_the_repos_own():
-    package = json.loads((cm.ROOT / "package.json").read_text())
-    assert package["devDependencies"]["playwright"] == cm.PLAYWRIGHT
-
-
 def test_base_installs_the_tools_as_root_before_the_marker(machine, tmp_path):
     m, fake = machine()
     apt = tmp_path / "apt"
     cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=apt, arch="aarch64")
     installs = [i for i, c in enumerate(fake.calls) if "chromium" in c and "install" in c]
     assert installs and max(installs) < fake.calls.index(["loginctl", "enable-linger", "user"])
-    assert fake.named("playwright@1.64.1") and not fake.named("google-chrome-stable")
+    assert not fake.named("playwright") and not fake.named("ffmpeg") and not fake.named("google-chrome-stable")
     assert (apt / "sources.list.d" / "nodesource.sources").exists()
     assert not (apt / "sources.list.d" / "google-chrome.sources").exists()
 

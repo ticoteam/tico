@@ -71,9 +71,13 @@ The base step (below) installs these, so every machine made from the snapshot ha
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
 - **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
-- **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`) and **ffmpeg**.
-- **Node.js 22** and npm, from NodeSource's apt repository.
-- **Playwright's Chromium** for the sandbox user (`npx playwright@1.64.1 install chromium`, the version the repo pins).
+- **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).
+- **Node.js 22** and npm, from NodeSource's apt repository. The runner installs each bot's harness (Claude Code, Codex,
+  Pi, Gemini, Grok) with npm on demand, so only the harness a bot uses lands on the machine.
+
+Nothing else is in the base. A bot that needs ffmpeg, a toolchain or anything else installs it itself with `sudo`; it
+stays on the machine's disk across stops and resumes. On the shared machine, tools a bot installs are there for every
+bot on it.
 
 Re-running the step is safe. A failed install stops `base` with the step's output, and no marker is written.
 

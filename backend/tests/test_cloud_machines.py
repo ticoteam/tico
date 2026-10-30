@@ -416,6 +416,21 @@ def test_nothing_defaults_to_a_machine_before_hq_lists_sizes(api, monkeypatch): 
     assert get(api, "cloud-machines")["offered"] is False and employee(api)["cloud_machine"] is None
 
 
+def test_hq_saying_machines_are_not_configured_hides_the_option_again(cloud):
+    cloud.tick(CM.SYNC)                                         # the list the fixture made: offered
+    with cloud.store.read() as c:
+        assert CM.offered(c, cloud.store.settings)
+    cloud.hq.list = lambda: (_ for _ in ()).throw(CM.Refused("not_configured", 503))
+    cloud.tick(CM.SYNC)
+    with cloud.store.read() as c:
+        assert not CM.offered(c, cloud.store.settings)
+    assert get(cloud.api, "cloud-machines")["offered"] is False
+    del cloud.hq.list                                           # HQ answers again: the sizes come back
+    cloud.tick(CM.SYNC)
+    with cloud.store.read() as c:
+        assert CM.offered(c, cloud.store.settings)
+
+
 def test_sizes_and_choices_are_checked(cloud):
     adopt(cloud)
     cloud.tick()

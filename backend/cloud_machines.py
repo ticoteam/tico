@@ -630,7 +630,10 @@ class Manager:
         self.synced = at
         try:
             listed = hq.list()
-        except Refused:
+        except Refused as refused:
+            if refused.status == 503 and refused.code == "not_configured":   # off, or turned off for this company
+                with self.store.transaction() as c:
+                    c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         with self.store.transaction() as c:
             if listed["sizes"]:
