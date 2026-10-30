@@ -2504,6 +2504,8 @@ class Execution:
         if (runner["operator"] not in (operator, self.auth.owner_id(c))
                 and not (member_bot and (runner["accepts_member_bots"] or self.auth.bot_admin(who)))):
             raise Problem("forbidden", "This machine's operator is not authorized to host this bot", 403)
+        from . import cloud_machines
+        cloud_machines.check_host(c, bot, body.runner_id)
         old = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
         generation = old["generation"] if old else 0
         if body.expected_generation != generation:
@@ -2532,7 +2534,6 @@ class Execution:
         built_on.forget(c, bot)                   # placed: its computer reports the checkout from now on
         if old and old["runner_id"] != body.runner_id:
             forget_report(c, old["runner_id"], bot)
-        from . import cloud_machines
         cloud_machines.placed(c, bot, body.runner_id, who.actor)
         return dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
 

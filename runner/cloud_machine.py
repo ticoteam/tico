@@ -335,7 +335,8 @@ def browser_package(arch: str) -> str:
 
 
 def tool_files(arch: str, apt: Path = APT) -> dict[Path, str]:
-    """The apt sources to write before the package lists are read. Chrome's only where Google builds it."""
+    """The apt sources for Node.js and (only where Google builds it) Chrome. Written only once their signing keys are on
+    disk: apt refuses a repository whose Signed-By key is missing, and the whole `apt-get update` with it."""
     sources, keyrings = apt / "sources.list.d", apt / "keyrings"
     files = {sources / "nodesource.sources": (
         "Types: deb\n"
@@ -354,8 +355,11 @@ def tool_files(arch: str, apt: Path = APT) -> dict[Path, str]:
     return files
 
 
-def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str]]]:
-    """Root's steps, in order, as (what, argv). Each is safe to run again: installs of present packages do nothing."""
+def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dict[Path, str]]]:
+    """Root's steps, in order, as (what, argv), or (what, {path: text}) for the apt sources to write. The order
+    matters on a fresh image: the distro's lists and curl first, then the signing keys, and only then the sources that
+    name them, then the lists again with those repositories. Each step is safe to run again: installs of present
+    packages do nothing, and the keys and sources are rewritten whole."""
     keyrings = apt / "keyrings"
     get = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get"]
     install = [*get, "install", "-y", "-q", "--no-install-recommends"]
@@ -369,6 +373,7 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str]]]:
         ("curl and ca-certificates", [*install, "ca-certificates", "curl"]),
         ("the apt keyring directory", ["install", "-d", "-m", "0755", str(keyrings)]),
         *keys,
+        ("the apt sources of NodeSource" + (" and Google" if arch == "x86_64" else ""), tool_files(arch, apt)),
         ("the package lists with the new repositories", [*get, "update", "-qq"]),
         (" ".join(packages), [*install, *packages]),
         (f"Node.js {NODE_MAJOR}", ["node", "-e",
@@ -383,10 +388,12 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
     (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml), so only the harness a bot uses lands on the machine. Nothing
     else is here: a bot that needs ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
     m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR}")
-    for path, text in tool_files(arch, apt).items():
-        write_root_file(path, text, 0o644)
     for what, argv in tool_commands(arch, apt):
         m.say(f"installing {what}")
+        if isinstance(argv, dict):
+            for path, text in argv.items():
+                write_root_file(path, text, 0o644)
+            continue
         done = m.system(*argv, timeout=1800)
         if done.returncode:
             for line in ((done.stdout or "") + (done.stderr or "")).splitlines()[-20:]:

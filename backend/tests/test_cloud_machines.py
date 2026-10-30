@@ -88,6 +88,9 @@ def cloud(api, monkeypatch):  # noqa: F811
     fake = FakeHQ()
     manager = api.app.state.cloud_machines
     monkeypatch.setattr(manager, "client", fake)
+    # The finished setup's bots go on cloud machines when HQ first lists sizes (test_a_setup_finished_before_...);
+    # here each test places its own.
+    monkeypatch.setattr(manager, "on_offered", None)
     at = [time.time()]
     monkeypatch.setattr(CM, "now", lambda: at[0])
 
@@ -145,13 +148,15 @@ def events(cloud, action):
 
 # ----------------------------------------------------------------------------- the policy, pure
 def facts(**kw):
-    return {"active": True, "turns": False, "activity": 0, "want": None, "frozen": False, "retry_now": False, **kw}
+    return {"active": True, "turns": False, "activity": 0, "want": None, "want_at": 0, "frozen": False,
+            "retry_now": False, **kw}
 
 
 def machine_row(**kw):
     return {"bot": "ops", "mode": "cloud", "size": "default", "always_on": 0, "machine_id": "m1", "runner_id": "r1",
             "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try": None,
-            "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, **kw}
+            "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, "enroll_by": 0,
+            "enroll_fails": 0, **kw}
 
 
 def test_decide_wakes_for_work_and_creates_on_first_use():
@@ -192,6 +197,36 @@ def test_decide_frozen_backoff_and_the_stuck_guard():
     assert CM.decide(woke, facts(want="job:a", activity=900), 2000, 300) == (None, "stuck")
     assert CM.decide(woke, facts(want="job:a", activity=1500), 2000, 300) == ("start", None)
     assert CM.decide(woke, facts(want="job:b", activity=900), 2000, 300) == ("start", None)
+
+
+def test_decide_counts_a_pending_want_as_activity():
+    """Work queued after the machine went quiet, that its runner has not claimed yet, holds the idle stop: stopping now
+    would only pay to start it again. Work its runner never takes still stops it, idle_s after it was queued."""
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    assert CM.decide(on, facts(want="job:b", want_at=1290), 1300, 300) == ("heartbeat", None)
+    assert CM.decide(on, facts(want="job:b", want_at=1290), 1589, 300) == ("heartbeat", None)
+    assert CM.decide(on, facts(want="job:b", want_at=1290), 1590, 300) == ("stop", None)
+
+
+def test_decide_gives_a_machine_being_made_until_its_code_expires_then_makes_it_again():
+    booting = machine_row(state="running", runner_id=None, active_at=1000, heartbeat_at=1000, enroll_by=1960)
+    # Booting: never idle-stopped, even with nothing to do, while its code can still enroll it.
+    assert CM.decide(booting, facts(), 1959, 300) == ("heartbeat", None)
+    assert CM.decide({**booting, "heartbeat_at": 1950}, facts(), 1959, 300) == (None, None)
+    # Its code expired unused: deleted, whatever its state, and made again for the next want.
+    assert CM.decide(booting, facts(), 1960, 300) == ("delete", None)
+    assert CM.decide({**booting, "state": "stopped"}, facts(want="job:a"), 1960, 300) == ("delete", None)
+    assert CM.decide({**booting, "state": "deleted"}, facts(want="job:a"), 1960, 300) == ("create", None)
+    # Enrolled (0) or never made (None): no deadline.
+    assert CM.decide({**booting, "enroll_by": 0}, facts(), 1960, 300) == ("stop", None)
+    # A refusal's wait holds the delete too; out of credit stops it first.
+    assert CM.decide({**booting, "next_try": 2000}, facts(), 1960, 300) == (None, None)
+    assert CM.decide(booting, facts(frozen=True), 1960, 300) == ("stop", "out_of_credit")
+    # Machines made in a row that never enrolled: nothing more is made until a person looks.
+    gone = machine_row(machine_id=None, runner_id=None, state="deleted", enroll_by=None)
+    assert CM.decide({**gone, "enroll_fails": CM.ENROLL_TRIES - 1}, facts(want="job:a"), 2000, 300) == ("create", None)
+    assert CM.decide({**gone, "enroll_fails": CM.ENROLL_TRIES}, facts(want="job:a"), 2000, 300) == (None, "no_enroll")
+    assert CM.decide({**gone, "enroll_fails": CM.ENROLL_TRIES}, facts(), 2000, 300) == (None, None)
 
 
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
@@ -273,6 +308,103 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
     assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == ""
 
 
+def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
+    enrolled(cloud)
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+    start = cloud.row()["active_at"]
+    cloud.at[0] = start + 290
+    work(cloud, text="Another thing")                           # queued (real clock) just before the idle stop
+    queued = cloud.at[0]
+    with cloud.store.transaction() as c:                        # the hub's clock is the fake one's
+        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (stamp(cloud),))
+    cloud.hq.calls.clear()
+    cloud.at[0] = start + 300
+    cloud.tick()
+    cloud.at[0] = queued + 299
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions() and cloud.row()["problem"] == ""
+    cloud.at[0] = queued + 300                                  # never claimed: it stops after all
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
+
+
+def test_a_machine_that_never_enrolls_is_made_again_with_a_fresh_code_three_times_at_most(cloud):
+    adopt(cloud)
+    work(cloud)
+    deadline = CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE
+    codes = []
+    for attempt in range(CM.ENROLL_TRIES):
+        cloud.hq.calls.clear()
+        assert cloud.tick(10) == ["create"]
+        codes.append(cloud.hq.calls[-1][3])
+        made = cloud.row()["machine_id"]
+        assert cloud.row()["enroll_by"] == cloud.at[0] + deadline
+        # It boots for longer than its size's idle time: never idle-stopped meanwhile.
+        cloud.tick(deadline - 1)
+        assert "stop" not in cloud.hq.actions() and "delete" not in cloud.hq.actions()
+        cloud.tick(1)
+        assert cloud.hq.actions()[-1] == "delete" and ("delete", made) in cloud.hq.calls
+        assert cloud.row()["state"] == "deleted" and cloud.row()["enroll_fails"] == attempt + 1
+    assert len(set(codes)) == CM.ENROLL_TRIES
+    assert [e["target"] for e in events(cloud, "cloud_machine.deleted")] == ["ops"] * CM.ENROLL_TRIES
+    # Three in a row never enrolled: nothing more is made for this work or new work, and people see why.
+    cloud.hq.calls.clear()
+    work(cloud, text="Another thing")
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "no_enroll"
+    with cloud.store.read() as c:
+        assert CM.waiting(c, "ops") == "its cloud machine never connected to this server"
+        assert "ops" in CM.health(c, cloud.store.settings)["summary"]
+    # A person's change tries again; this one enrolls, and the count starts over.
+    post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})
+    assert cloud.row()["problem"] == "" and cloud.tick(10) == ["create"]
+    post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["enroll_by"] == 0 and cloud.row()["enroll_fails"] == 0 and cloud.row()["runner_id"]
+
+
+def test_the_new_machine_waits_for_hq_to_finish_deleting_the_one_that_never_enrolled(cloud):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick(10) == ["create"]
+    pending = []
+    cloud.hq.delete = lambda machine_id: (cloud.hq.calls.append(("delete", machine_id)), pending.append(machine_id))
+    cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+    assert cloud.hq.actions()[-1] == "delete" and pending == ["m1"]
+    # HQ keeps m1 live until boat confirms: a create answers with it, which is not taken for the new machine, and a
+    # list does not bring it back.
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["create"]
+    assert cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "deleted" and not cloud.row()["enroll_by"]
+    assert cloud.tick(5) == ["create"]                          # waits out BACKOFF
+    cloud.hq.machines["m1"]["state"] = "deleted"                # boat confirmed
+    cloud.manager.synced = None
+    assert cloud.tick(10) == ["create", "create"]
+    assert cloud.row()["machine_id"] == "m2" and cloud.row()["enroll_by"] == cloud.at[0] + (
+        CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
+
+
+def test_a_create_whose_answer_was_lost_is_not_taken_for_a_machine_that_never_enrolled(cloud):
+    adopt(cloud)
+    work(cloud)
+    made = cloud.hq.create
+
+    def lost(*args):
+        made(*args)                                             # HQ made it; the answer never came back
+        raise CM.Refused("unreachable")
+    cloud.hq.create = lost
+    assert cloud.tick(10) == ["create"] and cloud.row()["machine_id"] is None
+    first = cloud.hq.calls[-1][3]
+    del cloud.hq.create
+    post(cloud.api, "runners/enroll", {"code": first, "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["enroll_by"] == 0
+    # The retry mints another code and gets the same machine back: it is enrolled, so no deadline.
+    assert cloud.tick(15) == ["create", "create"]
+    assert cloud.row()["machine_id"] == "m1" and cloud.row()["enroll_by"] == 0
+    cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE + 10)
+    assert "delete" not in cloud.hq.actions()
+
+
 def test_always_on_starts_with_no_work_and_never_idles(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
@@ -303,7 +435,10 @@ def test_a_frequent_watcher_keeps_it_on_and_a_due_one_wakes_it(cloud):
         ran(0, 120)
         cloud.tick()
     assert "stop" not in cloud.hq.actions()
-    cloud.tick(400)
+    # A run that falls due and is never taken counts from when it fell due (120 s after the last), like queued work.
+    cloud.tick(419)
+    assert cloud.hq.actions()[-1] == "heartbeat"
+    cloud.tick(1)
     assert cloud.hq.actions()[-1] == "stop"
     # Its next run is due and the machine is off: it starts for it.
     cloud.hq.calls.clear()
@@ -604,6 +739,67 @@ def test_the_shared_machines_size_and_always_on_are_the_companys(cloud):
     for _ in range(3):
         cloud.tick(600)
     assert "stop" not in cloud.hq.actions()                     # Always on never idles
+
+
+def test_another_bots_own_machine_is_never_a_computer_to_assign_and_the_shared_one_is(cloud):
+    own = enrolled(cloud)                                       # ops's own machine
+    with cloud.store.transaction() as c:
+        CM.ensure_shared(c)
+        CM.save(c, CM.SHARED, machine_id="m9", state="running")
+        code = CM.mint(c, CM.SHARED, "ana")
+    shared = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    # An owner (who passes every other check) still cannot put finance on ops's own machine.
+    refused = cloud.api.post("/api/v2/bots/finance/assignment", headers=headers(),
+                             json={"runner_id": own["runner_id"], "expected_generation": 0})
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "cloud_machine", refused.text
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM assignments WHERE bot='finance'").fetchone()
+    # The shared machine's computer takes any bot: choosing it is choosing the shared cloud machine.
+    assign(cloud.api, shared, "finance")
+    assert cloud.row("finance")["mode"] == "cloud" and cloud.row("finance")["placement"] == "shared"
+    with cloud.store.read() as c:
+        assert CM.members(c) == ["finance"]
+    # Its own bot still goes back on it.
+    with cloud.store.read() as c:
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
+    assign(cloud.api, shared, "ops", generation)
+    assert cloud.row()["placement"] == "shared"
+    assign(cloud.api, own, "ops", generation + 1)
+    assert cloud.row()["placement"] == "own"
+
+
+def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_does(api, monkeypatch):  # noqa: F811
+    store = api.app.state.store
+    cloud_access.apply(store, cloud_access.parse(signals("open")))
+    fake = FakeHQ()
+    listing = fake.list
+    fake.list = lambda: (_ for _ in ()).throw(CM.Refused("unreachable"))
+    manager = api.app.state.cloud_machines
+    monkeypatch.setattr(manager, "client", fake)
+    with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
+        c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',json('true')) "
+                  "WHERE bot='coo'")
+        c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
+    manager.tick()
+    with store.read() as c:
+        assert not CM.offered(c, store.settings) and CM.rows(c) == {}
+    fake.list = listing
+    manager.synced = None
+    manager.tick()                                              # HQ answers: the finished setup is placed now
+    with store.read() as c:
+        adopted = set(CM.rows(c)) - {CM.SHARED}
+        state = c.execute("SELECT state FROM bots WHERE slug='coo'").fetchone()["state"]
+    assert adopted == {"coo", "ops", "cpo", "product-design", "finance", "inbox"} and state == "active"
+    assert employee(api)["cloud_machine"]["mode"] == "cloud"
+    # Later syncs leave a person's choices alone: a bot moved to a computer stays there.
+    r = runner(api)
+    assign(api, r, "ops")
+    manager.tick()
+    manager.synced = None
+    manager.tick()
+    with store.read() as c:
+        assert CM.row(c, "ops")["mode"] == "computer"
 
 
 # ----------------------------------------------------------------------------- the HTTP client

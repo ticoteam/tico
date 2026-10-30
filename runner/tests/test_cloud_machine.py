@@ -157,8 +157,8 @@ def test_parse_reads_shell_assignments_without_running_them():
 
 
 def test_tools_get_google_chrome_on_x86_64_and_chromium_elsewhere(tmp_path):
-    x86 = cm.tool_commands("x86_64", tmp_path)
-    arm = cm.tool_commands("aarch64", tmp_path)
+    x86 = [(what, argv) for what, argv in cm.tool_commands("x86_64", tmp_path) if isinstance(argv, list)]
+    arm = [(what, argv) for what, argv in cm.tool_commands("aarch64", tmp_path) if isinstance(argv, list)]
     install_x86 = next(argv for _, argv in x86 if "xvfb" in argv)
     install_arm = next(argv for _, argv in arm if "xvfb" in argv)
     assert "google-chrome-stable" in install_x86 and "chromium" not in install_x86
@@ -177,6 +177,38 @@ def test_tool_sources_add_google_only_on_x86_64(tmp_path):
     assert "Architectures: amd64" in x86[chrome] and "https://dl.google.com/linux/chrome/deb/" in x86[chrome]
     assert chrome not in arm
     assert "node_22.x" in x86[node] and "node_22.x" in arm[node]
+
+
+def test_the_sources_are_written_only_once_their_keys_are_on_disk(machine, tmp_path):
+    """A fresh image: apt refuses a repository whose Signed-By key is missing, so the first update runs with the
+    distro's lists only, the keys come next, then the sources that name them, then the update that reads them."""
+    m, fake = machine()
+    apt = tmp_path / "apt"
+    sources = apt / "sources.list.d"
+    seen = []
+
+    def run(command, **kw):
+        if command[:2] == ["install", "-d"]:
+            Path(command[-1]).mkdir(parents=True, exist_ok=True)
+        elif "update" in command:
+            seen.append(("update", sorted(p.name for p in sources.glob("*.sources")) if sources.exists() else []))
+        elif command[0] == "curl":
+            seen.append(("key", sorted(p.name for p in sources.glob("*.sources")) if sources.exists() else []))
+            Path(command[command.index("-o") + 1]).write_text("key")
+        elif "install" in command and "nodejs" in command:
+            listed = [line.split("Signed-By: ")[1] for f in sources.glob("*.sources")
+                      for line in f.read_text().splitlines() if line.startswith("Signed-By: ")]
+            assert listed and all(Path(key).exists() for key in listed)
+        return fake(command, **kw)
+
+    m.run = run
+    cm.tools(m, arch="x86_64", apt=apt)
+    both = ["google-chrome.sources", "nodesource.sources"]
+    assert seen == [("update", []), ("key", []), ("key", []), ("update", both)]
+    steps = [what for what, _ in cm.tool_commands("x86_64", apt)]
+    assert steps.index("curl and ca-certificates") < steps.index("the apt keyring directory") \
+        < steps.index("NodeSource's signing key") < steps.index("the apt sources of NodeSource and Google") \
+        < steps.index("the package lists with the new repositories")
 
 
 def test_base_installs_the_tools_as_root_before_the_marker(machine, tmp_path):

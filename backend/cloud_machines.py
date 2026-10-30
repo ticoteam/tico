@@ -27,7 +27,9 @@ placement defaults by role when its row is made (`default_placement`): `own` for
 (the video producer) or in the Engineering department of the team chart, `shared` for every other; a person switches
 it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option is hidden and nothing here
 runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no computer defaults to a cloud
-machine (placement.auto_place); choosing another computer for it (Execution.assign) sets `computer`.
+machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed when they come,
+Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and another bot's
+own machine is never one to choose (`check_host`).
 
 A machine's runner is a normal Computer, enrolled with a one-time code minted here (the add-a-runner flow,
 `enrollments`) that HQ hands the machine and never keeps. Execution.enroll recognises the code (`cloud_machine_codes`)
@@ -48,10 +50,16 @@ machine; a shared machine's facts are its member bots' together:
     wake     a stopped machine with a want is started (created on first use); the size set since applies here
     keep     a running machine gets a heartbeat every HEARTBEAT seconds; HQ's ttl stops it if they stop coming
     idle     with no turn out on it, and no attempt or watcher activity on it for the size's `idle_stop_s` since the
-             later of its start and its last activity, it is stopped, unless Always on: the shared one only once every
-             member is idle. A watcher running often keeps it on by itself. With no active bot left on it, it stops.
+             later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
+             has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
+             watcher running often keeps it on by itself. With no active bot left on it, it stops.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
              runner never takes would otherwise start (4 cents) and idle-stop it forever. New work wakes it.
+    enroll   a machine being made has until its newest code's expiry (ENROLL_MINUTES, plus ENROLL_GRACE) to enroll; it
+             is not idle-stopped meanwhile. One that has not by then never can (a resume gets no new code), and it has
+             nothing worth keeping: it is deleted, and the next want makes a new one with a fresh code. After
+             ENROLL_TRIES such machines in a row nothing more is made ("no_enroll") until one enrolls or a person
+             changes the machine's settings.
     frozen   out of credit (cloud_access.frozen, or HQ's 402): nothing starts and the bot shows "Out of credit". HQ
              stops running machines and keeps their disks. A 402 is asked again once HQ says the company is open.
     errors   HQ not answering or refusing: the bot's queued work says so ("its cloud machine didn't start"), and the
@@ -85,7 +93,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- changed_by TEXT, updated TEXT);
+ enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated TEXT);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created TEXT NOT NULL);
 """
@@ -106,6 +114,8 @@ BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
 ENROLL_MINUTES = 15
+ENROLL_GRACE = 60               # past its newest code's expiry, a machine not enrolled yet never will be
+ENROLL_TRIES = 3                # machines made in a row that never enrolled before it waits for a person
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -391,6 +401,16 @@ def mint(c, key, owner=None):
     return code
 
 
+def awaiting(c, key, at):
+    """A code was just minted for machine `key` at `at`: the machine HQ is making must enroll by that code's expiry.
+    `enroll_by` is that deadline while a machine is being made, 0 once it has enrolled, and NULL when the row's machine
+    is gone (deleted here or at HQ, or never made). A create retried after a lost answer mints another code but gets
+    the same machine back (HQ is idempotent on key): one that enrolled meanwhile stays enrolled (0), and one still
+    booting may use either code, so the newer expiry counts."""
+    if row(c, key)["enroll_by"] != 0:
+        save(c, key, enroll_by=at + ENROLL_MINUTES * 60 + ENROLL_GRACE)
+
+
 def enrolling(c, code_hash):
     """The machine key (a bot, or SHARED) an enrollment code was minted for, or None for any other code."""
     found = c.execute("SELECT bot FROM cloud_machine_codes WHERE code_hash=?", (code_hash,)).fetchone()
@@ -410,7 +430,7 @@ def enrolled(c, execution, runner_id, key):
     old = current.get("runner_id")
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
-    save(c, key, runner_id=runner_id)
+    save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
@@ -447,12 +467,26 @@ def bind(c, execution, bot):
     return True
 
 
+def check_host(c, bot, runner_id):
+    """Execution.assign's check, whoever assigns: a bot's own cloud machine's computer takes that bot only. Placement
+    never offers it to another, and this keeps the assignment API from putting another bot there. The shared machine's
+    takes any bot: choosing it is choosing the shared cloud machine (`placed`)."""
+    found = c.execute("SELECT bot FROM cloud_machines WHERE runner_id=?", (runner_id,)).fetchone()
+    if found and found["bot"] not in (bot, SHARED):
+        raise Problem("cloud_machine", "That computer is another bot's own cloud machine. Choose the shared cloud "
+                      "machine or another computer", 409)
+
+
 def placed(c, bot, runner_id, actor):
     """Execution.assign put the bot on a computer: its own machine's keeps cloud mode on its own, the shared one's on
     the shared one, and any other is the person's choice of computer; a machine left without its bot stops at the next
-    look."""
+    look. A bot with no row yet that is put on the shared machine's computer gets one there."""
     current = row(c, bot)
     if not current:
+        shared = row(c, SHARED)
+        if shared and shared["runner_id"] and runner_id == shared["runner_id"]:
+            c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated) VALUES(?,?,?,?,?)",
+                      (bot, "cloud", "shared", actor, H.now()))
         return
     shared = row(c, SHARED) if runner_id != current["runner_id"] else None
     if runner_id == current["runner_id"]:
@@ -476,8 +510,9 @@ def epoch(value):
 def facts(c, settings, current, at):
     """What `decide` needs about machine `current` (a bot's own, or the shared one), read from the hub: whether any
     bot of it should be on it at all, whether a turn is out on it, the last attempt or watcher activity on it (epoch
-    seconds), and its first want (a stable key, or None): the newest claimable job of any of its bots, else a bot
-    waiting to move here, else a watcher due."""
+    seconds), its first want (a stable key, or None): the newest claimable job of any of its bots, else a bot
+    waiting to move here, else a watcher due, and `want_at`, the latest moment any of its bots' wants arose (epoch
+    seconds; 0 for none, or a move)."""
     key, runner_id = current["bot"], current["runner_id"]
     bots = hosted(c, key)
     # Turns and activity on its computer: its bots', and a bot's that just left with a turn still out there.
@@ -492,15 +527,16 @@ def facts(c, settings, current, at):
         ran = c.execute("SELECT max(finished) FROM watcher_runs WHERE bot=? AND runner_id=?",
                         (bot, runner_id)).fetchone()[0]
         activity = max([activity] + [t for t in (epoch(latest), epoch(ran)) if t])
-    out = {"active": False, "turns": turns, "activity": activity, "want": None,
+    out = {"active": False, "turns": turns, "activity": activity, "want": None, "want_at": 0,
            "frozen": cloud_access.frozen(c), "retry_now": False}
     if current["problem"] == "out_of_credit" and not out["frozen"]:
         said = cloud_access.state(c) or {}
         out["retry_now"] = bool(said.get("checked") and current["problem_at"] and said["checked"] > current["problem_at"])
     best = None
     for bot in bots:
-        active, want, rank = bot_want(c, settings, bot, runner_id, at)
+        active, want, rank, since = bot_want(c, settings, bot, runner_id, at)
         out["active"] = out["active"] or active
+        out["want_at"] = max(out["want_at"], since)
         if want and (best is None or rank > best[0]):
             best = (rank, want)
     out["want"] = best[1] if best else None
@@ -508,39 +544,42 @@ def facts(c, settings, current, at):
 
 
 def bot_want(c, settings, bot, runner_id, at):
-    """(active, want, rank) for one bot of a machine whose computer is `runner_id` (None before its first enroll).
-    `rank` orders wants across the shared machine's bots: newer work first, then a move, then a watcher."""
+    """(active, want, rank, since) for one bot of a machine whose computer is `runner_id` (None before its first
+    enroll). `rank` orders wants across the shared machine's bots: newer work first, then a move, then a watcher.
+    `since` is when the want arose (the job's queueing, the watcher's due time; 0 for a move or none), epoch seconds."""
     from .execution import bot_claimable
     found = H.bot(c, bot)
     if not (found and found["state"] == "active") or c.execute(
             "SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone():
-        return False, None, None
+        return False, None, None, 0
     placed_on = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     if placed_on and placed_on["runner_id"] != runner_id:
-        return True, "move:" + bot, (1, "")         # chosen while on another computer: its machine is made now
+        return True, "move:" + bot, (1, ""), 0      # chosen while on another computer: its machine is made now
     # Keyed by the newest queued job, so new work wakes a machine the guard holds for older work.
     newest = c.execute("SELECT id,created FROM jobs WHERE bot=? AND state='queued' AND held=0 "
                        "ORDER BY created DESC,id DESC LIMIT 1", (bot,)).fetchone()
     if newest and runner_id:
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)
         if (why is None and job) or why in STALE:
-            return True, "job:" + newest["id"], (2, newest["created"])
+            return True, "job:" + newest["id"], (2, newest["created"]), epoch(newest["created"]) or 0
     elif newest:
-        return True, "job:" + newest["id"], (2, newest["created"])
+        return True, "job:" + newest["id"], (2, newest["created"]), epoch(newest["created"]) or 0
     if runner_id:
         for watcher in c.execute("SELECT name,finished,every FROM watcher_runs WHERE bot=? ORDER BY finished", (bot,)):
             done = epoch(watcher["finished"])
             if done is not None and watcher["every"] and done + watcher["every"] <= at:
-                return True, f"watcher:{bot}:{watcher['name']}:{watcher['finished']}", (0, "")
-    return True, None, None
+                return True, f"watcher:{bot}:{watcher['name']}:{watcher['finished']}", (0, ""), done + watcher["every"]
+    return True, None, None, 0
 
 
 def decide(current, found, at, idle_s):
-    """(action, problem) for one machine: action is None, "create", "start", "heartbeat" or "stop"; problem is what
-    its bots' queued work waits on when nothing is done ("stuck"), or None to leave the row's as it is. Pure: the clock
-    is `at`. `found` is `facts`: on the shared machine every member's at once, so any want wakes it and only all idle
-    stop it."""
+    """(action, problem) for one machine: action is None, "create", "start", "heartbeat", "stop" or "delete" (a
+    machine that never enrolled, made again at the next want); problem is what its bots' queued work waits on when
+    nothing is done ("stuck", "no_enroll"), or None to leave the row's as it is. Pure: the clock is `at`. `found` is
+    `facts`: on the shared machine every member's at once, so any want wakes it and only all idle stop it."""
     on = current["state"] in ON and current["machine_id"]
+    # A machine being made that has not enrolled yet (enroll_by is its deadline; 0 once it enrolled).
+    booting = bool(current["enroll_by"] and current["machine_id"] and current["state"] != "deleted")
     if not found["active"]:
         # Paused, drained, archived or moved (every member, on the shared one): stopped, but never under a turn still
         # out (a drain lets it finish).
@@ -551,9 +590,12 @@ def decide(current, found, at, idle_s):
         return None, None                                   # waiting out a refusal
     if found["frozen"]:
         return ("stop" if on else None), "out_of_credit"
+    if booting and at >= current["enroll_by"]:
+        return "delete", None                               # its code expired unused: it can never enroll
     if on:
-        last = max(found["activity"] or 0, current["active_at"] or 0)
-        if not found["turns"] and not current["always_on"] and at - last >= idle_s:
+        # Work queued for it that its runner has not taken yet is activity: stopping now would only start it again.
+        last = max(found["activity"] or 0, current["active_at"] or 0, found["want_at"] or 0)
+        if not found["turns"] and not current["always_on"] and not booting and at - last >= idle_s:
             return "stop", None
         if at - (current["heartbeat_at"] or 0) >= HEARTBEAT:
             return "heartbeat", None
@@ -565,6 +607,8 @@ def decide(current, found, at, idle_s):
             (found["activity"] or 0) > (current["woke_at"] or 0)):
         return None, "stuck"                                # woken for this once already, and nothing ran
     if not current["machine_id"] or current["state"] == "deleted":
+        if current["enroll_fails"] >= ENROLL_TRIES:
+            return None, "no_enroll"                        # its last machines never enrolled: a person looks first
         return "create", None
     return "start", None
 
@@ -585,6 +629,7 @@ class Manager:
         return bool(self.settings.demo or self.settings.rehearsal)
 
     vault_of = None              # install's: the app's vault, made after this
+    on_offered = None            # install's: onboarding's hook, run with the sizes HQ first lists (on_cloud_offered)
 
     def hq(self, c):
         if self.client is not None:
@@ -626,7 +671,10 @@ class Manager:
                 log.exception("Cloud machine step failed for %s", key)
 
     def sync(self, hq, at):
-        """HQ's list: every machine's state, size, cost and starts onto its row (by key), and the sizes."""
+        """HQ's list: every machine's state, size, cost and starts onto its row (by key), and the sizes. The first sizes
+        this process sees, or the first since HQ had none, also run `on_offered`: a setup that finished before HQ
+        answered puts its bots on cloud machines then."""
+        first = self.synced is None
         self.synced = at
         try:
             listed = hq.list()
@@ -636,15 +684,32 @@ class Manager:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         with self.store.transaction() as c:
+            learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
                           "value_json=excluded.value_json",
                           (SIZES_KEY, json.dumps({"sizes": listed["sizes"], "caps": listed["caps"], "at": H.now()})))
             mine = rows(c)
+            latest = {}                                     # per key, a machine that is not deleted wins
             for machine in listed["machines"]:
-                current = mine.get(machine["key"])
-                if current and current["machine_id"] in (None, machine["id"]):
-                    save(c, machine["key"], **self.described(machine))
+                if machine["state"] != "deleted" or machine["key"] not in latest:
+                    latest[machine["key"]] = machine
+            for key, machine in latest.items():
+                current = mine.get(key)
+                if current and current["state"] == "deleted" and current["machine_id"] == machine["id"]:
+                    continue                                # deleted here: live at HQ only until boat confirms
+                if current and (current["machine_id"] in (None, machine["id"]) or (
+                        current["state"] == "deleted" and machine["state"] != "deleted")):
+                    gone = {"enroll_by": None} if machine["state"] == "deleted" else {}
+                    save(c, key, **self.described(machine), **gone)
+            if learned and self.on_offered is not None and offered(c, self.settings):
+                c.execute("SAVEPOINT cloud_offered")
+                try:
+                    self.on_offered(c)
+                except Exception:  # noqa: BLE001 - the sizes stay; the scheduler's placement sweep still places bots
+                    c.execute("ROLLBACK TO cloud_offered")
+                    log.exception("Placing bots on cloud machines failed")
+                c.execute("RELEASE cloud_offered")
         return listed
 
     @staticmethod
@@ -685,6 +750,7 @@ class Manager:
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
+                awaiting(c, key, at)
         try:
             if action == "create":
                 machine = hq.create(key, current["size"], code, self.settings.runner_url)
@@ -693,6 +759,14 @@ class Manager:
                 machine = hq.start(current["machine_id"], resize)
             elif action == "stop":
                 machine = hq.stop(current["machine_id"])
+            elif action == "delete":
+                try:
+                    hq.delete(current["machine_id"])
+                except Refused as refused:
+                    if refused.status != 404:               # already gone at HQ is what was asked
+                        raise
+                self.never_enrolled(current)
+                return
             else:
                 ttl = hq.heartbeat(current["machine_id"])
                 with self.store.transaction() as c:
@@ -700,6 +774,11 @@ class Manager:
                 return
         except Refused as refused:
             self.refused(current, action, refused, at)
+            return
+        if action == "create" and current["state"] == "deleted" and machine["id"] == current["machine_id"]:
+            # HQ still has the machine deleted here (until boat confirms): the new one is made once it is gone.
+            with self.store.transaction() as c:
+                save(c, key, next_try=at + BACKOFF, enroll_by=None)     # the code it took for that goes unused
             return
         fields = self.described(machine)
         if action in ("create", "start"):
@@ -710,6 +789,20 @@ class Manager:
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                     key, {"size": machine["size"], "machine": machine["id"]})
 
+    def never_enrolled(self, current):
+        """Its machine was deleted for never enrolling: the next want makes a new one with a fresh code, unless
+        ENROLL_TRIES in a row have failed so ("no_enroll", until one enrolls or a person changes its settings)."""
+        key, fails = current["bot"], current["enroll_fails"] + 1
+        with self.store.transaction() as c:
+            # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
+            # answers with that one (act), which is not the new machine.
+            save(c, key, state="deleted", enroll_by=None, enroll_fails=fails, wake_key=None,
+                 woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try=None,
+                 **({"problem": "no_enroll", "problem_at": H.now()} if fails >= ENROLL_TRIES
+                    else {"problem": "", "problem_at": None}))
+            H.event(c, H.KEEPER, "cloud_machine.deleted", key, {"machine": current["machine_id"],
+                                                                 "reason": "never_enrolled", "tries": fails})
+
     def refused(self, current, action, refused, at):
         key = current["bot"]
         fields = {}
@@ -719,7 +812,7 @@ class Manager:
             fields = {"next_try": at + STOPPING_RETRY}
         elif refused.status == 404 and action != "create":
             # HQ has no such machine (its disk was deleted): the next want makes a new one.
-            fields = {"machine_id": None, "state": "deleted", "next_try": None}
+            fields = {"machine_id": None, "state": "deleted", "next_try": None, "enroll_by": None}
         else:
             failures = current["failures"] + 1
             fields = {"failures": failures, "next_try": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
@@ -748,7 +841,8 @@ class Manager:
 
 
 # ----------------------------------------------------------------------------- what people see
-PROBLEMS = {"out_of_credit": "Out of credit", "stuck": "Started, but its work did not run there"}
+PROBLEMS = {"out_of_credit": "Out of credit", "stuck": "Started, but its work did not run there",
+            "no_enroll": "Made, but it never connected to this server"}
 
 
 def problem_words(problem):
@@ -771,6 +865,8 @@ def waiting(c, bot):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
+    if machine["problem"] == "no_enroll":
+        return "its cloud machine never connected to this server"
     return "starting its cloud machine"
 
 
@@ -842,7 +938,9 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
               (bot, "computer" if c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() else "cloud",
                placement or default_placement(c, bot), who.actor, H.now()))
     before = row(c, bot)
-    fields = {"changed_by": who.actor}
+    fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
+    if before["problem"] == "no_enroll":
+        fields["problem"] = ""
     if mode is not None:
         fields.update(mode=mode, wake_key=None, problem="")
     if placement is not None:
@@ -855,6 +953,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
     after = row(c, bot)
     if after["mode"] == "cloud" and after["placement"] == "shared":
         ensure_shared(c)
+        if row(c, SHARED)["enroll_fails"]:                  # and so does a member's, for the shared machine
+            save(c, SHARED, enroll_fails=0, **({"problem": ""} if row(c, SHARED)["problem"] == "no_enroll" else {}))
     if after["mode"] == "cloud":
         bind(c, execution, bot)                 # onto a machine that is there already; else when it is made
     H.event(c, who.actor, "cloud_machine.changed", bot, {
@@ -876,7 +976,9 @@ def change_shared(c, auth, who, size=None, always_on=None):
         raise Problem("validation", "Choose one of: " + ", ".join(size_names(c)), 422)
     ensure_shared(c)
     before = row(c, SHARED)
-    fields = {"changed_by": who.actor}
+    fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
+    if before["problem"] == "no_enroll":
+        fields["problem"] = ""
     if size is not None:
         fields["size"] = size
     if always_on is not None:
@@ -923,7 +1025,7 @@ def remove(store, hq, who, auth, bot):
         save(c, bot, machine_id=None, runner_id=None, state="none", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
-             changed_by=who.actor)
+             enroll_by=None, enroll_fails=0, changed_by=who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", bot, {"machine": current["machine_id"]})
     return {"ok": True}
 
@@ -961,6 +1063,8 @@ class SharedChange(BaseModel):
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
+    onboarding = getattr(app.state, "onboarding", None)
+    service.on_offered = onboarding.on_cloud_offered if onboarding is not None else None
     app.state.cloud_machines = service
 
     @app.get("/api/v2/cloud-machines")

@@ -43,7 +43,11 @@ cloud machine" under Computer).
 5. Later boots (a resume after an idle stop) find `~/.config/tico/runner.json` and only start the units.
 
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
-again (systemd reruns a failed boot step every 30 seconds). Without the marker `/etc/tico/cloud-machine.json` the
+again (systemd reruns a failed boot step every 30 seconds). A machine has until its code expires (plus a minute) to
+enroll, and is not idle-stopped meanwhile. One that has not by then never can (a resume brings no new code), so the
+server deletes it and the next work makes a new one with a fresh code; after three such machines in a row it makes no
+more ("Made, but it never connected to this server", in Health) until one enrolls or a person changes the machine's
+settings. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.
 
 The code never reaches a log or a command line. The enroll reads it from a 0600 file that is removed right after;
