@@ -192,6 +192,7 @@ class TunnelDocker:
     def __init__(self, updater, monkeypatch, project, failure=""):
         self.updater, self.project, self.failure = updater, project, failure
         self.events, self.hold, self.cloudflared, self.servers = [], {}, "direct", ["server0"]
+        self.tunnel_id, self.pending = "cf0", set()   # cloudflared's container, and any stop still on its way to one
         monkeypatch.setattr(updater, "docker_run", self.run)
         monkeypatch.setattr(updater, "healthy", lambda seconds: True)
         monkeypatch.setattr(updater, "running_image", lambda: ("sha256:old", "v0.1.0"))
@@ -217,7 +218,8 @@ class TunnelDocker:
         if args == ["config", "--services"]:
             return self.result(argv, "server\n" + ("hold\n" if bundle == "tunnel" else "") + "cloudflared\nupdater\n")
         if args[:3] == ["ps", "-a", "-q"]:
-            return self.result(argv, "\n".join(self.hold if args[-1] == "hold" else self.servers))
+            found = {"hold": list(self.hold), "cloudflared": [self.tunnel_id]}.get(args[-1], self.servers)
+            return self.result(argv, "\n".join(found))
         if args[0] == "up" and args[-1] == self.updater.SERVICE:
             self.servers = ["server%d" % (int(self.servers[0][6:]) + 1)]
         if args[0] == "pull" and "hold" in args:
@@ -234,9 +236,11 @@ class TunnelDocker:
             return self.result(argv, code=0 if answers else 1)
         if args[0] == "up" and args[-1] == "cloudflared":
             self.events.append(("up cloudflared", tag))
-            if self.failure == "cut" and tag == "v0.2.0":   # the old container is gone; the client never heard back
-                self.cloudflared = "stopped"
+            if self.failure == "cut" and tag == "v0.2.0":   # the client never heard back; the old one's stop may land
+                self.pending.add(self.tunnel_id)
                 raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if "--force-recreate" in args or bundle != self.cloudflared:   # else Compose keeps the matching container
+                self.tunnel_id = "cf%d" % (int(self.tunnel_id[2:]) + 1)
             self.cloudflared = bundle   # Compose recreates it only when its definition changed; same bundle, same route
         return self.result(argv)
 
@@ -281,5 +285,5 @@ def test_a_cut_cloudflared_recreate_is_settled_back_onto_the_restored_route(monk
     updater, docker = tunnel_install(monkeypatch, tmp_path, failure="cut")
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back"
-    assert docker.cloudflared == "direct"   # restarted from the restored bundle, not left stopped
+    assert docker.cloudflared == "direct" and docker.tunnel_id not in docker.pending   # a fresh one, not the stopping one
     assert docker.events[-1] == ("up cloudflared", "v0.1.0")
