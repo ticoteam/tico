@@ -57,7 +57,8 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   });
   for (const [k, v] of Object.entries(turns)) assert.match(v, /^transform\b.* 0\.12s\b/, `${tag}: ${k} turns over --dur-fast: ${v}`);
 
-  // ---- a count ticks in place: its box is the same in every frame of the tick.
+  // ---- a count ticks in place: every frame of the tick has the new number's box (the old number, drawn over it,
+  // never resizes it). Before vs after can differ by a digit's width in fonts without equal-width digits.
   const tick = await page.evaluate(async () => {
     const el = [...document.querySelectorAll('#side .cnt, #side [data-upd-badge], .mobile-nav .cnt, [data-upd-badge]')]
       .find(b => b.checkVisibility() && /^\d+\+?$/.test(b.textContent.trim()))
@@ -70,8 +71,8 @@ run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     countSet(el, el.textContent.trim());
     const was = el.textContent.trim(), next = String((parseInt(was, 10) || 0) + 1);
     const at = () => { const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(n => Math.round(n * 2) / 2).join(','); };
-    const boxes = [at()];
     countSet(el, next);
+    const boxes = [at()];
     const ticked = el.classList.contains('m-ticking');
     for (let i = 0; i < 16; i++) { await new Promise(r => requestAnimationFrame(r)); boxes.push(at()); }
     await new Promise(r => setTimeout(r, 120));
