@@ -1,14 +1,37 @@
 //! Keep the public origin unchanged without another proxy container.
-use super::{browser, runner, App};
+use super::{browser, runner, App, BYTES};
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+        ConnectInfo, Request, State,
+    },
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-use std::net::{IpAddr, SocketAddr};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    connect_async_with_config,
+    tungstenite::{
+        self,
+        client::IntoClientRequest,
+        protocol::{CloseFrame as BackendClose, WebSocketConfig},
+        Message as BackendMessage,
+    },
+    MaybeTlsStream, WebSocketStream,
+};
+
+type Backend = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 #[derive(Clone)]
 pub(super) struct Network {
@@ -182,10 +205,121 @@ async fn forward(
     }
 }
 
+/// The recorder's live speech stream, relayed by the Tico backend to the Gateway. The backend is dialled before the
+/// client is accepted, so a refusal (its 403 for a bad token, or a 503) reaches the client as that HTTP status.
+async fn recorder_stream(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    uri: Uri,
+    ws: WebSocketUpgrade,
+) -> Response {
+    // The backend is plain HTTP on the private network, so its WebSocket is plain too.
+    let Some(backend) = app.python.strip_prefix("http://") else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    let path = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let Ok(mut request) = format!("ws://{backend}{path}").into_client_request() else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    // The client's headers, as forward() passes them, minus the handshake's own (host, Sec-WebSocket-*).
+    let mut forwarded = HeaderMap::new();
+    for (name, value) in &headers {
+        if name != header::HOST && !name.as_str().starts_with("sec-websocket-") {
+            forwarded.append(name.clone(), value.clone());
+        }
+    }
+    strip_hop_headers(&mut forwarded);
+    client_headers(&mut forwarded, peer.ip(), &app.trusted_proxies);
+    request.headers_mut().extend(forwarded);
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(BYTES))
+        .max_frame_size(Some(BYTES));
+    let connected = tokio::time::timeout(
+        Duration::from_secs(10),
+        connect_async_with_config(request, Some(config), false),
+    )
+    .await;
+    match connected {
+        Ok(Ok((backend, _))) => ws
+            .max_message_size(BYTES)
+            .max_frame_size(BYTES)
+            .on_upgrade(move |client| relay(client, backend)),
+        Ok(Err(tungstenite::Error::Http(response)))
+            if response.status().is_client_error() || response.status().is_server_error() =>
+        {
+            response.status().into_response()
+        }
+        _ => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
+/// Frames pass unchanged in both directions until one side closes; that side's close goes on to the other.
+async fn relay(client: WebSocket, backend: Backend) {
+    let (mut client_tx, mut client_rx) = client.split();
+    let (mut backend_tx, mut backend_rx) = backend.split();
+    tokio::select! {
+        _ = client_to_backend(&mut client_rx, &mut backend_tx) => {}
+        _ = backend_to_client(&mut backend_rx, &mut client_tx) => {}
+    }
+}
+
+async fn client_to_backend(
+    client: &mut SplitStream<WebSocket>,
+    backend: &mut SplitSink<Backend, BackendMessage>,
+) {
+    while let Some(Ok(message)) = client.next().await {
+        let forwarded = match message {
+            Message::Text(text) => BackendMessage::Text((&*text).into()),
+            Message::Binary(bytes) => BackendMessage::Binary(bytes),
+            Message::Close(frame) => {
+                let frame = frame.map(|f| BackendClose {
+                    code: f.code.into(),
+                    reason: (&*f.reason).into(),
+                });
+                let _ = backend.send(BackendMessage::Close(frame)).await;
+                return;
+            }
+            // Pings and pongs are answered by the libraries on each connection.
+            Message::Ping(_) | Message::Pong(_) => continue,
+        };
+        if backend.send(forwarded).await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn backend_to_client(
+    backend: &mut SplitStream<Backend>,
+    client: &mut SplitSink<WebSocket, Message>,
+) {
+    while let Some(Ok(message)) = backend.next().await {
+        let forwarded = match message {
+            BackendMessage::Text(text) => Message::Text((&*text).into()),
+            BackendMessage::Binary(bytes) => Message::Binary(bytes),
+            BackendMessage::Close(frame) => {
+                let frame = frame.map(|f| CloseFrame {
+                    code: f.code.into(),
+                    reason: (&*f.reason).into(),
+                });
+                let _ = client.send(Message::Close(frame)).await;
+                return;
+            }
+            BackendMessage::Ping(_) | BackendMessage::Pong(_) | BackendMessage::Frame(_) => {
+                continue
+            }
+        };
+        if client.send(forwarded).await.is_err() {
+            return;
+        }
+    }
+}
+
 pub(super) fn routes(app: App) -> Router {
     Router::new()
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route("/api/v2/recorder/stream", get(recorder_stream))
         .fallback(forward)
         .with_state(app)
 }
@@ -193,6 +327,13 @@ pub(super) fn routes(app: App) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Hub;
+    use std::sync::{Arc, Mutex};
+    use tokio_tungstenite::tungstenite::{
+        protocol::{frame::coding::CloseCode, CloseFrame as ClientClose},
+        Message as ClientMessage,
+    };
+
     #[test]
     fn only_configured_proxies_preserve_client_headers() {
         let trusted = trusted_proxies("127.0.0.1/32,172.20.0.2/32").unwrap();
@@ -223,5 +364,169 @@ mod tests {
             &trusted,
         );
         assert_eq!(headers["x-forwarded-for"], "203.0.113.8");
+    }
+
+    type Closes = tokio::sync::mpsc::UnboundedSender<Option<(u16, String)>>;
+
+    /// A stand-in for the backend's stream route: refuses without a token, echoes, and closes on "close-me".
+    async fn backend_stream(
+        State(closes): State<Closes>,
+        headers: HeaderMap,
+        ws: axum::extract::WebSocketUpgrade,
+    ) -> Response {
+        if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bearer test-token") {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        ws.on_upgrade(move |mut socket| async move {
+            while let Some(Ok(message)) = socket.recv().await {
+                match message {
+                    Message::Text(text) if &*text == "close-me" => {
+                        let close = CloseFrame {
+                            code: 4100,
+                            reason: "refused".into(),
+                        };
+                        let _ = socket.send(Message::Close(Some(close))).await;
+                        return;
+                    }
+                    Message::Text(text) => {
+                        let _ = socket.send(Message::Text(text)).await;
+                    }
+                    Message::Binary(bytes) => {
+                        let _ = socket.send(Message::Binary(bytes)).await;
+                    }
+                    Message::Close(frame) => {
+                        let seen = frame.map(|f| (f.code, f.reason.to_string()));
+                        let _ = closes.send(seen);
+                        return;
+                    }
+                    Message::Ping(_) | Message::Pong(_) => {}
+                }
+            }
+        })
+    }
+
+    /// Starts the stand-in backend; its close frames arrive on the returned channel.
+    async fn backend() -> (
+        String,
+        tokio::sync::mpsc::UnboundedReceiver<Option<(u16, String)>>,
+    ) {
+        let (closes, received) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new()
+            .route("/api/v2/recorder/stream", get(backend_stream))
+            .with_state(closes);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (format!("http://{addr}"), received)
+    }
+
+    /// Starts the gateway routes with `python` as the backend, and returns the address they listen on.
+    async fn gateway(python: String) -> SocketAddr {
+        let app = App {
+            hub: Arc::new(Mutex::new(Hub::new())),
+            key: Arc::new(String::new()),
+            python: Arc::new(python),
+            http: reqwest::Client::new(),
+            proxy: reqwest::Client::new(),
+            trusted_proxies: Arc::new(trusted_proxies("127.0.0.1/32").unwrap()),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = routes(app).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        addr
+    }
+
+    fn stream_request(
+        gateway: SocketAddr,
+        token: Option<&str>,
+    ) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+        let url =
+            format!("ws://{gateway}/api/v2/recorder/stream?encoding=linear16&sample_rate=16000");
+        let mut request = url.into_client_request().unwrap();
+        if let Some(token) = token {
+            let value = format!("Bearer {token}").parse().unwrap();
+            request.headers_mut().insert(header::AUTHORIZATION, value);
+        }
+        request
+    }
+
+    #[tokio::test]
+    async fn recorder_stream_relays_frames_and_close() {
+        let (python, mut closes) = backend().await;
+        let gateway = gateway(python).await;
+        let (mut client, _) =
+            tokio_tungstenite::connect_async(stream_request(gateway, Some("test-token")))
+                .await
+                .unwrap();
+        client
+            .send(ClientMessage::Text("hello".into()))
+            .await
+            .unwrap();
+        let reply = client.next().await.unwrap().unwrap();
+        assert_eq!(reply, ClientMessage::Text("hello".into()));
+        client
+            .send(ClientMessage::Binary(vec![1, 2, 3].into()))
+            .await
+            .unwrap();
+        let reply = client.next().await.unwrap().unwrap();
+        assert_eq!(reply, ClientMessage::Binary(vec![1, 2, 3].into()));
+        let close = ClientClose {
+            code: CloseCode::from(4001),
+            reason: "bye".into(),
+        };
+        client
+            .send(ClientMessage::Close(Some(close)))
+            .await
+            .unwrap();
+        let seen = closes.recv().await.unwrap();
+        assert_eq!(seen, Some((4001, "bye".to_string())));
+    }
+
+    #[tokio::test]
+    async fn recorder_stream_passes_backend_close_to_client() {
+        let (python, _closes) = backend().await;
+        let gateway = gateway(python).await;
+        let (mut client, _) =
+            tokio_tungstenite::connect_async(stream_request(gateway, Some("test-token")))
+                .await
+                .unwrap();
+        client
+            .send(ClientMessage::Text("close-me".into()))
+            .await
+            .unwrap();
+        match client.next().await.unwrap().unwrap() {
+            ClientMessage::Close(Some(frame)) => {
+                assert_eq!(u16::from(frame.code), 4100);
+                assert_eq!(&*frame.reason, "refused");
+            }
+            other => panic!("expected a close frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recorder_stream_refused_without_token_is_403() {
+        let (python, _closes) = backend().await;
+        let gateway = gateway(python).await;
+        match tokio_tungstenite::connect_async(stream_request(gateway, None)).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            }
+            other => panic!("expected an HTTP refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recorder_stream_unreachable_backend_is_502() {
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let python = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let gateway = gateway(python).await;
+        match tokio_tungstenite::connect_async(stream_request(gateway, Some("test-token"))).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            }
+            other => panic!("expected an HTTP refusal, got {other:?}"),
+        }
     }
 }
