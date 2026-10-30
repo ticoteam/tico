@@ -23,6 +23,10 @@ log = logging.getLogger("tico.storage")
 
 # How long an unreachable earlier place is skipped (Blobs._open_earlier).
 EARLIER_RETRY = 300
+# The digests a bucket does not have yet, for `copy_local`: each digest probes blob_locations' (digest, bucket) key, so
+# the copies already made are never listed or read. The index blobs_by_digest serves the scan of blobs.
+UNCOPIED_SQL = ("SELECT b.digest, MAX(b.content_type) AS content_type FROM blobs b "
+                "WHERE NOT EXISTS (SELECT 1 FROM blob_locations l WHERE l.digest=b.digest AND l.bucket=?) GROUP BY b.digest")
 # A refused upload starts a fresh write check when the last one began longer ago than this (Blobs._heal).
 HEAL_AFTER = 60
 # The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
@@ -524,9 +528,8 @@ class Blobs:
         if not self.check_write(store, stop) or generation != self._generation:
             return
         with store.read() as c:
-            rows = list(c.execute("SELECT digest,MAX(content_type) AS content_type FROM blobs GROUP BY digest"))
-            known = {r[0] for r in c.execute("SELECT digest FROM blob_locations WHERE bucket=?", (location,))}
-        rows = [r for r in rows if r["digest"] not in known and (self.directory / self.key(r["digest"])).is_file()]
+            rows = c.execute(UNCOPIED_SQL, (location,)).fetchall()
+        rows = [r for r in rows if (self.directory / self.key(r["digest"])).is_file()]
         self.copy_status.update(done=0, total=len(rows), running=bool(rows), error="", failed=0)
         self._copy_health(store)
         for row in rows:

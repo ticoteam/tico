@@ -259,6 +259,29 @@ def test_copy_verified_and_fallback_keeps_local(api):
         assert c.execute('SELECT COUNT(*) FROM blob_locations').fetchone()[0] == 0
 
 
+def test_copy_local_selects_only_the_digests_the_bucket_lacks(api):
+    from backend import blobs as blob_module
+    tid = task(api)
+    first = attach(api, tid, 'copied.txt', b'already there')
+    attach(api, tid, 'new.txt', b'not copied yet')
+    blobs = api.app.state.blobs
+    store = api.app.state.store
+    with store.read() as c:
+        copied, = c.execute('SELECT digest FROM blobs WHERE id=?', (first,)).fetchone()
+    blobs.bucket, blobs._s3 = 'private', S3()
+    blobs._probe_s3 = blobs._s3
+    with store.transaction() as c:
+        c.execute('INSERT INTO blob_locations VALUES(?,?,?)', (copied, blobs.location, '2026-10-29T00:00:00Z'))
+    blobs.copy_local(store, threading.Event(), interval=0)
+    assert blobs.copy_status == {'done': 1, 'total': 1, 'running': False, 'error': '', 'failed': 0}
+    assert len(blobs._s3.objects) == 1 and not any(copied in key for key in blobs._s3.objects)
+    with store.read() as c:
+        plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + blob_module.UNCOPIED_SQL, ('private',))]
+    # Each digest probes blob_locations' (digest, bucket) key; the bucket's copies are never scanned.
+    assert any(step.startswith('SEARCH l USING') for step in plan)
+    assert not any(step.startswith('SCAN l') or 'blob_locations' in step and step.startswith('SCAN') for step in plan)
+
+
 @pytest.mark.parametrize('failure', ['AccessDenied'])
 def test_health_warns_about_s3_write_check_even_with_no_files(api, failure):
     from botocore.exceptions import NoCredentialsError
