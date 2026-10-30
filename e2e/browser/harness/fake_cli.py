@@ -243,11 +243,20 @@ def codex_app_server():
             configs[thread] = ((params.get("config") or {}).get("mcp_servers") or {})
             threads[thread] = True
             send({"id": rid, "result": {"thread": {"id": thread}}})
-        elif method == "turn/start":
+        elif method in ("turn/start", "turn/steer"):
+            # A steer adds input to the turn the host believes is running; the stand-in answers it as a turn of its own,
+            # so the text is never dropped (the journey shim ignores steers, and a probe sent as one never ran).
             turns += 1
-            thread, turn = str(params.get("threadId")), "harness-turn-%d" % turns
-            text = " ".join(part.get("text", "") for part in params.get("input", []))
-            send({"id": rid, "result": {"turn": {"id": turn}}})
+            thread = str(params.get("threadId"))
+            turn = str(params.get("expectedTurnId") or "harness-turn-%d" % turns)
+            items = params.get("input", [])
+            text = " ".join(part.get("text", "") for part in items if isinstance(part, dict))
+            with open(os.path.join(ROOT, "codex-protocol.log"), "a") as trace:
+                trace.write("  %s text: %s\n" % (method, text[:160].replace("\n", " ")))
+            if method == "turn/start":
+                send({"id": rid, "result": {"turn": {"id": turn}}})
+            else:
+                send({"id": rid, "result": {"turnId": turn}})
             send({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": turn}}})
             done = run_probe(text, configs.get(thread, {}), sys.argv)
             reply = reply_text(*done) if done else "no harness-run in the prompt"
