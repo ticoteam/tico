@@ -7,8 +7,9 @@ from backend.store import H
 from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401  (fixtures)
 
 
-def publish(api, token, text, name="cut.md"):
-    r = api.post("/api/v2/files/uploads", json={"name": name, "text": text}, headers=headers(token))
+def publish(api, token, text, name="cut.md", path=None):
+    r = api.post("/api/v2/files/uploads", json={"name": name, "text": text, **({"path": path} if path else {})},
+                 headers=headers(token))
     assert r.status_code == 200, r.text
     return r.json()["file"]
 
@@ -108,6 +109,27 @@ def test_a_bot_checks_its_checkout_file_by_the_digest_of_its_bytes(api):
     same, edited = (hashlib.sha256(text.encode()).hexdigest() for text in ("# Cut", "# Cut, edited"))
     assert approved(api, bot, path="cuts/cut.md", digest=same)["approved"]
     assert not approved(api, bot, path="cuts/cut.md", digest=edited)["approved"]
+
+
+def test_a_later_verdict_on_a_newer_version_with_the_same_bytes_decides_by_path(api):
+    import hashlib
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    same = hashlib.sha256(b"# Cut").hexdigest()
+    v1 = publish(api, bot, "# Cut", path="cuts/cut.md")
+    answer(api, ask(api, bot, [{"file": v1["id"]}], topic="cut-v1"), ["Approve"])
+    v2 = publish(api, bot, "# Cut, reworked", path="cuts/cut.md")
+    v3 = publish(api, bot, "# Cut", path="cuts/cut.md")
+    assert v2["id"] == v1["id"] and v3["id"] == v1["id"] and v3["version"] == 3
+    changes = ask(api, bot, [{"file": v3["id"], "version": 3}], topic="cut-v3", question="Is the cut ready again?")
+    answer(api, changes, ["Request changes"], other="Tighten the intro.")
+    got = approved(api, bot, path="cuts/cut.md", digest=same)
+    assert not got["approved"] and got["version"] == 3 and got["verdict"] == "changes"
+    fixed = ask(api, bot, [{"file": v3["id"], "version": 3}], topic="cut-v3-fixed",
+                question="Is the cut ready after the fix?")
+    answer(api, fixed, ["Approve"])
+    got = approved(api, bot, path="cuts/cut.md", digest=same)
+    assert got["approved"] and got["version"] == 3 and got["verdict"] == "approve"
 
 
 def review(api, token, body, expected=200):
