@@ -278,3 +278,48 @@ def test_decide_on_a_due_run_is_given_the_occurrence_fields():
                       "tz": "UTC", "rule_due_id": "rdd_7", "run_at": "2030-02-15T00:00:00.000000Z"}}
     E.execute(flow, values, services)
     assert services.judged[0]["values"] == {"due_on": "2030-03-01", "rule_due_id": "rdd_7"}
+
+
+def test_a_run_the_tick_gives_up_on_is_retried_too(api):
+    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"})
+    store = api.app.state.store
+    with store.transaction() as c:   # the pass queues the day's run, and nothing drains it
+        automations._due_pass(c, dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()),
+                              datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    rid = sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))[0]["id"]
+    with api.app.state.store.transaction() as c:
+        automations._fail(c, rid, None, "2030-02-15T00:00:06.000000Z", "the tick gave up")
+    assert get(api, f"automations/{aid}")["next_due"] == "2030-03-01"       # owed again, as a failed run is
+    with time_machine.travel(datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc), tick=False):
+        tick(api, datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc))
+        drain(api)
+    assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed", "ok"]
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Payroll' AND occurrence=?", (f"{aid}:2030-03-01",))) == 1
+
+
+def test_three_failed_runs_give_up_the_day_and_the_next_day_runs(api, monkeypatch):
+    aid = due(api, {"first_due": "2030-01-07", "repeats": "weekly", "open_days": 0, "tz": "UTC"})
+    real = hubdb.task_create
+
+    def broken(*args, **kwargs):
+        raise ValueError("the owner bot was deleted")
+
+    monkeypatch.setattr(hubdb, "task_create", broken)
+    for hour in (0, 1, 2):   # the first run, then its hourly retries: each one fails
+        at = datetime(2030, 1, 7, hour, 0, 5 + hour, tzinfo=timezone.utc) if hour == 0 else \
+            datetime(2030, 1, 7, hour, 10, 0, tzinfo=timezone.utc)
+        with time_machine.travel(at, tick=False):
+            tick(api, at)
+            drain(api)
+    assert sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]) == ["failed"] * 3
+    gave_up = sql(api, "SELECT detail_json FROM events WHERE action='automation.due_gave_up' AND target=?", (aid,))
+    assert [json.loads(row["detail_json"])["due_on"] for row in gave_up] == ["2030-01-07"]
+    assert "owner bot was deleted" in json.loads(gave_up[0]["detail_json"])["error"]
+    assert get(api, f"automations/{aid}")["next_due"] == "2030-01-14"
+    monkeypatch.setattr(hubdb, "task_create", real)
+    with time_machine.travel(datetime(2030, 1, 14, 0, 30, tzinfo=timezone.utc), tick=False):
+        tick(api, datetime(2030, 1, 14, 0, 30, tzinfo=timezone.utc))
+        drain(api)
+    assert runs_of(api, aid).count("due:2030-01-07") == 3 and "due:2030-01-14" in runs_of(api, aid)
+    assert [row["occurrence"] for row in sql(api, "SELECT occurrence FROM tasks WHERE title='Payroll' "
+                                             "AND status='open'")] == [f"{aid}:2030-01-14"]

@@ -1596,7 +1596,6 @@ class Hub:
                 status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
                 _cancel_mail(c, rid, state)
-                _due_failed(c, run)
             _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued", "held"))
             waits = [t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"]
             if status == "waiting":
@@ -1605,6 +1604,8 @@ class Hub:
                       "WHERE id=?", (status, state.get("cost", 0), json.dumps(state, default=str),
                                      None if status in ("waiting", "queued", "held") else H.now(),
                                      min(waits) if waits and status == "waiting" else None, rid))
+            if status == "failed":
+                _due_failed(c, rid, _run_error(state))
             if status == "queued":
                 _ring(c)
 
@@ -1685,6 +1686,8 @@ def _settle_run(c, run_id):
     c.execute("UPDATE automation_runs SET status=?, state_json=?, finished=? WHERE id=?",
               (status, json.dumps(state, default=str),
                run["finished"] or (None if status == "waiting" else H.now()), run_id))
+    if status == "failed" and run["status"] != "failed":
+        _due_failed(c, run_id, _run_error(state))
 
 
 def restate(c, run_id, key, value, changes):
@@ -1795,6 +1798,7 @@ def _cursor(day):
 
 
 DUE_RETRY = timedelta(hours=1)    # a due day whose run failed is run again no sooner than this after the failure
+DUE_TRIES = 3                     # failed runs of one due day before the routine gives that day up
 
 
 def _due_pass(c, row, at):
@@ -1843,18 +1847,40 @@ def _deferred(c, row, day, why):
     H.event(c, H.KEEPER, "automation.deferred", row["id"], detail)
 
 
-def _due_failed(c, run):
-    """A due day's run failed: the cursor goes back to that day (if it is past it), so `_due_pass` runs the day again
-    once its retry is due. A failed run has no other effect on the routine's days."""
-    ref = str(run.get("trigger_ref") or "")
+def _run_error(state):
+    """Why a run failed, in words: the run's own error, else the first failed step's detail (an action's refusal)."""
+    if state.get("error"):
+        return str(state["error"])
+    for record in state.get("steps") or []:
+        if record.get("status") == "failed":
+            found = next((a.get("detail") or a.get("error") for a in _entries(record) if not a.get("ok", True)), None)
+            return str(found or record.get("error") or "a step failed")
+    return "failed"
+
+
+def _due_failed(c, rid, error=""):
+    """A due day's run has failed (called once, as the run turns failed). Under DUE_TRIES failed runs for the day, the
+    cursor goes back to that day, so `_due_pass` runs it again once its retry is due. At DUE_TRIES, the day is given up
+    (`automation.due_gave_up`) and the cursor moves on to the next day."""
+    run = c.execute("SELECT automation_id, trigger_ref FROM automation_runs WHERE id=?", (rid,)).fetchone()
+    ref = str(run["trigger_ref"] or "") if run else ""
     if not ref.startswith("due:"):
         return
     try:
-        day = date.fromisoformat(ref[4:]).isoformat()
+        day = date.fromisoformat(ref[4:])
     except ValueError:
         return
-    c.execute("UPDATE automations SET next_due=? WHERE id=? AND (next_due='' OR next_due>?)",
-              (day, run["automation_id"], day))
+    aid = run["automation_id"]
+    # Moving the cursor back is safe: a later day that already has its run is passed over (`queue` refuses a second).
+    failed = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status='failed'",
+                       (aid, ref)).fetchone()[0]
+    if failed < DUE_TRIES:
+        c.execute("UPDATE automations SET next_due=? WHERE id=?", (day.isoformat(), aid))
+        return
+    trigger = json.loads(c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone()[0])["trigger"]
+    c.execute("UPDATE automations SET next_due=? WHERE id=?",
+              (_cursor(D.next_after(D.first_due(trigger), trigger["repeats"], day)), aid))
+    H.event(c, H.KEEPER, "automation.due_gave_up", aid, {"due_on": day.isoformat(), "error": str(error or "")[:300]})
 
 
 def _fail(c, rid, state, now, why):
@@ -1866,8 +1892,11 @@ def _fail(c, rid, state, now, why):
         _found_done(c, run["automation_id"], state, ended=True)
     else:
         _cancel_mail(c, rid)
+    was = c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()
     c.execute("UPDATE automation_runs SET status='failed',finished=?,claimed_at=NULL,state_json=coalesce(?,state_json) "
               "WHERE id=?", (now, json.dumps(state, default=str) if state else None, rid))
+    if was and was["status"] != "failed":
+        _due_failed(c, rid, why)
 
 
 def _due(trigger, at):
