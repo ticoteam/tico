@@ -126,7 +126,7 @@ when the turn ends are cut off. The token file and granted credential files are 
 files sit at the same paths every attempt. A turn that finds every turn user busy stops the longest-idle kept pi and
 takes its user. A kept pi's relay is stopped and its user cleaned and returned when the pi goes (idle, eviction, a
 crash, a failed turn, the runner stopping); a pi started again for a changed start keeps both. A new GitHub token
-still restarts it, about hourly.
+(the runner and the server hand out a new one about every 15 minutes) still restarts it.
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
