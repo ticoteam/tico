@@ -150,6 +150,10 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",
      "efforts": ("low", "high"), "default_effort": "low"},
+    # Inception's Mercury 3 (text only, tools, 1M context) through OpenRouter: the meeting model's next step on a computer
+    # that cannot run the Gateway's (backend/live_meetings.py turn_config). A meeting model, never a bot's pick.
+    {"id": "mercury-3", "label": "mercury 3", "runtime": "pi", "provider": "openrouter", "meeting": True,
+     "efforts": ("low", "high"), "default_effort": "low"},
     # The Tico AI Gateway's lineup (backend/gateway_tiers.py): 60 department tiers at their current pinned version, then the
     # old lineup (retired: it keeps working at its old price, nothing new may pick it). Any other id of the lineup
     # (an auto id, an older version, one that arrived with HQ's catalog) is found through `MODEL_BY_ID`.
@@ -210,6 +214,8 @@ MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
+#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, the list price the Gateway's meeting row marks up; cache
+#              reads at 10% of input, as the Gateway prices it
 PRICES_AS_OF = "2026-09-29"
 class _Priced(dict):
     """A price table whose lookups also find the Gateway's ids (`gateway_tiers`): a tier, a pinned version, an old id."""
@@ -260,6 +266,7 @@ PRICES = _Priced({
     "llama-4-maverick": (0.1875, 0.1875, 0.6525),
     "mistral-medium-3.5": (1.5, 1.5, 7.5),
     "devstral-2512": (0.40, 0.04, 2.0),
+    "mercury-3": (0.20, 0.02, 0.70),
 }, gateway_tiers.price_for)    # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
 
 
@@ -456,6 +463,8 @@ def env_seed(settings):
 
 # The model live-meeting replies run on when the company has not chosen one and the Tico AI Gateway is on.
 MEETING_MODEL = "tico-meeting-1.0"
+# The same model through OpenRouter, for a computer that cannot run the Gateway's (a Mac runner).
+OPENROUTER_MEETING_MODEL = "mercury-3"
 
 
 def with_gateway(record, connected):
