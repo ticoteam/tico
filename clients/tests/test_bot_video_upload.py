@@ -91,6 +91,8 @@ def test_other_kinds_keep_the_25_mb_cap(checkout):
     ("song.mp3", b"ID3\x04\x00", True), ("song.mp3", b"\xff\xfb\x90\x00", True),
     ("clip.wav", WAV, True), ("clip.ogg", b"OggS\x00", True), ("clip.aac", b"\xff\xf1\x50\x80", True),
     ("clip.aac", b"\xff\xd8\xff", False), ("notes.md", b"# not media", True),
+    ("cut.mov", b"\x00\x00\x00\x08skip" + b"\x00" * 8, True),
+    ("cut.mov", b"\x00\x00\x00\x08pnot" + b"\x00" * 8, True),
 ])
 def test_media_must_start_with_its_container(name, head, ok):
     assert BF.media_matches(name, head) is ok

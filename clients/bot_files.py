@@ -85,7 +85,7 @@ def media_matches(name, head):
     if kind is None:
         return True
     if kind == "ftyp":          # MP4, M4V, M4A and MOV start with a box whose type is ftyp (or an old QuickTime box)
-        return len(head) >= 8 and head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free")
+        return len(head) >= 8 and head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot")
     if kind == "ebml":
         return head[:4] == b"\x1a\x45\xdf\xa3"
     if kind == "mp3":
