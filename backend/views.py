@@ -535,7 +535,8 @@ def operation_issues(c, who, auth):
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
                 from .agents import CONFIG_SQL
                 config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
-                runtime = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config else {})[0] or "your"
+                runtime = providers.bot_choice(c, auth.settings,
+                                               H._json(config["config_json"], {}) or {} if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
                 from . import login_holds
