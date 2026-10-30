@@ -26,7 +26,13 @@ def live(api):
                   ("ops", "hermes", digest("synthetic-ops-agent"), H.now(), "human:ana"))
         c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
                   ("finance", "hermes", digest("synthetic-finance-agent"), H.now(), "human:ana"))
-    return api
+    yield api
+    assert settle(api)
+
+
+def settle(api):
+    """Wait for the meeting routing a write started off its request (live_meetings.Routing)."""
+    return api.app.state.live_meeting_routing.settle(timeout=60)
 
 
 def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, cooldown_seconds=60):
@@ -46,6 +52,7 @@ def chunk(api, mid, seq, start, end, text="Transcript", *, token="ana-test", exp
         {"seq": seq, "speaker": "Ana", "start_ms": start, "end_ms": end, "text": text}]} ,
         headers=headers(token))
     assert response.status_code == expected, response.text
+    settle(api)
     return response.json() if expected == 200 else response
 
 
@@ -208,13 +215,13 @@ def test_per_meeting_reply_cap_cooldown_and_validation(live):
     post(live, f"live-meetings/{mid}/turns/{first['id']}/claim", {}, token="finance-live")
     post(live, f"live-meetings/{mid}/chat", {"text": "Reviewed", "turn_id": first["id"]},
          token="finance-live")
+    # The cooldown holds back routed turns only: a bot named directly still gets its turn.
     post(live, f"live-meetings/{mid}/chat", {"text": "Finance, any follow-up?"})
     after_cooldown = get(live, f"live-meetings/{mid}")
-    assert after_cooldown["router"]["bypasses"][-1]["skipped"] == [{"bot": "finance", "reason": "cooldown"}]
-    chunk(live, mid, 2, 40_000, 41_000, "Finance, please follow up")
-    after_window = get(live, f"live-meetings/{mid}")
+    assert after_cooldown["router"]["bypasses"][-1]["skipped"] == []
+    assert after_cooldown["router"]["bypasses"][-1]["targets"] == ["finance"]
     assert any(turn["bot"] == "finance" and turn["status"] == "pending"
-               for turn in after_window["router"]["turns"])
+               for turn in after_cooldown["router"]["turns"])
     assert live.post("/api/v2/live-meetings", json={"title": "Invalid cap", "reply_cap": 21},
                      headers=headers()).status_code == 422
     assert live.post("/api/v2/live-meetings", json={"title": "Invalid cooldown", "cooldown_seconds": 3601},
@@ -652,7 +659,7 @@ def test_the_per_meeting_model_wins_and_an_empty_one_keeps_the_bots_model(live, 
     with live.app.state.store.transaction() as c:
         stored = c.execute("SELECT meeting_model FROM live_meetings WHERE id=?", (own_meeting["id"],)).fetchone()
         assert stored[0] == ""
-        assert live_meetings_module.turn_config(c, settings, own, "ops", own_meeting["id"], "") is own
+        assert live_meetings_module.turn_config(c, settings, own, "ops", own_meeting["id"], "") == {**own, "session": "task"}
         turn = live_meetings_module.turn_config(c, settings, own, "ops", picked["id"], "")
         assert turn["model"] == MEETING and turn["runtime"] == "pi"
 
@@ -668,7 +675,8 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
                   "created,updated,started_at,visibility,client,meeting_model) "
                   "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
-        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") is own
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") == {
+            **own, "session": "task"}
         event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-fallback' AND type='meeting.model'").fetchone()
         payload = json.loads(event[0])
         assert payload["fallback"] == "bot_model" and payload["turn_id"] == "t-1"
@@ -684,7 +692,7 @@ def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monke
                   "created,updated,started_at,visibility,client,meeting_model) "
                   "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
                   (H.now(), H.now(), H.now()))
-        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") is own
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") == {**own, "session": "task"}
         payload = json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-gone' "
                                        "AND type='meeting.model'").fetchone()[0])
         assert "not in the model catalog" in payload["reason"]
@@ -727,3 +735,234 @@ def test_a_routed_meeting_turn_is_claimed_on_the_meeting_model(live, monkeypatch
     with live.app.state.store.read() as c:
         handed = c.execute("SELECT handed_runtime,handed_model FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     assert (handed[0], handed[1]) == ("pi", MEETING)
+
+
+def claimed_turn(api, machine, bot="ops"):
+    """The next meeting turn a runner claims for `bot`, started as a running turn."""
+    attempt = post(api, "jobs/claim", {"bot": bot}, token=machine["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-" + attempt["id"]}, token=machine["token"])
+    return attempt
+
+
+def thread_of(attempt):
+    """The provider thread the runner keys this turn on (runner/state.py and runner-rs session_key, clients/sessions.py)."""
+    from clients import sessions
+    return sessions.session_key(attempt["config"], attempt["bot"], (attempt.get("task") or {}).get("id"),
+                                (attempt.get("conversation") or {}).get("id"))
+
+
+def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
+    """A private meeting's words never reach another meeting or the bot's chats: each meeting and bot has one
+    conversation, and its turns run on that conversation's own thread, whatever the bot's session setting."""
+    with live.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','bot') WHERE bot='ops'")
+    private = post(live, "live-meetings", {"title": "Private A", "visibility": "private", "cooldown_seconds": 0})
+    team = post(live, "live-meetings", {"title": "Team B", "cooldown_seconds": 0})
+    for meeting in (private, team):
+        attach(live, meeting["id"], "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, private["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
+    first = claimed_turn(live, machine)
+    post(live, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Noted.", "last_seq": 0},
+         token=machine["token"])
+    chunk(live, private["id"], 2, 1000, 2000, "Ops, what did I just say?")
+    second = claimed_turn(live, machine)
+    post(live, f"attempts/{second['id']}/complete", {"outcome": "completed", "text": "The codename.", "last_seq": 0},
+         token=machine["token"])
+    chunk(live, team["id"], 1, 0, 1000, "Ops, what is the codename?")
+    other = claimed_turn(live, machine)
+    assert first["conversation"]["id"] == second["conversation"]["id"] != other["conversation"]["id"]
+    assert thread_of(first) == thread_of(second) == "conversation:" + first["conversation"]["id"]
+    assert thread_of(other) == "conversation:" + other["conversation"]["id"] != thread_of(first)
+    with live.app.state.store.read() as c:
+        own = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        kept = {row[0] for row in c.execute("SELECT conversation_id FROM live_meeting_bots WHERE bot='ops'")}
+    from clients import sessions
+    assert sessions.session_key(own, "ops", None, "any-direct-chat") == sessions.BOT_THREAD != thread_of(first)
+    assert kept == {first["conversation"]["id"], other["conversation"]["id"]}
+    assert "confidential" not in other["message"]["body"]
+
+
+def test_a_named_follow_up_while_the_bot_replies_is_steered_into_that_reply(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, mid, 1, 0, 1000, "Ops, how is the rollout?")
+    running = claimed_turn(live, machine)
+    chunk(live, mid, 2, 1000, 2000, "Ops, and the rollback plan too")
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["router"]["bypasses"][-1]["skipped"] == []
+    follow = next(turn for turn in detail["router"]["turns"] if turn["source_key"] == "chunk:2")
+    first = next(turn for turn in detail["router"]["turns"] if turn["source_key"] == "chunk:1")
+    with live.app.state.store.read() as c:
+        deferred = [json.loads(row[0]) for row in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
+    assert deferred == [{"turn_id": follow["id"], "bot": "ops", "reason": "replying_in_meeting",
+                         "behind": first["id"], "source_key": "chunk:2"}]
+    # A runtime that steers takes the follow-up into the running turn, as any follow-up in its conversation.
+    taken = post(live, f"attempts/{running['id']}/inputs", {}, token=machine["token"])["messages"]
+    assert len(taken) == 1 and "rollback plan" in taken[0]["body"]
+    post(live, f"attempts/{running['id']}/complete",
+         {"outcome": "completed", "text": "On track; rollback is ready.", "last_seq": 0}, token=machine["token"])
+    turns = {turn["id"]: turn for turn in get(live, f"live-meetings/{mid}")["router"]["turns"]}
+    assert turns[first["id"]]["status"] == "replied"
+    assert (turns[follow["id"]]["status"], turns[follow["id"]]["skip_reason"]) == ("skipped", "steered_into_turn")
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+
+
+def test_a_named_follow_up_a_runtime_cannot_steer_runs_right_after_and_busy_bots_are_queued(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, mid, 1, 0, 1000, "Ops, how is the rollout?")
+    running = claimed_turn(live, machine)
+    chunk(live, mid, 2, 1000, 2000, "Ops, and the rollback plan too")
+    post(live, f"attempts/{running['id']}/complete", {"outcome": "completed", "text": "On track.", "last_seq": 0},
+         token=machine["token"])
+    after = claimed_turn(live, machine)
+    assert "rollback plan" in after["message"]["body"]
+    assert after["conversation"]["id"] == running["conversation"]["id"]
+    turns = {turn["source_key"]: turn for turn in get(live, f"live-meetings/{mid}")["router"]["turns"]}
+    assert turns["chunk:2"]["status"] == "claimed"
+    post(live, f"attempts/{after['id']}/complete", {"outcome": "completed", "text": "Rollback is ready.",
+                                                    "last_seq": 0}, token=machine["token"])
+    # Busy with other work: the named turn is queued behind it, never dropped.
+    with live.app.state.store.transaction() as c:
+        H.task_create(c, H.human_actor("ana"), "Tidy the notes", "Please tidy them.", "bot:ops")
+    chunk(live, mid, 3, 2000, 3000, "Ops, one more thing")
+    detail = get(live, f"live-meetings/{mid}")
+    assert any(turn["source_key"] == "chunk:3" and turn["status"] == "pending" for turn in detail["router"]["turns"])
+    with live.app.state.store.read() as c:
+        reasons = [json.loads(row[0])["reason"] for row in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
+    assert reasons[-1] == "busy"
+
+
+def test_a_routed_window_still_skips_a_busy_bot_and_one_in_cooldown(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live, cooldown_seconds=600)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+
+    def skipped_at(seq):
+        return next(window["trace"]["skipped"] for window in get(live, f"live-meetings/{mid}")["router"]["windows"]
+                    if window["trace"].get("chunk_range") == [seq, seq])
+
+    chunk(live, mid, 1, 0, 30_000, "The rollout needs a reliability review")
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+    chunk(live, mid, 2, 30_000, 60_000, "More about the rollout")
+    assert skipped_at(2) == [{"bot": "ops", "reason": "busy"}]
+    post(live, f"live-meetings/{mid}/turns/{turn['id']}/claim", {}, token="ops-live")
+    post(live, f"live-meetings/{mid}/chat", {"text": "Reviewed", "turn_id": turn["id"]}, token="ops-live")
+    chunk(live, mid, 3, 60_000, 90_000, "Still the rollout")
+    assert skipped_at(3) == [{"bot": "ops", "reason": "cooldown"}]
+
+
+def test_a_chunk_is_acknowledged_before_its_window_decision_comes_back(live):
+    import threading
+    gate, asked = threading.Event(), threading.Event()
+
+    def slow(state, questions, label):
+        asked.set()
+        gate.wait(30)
+        return {"model": "synthetic-decider", "ms": 1,
+                "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+
+    live.app.state.live_meeting_decider = slow
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    started = time.monotonic()
+    response = live.post(f"/api/v2/live-meetings/{mid}/chunks", headers=headers(), json={"chunks": [
+        {"seq": 1, "speaker": "Ana", "start_ms": 0, "end_ms": 30_000, "text": "The rollout needs a review"}]})
+    assert response.status_code == 200 and response.json()["accepted"] == [1]
+    assert asked.wait(10) and time.monotonic() - started < 10
+    assert get(live, f"live-meetings/{mid}")["router"]["windows"][0]["status"] == "deciding"
+    # A second chunk while the first window is still deciding neither waits nor starts a second decision of it.
+    again = live.post(f"/api/v2/live-meetings/{mid}/chunks", headers=headers(), json={"chunks": [
+        {"seq": 2, "speaker": "Ana", "start_ms": 30_000, "end_ms": 31_000, "text": "Anything else"}]})
+    assert again.status_code == 200
+    gate.set()
+    assert settle(live)
+    windows = get(live, f"live-meetings/{mid}")["router"]["windows"]
+    assert [window["outcome"] for window in windows if window["trace"].get("chunk_range")] == ["route"]
+    # A lost routing thread (a restart) is picked up by the scheduler's sweep.
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
+                  "VALUES(?,3,1,'Ana',40000,61000,'Late words',?)", (mid, H.now()))
+        c.execute("UPDATE live_meetings SET seq=3 WHERE id=?", (mid,))
+    live.app.state.live_meeting_routing.sweep()
+    assert settle(live)
+    windows = get(live, f"live-meetings/{mid}")["router"]["windows"]
+    assert [window["trace"]["chunk_range"] for window in windows if window["trace"].get("chunk_range")] == [[1, 1], [2, 3]]
+
+
+def test_a_failed_decision_keeps_its_code_and_never_its_detail(live):
+    from clients import judge as J
+
+    def failing(state, questions, label):
+        raise J.JudgeError("unavailable", "upstream echoed: synthetic-private-words", status=503, retryable=True)
+
+    live.app.state.live_meeting_decider = failing
+    meeting = connect(live)
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 30_000, "Synthetic words")
+    trace = get(live, f"live-meetings/{meeting['id']}")["router"]["windows"][0]["trace"]
+    assert (trace["reason"], trace["error"], trace["code"], trace["status"], trace["retryable"]) == (
+        "decision_error", "JudgeError", "unavailable", 503, True)
+    assert "synthetic-private-words" not in json.dumps({k: v for k, v in trace.items() if k != "decision_input"})
+
+
+def test_the_meeting_view_says_its_meeting_model(live):
+    assert connect(live)["meeting_model"] is None
+    own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
+    assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""
+
+
+def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_openrouter(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    gateway_off = lambda c, settings, bot, choice, *args: (
+        "the Tico AI Gateway does not run on this Mac" if choice["model"].startswith("tico-") else "")
+    monkeypatch.setattr(task_models, "why_not", gateway_off)
+
+    def meeting(rid):
+        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+                  (rid, H.now(), H.now(), H.now()))
+
+    def said(rid):
+        return json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+                                    "AND type='meeting.model'", (rid,)).fetchone()[0])
+
+    with live.app.state.store.transaction() as c:
+        providers.save(c, "human:ana", {"enabled": ["openrouter"], "meeting_model": MEETING,
+                                        "expected_revision": providers.load(c, settings)["revision"]}, H.now(), settings)
+        meeting("m-mac")
+        turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-mac", "", turn_id="t-1")
+        assert (turn["runtime"], turn["model"], turn["reasoning_effort"], turn["session"]) == (
+            "pi", "mercury-3", "low", "task")
+        payload = said("m-mac")
+        assert (payload["model"], payload["fallback"], payload["ran"]) == (MEETING, "openrouter", "mercury-3")
+        assert payload["steps"] == [{"model": MEETING, "reason": "the Tico AI Gateway does not run on this Mac"}]
+    with live.app.state.store.transaction() as c:
+        providers.save(c, "human:ana", {"enabled": ["anthropic"],
+                                        "expected_revision": providers.load(c, settings)["revision"]}, H.now(), settings)
+        meeting("m-no-openrouter")
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-no-openrouter", "") == {**own, "session": "task"}
+        payload = said("m-no-openrouter")
+        assert (payload["fallback"], payload["ran"]) == ("bot_model", "bots-own")
+        assert [step["model"] for step in payload["steps"]] == [MEETING, "mercury-3"]
+        assert payload["steps"][1]["reason"] == "OpenRouter is off for this company"

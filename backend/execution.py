@@ -4521,7 +4521,7 @@ class Execution:
             from .live_meetings import complete_runner_turn
             complete_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"],
                                  body.text if body.outcome == "completed" else "", body.outcome,
-                                 requeued=requeue)
+                                 requeued=requeue, attempt_id=aid)
         turn_task = work_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():

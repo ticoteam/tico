@@ -230,6 +230,10 @@ LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN repl
 # A meeting's own reply model: NULL follows the company's meeting model (providers.py), '' is the bot's own model.
 LIVE_MEETINGS_MODEL_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN meeting_model TEXT;"
 
+# The one conversation each attached bot's meeting turns go to (backend/live_meetings.py _turn_conversation), so a
+# meeting's turns continue one provider thread of their own, never the bot's shared thread or another meeting's.
+LIVE_MEETING_BOT_CONVERSATION_SCHEMA = "ALTER TABLE live_meeting_bots ADD COLUMN conversation_id TEXT;"
+
 # Ordinary human chat decisions are separate from the one-per-transcript-window router decision.
 # Keep their exact input and outcome durable so replay never has to call a model again.
 LIVE_MEETINGS_CHAT_ROUTING_SCHEMA = """

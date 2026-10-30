@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import threading
 import uuid
 from typing import Literal
 
@@ -233,7 +234,7 @@ def _view(c, auth, who, rid):
         "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
-        "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
+        "meeting_model": row["meeting_model"], "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
         "imported_meeting_id": row["imported_meeting_id"], "humans": humans, "bots": bots,
         "chunks": chunks, "chat": chat,
         "router": {"windows": windows, "chat_routes": chat_routes,
@@ -341,50 +342,93 @@ def _turn_prompt(c, rid, turn_id, slug):
             "Scoped meeting context JSON follows:\n" + payload)
 
 
+def _meeting_run(c, settings, bot, model, runner_id, job_id):
+    """(choice, "") when `model` can run this reply at low effort on `bot`'s computer, else (None, why)."""
+    spec = providers.MODEL_BY_ID.get(model)
+    if not spec:
+        return None, f"{model} is not in the model catalog"
+    effort = "low" if "low" in (spec.get("efforts") or ()) else None
+    try:
+        choice = {**task_models.choice_of(spec["id"], effort), "compact_at": None}
+    except providers.ProviderError as exc:
+        return None, exc.detail
+    why = task_models.why_not(c, settings, bot, choice, runner_id, job_id)
+    return (None, why) if why else (choice, "")
+
+
 def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None):
     """The bot's config for one live-meeting reply: the meeting's model (its own, else the company's meeting model) at
     low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
-    no model keep the bot's own config. A set model that cannot be used (not in the catalog, its provider off, not
-    installed or not signed in on the bot's computer) keeps the bot's own config and says why on the meeting."""
+    no model keep the bot's own model. A Gateway meeting model that cannot run on the bot's computer (a Mac runs no
+    Gateway model) is tried next as OpenRouter's Mercury when the company has OpenRouter on; a model that cannot be
+    used (not in the catalog, its provider off, not installed or not signed in) keeps the bot's own model. Each step is
+    said on the meeting (`meeting.model`).
+
+    Every meeting reply runs in its meeting conversation's own provider thread (`session: task` keys a turn with no
+    task on its conversation, clients/sessions.py), whatever the bot's own session setting: the bot's shared thread
+    carries its other chats and meetings, and a private meeting's words must never reach another one."""
     if not rid:
         return config
     row = c.execute("SELECT meeting_model FROM live_meetings WHERE id=?", (rid,)).fetchone()
     if not row:
         return config
+    config = {**config, "session": "task"}
     model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
     if not model:
         return config
-    why, choice = "", None
-    spec = providers.MODEL_BY_ID.get(model)
-    if not spec:
-        why = f"{model} is not in the model catalog"
-    else:
-        effort = "low" if "low" in (spec.get("efforts") or ()) else None
-        try:
-            choice = {**task_models.choice_of(spec["id"], effort), "compact_at": None}
-        except providers.ProviderError as exc:
-            why = exc.detail
-    if choice and not why:
-        why = task_models.why_not(c, settings, bot, choice, runner_id, job_id)
+    steps = []
+    choice, why = _meeting_run(c, settings, bot, model, runner_id, job_id)
+    spec = providers.MODEL_BY_ID.get(model) or {}
+    if why and spec.get("meeting") and (providers.PROVIDER_BY_ID.get(spec.get("provider")) or {}).get("gateway"):
+        steps.append({"model": model, "reason": why})
+        model = providers.OPENROUTER_MEETING_MODEL
+        if "openrouter" in providers.load(c, settings)["enabled"]:
+            choice, why = _meeting_run(c, settings, bot, model, runner_id, job_id)
+        else:
+            why = "OpenRouter is off for this company"
     if why:
-        _event(c, rid, "meeting.model", {"model": model, "bot": bot, "turn_id": turn_id, "fallback": "bot_model",
-                                         "reason": why})
+        steps.append({"model": model, "reason": why})
+    if steps:
+        ran = choice["model"] if choice else (config.get("model") or "")
+        _event(c, rid, "meeting.model", {"model": steps[0]["model"], "bot": bot, "turn_id": turn_id,
+                                         "fallback": "openrouter" if choice else "bot_model", "ran": ran,
+                                         "reason": steps[0]["reason"], "steps": steps})
+    if not choice:
         return config
     return task_models.apply({k: v for k, v in config.items() if k != task_models.KEY}, choice)
 
 
+def _turn_conversation(c, rid, slug, title):
+    """The one conversation this bot's turns in this meeting go to, opened with its first turn: one per meeting and bot,
+    so the turns continue one thread (turn_config) that no other meeting or chat shares."""
+    room = "live-meeting:" + rid
+    row = c.execute("SELECT conversation_id FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, slug)).fetchone()
+    conv = H.conversation(c, row["conversation_id"]) if row and row["conversation_id"] else None
+    if (conv and not conv.get("closed_at") and conv.get("room_key") == room
+            and "bot:" + slug in conv["participants"]):
+        return conv
+    conv = H.open_conversation(c, H.KEEPER, ["bot:" + slug], kind="chat", subject="Live meeting: " + title,
+                               room_key=room)
+    c.execute("UPDATE live_meeting_bots SET conversation_id=? WHERE meeting_id=? AND bot=?", (conv["id"], rid, slug))
+    return conv
+
+
 def _dispatch_turn(c, rid, turn_id, slug):
-    """Put one scoped reply request on the existing durable runner job queue."""
+    """Put one scoped reply request on the existing durable runner job queue, in this bot's meeting conversation. A
+    request that arrives while the bot's reply in this meeting runs is a follow-up in that conversation: a runtime that
+    steers takes it into the running turn (Execution.inputs), any other runs it right after."""
     meeting = _meeting(c, rid)
-    conv = H.open_conversation(c, H.KEEPER, ["bot:" + slug], kind="chat",
-                               subject="Live meeting: " + meeting["title"], room_key="live-meeting:" + rid)
+    conv = _turn_conversation(c, rid, slug, meeting["title"])
     refs = {"live_meeting": {"meeting_id": rid, "turn_id": turn_id}}
     H.feed(c, "bot:" + slug, _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
 
 
-def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None):
-    """Persist concurrent bot turns while respecting current-meeting and runner busy state."""
-    skipped, selected = [], []
+def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None, named=False):
+    """Persist concurrent bot turns while respecting current-meeting and runner busy state. A bot named directly
+    (`named`) is never passed over for being busy or in its cooldown: its turn goes into its meeting conversation all
+    the same, where a reply this bot is giving in this meeting takes it in as a follow-up and any other work runs
+    first (`meeting.bot_turn_deferred` says so)."""
+    skipped, selected, deferred = [], [], []
     meeting = _meeting(c, rid)
     if at_ms is None:
         at_ms = c.execute("SELECT COALESCE(MAX(end_ms),0) FROM live_meeting_chunks WHERE meeting_id=?",
@@ -395,19 +439,18 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
         if not attached:
             skipped.append({"bot": slug, "reason": "not_attached"})
             continue
-        busy = c.execute("SELECT 1 FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
-                         "WHERE t.meeting_id=? AND t.bot=? AND t.status IN ('pending','claimed') "
-                         "AND m.state='live' LIMIT 1", (rid, slug)).fetchone()
-        if not busy:
-            busy = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                             f"WHERE j.bot=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
-                             "AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NULL LIMIT 1",
-                             (slug,)).fetchone()
-        if busy:
+        replying = c.execute("SELECT t.id FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
+                             "WHERE t.meeting_id=? AND t.bot=? AND t.status IN ('pending','claimed') "
+                             "AND m.state='live' ORDER BY t.created,t.id LIMIT 1", (rid, slug)).fetchone()
+        busy = None if replying else c.execute(
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+            f"WHERE j.bot=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
+            "AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NULL LIMIT 1", (slug,)).fetchone()
+        if (replying or busy) and not named:
             skipped.append({"bot": slug, "reason": "busy"})
             continue
         last = attached["last_reply_ms"]
-        if last is not None and at_ms is not None and at_ms < last + meeting["cooldown_ms"]:
+        if not named and last is not None and at_ms is not None and at_ms < last + meeting["cooldown_ms"]:
             skipped.append({"bot": slug, "reason": "cooldown"})
             continue
         if len(selected) >= (cap if cap is not None else meeting["reply_cap"]):
@@ -421,8 +464,14 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
             selected.append({"id": tid, "bot": slug, "window_index": window_index,
                              "transcript_seq": transcript_seq})
             _dispatch_turn(c, rid, tid, slug)
+            if replying or busy:
+                deferred.append({"turn_id": tid, "bot": slug,
+                                 "reason": "replying_in_meeting" if replying else "busy",
+                                 "behind": replying["id"] if replying else None})
     if selected:
         _event(c, rid, "meeting.bot_turn", {"turns": selected, "source_key": source_key})
+    for row in deferred:
+        _event(c, rid, "meeting.bot_turn_deferred", {**row, "source_key": source_key})
     return selected, skipped
 
 
@@ -508,8 +557,27 @@ def claim_runner_turn(c, rid, turn_id, bot, *, auth=None):
     return {"id": turn_id, "status": "claimed"}
 
 
-def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False):
-    """Settle a meeting turn from a completed normal bot execution, keeping PASS hidden."""
+def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False, attempt_id=None):
+    """Settle a meeting turn from a completed normal bot execution, keeping PASS hidden. The follow-ups the run took in
+    while it ran (Execution.inputs: later turns of this bot in this meeting) are settled with it: answered in its reply,
+    or ended as it ended. A requeued run hands them back to the queue, and each keeps its own turn."""
+    if attempt_id and not requeued:
+        for row in c.execute("SELECT m.refs_json FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                             "WHERE i.attempt_id=? AND m.from_actor=? AND m.to_actor=? "
+                             "AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NOT NULL",
+                             (attempt_id, H.KEEPER, "bot:" + bot)).fetchall():
+            ref = (H._json(row["refs_json"], {}) or {}).get("live_meeting") or {}
+            folded = c.execute("SELECT * FROM live_meeting_turns WHERE id=? AND meeting_id=? AND bot=?",
+                               (ref.get("turn_id"), ref.get("meeting_id"), bot)).fetchone()
+            if not folded or folded["id"] == turn_id or folded["status"] in ("replied", "skipped"):
+                continue
+            if outcome == "completed":
+                c.execute("UPDATE live_meeting_turns SET status='skipped',skip_reason='steered_into_turn',replied_at=? "
+                          "WHERE id=?", (H.now(), folded["id"]))
+                _event(c, folded["meeting_id"], "meeting.bot_turn_skipped",
+                       {"turn_id": folded["id"], "bot": bot, "reason": "steered_into_turn"})
+            else:
+                _finish_pass(c, folded["meeting_id"], folded, "bot_execution_" + str(outcome))
     turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=? AND meeting_id=? AND bot=?",
                      (turn_id, rid, bot)).fetchone()
     if not turn or turn["status"] in ("replied", "skipped"):
@@ -554,7 +622,7 @@ def _route_mentions(c, rid, text, *, source_key, transcript_seq=None, at_ms=None
     if not found:
         return [], []
     selected, skipped = _enqueue(c, rid, found, source_key=source_key, transcript_seq=transcript_seq,
-                                 at_ms=at_ms)
+                                 at_ms=at_ms, named=True)
     _event(c, rid, "meeting.router", {"bypass": "named", "source_key": source_key,
                                        "targets": [v["bot"] for v in selected], "skipped": skipped,
                                        "trace": {"decision": "bypassed", "reason": "named mention"}})
@@ -616,10 +684,23 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
                  "decision_input": state, "threshold": threshold}
         return {"outcome": "route" if targets else "pass", "targets": [slug for _, slug in targets], "trace": trace}
     except Exception as exc:
-        # A route failure is a hidden PASS with a durable trace; it must never turn into transcript text.
+        # A route failure is a hidden PASS with a durable trace; it must never turn into transcript text. It keeps why:
+        # the decision service's code (unavailable, unconfigured, auth...), never its detail, which can echo the request.
         return {"outcome": "pass", "targets": [],
-                "trace": {"reason": "decision_error", "error": type(exc).__name__,
+                "trace": {"reason": "decision_error", "error": type(exc).__name__, **_error_cause(exc),
                           "threshold": threshold, "decision_input": state}}
+
+
+def _error_cause(exc):
+    """What a failed decision may keep of its error: the JudgeError code, its HTTP status and whether a retry may help;
+    `timeout` for a call that ran out of time, `unreadable` for anything else."""
+    if isinstance(exc, J.JudgeError):
+        cause = {"code": J.error_code(exc), "retryable": bool(exc.retryable)}
+        if isinstance(exc.status, int) and exc.status:
+            cause["status"] = exc.status
+        return cause
+    timed_out = isinstance(exc, TimeoutError)
+    return {"code": "timeout" if timed_out else "unreadable", "retryable": timed_out}
 
 
 def _route_human_chat(app, rid, chat_id):
@@ -880,7 +961,64 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
     return dict(c.execute("SELECT * FROM live_meeting_chat WHERE id=?", (cid,)).fetchone())
 
 
+class Routing:
+    """Window and chat routing off the request path: a chunk, a correction, a resume or a chat message is acknowledged
+    once it is stored, and its meeting is routed on a thread of its own, since a decision is a model call. One thread
+    per meeting at a time: a request while it runs has it go round again, so nothing that arrived is left unrouted, and
+    no window is decided twice at once (the `deciding` row fences that across processes too). Routing reads only the
+    database, so `sweep` picks up after a restart whatever a lost thread had not got to."""
+
+    def __init__(self, app):
+        self.app = app
+        self.lock = threading.Condition()
+        self.running, self.again, self.chats = set(), set(), {}
+
+    def later(self, rid, chat_id=None):
+        with self.lock:
+            if chat_id:
+                self.chats.setdefault(rid, []).append(chat_id)
+            if rid in self.running:
+                self.again.add(rid)
+                return
+            self.running.add(rid)
+        threading.Thread(target=self._route, args=(rid,), name="tico-live-route", daemon=True).start()
+
+    def _route(self, rid):
+        from .batch_work import report
+        while True:
+            with self.lock:
+                chats = self.chats.pop(rid, [])
+                self.again.discard(rid)
+            try:
+                for chat_id in chats:
+                    _route_human_chat(self.app, rid, chat_id)
+                _run_windows(self.app, rid)
+            except Exception as exc:
+                report("live_meeting_route", rid, exc, logger="tico.live_meetings")
+            with self.lock:
+                if rid not in self.again and not self.chats.get(rid):
+                    self.running.discard(rid)
+                    self.lock.notify_all()
+                    return
+
+    def sweep(self):
+        """Route each meeting live in the last two hours again (the scheduler's tick): a no-op where every elapsed window
+        is routed. A meeting left live after its transcript stopped has nothing new to route."""
+        with self.app.state.store.read() as c:
+            rows = c.execute("SELECT id FROM live_meetings WHERE state='live' AND updated>=?",
+                             (H.shift(H.now(), seconds=-7200),)).fetchall()
+        for row in rows:
+            self.later(row["id"])
+
+    def settle(self, timeout=60):
+        """Wait until no meeting is being routed (tests, shutdown). False if `timeout` seconds pass first."""
+        with self.lock:
+            return self.lock.wait_for(lambda: not self.running, timeout)
+
+
 def install_live_meetings(app, store, auth, write):
+    routing = app.state.live_meeting_routing = Routing(app)
+
     def mutate(request, body, work):
         # Store checks run under the write lock before looking up an idempotency receipt.
         rid = request.path_params.get("rid")
@@ -1073,7 +1211,7 @@ def install_live_meetings(app, store, auth, write):
             return {"id": rid, "state": row["state"], "seq": row["seq"] + len(added),
                     "accepted": accepted, "event_id": _meeting(c, rid)["next_event_id"]}
         result = mutate(request, body, work)
-        _run_windows(app, rid)
+        routing.later(rid)
         return result
 
     @app.post("/api/v2/live-meetings/{rid}/chunks/{seq}/corrections")
@@ -1114,7 +1252,7 @@ def install_live_meetings(app, store, auth, write):
             return {"id": rid, "seq": seq, "revision": body.revision, "replayed": False,
                     "event_id": _meeting(c, rid)["next_event_id"]}
         result = mutate(request, body, work)
-        _run_windows(app, rid)
+        routing.later(rid)
         return result
 
     @app.post("/api/v2/live-meetings/{rid}/bots")
@@ -1211,7 +1349,7 @@ def install_live_meetings(app, store, auth, write):
             with store.read() as c:
                 result = _view(c, auth, who, rid)
         elif body.action == "resume":
-            _run_windows(app, rid)
+            routing.later(rid)
         return result
 
     @app.post("/api/v2/live-meetings/{rid}/chat")
@@ -1255,9 +1393,7 @@ def install_live_meetings(app, store, auth, write):
                     "event_id": _meeting(c, rid)["next_event_id"]}
         result = mutate(request, body, work)
         if who.role in ("human", "owner"):
-            _route_human_chat(app, rid, result["message"]["id"])
-            with store.read() as c:
-                result["event_id"] = _meeting(c, rid)["next_event_id"]
+            routing.later(rid, result["message"]["id"])
         return result
 
     @app.get("/api/v2/live-meetings/{rid}/turns")

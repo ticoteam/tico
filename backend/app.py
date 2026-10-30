@@ -295,6 +295,11 @@ def create_app(settings=None):
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                 try:
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
+                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
+                except Exception as exc:
+                    telemetry.capture("live_meeting_sweep", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass

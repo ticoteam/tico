@@ -84,11 +84,18 @@ event is committed with the state change it describes. Reconnect from the last f
 replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
-`state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`, `created`,
+`state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
+`meeting_model` (the meeting's own choice: `""` for the bot's own model, null to follow the company's), `created`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, and `router`.
 The `router` object contains `windows`, `chat_routes`, `turns`, and `bypasses`. Each `chat_routes` item
 has `chat_id`, `status`, `outcome`, `started`, `finished`, and `trace`. Use the route-specific acknowledgments
 above for writes; the view is a snapshot, not an acknowledgment receipt.
+
+Chunk, correction, resume and human-chat writes are acknowledged once stored; routing (window and chat
+decisions, which call a model) runs after the response, one meeting at a time, so a slow decision never
+delays an upload and a window is never decided twice at once. A window left undecided by a restart is
+picked up by the scheduler within about ten seconds for meetings live in the last two hours. Read the
+outcome from the event stream or the `router` view.
 
 `client` is optional on connect: omit it (or send null) for an unnamed connector, or use
 `"tico-recorder"`. Any other value is a validation error. The meeting view always includes
@@ -120,7 +127,9 @@ schemas; nullable values are present as JSON `null` where noted:
 | `meeting.chat` | `{id:<chat-id>,actor:<actor>,role:"human",text:<string>,at_ms:<integer|null>,transcript_seq:<integer|null>}` |
 | `meeting.bot_turn` | `{turns:[{id:<turn-id>,bot:<slug>,window_index:<integer|null>,transcript_seq:<integer|null>},...],source_key:<string>}` |
 | `meeting.bot_turn_claimed` | `{turn_id:<turn-id>,bot:<slug>}` |
-| `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}` |
+| `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}`; `steered_into_turn` means the bot took the turn in as a follow-up to the reply it was giving, which answers it. |
+| `meeting.bot_turn_deferred` | `{turn_id:<turn-id>,bot:<slug>,reason:"replying_in_meeting"|"busy",behind:<turn-id|null>,source_key:<string>}`: a bot named while busy keeps its turn; it runs after the current work (see Router timing). |
+| `meeting.model` | `{model:<first choice>,bot:<slug>,turn_id:<turn-id|null>,fallback:"openrouter"|"bot_model",ran:<model>,reason:<first reason>,steps:[{model,reason},...]}`: the meeting model could not run on the bot's computer and the reply ran on `ran`; `steps` lists each model tried that could not. |
 | `meeting.router` named bypass | `{bypass:"named",source_key:<string>,targets:[<slug>,...],skipped:[{bot:<slug>,reason:<string>},...],trace:{decision:"bypassed",reason:"named mention"}}` |
 | `meeting.router` chat route | `{source_kind:"chat",source_key:"chat:<chat-id>",chat_id:<chat-id>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}` |
 | `meeting.router` window result | `{window_index:<integer>,start_ms:<integer>,end_ms:<integer>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}`. Empty elapsed windows record `trace.reason:"no_transcript_text"` with empty `selected`, `skipped`, and `chunk_range`; an ended partial final window records `trace.reason:"meeting_ended_final_window"` and never dispatches a new turn. |
@@ -139,7 +148,8 @@ include recent chat, prior transcript context, attached bot descriptions and rec
 including recent question/answer pairs. These traces are persisted for replay and do not trigger
 another decision on a retry. Fail-closed traces carry a `reason` such as
 `rehearsal_mode`, `decisions service unconfigured`, or `decision_error`
-(the latter also includes the exception class in `error`). A bot response of exactly `PASS`
+(the latter also includes the exception class in `error`, a `code` such as `unavailable`, `timeout` or
+`unreadable`, `retryable`, and the provider HTTP `status` when known; never the provider's error text). A bot response of exactly `PASS`
 (optionally followed by `.` or `!`) marks its existing turn skipped with reason `bot_pass`, emits the
 router trace, and creates no Chat message. Ending a meeting marks open turns skipped and suppresses
 their queued jobs. An interrupted in-flight decision emits
@@ -179,8 +189,13 @@ trace. Every elapsed window without transcript text gets a hidden PASS trace wit
 30 and 45 seconds. At most one meeting-route decision is made per window. Each meeting stores its
 reply cap (1–20, default 5) and cooldown (0–3600 seconds, default 60). Live meetings do not count against
 the daily decision budget; the monthly decision spend cap still stops them; bots with any pending/claimed
-live-meeting turn or an active ordinary runner job are skipped as busy across meetings. A speaker
-addressing a bot by name bypasses the decision provider. An ordinary human chat message gets one
+live-meeting turn in that meeting or an active ordinary runner job are skipped as busy, and a bot that
+replied within the cooldown is skipped as `cooldown`. A speaker addressing a bot by name bypasses the
+decision provider, the busy check and the cooldown: the reply cap still applies, and the mention is
+never dropped. If the bot is replying in this meeting, the mention goes into that reply's conversation:
+a runtime that takes follow-ups mid-turn (`/attempts/{id}/inputs`) answers it in the same reply and the
+turn is skipped as `steered_into_turn`; otherwise it runs right after. If the bot is busy with other
+work it runs after that. Either way `meeting.bot_turn_deferred` records it. An ordinary human chat message gets one
 separate decision using the same service and bounded recent context; paused chat is never dispatched.
 PASS is persisted as a hidden router outcome.
 
@@ -188,8 +203,15 @@ Meeting model: a live-meeting reply runs as a normal bot turn on the meeting's m
 bot's instructions, memory and hub tools. The model is the meeting's own `meeting_model` when the connect
 body sets one, else the company's meeting model (Settings > Computers > Meeting model). That default is
 `tico-meeting-1.0` while the Tico AI Gateway is on and the bot's own model otherwise; `""` means the bot's own
-model. Other bot work is unaffected. If the meeting model cannot run on the bot's computer, the reply falls
-back to the bot's own model.
+model. Other bot work is unaffected. If the meeting model cannot run on the bot's computer (a Mac computer
+cannot reach the Gateway's meeting models), a Gateway meeting model falls back to `mercury-3` (OpenRouter
+`inception/mercury-3`, low effort, on pi) when the company has OpenRouter on; if that cannot run either,
+the reply uses the bot's own model. `meeting.model` records each step.
+
+Each bot has one conversation per meeting, kept for the meeting's turns while the bot stays attached, and
+every turn runs on that conversation's own thread whatever the bot's session setting. So a bot's turns in
+one meeting continue each other, and nothing said in a meeting (private or team) reaches the bot's other
+meetings or its ordinary chats through the harness thread. Removing and re-adding a bot starts a new one.
 
 Each selected bot gets a durable normal Tico runner job containing only that meeting's title,
 transcript (up to 20 latest chunks through the routed sequence), and recent chat (up to 12 messages);
