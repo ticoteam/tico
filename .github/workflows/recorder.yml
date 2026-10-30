@@ -82,11 +82,13 @@ jobs:
         run: |
           mkdir -p out
           find recorder/target/universal-apple-darwin/release/bundle -type f \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -exec cp {} out/ \;
-          # The stable name the download link uses; the versioned disk image stays next to it.
           shopt -s nullglob
           dmgs=(out/*.dmg)
           [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::Expected one recorder disk image, found ${#dmgs[@]}"; exit 1; }
-          cp "${dmgs[0]}" out/Tico-Recorder.dmg
+          # GitHub turns spaces in asset names into dots, so the release names have none (the signed bytes are unchanged).
+          for file in out/*; do mv "$file" "${file// /-}"; done
+          # The stable name the download link uses; the versioned disk image stays next to it.
+          cp out/Tico-Recorder_*.dmg out/Tico-Recorder.dmg
           ls out/*.app.tar.gz.sig >/dev/null || { echo "::error::No recorder updater signature"; exit 1; }
           ls -la out
       - uses: actions/upload-artifact@v4

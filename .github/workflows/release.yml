@@ -260,9 +260,9 @@ jobs:
           mkdir -p dist/desktop
           gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
-          # Tico Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
+          # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
           # overwrite a newer recorder build of this tag.
-          rm -f dist/desktop/Tico-Recorder.dmg "dist/desktop/Tico Recorder"*
+          rm -f dist/desktop/Tico-Recorder*
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
       - name: Add the desktop files to the release
         env:
@@ -351,7 +351,7 @@ jobs:
           PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
         run: |
           mkdir -p dist/recorder
-          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico Recorder*' --pattern Tico-Recorder.dmg \
+          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico-Recorder*' \
             --pattern recorder-latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
       - name: Add the recorder files to the release
