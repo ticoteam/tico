@@ -2,10 +2,12 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* House rules. Every page follows these; a page rule that needs something else says why. Tokens in tokens.css.
    - Hover: a row, menu item or quiet button tints to --surface2 (--hover only where it already rests on --surface2),
-     colour and background over --dur-fast --ease. Hover never moves, resizes or borders anything.
+     colour and background over --dur-fast --ease. Hover never moves, resizes or borders anything, with one exception:
+     a clickable card lifts 1px and firms its border (motion.css).
    - Focus: var(--focus-ring) at --focus-offset, or --focus-inset on a row that meets its container's edge. A text field
      turns its border the accent and wears --focus-halo. outline:none only where one of these replaces it.
-   - Selected / current: --surface2 and weight 600, as the sidebar's .cur. No accent fills, no bars.
+   - Selected / current: --surface2 and weight 600, as the sidebar's .cur. No accent fills, no bars, with one exception:
+     the sidebar's current row carries the one sliding accent bar (ui/app/motion.js).
    - Chevrons: chevron_right, turned --chev-open when open, transform over --dur-fast --ease.
    - Card headers: sentence case, --t-base 600 --ink, one row of --s3 under it. The uppercase label (.label: --t-label
      600 --track-caps --muted) is for section and table heads and field keys, never a card's title.
