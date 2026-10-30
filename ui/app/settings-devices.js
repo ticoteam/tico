@@ -143,8 +143,6 @@ function settingsTokenShow(issued) {
   dialog.onclose = () => { dialog.remove(); void renderSettingsTokens(); };
   document.body.appendChild(dialog); dialog.showModal();
 }
-// Connect an agent: ui/connect-agent.js.
-$('#connect-agent').onclick = () => window.connectAgent?.();
 async function settingsTokenRevoke(id, label) {
   if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(id)}/revoke`, {}); toast(`Token ${label} revoked`); }
