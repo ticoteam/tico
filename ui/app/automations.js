@@ -140,7 +140,7 @@ const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.tr
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button><button class="primary au-new" type="button">+ New</button></header>
+    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="primary au-new" type="button">+ New</button></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>

@@ -610,6 +610,17 @@
     mark(); if (isOpen()) render(); schedule();
     return next;
   };
+  // Ask's "Loop in Tico Support" switch with no open request: a new request, sent at once, holding the chat it shares
+  // (the switch is the consent; ui/app/ask-rules.js askShareText scrubs it). The reply email and install details are
+  // the same defaults the form starts with.
+  window.supportFile = async message => {
+    const body = {message, email: compose?.email || '', include_ids: true, ...(appVersion() ? {app_version: appVersion()} : {})};
+    const next = await call('POST', '/support/tickets', body, uid());
+    stateRevision++;
+    state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
+    mark(); if (isOpen()) render(); schedule();
+    return next;
+  };
   window.supportRead = async id => {
     const revision = stateRevision;
     try {

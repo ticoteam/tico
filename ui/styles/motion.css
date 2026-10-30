@@ -1,5 +1,5 @@
 /* ui/styles/motion.css — State changes that move: menus and panels arriving, counts ticking, a task's check, a card
-   lifting under the pointer, the Assistant's mark while it replies, and every fold chevron's turn (ui/app/motion.js
+   lifting under the pointer, and every fold chevron's turn (ui/app/motion.js
    drives the parts a stylesheet cannot see). Linked last, so its few rules win over the files' own.
    Rules: 200ms at most (--dur-fast 120ms for most, --dur 180ms for larger surfaces), opacity and transform only
    (the individual translate and scale properties, so an element's own transform is kept), only on a change of state,
@@ -37,9 +37,7 @@
     @starting-style{.ask-panel:not([hidden]){translate:0 48px}}
   }
 }
-/* The Assistant replying: Ask's mark twinkles until the reply is in (body.ask-replying, ui/app/ask-panel.js). */
-@keyframes m-twinkle{50%{opacity:.55;scale:.88}}
-body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask[aria-expanded="false"] .mobile-nav-icon){animation:m-twinkle 1.4s var(--ease) infinite}
+/* The Assistant replying moves Ask's dot (liquid-dot.css states, set by ui/app/ask-panel.js askDot). */
 
 /* ---- counts (motion.js countSet, countWatch): the old number slides up and out as the new one comes up from below.
    The badge's box never changes: the old number is drawn over it, the new one is the badge's own text. */
@@ -82,8 +80,7 @@ body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask[aria-ex
 @media (prefers-reduced-motion:reduce){
   :is(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,
     #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover],dialog.gpanel,#task-peek,
-    .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before,
-  body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask .mobile-nav-icon){animation:none!important}
+    .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before{animation:none!important}
   :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile,.chev,.section-chev,.req-arrow,.tl-gchev svg,
     .tl-chev svg,.sub-chev,.au-chev,.rdo-cx){transition:none!important}
   .rail-fold>summary::before,.task-orig>summary::before,.chat-side>summary::before,.run-steps>summary::before,

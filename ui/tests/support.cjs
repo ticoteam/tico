@@ -620,9 +620,9 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     // A phone in the dark theme: no Talk to us anywhere, the ? tab in its place; reviewing and editing the
     // diagnostics still works in the sheet.
     v = await visit({viewport: {width: 390, height: 844}, theme: 'dark'});
-    assert.deepEqual(await v.page.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'More']);
+    assert.deepEqual(await v.page.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More']);
     assert.equal(await v.page.getByText('Talk to us').count(), 0);
-    assert.equal(await v.page.locator('#mobile-ask .mobile-nav-icon').innerText(), 'auto_awesome');
+    assert.equal(await v.page.locator('#mobile-ask .ldot').isVisible(), true);
     await openSupport(v.page, '#mobile-ask');
     assert.deepEqual(await active(v.page), {id: 'support-message', name: 'message', inPop: true});
     const dark = await v.page.locator('#support-pop').evaluate(el => [getComputedStyle(el).backgroundColor, getComputedStyle(el).color]);

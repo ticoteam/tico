@@ -19,7 +19,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page, name) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-const PHONE_BAR = ['Team', 'Search', 'Tasks', 'Updates', 'More'];
+const PHONE_BAR = ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More'];   // Ask Tico: the Liquid Dot in the centre slot
 // The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
 const railKeys = page => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => els.map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && el.querySelector(':scope > [data-nav]')?.dataset.nav) || el.id || el.className.split(' ')[0]));
