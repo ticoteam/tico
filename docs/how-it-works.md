@@ -120,7 +120,7 @@ not retry this action; leave a note for a person if you still need it."
 
 **hub.acme.example** — the record, the interface and the clock. A FastAPI backend (`backend/`) on one
 EC2 instance with SQLite on an encrypted EBS volume, attachments in a private S3 bucket, backed up
-to S3 twice over (Litestream replicates every ten seconds; a verified bundle of the database and
+to S3 twice over (Litestream replicates about every minute; a verified bundle of the database and
 every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, approval, routine, run and
 bot setting, serves the web interface (`ui/`), and runs the scheduler that turns due routines into
 tasks. It never runs a bot. It runs from the Docker image ([install.md](install.md)). Beside it

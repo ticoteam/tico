@@ -4,7 +4,7 @@
 set -euo pipefail
 
 DATA=${TICO_DATA_DIR:-/data}  # overridable so tests can run this script unprivileged
-LITESTREAM_CONFIG=/tmp/litestream.yml
+LITESTREAM_CONFIG=${TICO_LITESTREAM_CONFIG:-/tmp/litestream.yml}  # overridable so tests can read what was written
 
 log() { printf 'tico: %s\n' "$*"; }
 die() { printf 'tico: error: %s\n' "$*" >&2; exit 1; }
@@ -243,7 +243,7 @@ tunnel_config() {
 BACKUPS=${TICO_BACKUP_DIR:-/backups}
 
 backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups are off
-  local url region
+  local url region sync interval_seconds unit
   if [ "${TICO_BACKUP:-}" = off ]; then
     TICO_BACKUP_MODE=off
   elif [ -n "${TICO_BACKUP_URL:-}" ]; then
@@ -255,6 +255,12 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
   fi
   export TICO_BACKUP_MODE TICO_BACKUP_DIR="$BACKUPS"
   [ "$TICO_BACKUP_MODE" != off ] || return 1
+  # How often Litestream ships changes: the most that can be lost in a crash is about one interval. 1m by default.
+  sync=${TICO_BACKUP_SYNC_INTERVAL:-1m}
+  [[ $sync =~ ^([0-9]{1,4})([smh])$ ]] || die "TICO_BACKUP_SYNC_INTERVAL must be a number and s, m or h, like 30s, 5m or 1h; got '$sync'"
+  case "${BASH_REMATCH[2]}" in s) unit=1 ;; m) unit=60 ;; h) unit=3600 ;; esac
+  interval_seconds=$(( 10#${BASH_REMATCH[1]} * unit ))
+  { [ "$interval_seconds" -ge 1 ] && [ "$interval_seconds" -le 3600 ]; } || die "TICO_BACKUP_SYNC_INTERVAL must be between 1s and 1h; got '$sync'"
   url="${TICO_BACKUP_URL:-file://$BACKUPS}"
   region="${TICO_BACKUP_REGION:-}"
   [ -n "$region" ] || [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || region=us-east-1
@@ -271,7 +277,7 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
     echo "      url: $url"
     [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || echo "      endpoint: $TICO_BACKUP_ENDPOINT"
     [ -z "$region" ] || echo "      region: $region"
-    echo "      sync-interval: 10s"
+    echo "      sync-interval: $sync"
   } > "$LITESTREAM_CONFIG"
 }
 
