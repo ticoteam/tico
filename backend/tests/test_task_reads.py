@@ -117,6 +117,34 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
     assert [data for _, _, data in sent if data.get("bulk")] and len(sent) == 1
 
 
+def test_saving_a_big_types_steps_is_a_few_bulk_changes_not_one_per_task(api):
+    # Each step under FAN_CAP, the type over it: a save used to make a row per task per step write (TIDY, Oct 30).
+    typ = post(api, "task-types", {"name": "Development", "steps": [
+        {"name": "On Deck", "status": "open"}, {"name": "In Progress", "status": "doing"}]})["type"]
+    seed = post(api, "tasks", {"owner": "ben", "title": "Build the thing", "body": "Please.", "type": typ["id"],
+                               "step": typ["steps"][0]["id"]})
+    store = api.app.state.store
+    with store.transaction() as c:
+        columns = [row[1] for row in c.execute("PRAGMA table_info(tasks)") if row[1] not in ("id", "number", "step_id")]
+        for n in range(E.FAN_CAP):
+            c.execute(f"INSERT INTO tasks(id,step_id,{','.join(columns)}) SELECT ?,?,{','.join(columns)} FROM tasks WHERE id=?",
+                      (f"many{n}", typ["steps"][n % 2]["id"], seed["id"]))
+
+    def save(steps):
+        with store.read() as c:
+            before = E.latest(c)
+        r = api.post("/api/v2/task-types/" + typ["id"], headers=headers(), json={"steps": steps})
+        assert r.status_code == 200, r.text
+        with store.read() as c:
+            return [tuple(r) for r in c.execute("SELECT kind, subject_id FROM changes WHERE topic='tasks' AND seq>?",
+                                                (before,))]
+    steps = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in typ["steps"]]
+    assert save(steps) == [("bulk", None)]                     # the type's own row; its unchanged steps say nothing
+    steps[1]["name"] = "Doing"
+    assert save(steps) == [("bulk", None)] * 3                 # the type, and the renamed step's two writes
+    assert get(api, "task-types/" + typ["id"])["type"]["steps"][1]["name"] == "Doing"
+
+
 def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
     mine = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
     other = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})

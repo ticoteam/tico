@@ -3794,9 +3794,11 @@ def _type_steps(conn, actor, type_id, steps):
         _set_status(conn, KEEPER, task, step=target, note="Its waiting step was removed")
     for ident in removed:
         conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
-    # Temporary names let retained steps swap names without dropping referenced rows.
-    for ident in ids & set(existing):
-        conn.execute("UPDATE task_steps SET name=? WHERE id=?", (new_id(), ident))
+    # Temporary names let retained steps swap names without dropping referenced rows. Only a step being renamed
+    # needs one: a write to a step is a change to every task in it (backend/events.py).
+    for row in clean:
+        if row["id"] in existing and existing[row["id"]]["name"] != row["name"]:
+            conn.execute("UPDATE task_steps SET name=? WHERE id=?", (new_id(), row["id"]))
     for row in clean:
         conn.execute("INSERT INTO task_steps(id,type_id,name,position,status,public_name) "
                      "VALUES(:id,:type_id,:name,:position,:status,:public_name) ON CONFLICT(id) DO UPDATE SET "
