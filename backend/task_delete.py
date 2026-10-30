@@ -42,8 +42,11 @@ TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
 # A file a person attached to the task itself (scope `task:<id>`) is not work; any other file touched on the task is.
+# A verdict on a file under review (`reviewed`, backend/file_reviews.py) is not work either: the file is the work, and
+# a deleted task's verdicts stop counting.
 FILE_WORK = (("bot_files", "SELECT count(*) FROM bot_files WHERE task_id IN ({}) AND scope <> 'task:' || task_id"),
-             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) AND NOT EXISTS "
+             ("bot_file_activity", "SELECT count(*) FROM bot_file_activity a WHERE a.task_id IN ({}) "
+                                   "AND a.action <> 'reviewed' AND NOT EXISTS "
                                    "(SELECT 1 FROM bot_files f WHERE f.id=a.file_id AND f.scope='task:' || a.task_id)"),
              # A task file a bot made (from a run, or as itself) is work even though it sits on the task.
              ("bot_file_versions", "SELECT count(*) FROM bot_files f WHERE f.task_id IN ({}) AND f.scope='task:' || f.task_id "

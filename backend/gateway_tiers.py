@@ -92,6 +92,8 @@ SERVICES = (
      "tools": ["hub_gateway_search"]},
     {"id": "fetch", "name": "Fetch", "for": "Read a web page or PDF", "price": "$1.25 per 1,000 pages + tokens",
      "status": "live", "tools": ["hub_gateway_fetch"]},
+    {"id": "images", "name": "Images", "for": "Make an image from a prompt and reference images",
+     "price": "Per image, at cost + 25%", "status": "live", "tools": ["hub_gateway_image"]},
     {"id": "transcribe", "name": "Transcribe", "for": "Speech to text", "price": "", "status": "next", "tools": []},
     {"id": "send-email", "name": "Send email", "for": "Send from a company address", "price": "", "status": "later",
      "tools": []},

@@ -847,7 +847,19 @@ def task_ask(api, args):
                             "kind": {"type": "string", "enum": ["reversible", "send", "spend", "delete"],
                                      "description": "What that step is: reversible and internal, or a send, spending "
                                      "money or a delete"},
-                            "by": _s("ISO-8601 date-time with timezone: go ahead then instead of after the team's days")}}},
+                            "by": _s("ISO-8601 date-time with timezone: go ahead then instead of after the team's days")}},
+       "review": {"type": "array", "maxItems": 10, "items": _s("FILE or FILE@N, or a local path (published first)"),
+                  "description": "File versions they review, shown on the card: with no options, Approve / Request "
+                  "changes. The answer says what was judged of each exact version (`reviewed`); hub_file_approved "
+                  "checks one later"},
+       "pick": {"type": "boolean", "description": "Each reviewed file (2 to 5) is its own option, plus Request changes"},
+       "spend": {"type": "object", "additionalProperties": False, "required": ["label", "amount", "what"],
+                 "description": "Picking `label` also approves this spend: the answer's `spend_approval` is an approved "
+                 "spend approval you consume once", "properties": {
+                     "label": _s("The option that approves it", maxLength=60),
+                     "amount": _s("The amount, e.g. 12.50", maxLength=40),
+                     "what": _s("What it pays for", maxLength=200),
+                     "account": _s("The account it comes from (default gateway)", maxLength=80)}}},
       required=("question", "on"), writes=True)
 def task_question(api, args):
     options = [dict(o) for o in args.get("options") or []]
@@ -881,7 +893,39 @@ def task_question(api, args):
                    **({"by": args["by"]} if args.get("by") else {})}
     if default:
         body["if_no_answer"] = default
+    if args.get("review"):
+        body["review"] = [_review_ref(api, value, args, index) for index, value in enumerate(args["review"])]
+    if args.get("pick"):
+        body["pick"] = True
+    spend = args.get("spend")
+    if isinstance(spend, str):                       # the CLI's --spend "LABEL=AMOUNT:WHAT"
+        label, _, rest = spend.partition("=")
+        amount, _, what = rest.partition(":")
+        if not (label.strip() and amount.strip() and what.strip()):
+            raise ValueError('--spend is "LABEL=AMOUNT:WHAT", e.g. "Approve=12.50:render the final cut"')
+        spend = {"label": label.strip(), "amount": amount.strip(), "what": what.strip()}
+    if spend:
+        body["spend"] = {**spend, **({"account": args["spend_account"]} if args.get("spend_account") else {})}
     return api.post("task-questions", body, key=_key(args))
+
+
+FILE_REF = re.compile(r"[^/@\s]+(?:@[1-9][0-9]*)?")
+
+
+def _review_ref(api, value, args, index):
+    """{file, version} for one --review: FILE[@N] as given, or a path in this checkout published first (as
+    `hub file publish` does), so the version under review is the bytes on disk now."""
+    text = str(value).strip()
+    if FILE_REF.fullmatch(text) and not os.path.exists(text):
+        fid, _, number = text.partition("@")
+        return {"file": fid, **({"version": int(number)} if number else {})}
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("A path is read on the computer that runs you: use hub task question there, or give FILE@N")
+    made = files_publish_path(api, {"path": text, **({"task": args["parent"]} if args.get("parent") else {}),
+                                    "operation_id": _key(args, f":review:{index}")})
+    if made.get("refused"):
+        raise ValueError(made.get("detail") or f"{text} could not be published")
+    return {"file": made["file"]["id"], "version": made["file"]["version"]}
 
 
 # hub_task_update and hub_task_done: the note stays on the task and chat hears only the title and status (the API's
@@ -2316,7 +2360,8 @@ def files_list(api, args):
 
 @tool("hub_file_publish", "Publish a file you created or changed so people can open it from your page: "
       "a report, a draft, a spreadsheet. Send its text, or content_base64 for a binary file (up to about 1.4 MB "
-      "here; `hub file publish <path>` sends up to 25 MB). Publishing the same name again adds a version. "
+      "here; `hub file publish <path>` sends up to 25 MB, and video or audio up to the server limit). "
+      "Publishing the same name again adds a version. "
       "Documents, images, csv, json, md, html, pdf and office files only; never credentials.",
       {"name": _s("File name with its extension, e.g. 2026-09-15-pipeline-review.md"),
        "text": _s("The file's text"), "content_base64": _s("The bytes, base64-encoded, for anything not text"),
@@ -2361,11 +2406,33 @@ def files_import(api, args):
         return {"refused": "import", "detail": "Run `hub file import` on the bot's computer; Tico never "
                 "reads your buckets with its own credentials."}
     try:
+        key = BF.parse_s3(args["uri"])[1]
+        if BF.is_media(key.rsplit("/", 1)[-1]):
+            return _import_media(api, args)
         name, _, data, etag = BF.fetch_s3(args["uri"], client=args.get("_s3"))
     except BF.Refused as exc:
         return {"refused": "import", "detail": str(exc)}
     query = {"source": args["uri"], "etag": etag, "name": name, **_files_fields(args, "title", "task")}
     return api.request("POST", "/api/v2/files/imports?" + BF.urlencode(query), raw=data, key=_key(args))
+
+
+def _import_media(api, args):
+    """A video or audio object is copied to a file and sent from it, never held in memory (BF.fetch_s3_file)."""
+    import tempfile
+    from clients import bot_files as BF
+    with tempfile.TemporaryDirectory(prefix="tico-import-") as work:
+        name, _, path, etag = BF.fetch_s3_file(args["uri"], work, client=args.get("_s3"))
+        BF.check_media(path, name)
+        if path.stat().st_size > BF.MAX_BYTES and not api.features().get("file_media_stream"):
+            raise BF.Refused(OLD_SERVER_MEDIA)
+        query = {"source": args["uri"], "etag": etag, "name": name, **_files_fields(args, "title", "task")}
+        with path.open("rb") as stream:
+            return api.request("POST", "/api/v2/files/imports?" + BF.urlencode(query), raw=stream, key=_key(args))
+
+
+# What an older server answers for a video or audio file over 25 MB: it takes those only as bytes up to 25 MB.
+OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. Ask for a Tico update to send larger "
+                    "video or audio files.")
 
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
@@ -2451,17 +2518,78 @@ def files_delete(api, args):
     return _as_person(api).call("DELETE", f"files/{args['id']}", None, _key(args))
 
 
+def _file_target(api, target, command):
+    """A review target as the API takes it: {file, version} for FILE[@N], or {path, digest} for a path in this
+    checkout, read here (its bytes now)."""
+    target = str(target).strip()
+    if FILE_REF.fullmatch(target) and not os.path.exists(target):
+        fid, _, number = target.partition("@")
+        return {"file": fid, **({"version": int(number)} if number else {})}
+    if not hasattr(api, "post_multipart"):
+        raise APIError("validation", f"A path is read on the computer that runs you: use {command} there", 422)
+    from clients import bot_files as BF
+    try:
+        path, relative = BF.local_file(BF.checkout_root(), target)
+    except BF.Refused as exc:
+        raise APIError("file_refused", str(exc), 422) from None
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    return {"path": relative, "digest": digest.hexdigest()}
+
+
+@tool("hub_file_approved", "Whether this exact file version is approved: `approved` true only when the newest verdict "
+      "on that version, with the same bytes, approved it. By default only a person's verdict counts (an answer to "
+      "hub_task_question with review); `by` bot:SLUG or any also reads bots' hub_file_review. A later Request changes "
+      "undoes it; another version is never approved by it. Also who, when, and on which task and question.",
+      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
+                    "(its bytes now)"),
+       "by": _s("Whose verdicts count: human (default), any, or bot:SLUG")}, required=("target",))
+def files_approved(api, args):
+    query = _file_target(api, args["target"], "hub file approved")
+    return api.get("file-approvals", **query, **({"by": args["by"]} if args.get("by") else {}))
+
+
+@tool("hub_file_review", "Approve or ask for changes on another bot's exact file version, on a task you can read, "
+      "when you can open the file: for a company where a bot moves a stage. Never your own bot's file. "
+      "hub_file_approved with by bot:SLUG reads it.",
+      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
+                    "(its bytes now, matched to the version another bot published)"),
+       "verdict": {"type": "string", "enum": ["approve", "changes"]},
+       "task": _s("The task the review is for"),
+       "note": _s("What to change, or why it is approved", maxLength=4000)},
+      required=("target", "verdict", "task"), writes=True)
+def files_review(api, args):
+    body = {**_file_target(api, args["target"], "hub file review"), "task": args["task"], "verdict": args["verdict"],
+            **({"note": args["note"]} if args.get("note") else {})}
+    return api.post("file-reviews", body, key=_key(args))
+
+
 def files_publish_path(client, args):
     """`hub file publish <path>`: the CLI reads the file (inside this checkout only) and sends the bytes."""
     from clients import bot_files as BF
+    root = BF.checkout_root()
     try:
-        name, _, data, relative = BF.read_local(BF.checkout_root(), args["path"])
+        path, relative = BF.local_file(root, args["path"])
+        name, _ = BF.check_name(path.name)
+        # Video or audio over 25 MB streams from the file, never read whole; a server that cannot take it is refused.
+        streamed = BF.is_media(name) and path.stat().st_size > BF.MAX_BYTES
+        if streamed:
+            if not client.features().get("file_media_stream"):
+                raise BF.Refused(OLD_SERVER_MEDIA)
+            BF.check_media(path, name)
+        else:
+            name, _, data, relative = BF.read_local(root, args["path"])
     except BF.Refused as exc:
         return {"refused": "file", "detail": str(exc)}
     query = {"name": name, "path": relative, **_files_fields(args, "title", "task", "scope")}
-    commit = BF.pushed_commit(BF.checkout_root(), relative)
+    commit = BF.pushed_commit(root, relative)
     if commit:
         query["commit"] = commit
+    if streamed:
+        with path.open("rb") as stream:
+            return client.request("POST", "/api/v2/files/uploads?" + BF.urlencode(query), raw=stream, key=_key(args))
     return client.request("POST", "/api/v2/files/uploads?" + BF.urlencode(query), raw=data, key=_key(args))
 
 
@@ -5379,6 +5507,84 @@ def gateway_search(api, args):
       required=("url",))
 def gateway_fetch(api, args):
     return api.post("gateway/fetch", {"url": str(args["url"]), "max_tokens": int(args.get("max_tokens") or 10000)})
+
+
+# An image's reference file: at most this many bytes (HQ's MAX_REF_BYTES), read from this computer.
+IMAGE_REF_BYTES = 2 * 1024 * 1024
+IMAGE_CATEGORIES = ("storyboard", "photo", "character", "graphic")
+
+
+def image_type(data):
+    """The MIME type of PNG, JPEG or WebP bytes by their signature, or None for anything else."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def image_outputs(out, count):
+    """The paths the images are saved to: `out` (with .png when it has no suffix) for the first, then name-2.ext, name-3.ext."""
+    path = Path(out).expanduser()
+    suffix = path.suffix or ".png"
+    stem = path.with_suffix("") if path.suffix else path
+    first = path if path.suffix else path.with_name(path.name + suffix)
+    return [first] + [stem.with_name(f"{stem.name}-{n}{suffix}") for n in range(2, count + 1)]
+
+
+@tool("hub_gateway_image", "Make an image through the Tico AI Gateway and save it to files on this computer; the answer is the "
+      "saved paths, the model and the cost, never the image bytes. `category`: storyboard (fast, keeps references), photo, character "
+      "(keeps a person or character from the reference files) or graphic (text and layout). `refs` are up to 4 reference "
+      "files (PNG, JPEG or WebP, 2 MiB each). `out` is the file for the first image; more images are saved beside it as "
+      "name-2.png, name-3.png. Each image gets a sidecar `<file>.json` with its prompt, category, model, cost, the reference "
+      "names and their sha256, and the time. It spends from the company's Gateway cap. An existing file is never "
+      "overwritten: pick a new name.",
+      {"prompt": _s("What to draw"),
+       "category": {"type": "string", "enum": list(IMAGE_CATEGORIES), "description": "Which model makes it"},
+       "refs": {"type": "array", "maxItems": 4, "items": _s("A reference image file on this computer"),
+                "description": "Reference images to match (a person or character is kept from them)"},
+       "size": _s("WxH, for example 1920x1080; the nearest aspect ratio is asked for"),
+       "count": {"type": "integer", "minimum": 1, "maximum": 4, "default": 1, "description": "How many images"},
+       "out": _s("The file for the first image, e.g. shots/frame-01.png")},
+      required=("prompt", "category", "out"), local=True)
+def gateway_image(api, args):
+    count = int(args.get("count") or 1)
+    if not 1 <= count <= 4 or args["category"] not in IMAGE_CATEGORIES:
+        raise ValueError("count is 1 to 4 and category is one of " + ", ".join(IMAGE_CATEGORIES))
+    refs, names = [], []
+    for ref in args.get("refs") or []:
+        path = Path(ref).expanduser()
+        data = path.read_bytes()
+        mime = image_type(data)
+        if mime is None or len(data) > IMAGE_REF_BYTES:
+            raise ValueError(f"{path.name} is not a PNG, JPEG or WebP of 2 MiB or less")
+        refs.append(f"data:{mime};base64," + base64.b64encode(data).decode())
+        names.append({"name": path.name, "sha256": hashlib.sha256(data).hexdigest()})
+    outputs = image_outputs(args["out"], count)
+    taken = [str(path) for path in outputs if path.exists() or path.with_name(path.name + ".json").exists()]
+    if taken:
+        raise ValueError("These files exist; pick another name: " + ", ".join(taken))
+    body = {"prompt": str(args["prompt"]), "category": args["category"], "count": count}
+    if refs:
+        body["images"] = refs
+    if args.get("size"):
+        body["size"] = str(args["size"])
+    result = api.post("gateway/images", body)
+    made = result.get("images") or []
+    if not made:
+        raise APIError("gateway_image_empty", "The Gateway made no image")
+    saved, when = [], datetime.now().astimezone().isoformat(timespec="seconds")
+    cost = (result.get("usage") or {}).get("cost_usd")
+    for index, (path, image) in enumerate(zip(outputs, made, strict=False), start=1):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(image["b64"]))
+        sidecar = {"prompt": body["prompt"], "category": args["category"], "model": result.get("model"), "cost_usd": cost,
+                   "count": len(made), "index": index, "refs": names, "at": when}
+        Path(str(path) + ".json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+        saved.append(os.path.abspath(path))
+    return {"saved": saved, "model": result.get("model"), "category": args["category"], "cost_usd": cost}
 
 
 # ----------------------------------------------------------------------------- a person's batch

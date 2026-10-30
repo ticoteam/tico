@@ -184,6 +184,9 @@ Visuals from a private task never show to guests or on the public roadmap.
 A visual is shown from a signed address made for one reader. It works only for that reader and expires after at
 most 2 hours. Each read of the message returns a current one, which stays the same for up to an hour.
 
+**Live blocks.** A page with `<tico-*>` live tags ([Pages](pages.md#live-blocks)) is filled in per viewer when it is
+shown, so it is never served from the shared hosted copy. It is served only on the visual address, as above.
+
 ## Outside Tico
 
 Nothing visual leaves Tico. Where a message with visuals is posted to Slack, Slack shows its text and one more line:

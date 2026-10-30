@@ -2691,7 +2691,7 @@ def install_views(app, store, auth, mutate, task_view):
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
-                        "items": [x for x in items if str(x["id"]) in positions]}
+                        "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
             out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
@@ -2699,7 +2699,16 @@ def install_views(app, store, auth, mutate, task_view):
                 out["bots"] = needs_bots(items, who.actor)
                 if restarted:
                     out["restart"] = True
+            needs_visuals(c, who, out["items"])
             return out
+
+    def needs_visuals(c, who, items):
+        """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
+        added after the list's version is taken: an address renewed on the hour is not a change to the list."""
+        asks = [x["ask"] for x in items if isinstance(x.get("ask"), dict) and (x["ask"].get("refs") or {}).get("attachments")]
+        if asks:
+            visuals.for_reader(app, auth.settings, c, who, asks)
+        return items
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):
