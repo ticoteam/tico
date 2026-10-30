@@ -128,7 +128,7 @@
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true },
-    settings, meetings: { m1: meeting() }, transcripts: { m1: { id: 'm1', blocks: longBlocks } },
+    settings, meetings: { m1: meeting() }, transcripts: { m1: { id: 'm1', blocks: longBlocks } }, notices: {},
   };
 
   // ---- Scenes ----
@@ -277,7 +277,7 @@
     // The live meeting with bot-turn notices between the messages.
     notices: () => {
       scenes.live();
-      state.meetings.m2.live_notices = clone(liveNotices);
+      state.notices.m2 = clone(liveNotices);
     },
     // An update waiting for the recording to end (update.js draws the banner).
     update: () => {
@@ -344,6 +344,7 @@
       const rec = state.status.recording;
       return {
         status: clone(state.status),
+        live: { notices: clone(state.notices[id] || []) },
         library: part(state.library, have.library),
         settings: part(state.settings, have.settings),
         meeting: part(id ? state.meetings[id] || meeting({ id, title: state.library.rows.find((r) => r.id === id)?.title || 'Meeting' }) : null, have.meeting),

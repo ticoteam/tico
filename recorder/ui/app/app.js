@@ -124,10 +124,11 @@
         }
       }
       S.status = v.status;
+      S.live = v.live || null;
       window.ticoUpdate?.(v.status.update);
       // Profiling builds open the transcript of the test recording once.
       if (S.status.profile && S.status.recording && !S.ui.profiled) { S.ui.profiled = true; S.page = 'meeting'; S.ui.panel = 'transcript'; }
-      const key = statusKey(v.status);
+      const key = statusKey(v.status) + JSON.stringify(S.live?.notices || []);
       if (key !== S.statusKey) {
         S.statusKey = key;
         changed = true;
@@ -330,7 +331,7 @@
   /** Bot turns that failed, wait, were put off or were retried (`live.notices`), newest last. */
   function liveNotices(m) {
     if (!m) return [];
-    const list = (m.live && typeof m.live === 'object' ? m.live.notices : null) || m.live_notices || m.chat?.notices || [];
+    const list = S.live?.notices || (m.live && typeof m.live === 'object' ? m.live.notices : null) || [];
     return Array.isArray(list) ? list : [];
   }
   /** One quiet line in the chat: a failed turn in the warning tone, the rest muted. */
@@ -402,7 +403,7 @@
     }
     return S.ui.form;
   }
-  const speechSource = (speech, s) => (speech.source === 'own' || (speech.source === 'none' && !s.connections.length) ? 'own' : 'tico');
+  const speechSource = (speech, s) => s.speech_source || (speech.source === 'own' || (speech.source === 'none' && !s.connections.length) ? 'own' : 'tico');
   const FORM_KEYS = ['microphone', 'meeting_audio', 'transcription_url', 'transcription_model', 'transcription_language', 'calendar', 'streaming', 'streaming_model'];
   function formDirty() {
     const s = S.settings;
