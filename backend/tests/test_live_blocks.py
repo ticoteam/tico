@@ -1,5 +1,7 @@
 """Live blocks in pages (docs/pages.md "Live blocks"): a page's <tico-*> tags are filled in for the one viewer the visual
 address names, from the same visibility as Needs you and the task page. Nothing a viewer may not see reaches the page."""
+import pytest
+
 from backend import visuals as V
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
 from backend.tests.test_files import turn
@@ -57,18 +59,20 @@ def test_a_live_page_shows_each_viewer_only_what_they_may_see_and_escapes_titles
 
 
 def test_a_page_with_live_blocks_is_never_the_hosted_copy(api, monkeypatch):
+    from types import SimpleNamespace
     from backend import tico_storage
+    # No shared copy is ever written for a live page, so the hosted 302 never finds one.
+    monkeypatch.setattr(tico_storage, "_writable", lambda *args: pytest.fail("a live page is never copied"))
+    live_bytes = b'<html><body><tico-tasks waiting-on="viewer"></tico-tasks></body></html>'
+    assert tico_storage.make_visual(SimpleNamespace(edge={"location": "x"}), "d" * 64, "page", live_bytes, ()) is False
+    # Without a copy it is served from here, filled in for the reader.
     monkeypatch.setattr(api.app.state.store.settings, "visual_origin", VISUALS)
-    monkeypatch.setattr(tico_storage, "visual_link", lambda *args, **kwargs: "https://files.example/shared-copy")
+    monkeypatch.setattr(tico_storage, "visual_link", lambda *args, **kwargs: None)
     _, attempt = turn(api)
     shared = post(api, "tasks", {"owner": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
-    plain = page(api, attempt, shared["id"], "plain.html", b"<html><body><p>Hello</p></body></html>")
-    live = page(api, attempt, shared["id"], "live.html",
-                b'<html><body><tico-tasks waiting-on="viewer"></tico-tasks></body></html>')
-    assert view(api, plain, "ben", follow=False).status_code == 302
+    live = page(api, attempt, shared["id"], "live.html", live_bytes)
     shown = view(api, live, "ben")
-    assert shown.status_code == 200 and b"shared-copy" not in shown.content
-    assert b"Nothing waiting on you" in shown.content
+    assert shown.status_code == 200 and b"Nothing waiting on you" in shown.content
 
 
 def test_publishing_keeps_live_tags_with_their_own_attributes_only():

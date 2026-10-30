@@ -570,6 +570,9 @@ def make_visual(blobs, digest, kind, data, ancestors):
     """Write the cleaned copy of the page or SVG `data` (the bytes of `digest`) beside it in Tico's bucket and check
     it there without reading it back. Whether it is held as made; never raises."""
     from .visuals import clean, with_reporter
+    from .live_blocks import has_live
+    if kind == "page" and has_live(data.decode("utf-8", errors="replace")):
+        return False            # a page with live blocks is filled in for each reader: it never has a shared copy
     found = getattr(blobs, "edge", None)
     at = _writable(blobs, found) if found else None
     if at is None:
