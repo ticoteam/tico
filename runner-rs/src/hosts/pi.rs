@@ -133,13 +133,16 @@ fn write_agent_dir(settings: &Settings, env: &Env, mut files: Value) -> Option<P
     // Python finds the passwd home, the shared one, and would run a sibling's user site as the turn user.
     let mut child = crate::isolation::std_command_as(settings.identity, crate::env::python())
         .env_clear()
-        .args(["-I", "-c", r#"import json,os,sys
+        .args(["-I", "-c", r#"import json,os,sys,secrets
 root=sys.argv[1]
 os.makedirs(root,mode=0o700,exist_ok=True)
 body=json.load(sys.stdin)
 for name,value in body.items():
- fd=os.open(os.path.join(root,name),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+ final=os.path.join(root,name)
+ tmp=os.path.join(root,f".{name}.{os.getpid()}.{secrets.token_hex(8)}")
+ fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(fd,'w') as out: json.dump(value,out)
+ os.replace(tmp,final)
 "#, &dir.display().to_string()])
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
         .spawn().ok()?;
@@ -174,6 +177,15 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
     if let Some(hub) = hub_mcp_server(env) {
         let vars: serde_json::Map<String, Value> = hub["env"].as_object().into_iter().flatten().map(|(k, _)| (k.clone(), json!(format!("${{{k}}}")))).collect();
         servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
+    }
+    // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
+    // settings.json) would reach it. An empty value in the server's own env overrides what it inherits.
+    for row in servers.values_mut() {
+        if row.get("command").is_some() {
+            let mut own = row["env"].as_object().cloned().unwrap_or_default();
+            own.insert(GATEWAY_KEY_ENV.into(), json!(""));
+            row["env"] = Value::Object(own);
+        }
     }
     json!({"mcpServers": servers})
 }
@@ -650,10 +662,14 @@ mod tests {
         let config: Value = serde_json::from_str(&written).unwrap();
         let servers = &config["mcpServers"];
         assert_eq!(servers["linear"], json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
-        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct"}));
+        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"TICOAI_GATEWAY_KEY": ""}}));
         assert!(servers.get("legacy").is_none(), "an SSE server of the repository is left out");
         assert_eq!(servers["hub"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
         assert_eq!((&servers["hub"]["env"]["HUB_TOKEN"], &servers["hub"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
+        // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
+        for stdio in ["repo", "hub"] {
+            assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
+        }
         // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
         assert!(!TOOLS.split(',').any(|t| t.starts_with("mcp__")));
         std::fs::remove_dir_all(dir).unwrap();
