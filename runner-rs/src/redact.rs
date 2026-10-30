@@ -482,6 +482,12 @@ pub fn release(aid: &str) {
     active().lock().unwrap().retain(|(a, _)| a != aid);
 }
 
+/// A provider refresh produced a new access token after turns registered their original environments.
+pub fn protect_access_token(token: &str) {
+    let list: Vec<_> = active().lock().unwrap().iter().map(|(_, r)| r.clone()).collect();
+    for redactor in list { redactor.add(&[token.to_string()]); }
+}
+
 /// A log line with every running turn's secrets taken out.
 pub fn scrub_log(line: &str) -> String {
     let list: Vec<Arc<Redactor>> = active().lock().map(|l| l.iter().map(|(_, r)| r.clone()).collect()).unwrap_or_default();
@@ -495,6 +501,18 @@ pub fn scrub_log(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refreshed_access_credentials_are_scrubbed_from_already_registered_turns() {
+        let id = format!("synthetic-broker-{}", uuid::Uuid::new_v4());
+        let redactor = Arc::new(Redactor::new(&[]));
+        register(&id, redactor.clone());
+        protect_access_token("synthetic-new-access-token-rotated");
+        assert_eq!(redactor.scrub_text("synthetic-new-access-token-rotated"), "••••");
+        assert!(!scrub_log("provider error: synthetic-new-access-token-rotated").contains("synthetic-new-access-token-rotated"));
+        release(&id);
+    }
+
 
     #[test]
     fn a_secret_is_masked_in_every_form_and_short_or_common_values_are_not() {

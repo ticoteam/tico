@@ -633,12 +633,12 @@ impl ClaudeHost {
             // A test binary runs the parent from one test, with everything it runs in the environment.
             Some(_) if cfg!(test) => tokio::process::Command::new(reaper(std::path::Path::new("")).remove(0)),
             Some(path) => {
-                let mut c = crate::isolation::command_under(&reaper(path), &argv[0]);
+                let mut c = crate::isolation::command_under_as(t.settings.identity, &reaper(path), &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
             None => {
-                let mut c = crate::isolation::command(&argv[0]);
+                let mut c = crate::isolation::command_as(t.settings.identity, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
@@ -1513,7 +1513,7 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    // Both ordinary and brokered turns keep this exact session under their HOME's .claude.
     let home = turn_env(settings).remove("HOME").unwrap_or_default();
     let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
@@ -1554,9 +1554,11 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
             env.insert("HOME".into(), home);
         }
     }
-    // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
-    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
-    env.remove("CLAUDE_CONFIG_DIR");
+    // Only the runner's exact private-home location is accepted for a leased turn. Inherited/granted overrides
+    // still cannot select a different login. No refresh credential is placed in this directory.
+    let own_config = settings.identity.is_some() && env.get("HOME").is_some_and(|h|
+        env.get("CLAUDE_CONFIG_DIR") == Some(&std::path::Path::new(h).join(".claude").display().to_string()));
+    if !own_config { env.remove("CLAUDE_CONFIG_DIR"); }
     env
 }
 
