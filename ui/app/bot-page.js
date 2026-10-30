@@ -33,28 +33,25 @@ function botStopped() {
   BOT?.settingsCleanup?.();
   BOT_CHAT_TASK_LOAD++; BOT_CHAT_TASKS = new Map(); BOT = null;
 }
+// Pause is one row in the bot's Settings, not a strip on the page; the header's Paused badge says it at a glance.
 // The control API remains the sole authority; failed writes never change the shown state.
 function botPauseHTML(slug, state, error = '') {
+  const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
+  if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
   const e = S.emps.find(x => x.name === slug), name = e?.display_name || slug;
-  if (!state) return error ? `<div role="alert">${esc(error)} <button type="button" data-bot-pause-retry>Retry</button></div>` : '<div class="bot-control-state" role="status">Loading bot state…</div>';
-  const paused = state.state === 'paused', label = paused ? 'Unpause' : 'Pause';
-  const record = state.paused_by;
+  const paused = state.state === 'paused', record = state.paused_by;
   const stamp = record && Number.isFinite(Date.parse(record.at))
     ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
   const can = state.can_control && !state.company_paused && ['active', 'paused'].includes(state.state);
-  return `${state.company_paused ? '<div class="bot-company-pause" role="status"><strong>Company is paused for billing</strong><p>Add credit to resume company work. <a href="#/settings/billing">Add credit</a></p></div>' : ''}
-    <section class="bot-control-strip${paused ? ' is-paused' : ''}" aria-label="Bot controls">
-      <div class="bot-control-copy"><div class="bot-control-state" role="status" aria-live="polite" aria-atomic="true">
-        <span aria-hidden="true">${paused ? '<svg width="18" height="18" viewBox="0 0 18 18" focusable="false"><rect x="3" y="2" width="4" height="14" fill="currentColor"/><rect x="11" y="2" width="4" height="14" fill="currentColor"/></svg>' : state.state === 'active' ? '<span class="bot-running-dot"></span>' : ''}</span>
-        <strong>${paused ? `${esc(name)} is paused` : state.state === 'active' ? (stateOf(slug) === 'running' ? 'Running' : 'Idle') : esc(statusWord(state.state))}</strong></div>
-      ${paused ? `<p>It will not start tasks, answer messages or run routines until you unpause.</p>
-        <p>A turn in progress is interrupted when the computer receives the pause.</p>
-        <p class="bot-pause-record">${stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused'}</p>
-        ${state.open_tasks ? `<p><a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a></p>` : ''}
-        ${!state.can_control ? `<p>Ask ${esc(state.operator || 'its operator')} to unpause</p>` : ''}` : ''}
-      ${error ? `<p class="err" role="alert">${esc(error)} <button type="button" data-bot-pause-retry>Retry</button></p>` : ''}</div>
-      ${can ? `<button type="button" class="${paused ? 'primary' : 'ghost'}" data-bot-pause-action="${paused ? 'resume' : 'pause'}">${label}</button>` : ''}
-    </section>`;
+  const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
+  return `<div class="bot-pause-row">
+    <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
+      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.operator || 'its operator')} to unpause.` : ''}`
+        : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
+      ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
+      ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
+    ${can ? `<button type="button" class="ghost" data-bot-pause-action="${paused ? 'resume' : 'pause'}">${paused ? 'Unpause' : 'Pause'}</button>` : ''}
+  </div>`;
 }
 function botPauseDraw() {
   const host = $('#bot-control-host'); if (!host || !BOT) return;
@@ -98,7 +95,11 @@ async function botPauseChange(view, action) {
     if (BOT !== view) return;
     view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
       paused_by: null};
-    const name = S.emps.find(x => x.name === view.slug)?.display_name || view.slug;
+    // The header's and the tree's Paused badges read the roster: follow the control now, not at the next poll.
+    const emp = S.emps.find(x => x.name === view.slug), badge = $('#bot-paused');
+    if (emp) { emp.status = action === 'pause' ? 'paused' : 'active'; renderTree(); }
+    if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
+    const name = emp?.display_name || view.slug;
     toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
       action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
   } catch (error) {
@@ -278,7 +279,7 @@ function botLimitHTML(slug) {
   return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/strategy/budget/${encodeURIComponent('bot:' + slug)}">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
-// The pause strip re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
+// The Settings pause row re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
 const PAUSE_STALE_MS = 60_000;
 function botPauseStale(view) {
   if (!view.pauseState || view.pauseLoadedAt == null) return true;
@@ -288,8 +289,9 @@ function botPauseStale(view) {
 function botAlertDraw() {
   if (!BOT) return;
   if (botPauseStale(BOT)) void botPauseLoad();
-  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
+  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host'), paused = $('#bot-paused');
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
+  if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
   if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
   if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }
@@ -348,11 +350,10 @@ async function pageBot(slug, tab) {
   // only when it is an alert. Configuration opens on Info.
   BOT?.settingsCleanup?.();
   $('#main').innerHTML = `
-  <div id="bot-control-host">${botPauseHTML(slug, null)}</div>
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
-      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}${botBetaPill(e)}</h1><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
+      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}${botBetaPill(e)}</h1><span id="bot-paused">${botPausedBadge(slug)}</span><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
@@ -461,6 +462,7 @@ async function pageBot(slug, tab) {
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
     <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
       ${accessTable(e)}</section>
+    <section class="card" id="bot-pause-card" aria-label="Pause"><div id="bot-control-host">${botPauseHTML(slug, null)}</div></section>
 
   </div>`}
 
