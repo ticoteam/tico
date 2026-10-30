@@ -5,7 +5,7 @@ edition = "2024"
 # cargo tauri build needs one default binary; the window is tico-recorder.
 default-run = "tico-recorder"
 rust-version = "1.92"
-license = "MIT"
+license-file = "../LICENSE"
 description = "Native Tico meeting recorder: platform capture, durable audio, transcription and ordered meeting sync"
 
 [features]
