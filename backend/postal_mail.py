@@ -727,6 +727,8 @@ def install(app, settings, store, auth):
 
     def hq(method, path, body=None, key=None):
         from .hook_relay import Failed, Stop
+        if settings.rehearsal:      # a copy of real data: the company's Gateway key may still be on it, so nothing leaves
+            raise Problem("rehearsal", "Physical mail is off in rehearsal mode; nothing is sent to the Gateway", 503)
         link = service.link()
         if not link:
             raise Problem("gateway", "Connect Tico Gateway first", 409)
