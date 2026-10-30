@@ -272,6 +272,8 @@ function askClick(ev) {
   if (t.closest('[data-ask-loop], [data-ask-sup-x]')) { askFlip(); return; }
   const pick = t.closest('[data-ask-pick]');
   if (pick) { void askAnswer(pick.closest('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
+  const more = t.closest('[data-ask-more]');
+  if (more) { more.setAttribute('aria-expanded', String(more.getAttribute('aria-expanded') !== 'true')); return; }
   const hint = t.closest('[data-ask-hint]');
   if (hint) { ev.preventDefault(); void ASK?.send?.(hint.dataset.askHint); return; }
   // A link followed from the panel: on a phone the sheet gets out of the way of the page it opens.
@@ -289,11 +291,18 @@ function askQuestions() {
 }
 // Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
 const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardAsker(actor);
+// A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
+// or more picks are one list and Send.
+const ASK_Q_LONG = 160;
 function askQuestionHTML(it) {
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
-  const body = `<div class="ask-card-who">${esc(who)} asks</div><div class="ask-card-q">${esc(plainActors(q ? q.question : it.ask.body))}</div>`;
+  const text = plainActors(q ? q.question : it.ask.body);
+  const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
+    ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
   const structured = it.kind === 'question' && (it.ask.refs?.questions || []).length;
   const answer = q?.multi || (structured && !q) ? `<a href="#/task/${encodeURIComponent(it.id)}">Answer</a>`
+    : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i) =>
+      `<option value="${i}"${o.recommended ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
     : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
     : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
   return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
@@ -308,7 +317,7 @@ async function askAnswer(card, {pick, text}) {
     : it.kind === 'ask' ? [{path: `/v2/messages/${encodeURIComponent(it.id)}/answer`, body: {text}}]
     : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
   card.dataset.busy = '1';
-  card.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+  card.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });
   try {
     for (const w of writes) await post(w.path, w.body);
     card.innerHTML = `<div class="ask-card-who">${esc(who)}</div><div class="muted">Answered</div>`;
@@ -318,7 +327,7 @@ async function askAnswer(card, {pick, text}) {
   } catch (e) {
     toast(e.message, true);
     delete card.dataset.busy;
-    card.querySelectorAll('button, input').forEach(el => { el.disabled = false; });
+    card.querySelectorAll('button, input, select').forEach(el => { el.disabled = false; });
   }
 }
 
@@ -427,7 +436,7 @@ async function askLoad(chat) {
     if (html !== rendered) {
       stickScroll(thread).update(() => {
         thread.innerHTML = html;
-        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
+        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered, chat.rowDelay || 0);
       chat.rowDelay = 0;
@@ -531,6 +540,8 @@ $('#ask-fab')?.addEventListener('click', () => askToggle());
 $('#mobile-ask')?.addEventListener('click', () => askToggle());
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('submit', ev => {
+  const choose = ev.target.closest('[data-ask-choose]');
+  if (choose) { ev.preventDefault(); void askAnswer(choose.closest('[data-ask-q]'), {pick: Number(choose.elements.pick.value)}); return; }
   const form = ev.target.closest('[data-ask-reply]');
   if (!form) return;
   ev.preventDefault();

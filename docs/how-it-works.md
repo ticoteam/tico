@@ -284,7 +284,7 @@ take minutes) stopped during it: Needs you says so, but that is timing, not proo
 as any lapsed run. Needs you groups those runs, two or more within ten minutes, into one row with **Try all again**
 and **Don’t retry** for the people who may decide them; each retry tells the bot to check what already happened
 first. **Try all again** appears only when the review card recommends retrying every one of them; otherwise the row
-says how many ran commands Tico can’t check and leaves retrying each of those to its own line. Each run keeps its own line under Details, and a run that recorded a named outside action or used an approval,
+says how many ran commands Tico can’t check and leaves retrying each of those to its own line. Each run keeps its own line under the row's title, and a run that recorded a named outside action or used an approval,
 or one with a choice already saved, keeps its own choices. A stopped run is counted once however many requests were
 folded into it. A consumed approval or a named irreversible outside action
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
@@ -314,8 +314,8 @@ messages still run: nothing about them is uncertain.
 **Needs you.** Every issue Tico derives says whether a human has to act. Those that do (a
 review owed, a computer gone for more than ten minutes, a missing agent credential, a stale backup,
 a usage limit hit three times) open in a dialog in front of the human the first time they appear,
-wherever they are in the app, with the action inline: *Review now* opens the interrupted work,
-*Open bot* goes to the bot. Closing it is remembered per issue and *Snooze* quiets it for an hour;
+wherever they are in the app. Each item is a title, at most one short line and at most two buttons: the title opens
+the details (the stopped runs, with *Open bot*, or the bot, the computer or Health). Closing it is remembered per issue and *Snooze* quiets it for an hour;
 the alert under the sidebar reopens it any time. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → Health**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is

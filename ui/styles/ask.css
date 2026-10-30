@@ -103,6 +103,10 @@
 .ask-card{margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);display:flex;flex-direction:column;gap:6px}
 .ask-card-who{font-size:var(--t-xs);font-weight:600;color:var(--muted)}
 .ask-card-q{overflow-wrap:anywhere}
+/* A long question: three lines until tapped (ask-panel.js askQuestionHTML). */
+button.ask-card-q{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
+.ask-reply select{flex:1;min-width:0}
 .ask-picks{display:flex;flex-wrap:wrap;gap:6px}
 .ask-reply{display:flex;gap:6px}
 .ask-reply input{flex:1;min-width:0}

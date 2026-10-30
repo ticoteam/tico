@@ -124,7 +124,7 @@ async function open(browser, state) {
     assert.equal(await details.evaluate(d => d.open), false, 'repo: Details starts closed');
     const seen = await repo.evaluate(el => el.innerText);
     for (const raw of ['PUT', '/api/v2', 'chosen', 'full_name', '{', 'mode:']) assert.ok(!seen.includes(raw), `repo: "${raw}" is not shown before Details opens`);
-    assert.equal((await repo.locator('.asst-state').first().innerText()).includes('“'), false, 'repo: no quote that repeats the title');
+    assert.ok(!seen.includes('“'), 'repo: no quote that repeats the title');
     await details.locator('summary').click();
     const opened = await repo.evaluate(el => el.innerText);
     assert.ok(opened.includes('PUT /api/v2/bots/security-engineer-2/repositories') && opened.includes('ticoteam/tico'), 'repo: Details has the method, path and fields');
@@ -133,7 +133,11 @@ async function open(browser, state) {
     const old = page.locator('.asst-card[data-action="act2"]');
     const title = await old.locator('[data-what]').innerText();
     assert.ok(!/\/api\/|^(POST|PUT|PATCH|DELETE)\b/.test(title), 'old card: no method or path as its title, got ' + title);
-    assert.match(title, /^BotOps /, 'old card: a plain sentence naming who asks');
+    assert.equal(title, 'A change for you', 'old card: a plain sentence');
+    assert.equal(await old.locator('.asst-who').innerText(), 'BotOps asks', 'old card: who asks, above the title');
+    // Two buttons and no helper line: what Confirm does is its tooltip.
+    assert.deepEqual(await old.locator('button').allInnerTexts(), ['Confirm', 'Cancel']);
+    assert.ok(!(await old.evaluate(el => el.innerText)).includes('Runs as you'), 'old card: no helper line');
     assert.ok(!(await old.evaluate(el => el.innerText)).includes('/api/v2'), 'old card: path only behind Details');
 
     // The card Chris saw: no mode word, method, path or JSON until Details opens, and the old line only there.
@@ -208,8 +212,8 @@ async function open(browser, state) {
     await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('read', 'bot:botops', 'While you read.', state.n++));
     assert.deepEqual(await page.evaluate(() => {
       const long = document.querySelector('.asst-card[data-action="actL"]');
-      return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('details.asst-long').open,
-        document.activeElement === long.querySelector('details.asst-long summary')];
+      return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('.asst-said details.asst-long').open,
+        document.activeElement === long.querySelector('.asst-said details.asst-long summary')];
     }), [true, 'actL', true, true], 'a rebuild keeps the card being read, open and focused');
     // A refresh asked just before a click and answered while the Confirm is on its way is dropped: a rebuild after it
     // still draws the card as running, with no live button (a second click would be refused).

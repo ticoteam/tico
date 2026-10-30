@@ -634,8 +634,10 @@ const stoppedOutcome = (decision, deferred) => decision === 'mixed'
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
   dialog.setAttribute('aria-label', 'Stopped runs');
-  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
+  // Open bot lives here, not on the Needs you card that opens this.
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(bot)}/more" data-open-bot>Open bot</a><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.querySelector('[data-open-bot]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
   document.body.appendChild(dialog); dialog.showModal();
   const host = dialog.querySelector('[data-review]');

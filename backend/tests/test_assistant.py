@@ -837,6 +837,10 @@ def test_a_greeting_is_answered_at_once_with_no_model_or_job(api, monkeypatch):
     retry = post(api, "assistant/messages", {"text": "hi"}, key="greeting")
     assert retry["reply"]["id"] == result["reply"]["id"]
     assert len(room(api)["messages"]) == 2 and jobs(api) == before
+    # The canned line once per chat: a second "hi" is the model's to answer, not the same line again.
+    again = post(api, "assistant/messages", {"text": "hi"}, key="greeting-again")
+    assert again["fast"] is False and again["reply"] is None
+    assert [m["body"] for m in room(api)["messages"]].count(result["reply"]["body"]) == 1
 
 
 @pytest.mark.parametrize("status_code", [403])
