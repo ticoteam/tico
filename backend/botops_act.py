@@ -573,7 +573,8 @@ def default_delegable(method, path, body=None, query=None):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False
-    if path == API + "rules" and str(method).upper() == "GET" and str((query or {}).get("mine", "")).lower() == "true":
+    mine = str((query or {}).get("mine", "")).lower() in ("1", "true", "yes", "on")
+    if path == API + "rules" and str(method).upper() == "GET" and mine:
         return False      # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
     # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
     # header too, not BotOps' own 403.
