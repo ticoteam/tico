@@ -1561,11 +1561,11 @@ def create_app(settings=None):
             raise Problem("forbidden", "Only the owner may choose the company's AI providers", 403)
 
         def work(c):
-            before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            before, after = Providers.save(c, who.actor, body.model_dump(), H.now(), settings)
             model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
-                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")},
-                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")}})
+                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")},
+                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")}})
             return Providers.view(after)
         return mutate(request, body, work)
 

@@ -12,7 +12,9 @@ from pydantic import Field, StrictStr, model_validator
 
 from clients import judge as J
 from .auth import Identity
-from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
+from . import providers
+from . import task_models
+from .judge import audit_detail, over_spend_cap, server_engine
 from .imports import MeetingImport
 from .models import Contract
 from .store import H, Problem, encode
@@ -30,8 +32,10 @@ class Connect(Contract):
     client: Literal["tico-recorder"] | None = None
     fallback_window_seconds: int = Field(default=30, ge=30, le=45)
     threshold: float = Field(default=0.7, ge=0.5, le=1)
-    reply_cap: int = Field(default=3, ge=1, le=20)
+    reply_cap: int = Field(default=5, ge=1, le=20)
     cooldown_seconds: int = Field(default=60, ge=0, le=3600)
+    # The model this meeting's replies run on: '' for the bot's own model; None follows the company's meeting model.
+    meeting_model: str | None = Field(default=None, max_length=100)
     # Private: only the owner, people they add and attached bots. Team: anyone on the team may join.
     visibility: Literal["private", "team"] = "team"
 
@@ -337,6 +341,29 @@ def _turn_prompt(c, rid, turn_id, slug):
             "Scoped meeting context JSON follows:\n" + payload)
 
 
+def turn_config(c, settings, config, bot, rid, runner_id, job_id=None):
+    """The bot's config for one live-meeting reply: the meeting's model (its own, else the company's meeting model) at
+    low effort, on that model's harness and runtime, as a task model is applied. Any other turn, a meeting that sets
+    none, and a model that cannot run on the bot's computer keep the bot's own config."""
+    if not rid:
+        return config
+    row = c.execute("SELECT meeting_model FROM live_meetings WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return config
+    model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
+    spec = providers.MODEL_BY_ID.get(model or "")
+    if not spec:
+        return config
+    effort = "low" if "low" in (spec.get("efforts") or ()) else None
+    try:
+        choice = {**task_models.choice_of(spec["id"], effort), "compact_at": None}
+    except providers.ProviderError:
+        return config
+    if task_models.why_not(c, settings, bot, choice, runner_id, job_id):
+        return config
+    return task_models.apply({k: v for k, v in config.items() if k != task_models.KEY}, choice)
+
+
 def _dispatch_turn(c, rid, turn_id, slug):
     """Put one scoped reply request on the existing durable runner job queue."""
     meeting = _meeting(c, rid)
@@ -551,13 +578,8 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
         return {"outcome": "pass", "targets": [],
                 "trace": {"reason": "no attached bots", "answers": {}, "decision_input": state}}
     try:
+        # Live meetings are not counted against the daily decision budget; the monthly spend cap still holds.
         with app.state.store.read() as c:
-            who = app.state.auth.identity_for_actor(c, owner_actor)
-            used = used_today(c, owner_actor)
-            if used >= daily_cap(app.state.store.settings, who.role):
-                return {"outcome": "pass", "targets": [],
-                        "trace": {"reason": "daily_decision_budget", "answers": {},
-                                  "threshold": threshold, "decision_input": state}}
             if over_spend_cap(c, app.state.store.settings):
                 return {"outcome": "pass", "targets": [],
                         "trace": {"reason": "monthly_decision_spend_cap", "answers": {},
@@ -886,11 +908,14 @@ def install_live_meetings(app, store, auth, write):
             rid = str(uuid.uuid4())
             stamp = H.now()
             window_ms = _window_ms(app, body)
+            model = None if body.meeting_model is None else providers.meeting_choice(
+                {"enabled": providers.load(c, app.state.store.settings)["enabled"]}, body.meeting_model)
             c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,"
-                      "reply_cap,threshold,created,updated,started_at,visibility,client) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "reply_cap,threshold,created,updated,started_at,visibility,client,meeting_model) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, who.actor, body.title, "live", body.client_id, window_ms,
                        body.cooldown_seconds * 1000, body.reply_cap, body.threshold, stamp, stamp, stamp,
-                       body.visibility, body.client))
+                       body.visibility, body.client, model))
             c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (rid, who.actor, stamp))
             _event(c, rid, "meeting.state", {"state": "live", "connected_by": who.actor,
                                               "visibility": body.visibility, "window_ms": window_ms,
