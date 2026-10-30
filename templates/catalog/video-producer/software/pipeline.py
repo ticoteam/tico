@@ -70,7 +70,7 @@ def read(path=None):
     try:
         budget = float(top["budget_usd"])
     except (KeyError, ValueError):
-        raise Problem("pipeline.yaml: budget_usd must be a number of USD per project")
+        raise Problem("pipeline.yaml: budget_usd must be a number of USD per project") from None
     stages = []
     for item in items:
         stage_id, mover = item.get("id", ""), item.get("mover", "")
@@ -106,7 +106,7 @@ def sidecar(asset):
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
-        raise Problem(f"{path.name}: not readable JSON")
+        raise Problem(f"{path.name}: not readable JSON") from None
     return data if isinstance(data, dict) else {}
 
 
@@ -114,7 +114,7 @@ def cost(asset):
     try:
         return float(sidecar(asset).get("cost_usd") or 0)
     except (TypeError, ValueError):
-        raise Problem(f"{asset.name}.json: cost_usd is not a number")
+        raise Problem(f"{asset.name}.json: cost_usd is not a number") from None
 
 
 def spent(project, cfg):
@@ -130,7 +130,7 @@ def budget_record(project):
     try:
         data = json.loads(path.read_text())
     except ValueError:
-        raise Problem(f"{path}: not readable JSON")
+        raise Problem(f"{path}: not readable JSON") from None
     return {"extra_usd": float(data.get("extra_usd") or 0), "approval": str(data.get("approval") or ""),
             "approvals": [str(a) for a in data.get("approvals") or []]}
 
@@ -151,7 +151,7 @@ def rel(path):
     try:
         return str(Path(path).resolve().relative_to(REPO.resolve()))
     except ValueError:
-        raise Problem(f"{path} is outside this repository")
+        raise Problem(f"{path} is outside this repository") from None
 
 
 def approved_by(mover):
@@ -163,9 +163,9 @@ def approval(asset, mover="owner"):
     """(approved, detail) from `hub file approved --by`: exit 0 approved, 1 not approved, anything else is a failure."""
     command = ["hub", "file", "approved", rel(asset), "--by", approved_by(mover)]
     try:
-        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60)
+        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub file approved could not run: {exc}")
+        raise Problem(f"hub file approved could not run: {exc}") from None
     if done.returncode == 0:
         try:
             detail = json.loads(done.stdout)
