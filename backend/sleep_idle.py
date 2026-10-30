@@ -6,6 +6,12 @@ two settings (`hours`, 0 = off, and `runners`, whether the bot computers stop wi
 install is hosted (`GET servers/self`, kept six hours), looks every five minutes for the quiet that was asked for, and
 on finding it records why in the history and asks HQ to stop the server (`POST servers/self/sleep`).
 
+A Tico Cloud cell company (TICO_CELL=1) is hosted by definition, so it needs no Gateway key and no HQ question: it asks
+its cell's updater listener instead (`POST /sleep` on TICO_UPDATER_URL, setup/cell_updater.py), with `wake_at` and the
+reason but no `runners`, since the cell cannot stop bot computers. A cell that was never given an `hours` setting
+sleeps after two hours; an explicit 0 is off. An online bot computer keeps a cell up (`computer_online`): it reports
+about once a minute, and would start the company again at once.
+
 Quiet means all of these hold for the whole of `hours`: nobody used the app signed in, no run started or ended, and right
 now nothing is queued, running, waiting for a worktree, a computer's job, or an outgoing send, and no routine is due in
 the next 15 minutes. The time of the last signed-in request is kept in memory only: a restart (a wake-up included)
@@ -23,6 +29,7 @@ from datetime import datetime, timezone
 from fastapi import Request
 from pydantic import Field, StrictBool
 
+from . import cloud_access, releases
 from . import hubdb as H
 from .hook_relay import Failed, Link, Stop, link_of
 from .models import Contract
@@ -37,6 +44,7 @@ BACKOFF_MAX = 6 * 3600
 UI_EVERY = 60                    # the last-seen mark moves at most this often
 ANSWER_CAP = 64 * 1024
 HOURS_MAX = 24
+CELL_HOURS = 2                   # a cell company whose owner never set `hours` sleeps after this many quiet hours
 NOT_NOW = ("busy", "cooldown")   # HQ refusals that are no failure
 STREAM = "/api/v2/stream"        # an open stream says nothing about a person being there
 # Outgoing sends: a row waiting for its next try (`next_attempt`, NULL = now) keeps the server up only when that try is
@@ -56,9 +64,12 @@ class SleepSet(Contract):
 # ----------------------------------------------------------------------------- state
 def state(c):
     row = c.execute("SELECT * FROM sleep_idle_state WHERE singleton=1").fetchone()
-    return dict(row) if row else {"hours": 0, "runners": 1, "changed_by": "", "changed_at": None, "hosted": None,
-                                  "layout": "", "checked_at": None, "last_request_at": None, "last_result": "",
-                                  "last_wake_at": None, "last_error": "", "failures": 0, "next_ask": None}
+    current = dict(row) if row else {"hours": 0, "runners": 1, "changed_by": "", "changed_at": None, "hosted": None,
+                                     "layout": "", "checked_at": None, "last_request_at": None, "last_result": "",
+                                     "last_wake_at": None, "last_error": "", "failures": 0, "next_ask": None}
+    if current["changed_at"] is None and cloud_access.cell():     # never set: a cell's default (`changed_at` is the mark)
+        current["hours"] = CELL_HOURS
+    return current
 
 
 def save(c, **fields):
@@ -144,6 +155,12 @@ def later_sends(c, at):
     return out
 
 
+def online_computer(c):
+    """Whether a bot computer was heard from in the last two minutes (getting_started's own test of "online")."""
+    from .getting_started import _online_runners
+    return bool(_online_runners(c))
+
+
 def busy(c, at):
     """The first thing keeping the server up right now, or ''. Names are stable: the CLI and the app show them."""
     if c.execute("SELECT 1 FROM jobs WHERE state='queued' LIMIT 1").fetchone():
@@ -155,6 +172,8 @@ def busy(c, at):
         return "task_session"
     if c.execute("SELECT 1 FROM runner_harness_actions WHERE state IN ('requested','running') LIMIT 1").fetchone():
         return "runner_job"
+    if cloud_access.cell() and online_computer(c):
+        return "computer_online"
     for name, where in SENDS.items():
         if table(c, name) and c.execute(
                 f"SELECT 1 FROM {name} WHERE state='sending' OR ({where} AND coalesce(next_attempt,'')<=?) LIMIT 1",
@@ -202,6 +221,16 @@ class SleepIdle:
     def ask(self, link, method, path, body=None, idempotency=None):
         return link.call(method, path, body, idempotency, area="servers", transport=TRANSPORT, cap=ANSWER_CAP)
 
+    def ask_cell(self, body):
+        """The cell's updater listener: 202 is the stop, 409 `busy` is "not now"; anything else raises Failed with a
+        stable code (`unreachable` when it did not answer)."""
+        status, answer = releases.updater_answer("POST", "/sleep", body)
+        if status == 202:
+            return
+        if status == 409 and answer.get("error") == "busy":
+            raise Failed("busy", 409)
+        raise Failed("unreachable" if not status else f"updater_{status}", status)
+
     # ------------------------------------------------------------------------- signed-in activity
     def seen(self, who, path):
         """A person using the app signed in. A token, a bot or a stream does not count: a script polling must not keep a
@@ -216,7 +245,9 @@ class SleepIdle:
     # ------------------------------------------------------------------------- is this server hosted
     def hosted(self, link, force=False):
         """HQ's word on whether Tico hosts this server, kept six hours; None when it cannot be asked. Raises Failed on
-        a force that fails."""
+        a force that fails. A cell company is hosted by definition: HQ is not asked."""
+        if cloud_access.cell():
+            return True
         with self.store.read() as c:
             current = state(c)
         at = now()
@@ -257,7 +288,7 @@ class SleepIdle:
         with self.store.read() as c:
             current = state(c)
             link = self.link(c)
-        if not current["hours"] or not link:
+        if not current["hours"] or (not link and not cloud_access.cell()):
             return
         if not self.hosted(link):
             return
@@ -276,12 +307,18 @@ class SleepIdle:
         self.request(link, current, wake, quiet["since"])
 
     def request(self, link, current, wake, since):
-        body = {"wake_at": iso(wake), "runners": bool(current["runners"]), "reason": "idle"}
+        cell = cloud_access.cell()
+        body = {"wake_at": iso(wake), "reason": "idle"}
+        if not cell:
+            body["runners"] = bool(current["runners"])
         key = f"sleep:{int(since)}:{current['hours']}"
         at = now()
         result, error = "requested", ""
         try:
-            self.ask(link, "POST", "self/sleep", body, key)
+            if cell:
+                self.ask_cell(body)
+            else:
+                self.ask(link, "POST", "self/sleep", body, key)
             delay, failures = SOON, 0
         except Stop:
             result, error, failures = "failed", "key_revoked", current["failures"] + 1
@@ -325,15 +362,17 @@ class SleepIdle:
     def view(self, c):
         current = state(c)
         link = self.link(c)
-        hosted = None if current["hosted"] is None else bool(current["hosted"])
-        active = bool(current["hours"] and hosted and link and not self.off)
+        cell = cloud_access.cell()
+        hosted = True if cell else (None if current["hosted"] is None else bool(current["hosted"]))
+        active = bool(current["hours"] and hosted and (link or cell) and not self.off)
         quiet = self.quiet(c, current["hours"], now()) if current["hours"] and hosted else None
         last = None
         if current["last_request_at"]:
             last = {"at": iso(current["last_request_at"]), "result": current["last_result"],
                     "wake_at": current["last_wake_at"]}
         return {"hosted": bool(hosted), "layout": current["layout"] or None, "hours": current["hours"],
-                "runners": bool(current["runners"]), "active": active,
+                "hours_default": current["changed_at"] is None and cell, "runners": bool(current["runners"]),
+                "active": active,
                 "idle_since": iso(quiet["since"]) if quiet else None,
                 "blocker": quiet["blocker"] if quiet else "",
                 "wake_at": iso(wake_time(c, now())) if active else None,
@@ -354,7 +393,7 @@ class SleepIdle:
         with self.store.read() as c:
             current, link = state(c), self.link(c)
         target = current["hours"] if hours is None else hours
-        if target:                                   # turning it on needs HQ's word that this server is Tico's
+        if target and not cloud_access.cell():      # turning it on needs HQ's word that this server is Tico's
             if not link:
                 raise Problem("gateway", NO_KEY, 409)
             try:
@@ -365,8 +404,8 @@ class SleepIdle:
             if not hosted:
                 raise Problem("not_hosted", NOT_HOSTED, 409)
         fields = {"changed_by": who.actor, "changed_at": H.now(), "next_ask": None, "failures": 0, "last_error": ""}
-        if hours is not None:
-            fields["hours"] = hours
+        if hours is not None or current["changed_at"] is None:   # a runners-only change makes the default the owner's
+            fields["hours"] = target
         if runners is not None:
             fields["runners"] = int(runners)
         with self.store.transaction() as c:
@@ -379,7 +418,8 @@ class SleepIdle:
 def health(c, settings=None):
     """Health's row, or None: Sleep when idle is on and Tico's last answer was neither success nor a plain 'not now'."""
     current = state(c)
-    if not current["hours"] or not current["hosted"] or not current["last_error"]:
+    hosted = cloud_access.cell() or current["hosted"]
+    if not current["hours"] or not hosted or not current["last_error"]:
         return None
     words = ("Tico does not accept this server's Gateway key" if current["last_error"] == "key_revoked"
              else "this server cannot reach Tico" if current["last_error"] == "unreachable"

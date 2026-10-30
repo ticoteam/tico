@@ -38837,6 +38837,9 @@
               "hours": {
                 "type": "integer"
               },
+              "hours_default": {
+                "type": "boolean"
+              },
               "runners": {
                 "type": "boolean"
               },
@@ -38873,6 +38876,7 @@
               "blocker",
               "hosted",
               "hours",
+              "hours_default",
               "idle_since",
               "last_error",
               "last_request",

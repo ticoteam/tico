@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from backend import botops_act, routines, scheduler, sleep_idle
+from backend import botops_act, releases, routines, scheduler, sleep_idle
 from backend import hubdb as H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -265,3 +265,118 @@ def test_a_send_waiting_for_a_far_retry_does_not_keep_the_server_up_but_sets_the
             c.execute("UPDATE webhook_sends SET state=?, next_attempt=?", (state, sleep_idle.stamp(later)))
         with api.app.state.store.read() as c:
             assert (sleep_idle.busy(c, at) == "send_pending") is due
+
+
+class Cell:
+    """A Tico Cloud cell's updater listener, `POST /sleep` (setup/cell_updater.py), in memory."""
+
+    def __init__(self):
+        self.sleeps, self.answer = [], (202, {"state": "sleeping", "wake_at": None})
+
+    def __call__(self, request):
+        assert request.url.path == "/sleep" and request.method == "POST"
+        assert request.headers["authorization"] == "Bearer cell-token"
+        self.sleeps.append(json.loads(request.content))
+        status, answer = self.answer
+        return httpx.Response(status, json=answer)
+
+
+@pytest.fixture
+def cell(hq, monkeypatch):
+    """This install is a Tico Cloud cell company: its listener answers, and HQ is not to be asked."""
+    monkeypatch.setenv("TICO_CELL", "1")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.0.0.1:9001")
+    monkeypatch.setenv("TICO_UPDATER_TOKEN", "cell-token")
+    fake = Cell()
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(fake))
+    return fake
+
+
+def test_a_cell_company_asks_its_cell_not_hq_and_sends_no_runners(api, hq, cell):
+    at = hq.clock[0]
+    wake = int(at + 3 * 3600)
+    add_routine(api, wake)
+    state = turn_on(api, 1, runners=False)
+    assert state["hosted"] and state["active"] and state["hours"] == 1 and state["hours_default"] is False
+    tick(api)
+    assert cell.sleeps == [{"wake_at": sleep_idle.iso(wake), "reason": "idle"}]
+    assert hq.calls == []                    # no Gateway key, no HQ question
+    last = get(api, "sleep")["sleep"]["last_request"]
+    assert last["result"] == "requested" and last["wake_at"] == sleep_idle.iso(wake)
+
+
+def test_a_cell_never_set_sleeps_after_two_hours_and_an_explicit_zero_is_off(api, hq, cell):
+    state = get(api, "sleep")["sleep"]
+    assert state["hours"] == 2 and state["hours_default"] is True and state["active"] and state["hosted"]
+    service(api).started = hq.clock[0] - 90 * 60          # quiet for an hour and a half: not yet
+    tick(api)
+    assert cell.sleeps == []
+    hq.clock[0] += 31 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+    state = post(api, "sleep", {"runners": False})["sleep"]    # a change to runners alone keeps the two hours
+    assert state["hours"] == 2 and state["hours_default"] is False
+    assert turn_on(api, 0)["hours"] == 0
+    hq.clock[0] += 3 * 3600
+    tick(api)
+    assert len(cell.sleeps) == 1 and get(api, "sleep")["sleep"]["active"] is False
+
+
+def test_a_busy_cell_says_not_now_and_is_asked_again_after_fifteen_minutes(api, hq, cell):
+    turn_on(api, 1)
+    cell.answer = (409, {"error": "busy"})
+    tick(api)
+    state = get(api, "sleep")["sleep"]
+    assert len(cell.sleeps) == 1 and state["last_request"]["result"] == "busy" and state["last_error"] == ""
+    hq.clock[0] += sleep_idle.SOON - 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+    hq.clock[0] += 60
+    tick(api)
+    assert len(cell.sleeps) == 2
+
+
+def test_a_failing_cell_backs_off_like_hq_and_reaches_health(api, hq, cell):
+    turn_on(api, 1)
+    cell.answer = (500, {"error": "boom"})
+    tick(api)
+    state = get(api, "sleep")["sleep"]
+    assert len(cell.sleeps) == 1 and state["last_request"]["result"] == "failed" and state["last_error"] == "updater_500"
+    with api.app.state.store.read() as c:
+        assert "failed" in sleep_idle.health(c)["summary"]
+    hq.clock[0] += 16 * 60
+    tick(api)
+    assert len(cell.sleeps) == 2             # the second failure waits twice as long
+    hq.clock[0] += 16 * 60
+    tick(api)
+    assert len(cell.sleeps) == 2
+    hq.clock[0] += 16 * 60
+    cell.answer = (202, {"state": "sleeping"})
+    tick(api)
+    assert len(cell.sleeps) == 3 and get(api, "sleep")["sleep"]["last_error"] == ""
+    with api.app.state.store.read() as c:
+        assert sleep_idle.health(c) is None
+
+
+def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api, hq, cell):
+    turn_on(api, 1)
+    r = runner(api, "ana")
+    ready(api, r, [])                        # the computer reports in now
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "computer_online"
+    tick(api)
+    assert cell.sleeps == [] and quiet(api)["blocker"] == "computer_online"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?", (sleep_idle.stamp(time.time() - 300),))
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_block(api, hq):
+    state = get(api, "sleep")["sleep"]
+    assert state["hours"] == 0 and state["hours_default"] is False
+    r = runner(api, "ana")
+    ready(api, r, [])
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
