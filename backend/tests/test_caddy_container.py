@@ -252,8 +252,8 @@ class Containers:
     def inspect(self):
         return json.loads(self.docker("inspect", self.caddy).stdout)[0]
 
-    def request(self, host, path="/", method="GET", headers=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+    def request(self, host, path="/", method="GET", headers=None, timeout=2):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         try:
             connection.request(method, path, headers={"Host": host, **(headers or {})})
             response = connection.getresponse()
@@ -261,8 +261,8 @@ class Containers:
         finally:
             connection.close()
 
-    def expect(self, host, path, status, method="GET", headers=None):
-        result = self.request(host, path, method, headers)
+    def expect(self, host, path, status, method="GET", headers=None, timeout=2):
+        result = self.request(host, path, method, headers, timeout)
         self.steps.append({"host": host, "target_sha256": digest(path), "method": method, "status": result[0]})
         if result[0] != status:
             raise AssertionError("routing expectation failed: target sha256=%s status=%s" % (digest(path), result[0]))
@@ -427,7 +427,9 @@ def test_shipped_linux_producer_and_pinned_caddy_enforce_visual_boundary(contain
     qa.expect("unknown.acme.example", SIGNED_PATH, 404)
     assert qa.backend_count() == before
     qa.docker("stop", qa.backend)
-    qa.expect(VISUAL, SIGNED_PATH, 502, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})
+    # The proxy holds the request while the server is gone (caddy_assets.HOLD_FOR), then answers a plain 503.
+    _, headers, _ = qa.expect(VISUAL, SIGNED_PATH, 503, headers={"Referer": "https://" + VISUAL + SIGNED_PATH}, timeout=45)
+    assert headers["retry-after"] == "5"
     def error_logged():
         log = qa.docker("logs", qa.caddy)
         return '"logger":"http.log.error"' in log.stdout + log.stderr
