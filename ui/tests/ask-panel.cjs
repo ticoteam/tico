@@ -85,6 +85,9 @@ async function open(browser, viewport, state) {
     await fab.click();
     await panel.waitFor();
     assert.equal(await fab.getAttribute('aria-expanded'), 'true');
+    // One live dot: the panel's own while it is open; the button's holds still.
+    const dots = () => page.evaluate(() => [...document.querySelectorAll('#ask-fab .ldot, #ask-panel .ldot')].map(d => d.dataset.state));
+    assert.deepEqual(await dots(), ['still', 'idle']);
     const box = panel.locator('.ask-form .p-text');
     await box.waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('#ask-panel .p-text'));
@@ -149,6 +152,7 @@ async function open(browser, viewport, state) {
     await box.focus();
     await page.keyboard.press('Escape');
     await panel.waitFor({state: 'hidden'});
+    assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the button carries the live dot');
     await page.keyboard.press('Control+j');
     await panel.waitFor();
     // Show chat opens the Assistant page, where the button is not needed.
@@ -162,10 +166,11 @@ async function open(browser, viewport, state) {
     state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: []};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
-    // The Ask tab is an icon, no word: Ask's mark, a close mark while open, and its name says which.
-    const glyph = () => tab.locator('.mobile-nav-icon').innerText();
+    // The Ask tab has no word: the dot, a close mark while open, and its name says which.
+    const glyph = async () => (await tab.locator('.mobile-nav-icon').isVisible()) ? tab.locator('.mobile-nav-icon').innerText()
+      : (await tab.locator('.ldot').isVisible()) ? 'dot' : '';
     assert.equal(await tab.locator('.mobile-nav-label').count(), 0);
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'auto_awesome']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'dot']);
     await tab.click();
     await page.locator('#ask-panel').waitFor();
     await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
@@ -175,7 +180,7 @@ async function open(browser, viewport, state) {
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'auto_awesome']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'dot']);
     assert.deepEqual(errors, []);
     await page.close();
   } finally {

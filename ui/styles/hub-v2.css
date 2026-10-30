@@ -69,7 +69,7 @@
 .docs-search-field:focus-within .docs-kbd{display:none}
 .docs-ask{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:var(--ctl);padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-size:var(--t-sm);font-weight:500;white-space:nowrap;cursor:pointer}
 .docs-ask:hover{background:var(--surface2)}
-.docs-ask .nav-icon{font-size:16px;color:var(--accent)}
+.docs-ask .ldot{margin:0 1px}
 .docs-actions{display:flex;align-items:center;gap:6px}
 .docs-new,.docs-tool,.docs-mini,.docs-link-edit{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);line-height:var(--lh-tight);text-decoration:none;cursor:pointer;white-space:nowrap}
 .docs-new{height:30px;padding:0 11px;font-weight:500;font-family:inherit}

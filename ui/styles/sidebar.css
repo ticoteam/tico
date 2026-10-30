@@ -27,9 +27,9 @@
   width:20px;height:20px;flex:none;overflow:hidden;user-select:none;
   display:inline-flex;align-items:center;justify-content:center;
   color:var(--muted);font-family:"Material Symbols Outlined";
-  font-weight:200;font-style:normal;font-size:20px;line-height:var(--lh-none);
+  font-weight:300;font-style:normal;font-size:20px;line-height:var(--lh-none);
   letter-spacing:normal;text-transform:none;white-space:nowrap;
-  font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;
+  font-variation-settings:"FILL" 0,"wght" 300,"GRAD" 0,"opsz" 24;
   font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
   -webkit-font-smoothing:antialiased;
 }

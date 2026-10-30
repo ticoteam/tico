@@ -40,13 +40,12 @@ function askSync() {
   fab.setAttribute('aria-expanded', String(open));
   fab.setAttribute('aria-label', open ? 'Close ' + name : name);
   fab.title = name + ' (⌘J)';
-  // The phone's tab is a glyph with no word under it: Ask's mark, or a close mark while the sheet is open.
+  // The phone's tab has no word under it: the dot, or a close mark while the sheet is open (ask.css, by aria-expanded).
   if (tab) {
-    const icon = open ? 'close' : 'auto_awesome';
     tab.setAttribute('aria-expanded', String(open));
     tab.setAttribute('aria-label', open ? 'Close' : 'Ask');
-    tab.querySelector('.mobile-nav-icon').textContent = icon;
   }
+  askDot();
   panel.setAttribute('aria-label', name);
   panel.querySelector('#ask-title').textContent = name;
   if (!open) return;
@@ -55,6 +54,16 @@ function askSync() {
   sees.querySelector('[data-ask-sees-name]').textContent = page.title;
   sees.title = 'Sees ' + page.title;
   askMembers();
+}
+// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the button's (or the phone's tab) while the
+// panel is closed, the panel's own while it is open; the other holds still. With reduced motion the dot is still and the
+// closed button says the state in a word; the open panel says it in the thread already ("Thinking…", the reply itself).
+function askDot() {
+  const state = ASK?.dotState || 'idle', open = !$('#ask-panel')?.hidden;
+  document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
+  ldotSet($('#ask-panel [data-ask-dot]'), open ? state : 'still');
+  const word = $('#ask-fab [data-ask-word]');
+  if (word) { word.textContent = open ? '' : ldotWord(state); word.hidden = !word.textContent; }
 }
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
@@ -206,10 +215,11 @@ async function askLoad(chat) {
   const draw = () => {
     if (!current() || !info?.available) return;
     const ticket = askTicket(), only = !!chat.only && !!ticket, at = x => Date.parse(x || '') || 0;
-    // While the Assistant is replying, Ask's mark twinkles (styles/motion.css body.ask-replying), the panel open or not.
-    const replying = !only && (!!(execution && execution.state !== 'completed' && execution.text)
-      || (messages.length > 0 && !isReply(messages.at(-1))));
-    document.body.classList.toggle('ask-replying', replying);
+    // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not.
+    const streaming = !!(execution && execution.state !== 'completed' && execution.text);
+    const replying = streaming || (messages.length > 0 && !isReply(messages.at(-1)));
+    chat.dotState = only ? 'idle' : ldotChatState({replying, streaming});
+    askDot();
     const rows = (only ? [] : messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})})))
       .concat(ticket ? askSupportRows(ticket) : [])
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);

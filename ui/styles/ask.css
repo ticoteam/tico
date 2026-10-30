@@ -1,8 +1,9 @@
 /* Ask (ui/app/ask-panel.js): a round button at the bottom left of the page opens the person's chat bot in a panel
-   above it; on a phone the Ask tab opens it as a sheet over the page, above the tab bar. */
+   above it; on a phone the Ask tab opens it as a sheet over the page, above the tab bar. Its mark is the Liquid Dot
+   (liquid-dot.css) on a plain face: the dot is jade, so the face is not. */
 .ask-fab{position:fixed;left:calc(var(--rail-left) + 16px);bottom:16px;z-index:25;width:44px;height:44px;border-radius:50%;
-  border:0;background:var(--accent);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;
-  cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28)}
+  border:1px solid var(--line);background:var(--ask-face);color:var(--ink);display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;box-shadow:0 6px 18px -6px rgba(0,0,0,.35)}
 .ask-fab[hidden]{display:none}
 /* What it floats over keeps its footprint clear at the end of the scroll, so no last row hides under it. */
 @media (min-width:761px){
@@ -12,16 +13,19 @@
      the page's 28px gutter) */
   body:has(#ask-fab:not([hidden])) #main.bot-chat-layout #chat-composer{padding-left:calc(16px + 44px + var(--s3) - 28px)}
 }
-.ask-fab .nav-icon{font-size:22px;color:inherit}
-.ask-fab:hover{filter:brightness(1.08)}
-.ask-fab[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
+.ask-fab:hover{background:var(--surface2)}
+.ask-fab[aria-expanded="true"]{background:var(--surface2)}
+/* With reduced motion the dot holds still, so a working or replying Assistant says so in a word beside the button. */
+.ask-word{display:none;position:absolute;left:calc(100% + 8px);top:50%;translate:0 -50%;padding:2px 8px;border:1px solid var(--line);
+  border-radius:999px;background:var(--ask-face);color:var(--muted);font-size:var(--t-xs);white-space:nowrap;pointer-events:none}
+@media (prefers-reduced-motion:reduce){.ask-word:not([hidden]){display:block}}
 .ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));
   height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
 .ask-panel[hidden]{display:none}
 .ask-head{display:flex;align-items:center;gap:6px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
 .ask-head h2{margin:0;font-size:var(--t-md);white-space:nowrap}
-.ask-mark{font-size:18px;color:var(--accent);font-variation-settings:"FILL" 1}
+.ask-mark{margin:0 2px}
 .ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
   font-size:var(--t-xs);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .ask-sees[hidden]{display:none}
@@ -80,13 +84,14 @@
 @media (max-width:760px){
   .ask-fab{display:none}
   .mobile-ask{display:flex}
-  /* The primary action: an accent circle with no word under it, filling its column. Its centre sits 2px above the other
-     tabs' icons, so the row reads as one line and the circle as raised; a close mark replaces the glyph while open. */
+  /* The primary action: the dot on a raised circle with no word under it, filling its column. Its centre sits 2px above
+     the other tabs' icons, so the row reads as one line and the circle as raised; a close mark replaces the dot while open. */
   .mobile-ask{justify-content:flex-start;padding-top:0}
-  .mobile-ask-mark{flex:none;width:44px;height:44px;margin-top:-5px;border-radius:50%;background:var(--accent);color:var(--accent-ink);
-    display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.18);
+  .mobile-ask-mark{flex:none;width:44px;height:44px;margin-top:-5px;border-radius:50%;border:1px solid var(--line);background:var(--ask-face);color:var(--ink);
+    display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px -2px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.12);
     transition:transform var(--dur-fast) var(--ease)}
   .mobile-ask-mark .mobile-nav-icon{width:24px;height:24px;font-size:24px}
+  .mobile-ask[aria-expanded="true"] .ldot,.mobile-ask[aria-expanded="false"] .mobile-nav-icon{display:none}
   .mobile-ask:active .mobile-ask-mark{transform:scale(.96)}
   .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}

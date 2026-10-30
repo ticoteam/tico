@@ -5,9 +5,9 @@
 <title>Tico</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<meta name="theme-color" content="#121417">
+<meta name="theme-color" content="#101513">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=aff2e0315361" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -81,6 +81,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/strategy-budget.css">
 <link rel="stylesheet" href="/tico/ui/styles/redesign-library.css">
 <link rel="stylesheet" href="/tico/ui/styles/pages.css">
+<link rel="stylesheet" href="/tico/ui/styles/liquid-dot.css">
 <link rel="stylesheet" href="/tico/ui/styles/ask.css">
 <link rel="stylesheet" href="/tico/ui/styles/motion.css">
 <!-- bundle:css:end -->
@@ -170,9 +171,9 @@
   <div id="app-nudge" hidden><span class="app-nudge-text"></span><a class="app-nudge-get" href="/download/mac">Download</a><button type="button" class="app-nudge-close" aria-label="Not now">✕</button></div>
 </div>
 <main id="main"></main>
-<button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Assistant" hidden><span class="nav-icon" aria-hidden="true">auto_awesome</span></button>
+<button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Assistant" hidden><span class="ldot" data-ask-dot data-state="idle" data-size="22" style="width:22px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="ask-word" data-ask-word hidden></span></button>
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" hidden>
-  <header class="ask-head"><span class="nav-icon ask-mark" aria-hidden="true">auto_awesome</span><h2 id="ask-title">Assistant</h2>
+  <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Assistant</h2>
     <span class="ask-sees" data-ask-sees hidden><span data-ask-sees-name></span></span>
     <button type="button" class="ask-ib" id="ask-add" aria-haspopup="menu" aria-expanded="false" aria-label="Add to this chat" title="Add to this chat">+</button>
     <a class="ask-full" href="#/assistant">Show chat</a>
@@ -190,7 +191,7 @@
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
-  <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Ask"><span class="mobile-ask-mark"><span class="mobile-nav-icon" aria-hidden="true">auto_awesome</span></span></button>
+  <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Ask"><span class="mobile-ask-mark"><span class="ldot" data-ask-dot data-state="idle" data-size="22" style="width:22px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon" aria-hidden="true">close</span></span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
   <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
   <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span></button>
@@ -245,6 +246,7 @@
 <script src="/tico/ui/app/notices.js"></script>
 <script src="/tico/ui/app/cloud-access.js"></script>
 <script src="/tico/ui/app/avatars.js"></script>
+<script src="/tico/ui/app/liquid-dot.js"></script>
 <script src="/tico/ui/app/sidebar.js"></script>
 <script src="/tico/ui/app/heartbeat.js"></script>
 <script src="/tico/ui/app/issues.js"></script>

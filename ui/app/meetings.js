@@ -24,7 +24,7 @@ async function pageNotes() {
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
+      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
