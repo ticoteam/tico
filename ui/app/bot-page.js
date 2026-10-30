@@ -15,8 +15,8 @@ async function recentRuns() {
 // Header (name, alert, goal) stays visible; work and configuration tabs live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
-// Configuration has its own four tabs; old More, Docs and Session links retain a destination.
-const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'settings'];
+// Configuration has its own five tabs (Rules lists what the bot must follow, ui/app/org-rules.js); old More, Docs and Session links retain a destination.
+const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'rules', 'settings'];
 const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
 // The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
 const botTabs = slug => {
@@ -462,6 +462,7 @@ async function pageBot(slug, tab) {
 
     ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
+  <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
@@ -661,13 +662,14 @@ function showBotTab(tab) {
   $('#bot-details').hidden = work;
   $('#pane-more').hidden = view !== 'info';
   $('#pane-docs').hidden = view !== 'instructions';
-  for (const t of ['history', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
+  for (const t of ['history', 'rules', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
   $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach(button => {
     const on = button.dataset.botDetailTab === view;
     button.classList.toggle('cur', on); button.setAttribute('aria-selected', String(on));
     button.tabIndex = on ? 0 : -1;
   });
   if (view === 'history') void botHistoryLoad(BOT.slug);
+  if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
   if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
   if (chat && BOT_PILL?.focusOnOpen) {
