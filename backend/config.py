@@ -308,6 +308,12 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
+    # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
+    # screening never spend each other's; the Decide level they ask at; and how many `hub rules check` drafts one bot
+    # may check in a UTC day.
+    rules_monthly_usd: float = 50.0
+    rule_check_level: str = "medium"
+    rules_check_daily_drafts: int = 200
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
     # default; when on, a confident bug or small change goes to Head of Engineering, everything else to product as before.
     decisions_idea_triage: bool = False
@@ -561,6 +567,10 @@ class Settings:
             decisions_monthly_usd=max(0.0, float(os.environ.get("TICO_DECISIONS_MONTHLY_USD", "") or 50.0)),
             decisions_jev_usd_per_mtok_input=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "") or 0.042)),
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
+            rules_monthly_usd=max(0.0, float(os.environ.get("TICO_RULES_MONTHLY_USD", "") or 50.0)),
+            rule_check_level=(os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() or "medium")
+            if os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() in ("", "low", "medium", "high") else "medium",
+            rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             **_company_file_fields(rehearsal),
