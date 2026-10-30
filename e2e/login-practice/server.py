@@ -54,6 +54,7 @@ STATE = {
     "ttl": int(os.environ.get("PRACTICE_SESSION_TTL", "1800")),
     "beacon": None,
     "challenge": {},  # username -> time the press-and-hold check passed
+    "challenge_last": {},  # username -> the last pass attempt: {"held_ms": ..., "status": ...}, for diagnosis
     "phones": {},     # phone number -> {user, code, expires}: a text code still waiting
 }
 HOLD_MS = 3000
@@ -203,7 +204,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(401, json.dumps({"error": "signed_out"}), "application/json")
             with LOCK:
                 passed = user in STATE["challenge"]
-            return self.send(200, json.dumps({"passed": passed}), "application/json")
+                last = STATE["challenge_last"].get(user)
+            return self.send(200, json.dumps({"passed": passed, "last": last}), "application/json")
         if path == "/settings":
             return self.settings()
         if path == "/logout":
@@ -380,10 +382,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         user = self.session_user()
         if not user:
             return self.send(401, json.dumps({"error": "signed_out"}), "application/json")
-        if int(form.get("held_ms") or 0) < HOLD_MS:
+        held = int(form.get("held_ms") or 0)
+        if held < HOLD_MS:
+            with LOCK:
+                STATE["challenge_last"][user] = {"held_ms": held, "status": "too_short"}
+            print(f"challenge held_ms={held} status=too_short", file=sys.stderr, flush=True)
             return self.send(422, json.dumps({"error": "too_short"}), "application/json")
         with LOCK:
             STATE["challenge"][user] = time.time()
+            STATE["challenge_last"][user] = {"held_ms": held, "status": "passed"}
+        print(f"challenge held_ms={held} status=passed", file=sys.stderr, flush=True)
         return self.send(200, json.dumps({"passed": True}), "application/json")
 
     def settings_2fa(self, form):

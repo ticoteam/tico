@@ -247,6 +247,10 @@ sc_attach() {
 
 # Scenario 7: the bot signs in and asks for a person at the check page. The person holds the bot's screen (control mode,
 # 390x844), the person marks it done, and the next turn reads the check as passed.
+challenge_log() {  # the practice site's lines for the check: each request to the check and each pass attempt's held_ms
+  dc logs --no-log-prefix practice 2>&1 | grep -E '/challenge|^challenge held_ms' | tail -n 20 | sed 's/^/    /'
+}
+
 sc_captcha() {
   # The check's card waits on a person, so the phase runs on a task of the bot's, as the journey's needs-you does.
   grant_trail "before S7"
@@ -260,7 +264,7 @@ sc_captcha() {
   person=$?
   send POST "/api/v2/runners/$rid/screen" '{"mode": "off"}' >/dev/null
   python3 "$J" report "$out"
-  verdict "captcha: the person held the bot's screen for the check" "$person" || return 1
+  verdict "captcha: the person held the bot's screen for the check" "$person" || { challenge_log; return 1; }
   card="$(python3 "$J" reconnect-id "$HOST_NAME")" || return 1
   [ -n "$card" ] || { say "no open reconnect for $HOST_NAME"; return 1; }
   id="$(printf '%s' "$card" | pick 'd["id"] or "-"')"
@@ -268,6 +272,10 @@ sc_captcha() {
   key="$(printf '%s' "$card" | pick 'd["key"]')"
   send POST "/api/v2/reconnects/$id/done" "{\"task\": \"$task\", \"key\": \"$key\"}" >/dev/null || { say "Done did not close the check"; return 1; }
   browser_phase challenge-check
+  local rc=$?
+  say "the practice site's check lines after the person's hold and the next turn:"
+  challenge_log
+  return $rc
 }
 
 # Scenario 8: two runs of the same bot as two tasks, which the bot takes at once (its chat would queue them).

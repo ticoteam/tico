@@ -371,6 +371,9 @@ const phases = {
     await tab.go(practice + '/challenge');
     const before = await tab.eval('fetch("/challenge/state", {credentials: "include"}).then(r => r.json()).then(d => d.passed)');
     check('the check is not passed yet', before === false, before);
+    // The person sees the Chrome's foreground tab, so the check's tab is brought to the front before the person is asked.
+    await browser.send('Target.activateTarget', {targetId: tab.targetId});
+    check('the check tab is in front', (await tab.eval('document.visibilityState')) === 'visible', await tab.path());
     const r = hub(['browser', 'needs-you', host, '--reason', 'Hold the screen for three seconds to pass the check']);
     data.needs = (r.json && r.json.id) || '';
     check('the check asks a person', r.ok === true);
@@ -379,8 +382,11 @@ const phases = {
   async 'challenge-check'(browser) {
     const tab = await browser.newTab();
     await tab.go(practice + '/challenge');
-    const passed = await tab.eval('fetch("/challenge/state", {credentials: "include"}).then(r => r.json()).then(d => d.passed)');
-    check('the check is passed after the person held it', passed === true, passed);
+    const state = await tab.eval('fetch("/challenge/state", {credentials: "include"}).then(r => r.json())');
+    const page = await tab.text();
+    // The detail says what the server saw: the page's own text and the last pass attempt's held_ms and status.
+    check('the check is passed after the person held it', state.passed === true,
+          JSON.stringify({state, page: page.slice(0, 80)}));
   },
 
   // Scenario: two runs of the same bot at once share its Chrome. Each records when it held its tab, so the host can see
