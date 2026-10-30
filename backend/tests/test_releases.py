@@ -106,7 +106,7 @@ def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tm
 
 
 def test_a_server_tico_updates_offers_no_update_now(environment, monkeypatch):
-    """TICO_UPDATES=tico (a cloud company: setup/cell.py runs its updates): no Update now, and the app says why."""
+    """TICO_UPDATES=tico (Tico updates this server from outside): no Update now, and the app says why."""
     monkeypatch.setenv("TICO_UPDATES", "tico")
     monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")      # even an updater left in .env is not called
     network(monkeypatch, lambda request: pytest.fail("the updater was called"))

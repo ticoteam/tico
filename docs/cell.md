@@ -6,8 +6,9 @@ host, with its own domain, settings and data ([Moving an install in](#moving-an-
 [hosted install](install-advanced.md) gets: the stock `ghcr.io/ticoteam/tico` image at a pinned release, the stock
 entrypoint and `compose.yaml`, its own data folder, `.env` and Compose project, sign-in through its own OpenID
 Connect client, the owner sign-in link kept as break-glass, and the recommended setup. It does not get its own Caddy,
-cloudflared, updater or EC2 instance: its `.env` has `TICO_UPDATES=tico`, so the app shows no Update now and says
-Tico updates the server (HQ runs `update`). Every company shares one router and one Cloudflare Tunnel. The host runs only Tico
+cloudflared, updater sidecar or EC2 instance. Every company shares one router, one Cloudflare Tunnel and one cell
+updater, which speaks the sidecar's contract to each company on its own address, so Update now, update keys and Tico
+support's idle-time updates work as on a hosted install ([Updates](#updates)). The host runs only Tico
 servers. It never runs bots or a runner.
 
 The reference implementation is `setup/cell.py`.
@@ -48,6 +49,9 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    directory `/srv/tico-cell/tunnel` is 0700 and owned by uid/gid 65532, the user cloudflared runs as; every `init`
    sets that owner again. The token is kept in `/srv/tico-cell/tunnel.env` (0600). Without
    `--tunnel-token-file`, the token from an earlier run is used, or only the router runs.
+5. Installs and starts `tico-cell-updater.service`, the companies' updater ([Updates](#updates)), running
+   `python3 -m setup.cell_updater` from this checkout. It is restarted only when its unit changes, which is when
+   `init` runs from another checkout, and started if it is not running.
 
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
@@ -99,6 +103,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `firewall_failed` | The metadata firewall rule could not be set |
 | `unhealthy` | `/healthz` did not answer through the router in time (the detail has the last log lines) |
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
+| `updater_failed` | `init` could not install or start the cell updater |
 | `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
 | `unsupported_host` | `init` was run somewhere other than the Linux host |
 | `internal` | A bug. The detail has the cause, with secrets masked |
@@ -202,8 +207,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   keeps) every key it writes with a value, the keys a later `add` reads back from `.env` (team name, owner, Gateway
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
-  `TICO_UPDATER_URL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`, `TICO_EXPECTED_AWS_ROLE`, and
-  `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
+  `TICO_EXPECTED_AWS_ROLE`, and `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
@@ -215,19 +220,74 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   second check, owned by user 10001, and renamed to `data/` in one step before the server first starts, so a failed
   import leaves nothing. Once imported, run `add` again without `--import-data`.
 
+## Updates
+
+A company updates through the same contract as a hosted install's updater sidecar (`docker/updater.py`): its server
+calls `POST /update` and `GET /status` at `TICO_UPDATER_URL` with the token in `/control/updater-token`. So Update now,
+an update service key (the Release Manager's rollout), Tico support's idle-time target, the `system.update` events and
+Health's Version line work unchanged. The answers, states and 409s are the sidecar's; `GET /diagnostics` has
+`"mode": "cell"` and a `note` when the host's core lags. The reference implementation is `setup/cell_updater.py`.
+
+- **One service for the host.** `tico-cell-updater.service` (installed by `init`) holds one listener per company. It
+  runs as root because the work is `update`: it runs Docker and writes the company's folder, as staff's commands do.
+  It is a systemd unit, not a container, so it needs no Docker socket mounted into anything. It never changes its own
+  code: it runs the checkout `init` last ran from, and it never runs `init` (that restarts it, and the router and
+  tunnel stay with staff). A stop lets an update under way finish first.
+- **The work is `update`.** An accepted request runs this host's own `cell update` for that one company: pull first,
+  stop, snapshot, the new release health-checked through the router, and the old release and database put back when
+  it does not come up (state `rolled_back`, `restored: true`). It takes the company's lock, so a staff `update` (or
+  `add`, `stop`) running on that company makes the request a 409, and a request under way makes staff's command wait,
+  then answer `busy`. Each company's last status is kept in `updater-status.json`, so a restarted service still
+  answers it.
+- **Which releases.** `latest` or a stable `X.Y.Z` (else 422), published on GitHub (its `SHA256SUMS` downloads), and
+  no older than the company runs (409, as the sidecar refuses it). A release it may not run fails with a message
+  saying why, and nothing changes.
+- **A release newer than the host's core** runs with its own core, since a company's `compose.yaml` is the core's
+  own file and a later release may need settings or mounts an older one does not pass. The updater installs that
+  release's core beside the others, as HQ does: `/opt/tico-cell/core-<vX.Y.Z>`, from GitHub's tag archive (at most
+  256 MB, 5 minutes), unpacked into a staging folder `.core-<vX.Y.Z>.<random>` with its top folder stripped, then
+  renamed into place. An archive with an absolute name, a `..`, a link out of the tree, a device or a FIFO installs
+  nothing. A folder already there is used as it is (it must have `setup/cell.py`). Then it runs that folder's own
+  `python3 -m setup cell update --company <slug> --version <tag> --json` as a child, which takes the company's lock
+  itself, and maps its answer to the same states. The host's `init` stays at the older core until staff move it;
+  the status message and `note` say so ("updated with core vX; host init still at vY"). A core with no
+  `.tico-installer.json` is known by its folder's name (`core-vX.Y.Z`); one that says neither treats every release
+  as newer.
+- **Isolation.** Company `i`'s listener is bound to its default network's gateway, `10.208.i.1:8090`, never a public
+  or loopback address, so nothing off the host and nothing through the router reaches it. Linux accepts a packet for
+  any host address from any bridge, so another company's container can open a connection there. So the listener
+  answers only a peer inside company `i`'s own subnet (only its containers are on it, and servers drop every
+  capability, so they cannot fake an address), then only that company's own token, compared in constant time. The
+  token is in the company's `control/` folder, which only its server mounts; a symlink or a short file is no token.
+  The company comes from the cell's record (its slug and slot, checked again on each request), never from the
+  request; the body is read for a version and the running release only, at most 1 KB. So a company can update only
+  itself, and only to a release the sidecar would also let it run. Tokens are never logged or printed.
+
+Each company's `.env` has `TICO_UPDATER_URL=http://10.208.<i>.1:8090` and `TICO_CELL=1` (which marks a cloud company
+for cloud access), and no `TICO_UPDATES`. Its `compose.cell.yaml` mounts `control/` as `/control`.
+
+**Picking it up on an older host.** A company an older core added has `TICO_UPDATES=tico`, no token and the stock
+control volume. Run `init` from the new checkout once (it installs the service), then
+`cell update --company <slug> --version <the release it runs>` for each company, or let its next `update` do it.
+`update` rewrites the company's files to the new form (token, `control/` mount, `.env`). With the same release it
+takes no snapshot, and it restarts the server only when a file changed, so a second run changes nothing.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
+| `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
-| `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data`, `TICO_UPDATES`, the default network and the `tico.cell.company` label |
+| `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data` and `control/` as `/control`, `TICO_CELL`, the default network and the `tico.cell.company` label |
 | `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
 | `.../company.json` | The slot, port, release, memory, state, aliases, and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
+| `.../control/updater-token` | The company's updater token (0600, owned by 10001); its server reads it as `/control/updater-token` |
+| `.../updater-status.json` | The cell updater's last status for the company (0600) |
 | `.../owner-link.txt` | The owner's break-glass sign-in link (0600). It is never printed |
 | `.../snapshots/` | Database copies taken before each update |
 | `.../.data-import/` | An archive being unpacked (`--import-data`); renamed to `data/` when done |

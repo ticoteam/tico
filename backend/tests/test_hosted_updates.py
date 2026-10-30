@@ -93,11 +93,20 @@ def test_only_a_hosted_server_asks_and_nothing_happens_until_support_sets_a_targ
     assert hosted.updater.started == []
 
 
-def test_a_cloud_company_never_asks_hq(hosted, monkeypatch):
-    """Tico updates a cloud company from outside (`setup cell update`); it has no updater for a target to go through."""
+def test_a_server_tico_updates_from_outside_never_asks_hq(hosted, monkeypatch):
+    """TICO_UPDATES=tico: Tico updates it from outside, and it has no updater for a target to go through."""
     monkeypatch.setenv("TICO_UPDATES", "tico")
     hosted.hq.target = TARGET
     assert hosted.tick(T0) == "" and hosted.hq.bodies == [] and hosted.updater.started == []
+
+
+def test_a_cell_company_takes_its_target_through_its_own_updater(hosted, monkeypatch):
+    """A cell company (TICO_CELL=1) has the cell updater at TICO_UPDATER_URL, so support's target reaches it too."""
+    monkeypatch.setenv("TICO_CELL", "1")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.208.0.1:8090")
+    hosted.hq.target = TARGET
+    hosted.tick(T0)
+    assert hosted.hq.bodies and hosted.updater.started
 
 
 def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(api, hosted, monkeypatch):  # noqa: F811

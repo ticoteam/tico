@@ -186,7 +186,7 @@ def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
 def test_a_new_key_asks_a_cloud_cell_for_its_access_at_once(api, monkeypatch):  # noqa: F811
     # The first ask can run before the install has its key (the hourly wait was the bug): a cell's enrolled key asks now.
     asked = []
-    monkeypatch.setenv("TICO_UPDATES", "tico")
+    monkeypatch.setenv("TICO_CELL", "1")
     monkeypatch.setattr(cloud_access, "sync_later", lambda store, vault, settings: asked.append(store))
     with fake_hq() as fake:
         enroll_setup(api, monkeypatch, fake)
@@ -197,6 +197,7 @@ def test_a_new_key_asks_a_cloud_cell_for_its_access_at_once(api, monkeypatch):  
 def test_a_key_change_on_a_non_cell_install_makes_no_immediate_cloud_ask(api, monkeypatch):  # noqa: F811
     # Self-hosted and EC2-hosted installs keep their hourly ask: a new key does not ask HQ about cloud access at once.
     asked = []
+    monkeypatch.delenv("TICO_CELL", raising=False)
     monkeypatch.delenv("TICO_UPDATES", raising=False)
     monkeypatch.setattr(cloud_access, "sync_later", lambda store, vault, settings: asked.append(store))
     with fake_hq() as fake:
@@ -207,7 +208,7 @@ def test_a_key_change_on_a_non_cell_install_makes_no_immediate_cloud_ask(api, mo
 
 def test_a_cloud_cell_with_no_answer_yet_asks_every_sync_not_every_unknown(api, monkeypatch, hq):  # noqa: F811
     store = api.app.state.store
-    monkeypatch.setenv("TICO_UPDATES", "tico")
+    monkeypatch.setenv("TICO_CELL", "1")
     last = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
     assert cloud_access.current(store) is None
     assert not cloud_access.due(store, last + timedelta(seconds=59), last)
@@ -218,6 +219,7 @@ def test_a_cloud_cell_with_no_answer_yet_asks_every_sync_not_every_unknown(api, 
 
 def test_a_self_hosted_or_ec2_install_keeps_the_hourly_ask(api, monkeypatch):  # noqa: F811
     store = api.app.state.store
+    monkeypatch.delenv("TICO_CELL", raising=False)
     monkeypatch.delenv("TICO_UPDATES", raising=False)
     last = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
     assert cloud_access.current(store) is None
@@ -225,3 +227,16 @@ def test_a_self_hosted_or_ec2_install_keeps_the_hourly_ask(api, monkeypatch):  #
     assert not cloud_access.due(store, last + timedelta(minutes=59), last)
     assert cloud_access.due(store, last + cloud_access.UNKNOWN, last)
     assert cloud_access.due(store, last, None)                       # the first check of a start always runs
+
+
+@pytest.mark.parametrize("env, cell", [({"TICO_CELL": "1"}, True), ({"TICO_UPDATES": "tico"}, True),
+                                       ({"TICO_CELL": "0"}, False), ({"TICO_CELL": ""}, False), ({}, False)])
+def test_a_cell_is_known_by_its_marker_or_an_older_cores_env(monkeypatch, env, cell):
+    # A cell company now has an updater URL like any hosted server, so the URL cannot say "cell"; TICO_CELL=1 does.
+    # TICO_UPDATES=tico is what an older core wrote, until that company's next `cell update` rewrites its .env.
+    for key in ("TICO_CELL", "TICO_UPDATES"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.208.0.1:8090")
+    assert cloud_access.cell() is cell
