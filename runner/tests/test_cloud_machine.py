@@ -2,6 +2,7 @@
 (runner/cloud_machine.py)."""
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -177,6 +178,27 @@ def test_tool_sources_add_google_only_on_x86_64(tmp_path):
     assert "Architectures: amd64" in x86[chrome] and "https://dl.google.com/linux/chrome/deb/" in x86[chrome]
     assert chrome not in arm
     assert "node_22.x" in x86[node] and "node_22.x" in arm[node]
+
+
+@pytest.mark.parametrize("version, ok", [("24.21.0", True), ("22.0.0", True), ("21.7.3", False)])
+def test_the_node_check_accepts_22_or_newer(tmp_path, version, ok):
+    """boat's image ships Node 24 ahead of apt's 22 on PATH: a newer Node passes the check, an older one fails it."""
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    argv = next(argv for what, argv in cm.tool_commands("x86_64", tmp_path) if what.startswith("Node.js"))
+    script = argv[-1].replace("process.versions.node", repr(version))
+    assert subprocess.run([shutil.which("node"), "-e", script]).returncode == (0 if ok else 1)
+
+
+def test_the_box_token_line_leaves_the_user_bashrc_and_the_rest_stays(tmp_path):
+    bashrc = tmp_path / ".bashrc"
+    bashrc.write_text('export PATH="$HOME/bin:$PATH"\nexport ASCII_TOKEN="secret-box-token"\nalias ll="ls -l"\n')
+    bashrc.chmod(0o640)
+    assert cm.drop_ascii_token(bashrc) == 1
+    assert bashrc.read_text() == 'export PATH="$HOME/bin:$PATH"\nalias ll="ls -l"\n'
+    assert bashrc.stat().st_mode & 0o777 == 0o640
+    assert cm.drop_ascii_token(bashrc) == 0 and cm.drop_ascii_token(tmp_path / "missing") == 0
+    assert not (tmp_path / "missing").exists()
 
 
 def test_the_sources_are_written_only_once_their_keys_are_on_disk(machine, tmp_path):

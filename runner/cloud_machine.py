@@ -16,8 +16,8 @@ every machine made from the snapshot would be the same runner.
 
 `base` also installs the tools every bot's computer needs, so they are in the snapshot and no boot waits for them
 (`tools()`): Google Chrome stable (Chromium on any other architecture), the computer screen's Xvfb, x11vnc and matchbox
-(the runner starts them on :99 and up when the screen is on), fonts, and Node.js 22 with npm. Anything else a bot needs
-it installs itself with sudo, and that stays on the machine's disk across stops (on the shared machine, for every
+(the runner starts them on :99 and up when the screen is on), fonts, and Node.js 22 or newer with npm. Anything else a
+bot needs it installs itself with sudo, and that stays on the machine's disk across stops (on the shared machine, for every
 member bot).
 
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
@@ -376,8 +376,9 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dic
         ("the apt sources of NodeSource" + (" and Google" if arch == "x86_64" else ""), tool_files(arch, apt)),
         ("the package lists with the new repositories", [*get, "update", "-qq"]),
         (" ".join(packages), [*install, *packages]),
-        (f"Node.js {NODE_MAJOR}", ["node", "-e",
-                                   f"process.exit(process.versions.node.split('.')[0] === '{NODE_MAJOR}' ? 0 : 1)"]),
+        # boat's image ships Node 24 ahead of apt's 22 on PATH, so the check is a floor, not an exact match
+        (f"Node.js {NODE_MAJOR} or newer", ["node", "-e", f"process.exit(Number(process.versions.node.split('.')[0]) "
+                                                          f">= {NODE_MAJOR} ? 0 : 1)"]),
         ("npm", ["npm", "--version"]),
     ]
 
@@ -387,7 +388,7 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
     the runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) on demand with npm
     (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml), so only the harness a bot uses lands on the machine. Nothing
     else is here: a bot that needs ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
-    m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR}")
+    m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR} or newer")
     for what, argv in tool_commands(arch, apt):
         m.say(f"installing {what}")
         if isinstance(argv, dict):
@@ -405,6 +406,28 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
 def checkout_release(root: Path, run=subprocess.run) -> str:
     from runner import release_update
     return release_update.checkout_release(root, run=run)
+
+
+ASCII_TOKEN_LINE = re.compile(r"^export ASCII_TOKEN=")
+
+
+def drop_ascii_token(bashrc: Path) -> int:
+    """Take boat's box token out of the user's ~/.bashrc (box-scoped and 90 days, so a snapshot must not carry it).
+    The file keeps its owner and mode. Returns the number of lines removed; the value is never printed."""
+    try:
+        before = bashrc.read_text().splitlines(keepends=True)
+    except FileNotFoundError:
+        return 0
+    kept = [line for line in before if not ASCII_TOKEN_LINE.match(line)]
+    removed = len(before) - len(kept)
+    if removed:
+        st = bashrc.stat()
+        tmp = bashrc.with_name(bashrc.name + ".tmp")
+        tmp.write_text("".join(kept))
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        os.replace(tmp, bashrc)
+    return removed
 
 
 def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = UNIT_DIR, apt: Path = APT,
@@ -445,6 +468,8 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
     for command in (["systemctl", "daemon-reload"], ["systemctl", "enable", UNIT]):
         if m.system(*command).returncode:
             raise Refused(" ".join(command) + " failed")
+    if drop_ascii_token(m.home / ".bashrc"):
+        m.say(f"removed boat's ASCII_TOKEN line from {m.home / '.bashrc'}")
     m.say(f"ready: {UNIT} enrolls the runner at the first boot that has {TOKEN} and {HUB}. Save the snapshot now.")
 
 

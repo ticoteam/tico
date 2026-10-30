@@ -89,8 +89,9 @@ The base step (below) installs these, so every machine made from the snapshot ha
 - **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).
-- **Node.js 22** and npm, from NodeSource's apt repository. The runner installs each bot's harness (Claude Code, Codex,
-  Pi, Gemini, Grok) with npm on demand, so only the harness a bot uses lands on the machine.
+- **Node.js 22 or newer** and npm, from NodeSource's apt repository (a newer Node already on the image is kept). The
+  runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) with npm on demand, so only the harness a bot
+  uses lands on the machine.
 
 Nothing else is in the base. A bot that needs ffmpeg, a toolchain or anything else installs it itself with `sudo`; it
 stays on the machine's disk across stops and resumes. On the shared machine, tools a bot installs are there for every
@@ -103,6 +104,7 @@ Re-running the step is safe. A failed install stops `base` with the step's outpu
 Once per release, from a computer with the boat CLI signed in to the account HQ uses. `--no-env` keeps the account's
 stored secrets out of the sandbox, and so out of the snapshot. Never pass `-e` secrets to the build sandbox: a saved
 snapshot hands its variables to every machine made from it.
+`base` also removes boat's box-scoped `export ASCII_TOKEN=` line from the user's `~/.bashrc`, so the snapshot carries no token.
 
 ```sh
 V=v0.5.7   # the release the servers run
@@ -113,7 +115,7 @@ boat exec "$id" --timeout 1200 -- bash -lc "
   cd ~/tico && sudo python3 -m runner.cloud_machine base --user user"
 # not enrolled, service enabled, linger on
 boat exec "$id" -- bash -lc 'test ! -e ~/.config/tico/runner.json && systemctl is-enabled tico-cloud-machine.service && loginctl show-user user -p Linger'
-boat snapshot "$id" "tico-runner-base-${V#v}"   # a fixed version to pin or roll back to
+boat snapshot "$id" "tico-runner-base-$(echo "${V#v}" | tr . -)"   # a fixed version to pin or roll back to (no dots in names)
 boat snapshot "$id" tico-runner-base            # the name HQ uses by default; reusing a name replaces it
 boat delete "$id"
 ```
@@ -123,7 +125,7 @@ checkout that is not on a release tag. It builds the venv and the release's Rust
 `scripts/setup-runner.sh`), writes the sudoers file, turns on lingering so the user's systemd starts at boot, writes
 the marker and enables the boot service.
 
-To pin HQ to one build, set `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0.5.7` on HQ; to roll back, point it at the
+To pin HQ to one build, set `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-5-7` on HQ; to roll back, point it at the
 previous version's name. Machines that exist keep running whatever they have.
 
 ## Verify on the first live machine
