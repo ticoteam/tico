@@ -121,7 +121,7 @@ step_enroll_harness() {  # enrolls the runner as the journey does, then puts the
   retry 180 runner_online || { BLOCKED="the runner did not come online"; say "$BLOCKED"; return 1; }
   install_fakes || { BLOCKED="the stand-in CLIs did not reach the runner"; say "$BLOCKED"; return 1; }
   revision="$(japi GET /api/v2/providers | pick 'd["revision"]')" || return 1
-  send PUT /api/v2/providers '{"enabled": ["openai", "anthropic", "google", "xai", "cursor", "meta", "deepseek"], "runtime": "", "model": "", "expected_revision": '"$revision"'}' >/dev/null || return 1
+  send PUT /api/v2/providers '{"enabled": ["openai", "anthropic", "google", "xai", "cursor", "meta", "deepseek", "openrouter"], "runtime": "", "model": "", "expected_revision": '"$revision"'}' >/dev/null || return 1
   verdict "enroll: the runner is online with the stand-in CLIs, and every provider the harnesses need is on" 0
 }
 
@@ -144,10 +144,23 @@ step_practice_account() {
   verdict "practice: the bot's account is signed up, with two-step sign-in switched on" 0
 }
 
+# The keys the readiness check asks for before a bot runs grok or pi: each is granted to the bot as a credential. The values
+# are stand-ins; the harness checks the bot can run, not that a provider answers.
+step_api_keys() {
+  local env value
+  for env in XAI_API_KEY OPENROUTER_API_KEY; do
+    value="journey-fake-$(printf '%s' "$env" | tr '[:upper:]_' '[:lower:]-')-0123456789"
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"env": sys.argv[1], "for_bot": sys.argv[2], "value": sys.argv[3], "name": sys.argv[1], "kind": "api_key"}))' \
+      "$env" "$BOT" "$value" > "$WORK/body.json"
+    send POST /api/v2/credential-set "$(cat "$WORK/body.json")" >/dev/null || { say "$env could not be stored for $BOT"; return 1; }
+  done
+  verdict "credentials: the bot holds the xAI and OpenRouter keys its harnesses need" 0
+}
+
 # The bot opens a login card on codex; the person saves the password and the 2FA secret on it.
 step_login() {
   local card
-  switch_model codex gpt-6-astra || { say "$SWITCH_WHY"; return 1; }
+  switch_model codex gpt-6-luna || { say "$SWITCH_WHY"; return 1; }
   hturn request request || { say "$TURN_WHY"; chrome_diagnose; return 1; }
   card="$(python3 "$J" field "$LAST_RESULT" card)" || return 1
   [ -n "$card" ] || { say "the bot opened no login card"; return 1; }
@@ -164,12 +177,13 @@ step_status() {
 }
 
 rows() {  # every harness the runner supports, as the bot's harness and model; the gateway is a gap, listed last
-  run_row codex codex gpt-6-astra devtools
-  run_row claude-code claude-code claude-opus-5-5 devtools
-  run_row muse-code muse-code muse-spark-1.3 devtools
-  run_row gemini-cli gemini-cli gemini-3.8-flash none
+  # The harness is the runtime the catalog names for the model (backend/providers.py MODEL_CATALOG).
+  run_row codex codex gpt-6-luna devtools
+  run_row claude-code claude claude-opus-5-5 devtools
+  run_row muse-code musecode muse-spark-1.3 devtools
+  run_row gemini-cli gemini gemini-3.8-flash none
   run_row grok grok grok-4.6 none
-  run_row cursor-agent cursor-agent cursor-auto none
+  run_row cursor-agent cursor cursor-auto none
   run_row pi pi deepseek-v4.1-flash none
   run_row antigravity antigravity gemini-3.8-flash none
   python3 - "$WORK/rows/native.json" <<'PY'
@@ -221,6 +235,7 @@ run_step "runner image: which real CLIs it ships" main step_real_clis
 run_step "enroll: runner online with the stand-in CLIs; every provider the harnesses need enabled" main step_enroll_harness
 run_step "bot: active on the computer with the chrome tool" "runner online" step_bot_harness
 run_step "practice: the bot's account signed up, two-step sign-in on" "bot" step_practice_account
+run_step "keys: the bot is granted the xAI and OpenRouter keys" "bot" step_api_keys
 run_step "login: the bot opens a card; the person saves a password and a 2FA secret" "account, chrome tool" step_login
 run_step "status: the run's endpoint answers and Chrome runs" "login" step_status
 run_step "rows: one turn per harness, each through its own CLI" main rows
