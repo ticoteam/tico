@@ -1,0 +1,38 @@
+// Small line icons, drawn on a 16px grid in the current text colour.
+(() => {
+  const paths = {
+    back: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
+    down: '<path d="m4.5 6.5 3.5 3.5 3.5-3.5"/>',
+    up: '<path d="m4.5 10 3.5-3.5 3.5 3.5"/>',
+    right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
+    search: '<circle cx="7" cy="7" r="4.25"/><path d="m10.2 10.2 3.3 3.3"/>',
+    copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.6V3.3A1.8 1.8 0 0 0 8.7 1.5H3.3a1.8 1.8 0 0 0-1.8 1.8v5.4a1.8 1.8 0 0 0 1.8 1.8h.3"/>',
+    minimize: '<path d="M3.5 8h9"/>',
+    close: '<path d="m4 4 8 8M12 4l-8 8"/>',
+    trash: '<path d="M2.75 4.25h10.5M6.25 4.25V2.75h3.5v1.5M4 4.25l.6 8.1a1.5 1.5 0 0 0 1.5 1.4h3.8a1.5 1.5 0 0 0 1.5-1.4l.6-8.1"/>',
+    send: '<path d="M14 2 7 9M14 2l-4.5 12-2.5-5-5-2.5z"/>',
+    arrowUp: '<path d="M8 13V3.5M4 7.5l4-4 4 4"/>',
+    check: '<path d="m3.5 8.5 3 3 6-7"/>',
+    external: '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/>',
+    people: '<circle cx="6" cy="5.5" r="2.5"/><path d="M1.75 13.5c.4-2.3 2.1-3.75 4.25-3.75s3.85 1.45 4.25 3.75"/><path d="M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 9.9c1.2.5 2 1.7 2.25 3.6"/>',
+    person: '<circle cx="8" cy="5.5" r="2.75"/><path d="M2.75 14c.5-2.6 2.6-4.25 5.25-4.25s4.75 1.65 5.25 4.25"/>',
+    bot: '<rect x="2.5" y="5" width="11" height="8.5" rx="2.5"/><path d="M8 5V2.5"/><circle cx="8" cy="2.25" r=".6" fill="currentColor"/><circle cx="5.75" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="10.25" cy="9" r=".9" fill="currentColor" stroke="none"/>',
+    lock: '<rect x="3" y="7" width="10" height="7" rx="1.8"/><path d="M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2"/>',
+    globe: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.7 1.8 2.5 3.8 2.5 6s-.8 4.2-2.5 6c-1.7-1.8-2.5-3.8-2.5-6S6.3 3.8 8 2"/>',
+    gear: '<path d="M6.9 1.75h2.2l.35 1.6c.45.17.86.41 1.23.71l1.56-.5 1.1 1.9-1.21 1.1a4.4 4.4 0 0 1 0 1.42l1.21 1.1-1.1 1.9-1.56-.5c-.37.3-.78.54-1.23.71l-.35 1.6H6.9l-.35-1.6a4.4 4.4 0 0 1-1.23-.71l-1.56.5-1.1-1.9 1.21-1.1a4.4 4.4 0 0 1 0-1.42L2.66 5.46l1.1-1.9 1.56.5c.37-.3.78-.54 1.23-.71z"/><circle cx="8" cy="8" r="1.9"/>',
+    wave: '<path d="M2.5 6.5v3M5.25 4v8M8 2.5v11M10.75 5v6M13.5 6.75v2.5"/>',
+    mic: '<rect x="5.75" y="1.75" width="4.5" height="8" rx="2.25"/><path d="M3.5 7.75a4.5 4.5 0 0 0 9 0M8 12.25v2"/>',
+    speaker: '<path d="M2.5 6h2.25L8 3v10L4.75 10H2.5z"/><path d="M10.75 5.75a3 3 0 0 1 0 4.5M12.5 4a5.5 5.5 0 0 1 0 8"/>',
+    plus: '<path d="M8 3v10M3 8h10"/>',
+    more: '<circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none"/>',
+    transcript: '<path d="M2.75 4.25h10.5M2.75 8h10.5M2.75 11.75h6.5"/>',
+    chat: '<path d="M2.5 7.6c0-2.8 2.5-4.85 5.5-4.85s5.5 2.05 5.5 4.85-2.5 4.85-5.5 4.85c-.75 0-1.45-.1-2.1-.33L3 13.25l.75-2.3A4.6 4.6 0 0 1 2.5 7.6z"/>',
+    alert: '<circle cx="8" cy="8" r="6"/><path d="M8 4.75v3.75"/><circle cx="8" cy="11" r=".5" fill="currentColor"/>',
+    retry: '<path d="M13 8a5 5 0 1 1-1.5-3.55M13 2.75V5.5h-2.75"/>',
+    calendar: '<rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2"/><path d="M2.25 6.75h11.5M5.25 1.75v3M10.75 1.75v3"/>',
+    flag: '<path d="M3.5 14V2.5M3.5 3h8l-1.5 3 1.5 3h-8"/>',
+    import: '<path d="M8 2v8M4.75 7 8 10.25 11.25 7M2.75 12v1.25h10.5V12"/>',
+  };
+  window.icon = (name, size = 16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
+})();
