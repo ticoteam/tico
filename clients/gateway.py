@@ -378,3 +378,27 @@ def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=Non
     return 200, {"url": str(payload.get("url") or page)[:2000], "title": str(payload.get("title") or "")[:300],
                  "content": str(payload.get("content") or "")[:250000],
                  "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+
+
+# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+RELAY_LIMIT = 30 * 1024 * 1024
+
+
+def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
+    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
+    `safe_base` allows it, and never through a redirect."""
+    try:
+        safe_base(url)
+        request = urllib.request.Request(url, data=body, method=method, headers={
+            **(headers or {}), "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {})})
+        with _send(request, timeout=timeout) as response:
+            return response.status, response.read(RELAY_LIMIT)
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read(RELAY_LIMIT)
+        except OSError:
+            return exc.code, b""
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b""
