@@ -2316,7 +2316,8 @@ def files_list(api, args):
 
 @tool("hub_file_publish", "Publish a file you created or changed so people can open it from your page: "
       "a report, a draft, a spreadsheet. Send its text, or content_base64 for a binary file (up to about 1.4 MB "
-      "here; `hub file publish <path>` sends up to 25 MB). Publishing the same name again adds a version. "
+      "here; `hub file publish <path>` sends up to 25 MB, and video or audio up to the server limit). "
+      "Publishing the same name again adds a version. "
       "Documents, images, csv, json, md, html, pdf and office files only; never credentials.",
       {"name": _s("File name with its extension, e.g. 2026-09-15-pipeline-review.md"),
        "text": _s("The file's text"), "content_base64": _s("The bytes, base64-encoded, for anything not text"),
@@ -2361,11 +2362,33 @@ def files_import(api, args):
         return {"refused": "import", "detail": "Run `hub file import` on the bot's computer; Tico never "
                 "reads your buckets with its own credentials."}
     try:
+        key = BF.parse_s3(args["uri"])[1]
+        if BF.is_media(key.rsplit("/", 1)[-1]):
+            return _import_media(api, args)
         name, _, data, etag = BF.fetch_s3(args["uri"], client=args.get("_s3"))
     except BF.Refused as exc:
         return {"refused": "import", "detail": str(exc)}
     query = {"source": args["uri"], "etag": etag, "name": name, **_files_fields(args, "title", "task")}
     return api.request("POST", "/api/v2/files/imports?" + BF.urlencode(query), raw=data, key=_key(args))
+
+
+def _import_media(api, args):
+    """A video or audio object is copied to a file and sent from it, never held in memory (BF.fetch_s3_file)."""
+    import tempfile
+    from clients import bot_files as BF
+    with tempfile.TemporaryDirectory(prefix="tico-import-") as work:
+        name, _, path, etag = BF.fetch_s3_file(args["uri"], work, client=args.get("_s3"))
+        BF.check_media(path, name)
+        if path.stat().st_size > BF.MAX_BYTES and not api.features().get("file_media_stream"):
+            raise BF.Refused(OLD_SERVER_MEDIA)
+        query = {"source": args["uri"], "etag": etag, "name": name, **_files_fields(args, "title", "task")}
+        with path.open("rb") as stream:
+            return api.request("POST", "/api/v2/files/imports?" + BF.urlencode(query), raw=stream, key=_key(args))
+
+
+# What an older server answers for a video or audio file over 25 MB: it takes those only as bytes up to 25 MB.
+OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. Ask for a Tico update to send larger "
+                    "video or audio files.")
 
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
@@ -2454,14 +2477,27 @@ def files_delete(api, args):
 def files_publish_path(client, args):
     """`hub file publish <path>`: the CLI reads the file (inside this checkout only) and sends the bytes."""
     from clients import bot_files as BF
+    root = BF.checkout_root()
     try:
-        name, _, data, relative = BF.read_local(BF.checkout_root(), args["path"])
+        path, relative = BF.local_file(root, args["path"])
+        name, _ = BF.check_name(path.name)
+        # Video or audio over 25 MB streams from the file, never read whole; a server that cannot take it is refused.
+        streamed = BF.is_media(name) and path.stat().st_size > BF.MAX_BYTES
+        if streamed:
+            if not client.features().get("file_media_stream"):
+                raise BF.Refused(OLD_SERVER_MEDIA)
+            BF.check_media(path, name)
+        else:
+            name, _, data, relative = BF.read_local(root, args["path"])
     except BF.Refused as exc:
         return {"refused": "file", "detail": str(exc)}
     query = {"name": name, "path": relative, **_files_fields(args, "title", "task", "scope")}
-    commit = BF.pushed_commit(BF.checkout_root(), relative)
+    commit = BF.pushed_commit(root, relative)
     if commit:
         query["commit"] = commit
+    if streamed:
+        with path.open("rb") as stream:
+            return client.request("POST", "/api/v2/files/uploads?" + BF.urlencode(query), raw=stream, key=_key(args))
     return client.request("POST", "/api/v2/files/uploads?" + BF.urlencode(query), raw=data, key=_key(args))
 
 

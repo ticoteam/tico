@@ -82,7 +82,12 @@ files:
 ```
 
 Documents, images, video, audio, csv, tsv, json, yaml, md, html, pdf and office files can be published.
-Automatic file publishing keeps its 25 MiB cap. Task attachments use the server upload limit
+Every kind but video and audio is capped at 25 MB. `hub file publish` and `hub file import` take video and audio up to
+the server's upload limit (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default). They stream from disk with a raw body and a
+Content-Length, never as base64, and the server hashes the bytes as they arrive. A video or audio file must start with
+the container its extension names, or it is refused. Older servers do not advertise `features.file_media_stream`: they
+take video and audio only up to 25 MB, and the client refuses a larger one before it reads it.
+Automatic file publishing (the runner's) keeps its 25 MiB cap. Task attachments use the server upload limit
 (2 GiB by default; 10 MB on older servers).
 A `.env`, anything with a credential-like name, a symbolic link, a file with more than one hard link, and any path that resolves outside
 the checkout is refused. Uploads go through a durable outbox in the runner's own state with an

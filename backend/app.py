@@ -57,6 +57,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
+from .files import raw_media
 from clients import gateway as gateway_client
 from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
@@ -655,9 +656,11 @@ def create_app(settings=None):
                             and request.state.identity.role == "runner")
                 memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
                                  and request.state.identity.role == "runner")
-                streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
+                # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
+                media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
+                streamed = media_raw or bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -1470,7 +1473,7 @@ def create_app(settings=None):
         """Everything a client needs to name this environment and reach its runner."""
         from .onboarding import config_view
         with store.read_transaction() as c:
-            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True}}
+            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True, "file_media_stream": True}}
 
     def updater_only(who, what):
         """The owner, or an `update` service key (backend/service_keys.py) held by a release bot on another install."""
