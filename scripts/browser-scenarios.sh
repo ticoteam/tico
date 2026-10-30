@@ -104,7 +104,10 @@ sc_phone() {
 sc_proxy() {
   browser_phase proxy "EXPECT_TZ=$ZONE" "EXPECT_LANG=$LOCALE" || return 1
   dc logs --no-log-prefix proxy 2>/dev/null | grep -Eq '^(GET|CONNECT) login\.practice\.test '
-  verdict "proxy: the proxy logged the practice site's host" $?
+  local rc=$?
+  # The proxy's lines about the practice site, when the check fails: the page loaded, so these say how it was reached.
+  [ "$rc" = 0 ] || { say "proxy log, last lines (hosts only):"; dc logs --no-log-prefix proxy 2>/dev/null | tail -n 12 | sed 's/^/    /'; }
+  verdict "proxy: the proxy logged the practice site's host" "$rc"
 }
 
 sc_fingerprint() { browser_phase fingerprint; }
@@ -168,10 +171,37 @@ if session is not None:
 }
 
 # Scenario 5: Chrome is killed by its exact PID; the runner starts it again with the same profile.
+# The cookies the profile's database holds, in all of them: Chrome writes cookies on a timer, so a kill soon after a sign-in
+# can find none on disk. Read plainly, not immutable, so a commit in progress is seen.
+cookie_rows() {
+  docker exec -i -e BOT="$BOT" "$RUNNER" python3 -I - <<'PY' 2>/dev/null
+import glob, os, sqlite3
+p = os.path.join("/home/runner/browsers", os.environ["BOT"], "profile", "Default")
+n = 0
+for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
+    try:
+        c = sqlite3.connect(db, timeout=5)
+        n += c.execute("SELECT count(*) FROM cookies").fetchone()[0]
+        c.close()
+    except sqlite3.Error:
+        pass
+print(n)
+PY
+}
+
 sc_crash() {  # the round, for the log
-  local pid killed signed gap
+  local pid killed signed gap rows waited=0
   say "profile before the kill, round ${1:-1}:"
   profile_facts
+  # The round waits up to 90 seconds for the first cookie on disk, then kills; the wait is part of the log.
+  while :; do
+    rows="$(cookie_rows)"
+    [ "${rows:-0}" -gt 0 ] 2>/dev/null && break
+    [ "$waited" -ge 90 ] && break
+    sleep 3
+    waited=$((waited + 3))
+  done
+  say "round ${1:-1}: cookies on disk before the kill: ${rows:-0}, after ${waited}s of waiting"
   pid="$(chrome_pid)" || { say "no Chrome for $BOT is running under its profile lock"; return 1; }
   killed="$(python3 -c 'import time; print(f"{time.time():.3f}")')"
   docker exec "$RUNNER" sh -c "kill -KILL $pid" || { say "Chrome $pid could not be killed"; return 1; }

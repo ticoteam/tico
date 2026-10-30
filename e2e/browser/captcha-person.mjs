@@ -13,7 +13,8 @@ const [base, computer] = process.argv.slice(2);
 const token = readFileSync(process.env.TOKEN_FILE, 'utf8').trim();
 const HOLD_MS = 3500;   // the check asks for three seconds
 const checks = [];
-const check = (name, ok, detail = '') => checks.push({name, ok: Boolean(ok), detail: String(detail).slice(0, 240)});
+// A failed click's log is long; the first lines of it name what blocked the click.
+const check = (name, ok, detail = '') => checks.push({name, ok: Boolean(ok), detail: String(detail).slice(0, 900)});
 
 const browser = await chromium.launch({args: ['--no-sandbox']});
 try {
@@ -24,7 +25,16 @@ try {
   const page = await context.newPage();
   await page.goto(`${base}/tico/ui/#/computers/${encodeURIComponent(computer)}/screen`, {waitUntil: 'load', timeout: 60000});
   await page.waitForSelector('#scr', {timeout: 30000});
-  await page.locator('[data-scr-control="1"]').first().click({timeout: 15000});
+  // What sits at the Control button's centre: a click that never lands is an overlay or a button that moved.
+  const control = page.locator('[data-scr-control="1"]').first();
+  await control.waitFor({state: 'visible', timeout: 30000});
+  const where = await control.evaluate(el => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return `box ${[r.x, r.y, r.width, r.height].map(Math.round).join(',')} at ${innerWidth}px; hit ${hit ? hit.tagName + (hit.id ? '#' + hit.id : '') + (hit.className && typeof hit.className === 'string' ? '.' + hit.className.split(' ')[0] : '') : 'none'}`;
+  });
+  check('the control is visible and at the centre', true, where);
+  await control.click({timeout: 15000});
   const canvas = page.locator('#scr-target canvas').first();
   await canvas.waitFor({timeout: 30000});
   const box = await canvas.boundingBox();
