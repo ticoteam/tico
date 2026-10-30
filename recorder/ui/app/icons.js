@@ -31,6 +31,7 @@
     retry: '<path d="M13 8a5 5 0 1 1-1.5-3.55M13 2.75V5.5h-2.75"/>',
     calendar: '<rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2"/><path d="M2.25 6.75h11.5M5.25 1.75v3M10.75 1.75v3"/>',
     flag: '<path d="M3.5 14V2.5M3.5 3h8l-1.5 3 1.5 3h-8"/>',
+    clock: '<circle cx="8" cy="8" r="6"/><path d="M8 4.75V8l2.25 1.5"/>',
     import: '<path d="M8 2v8M4.75 7 8 10.25 11.25 7M2.75 12v1.25h10.5V12"/>',
   };
   window.icon = (name, size = 16) =>

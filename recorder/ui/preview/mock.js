@@ -122,6 +122,9 @@
   const status = {
     busy: false, demo: false, error: '', message: '', signing_in: false, connect: null, first_run: false,
     suggested: '', recording: null, meeting: null, sending: null,
+    // Speech through the signed-in Tico; `none` before sign-in without keys of your own.
+    speech: { source: 'tico', stream: true, transcribe: true, tico: 'Acme' },
+    update: { state: 'none', version: '', notes: '', blocked: '' },
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true },
@@ -160,6 +163,14 @@
       replying: ['Head of Engineering'],
     },
   });
+  // Bot-turn notices (`live.notices`), newest last: waits, a turn put off, an empty reply asked again, a failure.
+  const at = (minutesAgo) => now - minutesAgo * 60000;
+  const liveNotices = [
+    { id: 'n1', kind: 'waiting', bot: 'Librarian', text: 'Librarian is waiting for its computer to update before it can reply.', at: at(8.8) },
+    { id: 'n2', kind: 'deferred', bot: 'Head of Engineering', text: 'Head of Engineering will reply after the answer it is giving.', at: at(4.45) },
+    { id: 'n3', kind: 'retried', bot: 'Head of Engineering', text: 'Empty reply, asked again.', at: at(4.42) },
+    { id: 'n4', kind: 'failed', bot: 'Marketing Lead', text: "Marketing Lead couldn't make a private copy of its repository, so it can't reply in this meeting.", at: at(1) },
+  ];
   // Live text while recording: finished turns, streamed far-end speakers (S1, S2), and a partial tail.
   const liveTurns = [
     { speaker: 'Me', me: true, start_ms: 2000, paragraphs: ['Thanks for joining. Quick one today: the streaming rollout.'], streamed: false },
@@ -196,12 +207,12 @@
   const scenes = {
     library: () => { state.status.demo = false; },
     empty: () => {
-      Object.assign(state.status, { first_run: true, suggested: '' });
+      Object.assign(state.status, { first_run: true, suggested: '', speech: { source: 'none', stream: false, transcribe: false, tico: '' } });
       state.library = { rows: [], events: [], calendar_stale: false, connected: false };
       state.settings = { ...settings, connections: [], calendar: false, calendar_available: false, key_saved: false, xai_saved: false, streaming: false };
     },
     signing: () => {
-      Object.assign(state.status, { first_run: true, signing_in: true, busy: true });
+      Object.assign(state.status, { first_run: true, signing_in: true, busy: true, speech: { source: 'none', stream: false, transcribe: false, tico: '' } });
       state.status.suggested = 'tico.example.com';
       state.library = { rows: [], events: [], calendar_stale: false, connected: false };
     },
@@ -259,6 +270,31 @@
     // A meeting not in Tico yet: the first message would connect it, private to you.
     'chat-first': () => {},
     settings: () => {},
+    // Own providers: the key fields show.
+    'settings-own': () => { state.status.speech = { source: 'own', stream: true, transcribe: true, tico: 'Acme' }; },
+    // This Tico transcribes but has no live text yet.
+    'settings-nostream': () => { state.status.speech = { source: 'tico', stream: false, transcribe: true, tico: 'Acme' }; },
+    // The live meeting with bot-turn notices between the messages.
+    notices: () => {
+      scenes.live();
+      state.meetings.m2.live_notices = clone(liveNotices);
+    },
+    // An update waiting for the recording to end (update.js draws the banner).
+    update: () => {
+      scenes.recording();
+      state.status.update = { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording' };
+    },
+    'update-error': () => { state.status.update = { state: 'error', version: '0.6.0', notes: '', blocked: '' }; },
+    // Long names and titles everywhere they show.
+    long: () => {
+      scenes.live();
+      const m = state.meetings.m2;
+      m.title = 'Quarterly planning with the platform, infrastructure and developer experience teams (EMEA + Americas)';
+      m.actions.items[1].owner_name = 'Head of Engineering, Platform and Developer Experience';
+      m.chat.messages[1].name = 'Librarian for the Engineering Knowledge Base and Docs';
+      m.people.rows.push({ kind: 'person', name: 'Maria-Fernanda Gonçalves de Albuquerque', local: true });
+      state.library.rows[0].title = 'A very long recording title that keeps going past the edge of the window to check truncation';
+    },
     // People being added: one on its way, and the reason the last one was refused.
     adding: () => {
       scenes.live();
@@ -399,8 +435,9 @@
     },
     set_chat_private: ({ private: value }) => { open().chat.private = value; },
     save_settings: ({ form }) => {
-      const { key, xai_key, ...rest } = form;
+      const { key, xai_key, speech_source, ...rest } = form;
       Object.assign(state.settings, rest);
+      if (speech_source) state.status.speech = { ...state.status.speech, source: speech_source };
       if (key) state.settings.key_saved = true;
       if (xai_key) state.settings.xai_saved = true;
       toast('Settings saved');

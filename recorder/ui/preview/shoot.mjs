@@ -35,6 +35,7 @@ const transcript = async (page) => {
   await page.click('[data-act="toggle-transcript"]');
   await page.waitForSelector('#tbody > *');
 };
+const toChat = async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }));
 const scenes = {
   library: [],
   empty: [],
@@ -89,9 +90,16 @@ const scenes = {
     await page.keyboard.press('Enter');
   }],
   settings: [async (page) => page.click('[data-act="settings"]')],
+  'settings-own': [async (page) => page.click('[data-act="settings"]')],
+  'settings-nostream': [async (page) => page.click('[data-act="settings"]')],
+  notices: [open('m2'), toChat],
+  long: [open('m2')],
+  'long-library': ['long'],
+  'long-chat': ['long', open('m2'), toChat],
+  'long-people': ['long', open('m2'), async (page) => page.click('.people-btn')],
   sources: [async (page) => page.click('.caret')],
 };
-const sizes = [[1040, 690], [760, 490]];
+const sizes = [[1040, 690], [760, 490], [640, 460]];
 const themes = ['light', 'dark'];
 const only = process.argv.slice(2);
 const browser = await webkit.launch();
@@ -259,6 +267,32 @@ if (!only.length || only.includes('checks')) {
   await people.waitForSelector('.topbar .sending:has-text("Finishing…")');
   await people.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 4000 });
   if (await people.locator('[data-act="finish"]').count()) errors.push('send: Finish meeting still offered after sending');
+
+  // Bot-turn notices sit between the messages in time order; only the failed one is in the warning tone.
+  await people.goto(`${base}?scene=notices`);
+  await people.waitForSelector('.row');
+  await open('m2')(people);
+  const notices = await people.locator('#chat > *').evaluateAll((rows) => rows.map((row) => row.className.includes('chat-notice') ? (row.className.includes('failed') ? 'F' : 'N') : row.className.includes('msg') ? 'm' : ''));
+  if (notices.filter(Boolean).join('') !== 'mNmmmmNNmmFm') errors.push(`notices: order ${notices.join('')}`);
+
+  // Speech: Your Tico hides the key fields; Own keys shows them and makes the form savable.
+  await people.goto(`${base}?scene=settings`);
+  await people.waitForSelector('.row');
+  await people.click('[data-act="settings"]');
+  if (await people.locator('[data-model="key"]').count()) errors.push('speech: key field shown under Your Tico');
+  await people.click('[data-act="speech-source"][data-source="own"]');
+  if (!(await people.locator('[data-model="key"]').count())) errors.push('speech: no key field under Own keys');
+  if (await people.locator('[data-act="save-settings"]').isDisabled()) errors.push('speech: switching source left Save off');
+  await people.click('[data-act="save-settings"]');
+  await people.waitForTimeout(400);
+  if ((await people.evaluate(() => window.__PREVIEW__.state.status.speech.source)) !== 'own') errors.push('speech: source not saved');
+
+  // Library rows open from the keyboard.
+  await people.goto(`${base}?scene=library`);
+  await people.waitForSelector('.row');
+  await people.focus('.row[data-id="m1"]');
+  await people.keyboard.press('Enter');
+  await people.waitForSelector('.title-input', { timeout: 1000 }).catch(() => errors.push('keyboard: Enter on a row did not open it'));
 }
 await browser.close();
 server.close();
