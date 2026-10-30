@@ -35,6 +35,7 @@ class FakeSystem:
         self.release = "v1.2.3"
         self.hosts = {}                    # host -> slug, for a host that is not <slug>.<anything>
         self.unpublished = set()           # tags GitHub has no release for; None: GitHub does not answer
+        self.probes = []                   # (host, port) of each health probe
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -70,9 +71,10 @@ class FakeSystem:
                 self.ps.pop(slug, None)
         return Result(0)
 
-    def http_status(self, host, path, timeout=3):
+    def http_status(self, host, path, timeout=3, port=cell.ROUTER_PORT):
         if host == cell.ROUTER_HEALTH_HOST:
             return 200
+        self.probes.append((host, port))
         slug = self.hosts.get(host) or host.split(".")[0]
         if self.ps.get(slug, ("",))[0] != "running":
             return 502
@@ -478,6 +480,27 @@ def test_edge_images_are_the_ones_compose_yaml_pins():
     assert cell.ROUTER_IMAGE in text and cell.TUNNEL_IMAGE in text
 
 
+def test_the_router_holds_requests_while_a_server_is_down():
+    text = cell.router_config([{"slug": "a", "domain": "a.tico.team", "port": 20000}])
+    site = text[text.index("http://a.tico.team:8080"):text.index("http://:8080")]
+    assert "lb_try_duration 30s" in site and "lb_try_interval 250ms" in site and "stream_close_delay 5m" in site
+    # what still fails is a plain 503 with Retry-After, never Caddy's 502
+    assert "handle_errors {" in site and "header Retry-After 5" in site and f'respond "{cell.HOLD_BODY}" 503' in site
+    assert "lb_retry_match" not in site      # a write that reached the server is never sent twice
+
+
+def test_a_sleeping_company_goes_to_the_wake_service_and_a_stopped_one_is_a_503():
+    text = cell.router_config([{"slug": "a", "domain": "a.tico.team", "port": 20000, "state": "sleeping",
+                                "aliases": ["a.example.com"]},
+                               {"slug": "b", "domain": "b.tico.team", "port": 20001, "state": "stopped"}])
+    a = text[text.index("http://a.tico.team:8080"):text.index("http://b.tico.team")]
+    assert a.startswith("http://a.tico.team:8080, http://a.example.com:8080 {")
+    assert "reverse_proxy 127.0.0.1:8082" in a and "header_up X-Tico-Cell-Wake a\n" in a and "20000" not in a
+    assert "lb_try_duration 30s" in a and "handle_errors" in a     # the hold covers the wake service's own restart
+    b = text[text.index("http://b.tico.team"):text.index("http://:8080")]
+    assert 'respond "This Tico company is stopped." 503' in b and "reverse_proxy" not in b
+
+
 # --- init ------------------------------------------------------------------------------------------------------
 
 def test_init_sets_up_the_host_once(host):
@@ -504,7 +527,8 @@ def test_init_sets_up_the_host_once(host):
     assert second["ok"] and second["changed"] == [] and second["tunnel"] is True
     # Only a look at whether the updater runs: nothing restarts or is reinstalled.
     assert [c for c in host.system.calls[n:] if c[0] == "systemctl"] == \
-        [["systemctl", "is-active", "--quiet", "tico-cell-updater.service"]]
+        [["systemctl", "is-active", "--quiet", "tico-cell-updater.service"],
+         ["systemctl", "is-active", "--quiet", "tico-cell-wake.service"]]
 
 
 def test_init_without_a_token_runs_only_the_router(host):
@@ -643,6 +667,78 @@ def test_updating_a_stopped_company_keeps_it_stopped(ready):
     assert answer["ok"] and answer["version"] == "v1.4.0" and answer["ready_ms"] == 0
     assert ready("status", "--company", "boatyard")["state"] == "stopped"
     assert ready("start", "--company", "boatyard")["version"] == "v1.4.0"
+
+
+def caddyfile(host):
+    return (host.root / "router" / "Caddyfile").read_text()
+
+
+def test_sleep_routes_to_the_wake_service_and_wake_routes_back(ready):
+    ready(*add_args(ready))
+    assert ready("sleep", "--company", "boatyard") == {"ok": True, "company": "boatyard", "state": "sleeping",
+                                                        "changed": True}
+    assert ready.system.ps["boatyard"][0] == "exited" and record(ready)["state"] == "sleeping"
+    assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready) and "127.0.0.1:20000" not in caddyfile(ready)
+    assert ready("sleep", "--company", "boatyard")["changed"] is False
+    ready.system.probes.clear()
+    status = ready("status", "--company", "boatyard")
+    assert status["state"] == "sleeping" and status["healthy"] is False
+    assert ready.system.probes == []                          # a probe through the router would wake it
+    assert ready("list")["companies"][0]["state"] == "sleeping"
+    woke = ready("wake", "--company", "boatyard")
+    assert woke["ok"] and woke["changed"] is True and record(ready)["state"] == "running"
+    assert ready.system.probes == [("boatyard.tico.team", 20000)]    # on its own port: the route still led to wake
+    assert "reverse_proxy 127.0.0.1:20000" in caddyfile(ready) and "8082" not in caddyfile(ready)
+    ready.system.probes.clear()
+    again = ready("wake", "--company", "boatyard")
+    assert again["ok"] and again["changed"] is False and ready.system.probes == [("boatyard.tico.team", 8080)]
+
+
+def test_stop_answers_503_and_start_routes_back(ready):
+    ready(*add_args(ready))
+    ready("stop", "--company", "boatyard")
+    assert 'respond "This Tico company is stopped." 503' in caddyfile(ready)
+    assert ready("wake", "--company", "boatyard")["error"] == "not_sleeping"     # staff stopped it: wake leaves it
+    assert ready.system.ps["boatyard"][0] == "exited"
+    ready("start", "--company", "boatyard")
+    assert "reverse_proxy 127.0.0.1:20000" in caddyfile(ready)
+    ready("sleep", "--company", "boatyard")
+    assert ready("start", "--company", "boatyard")["ok"] and "8082" not in caddyfile(ready)
+
+
+def test_a_wake_that_does_not_come_up_sleeps_again(ready):
+    ready(*add_args(ready))
+    ready("sleep", "--company", "boatyard")
+    ready.system.health["boatyard.tico.team"] = 500
+    answer = ready("wake", "--company", "boatyard", "--timeout", "2")
+    assert answer["error"] == "unhealthy" and "on its port 20000" in answer["detail"]
+    assert ready.system.ps["boatyard"][0] == "exited" and record(ready)["state"] == "sleeping"
+    assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
+
+
+def test_a_sleep_whose_stop_fails_keeps_the_company_as_it_was(ready):
+    ready(*add_args(ready))
+    ready.system.fail["stop server"] = Result(1, "", "cannot stop")
+    assert ready("sleep", "--company", "boatyard")["error"] == "stop_failed"
+    assert record(ready)["state"] == "running" and "reverse_proxy 127.0.0.1:20000" in caddyfile(ready)
+
+
+def test_updating_a_sleeping_company_keeps_it_asleep_and_its_wake_is_guarded(ready):
+    ready(*add_args(ready))
+    ready("sleep", "--company", "boatyard")
+    answer = ready("update", "--company", "boatyard", "--version", "v1.4.0")
+    assert answer["ok"] and answer["ready_ms"] == 0 and record(ready)["pending"]["from"] == "v1.2.3"
+    assert ready.system.ps["boatyard"][0] == "exited" and record(ready)["state"] == "sleeping"
+    woke = ready("wake", "--company", "boatyard")
+    assert woke["ok"] and woke["version"] == "v1.4.0" and "pending" not in record(ready)
+
+
+def test_init_installs_the_wake_service(host):
+    first = host("init", "--json")
+    unit = (host.etc / cell.WAKE_UNIT).read_text()
+    assert f"WorkingDirectory={ROOT}" in unit and f"-m setup.cell_wake --root {host.root}" in unit
+    assert "wake" in first["changed"]
+    assert ["systemctl", "restart", "--no-block", cell.WAKE_SERVICE] in host.system.calls
 
 
 # --- review fixes: remove, the metadata block, updates and locks ---------------------------------------------------
@@ -864,7 +960,7 @@ def test_a_failed_stop_or_snapshot_leaves_the_old_release_running(ready, monkeyp
     assert not (d / "snapshots").exists() or not any((d / "snapshots").iterdir())
 
 
-@pytest.mark.parametrize("argv", [["stop"], ["start"], ["update", "--version", "v1.3.0"]])
+@pytest.mark.parametrize("argv", [["stop"], ["start"], ["sleep"], ["wake"], ["update", "--version", "v1.3.0"]])
 def test_commands_read_the_record_once_they_hold_its_lock(ready, argv):
     ready(*add_args(ready))
     fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
@@ -1554,7 +1650,7 @@ def test_init_runs_the_updater_from_its_own_core(host):
     unit = (host.etc / cell.UPDATER_UNIT).read_text()
     assert f"WorkingDirectory={ROOT}" in unit and f"-m setup.cell_updater --root {host.root}" in unit
     assert "KillMode=mixed" in unit and "TimeoutStopSec=" in unit
-    host.system.fail["is-active"] = Result(3, "inactive")
+    host.system.fail["is-active --quiet tico-cell-updater"] = Result(3, "inactive")
     n = len(host.system.calls)
     assert host("init", "--json")["changed"] == ["updater"]          # stopped by hand: started again, not reinstalled
     assert ["systemctl", "start", "--no-block", cell.UPDATER_SERVICE] in host.system.calls[n:]

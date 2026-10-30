@@ -41,8 +41,8 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    `init` checks it is first (`iptables -S DOCKER-USER`), and `add` refuses to start a company when it is missing or
    not first.
 4. Starts the router and the tunnel in Compose project `tico-cell` (`/srv/tico-cell/edge.yaml`). The router is Caddy,
-   serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port, and
-   answers anything else with a 404. The tunnel sends `*.<domain>` to the router, and before that wildcard, every
+   serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port (or, for
+   a sleeping company, to the wake service), and answers anything else with a 404. The tunnel sends `*.<domain>` to the router, and before that wildcard, every
    company host it does not match (see [Moving an install in](#moving-an-install-in)). Both containers use the host's
    network and listen on loopback only. Both drop all Linux capabilities, set `no-new-privileges` and a read-only
    root filesystem. The router adds back only `NET_BIND_SERVICE` (Caddy's binary needs it to exec). The tunnel
@@ -52,6 +52,9 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 5. Installs and starts `tico-cell-updater.service`, the companies' updater ([Updates](#updates)), running
    `python3 -m setup.cell_updater` from this checkout. It is restarted only when its unit changes, which is when
    `init` runs from another checkout, and started if it is not running.
+6. Installs and starts `tico-cell-wake.service`, which starts a sleeping company on its first request
+   ([Sleep, wake and the hold](#sleep-wake-and-the-hold)), running `python3 -m setup.cell_wake` from this checkout on
+   `127.0.0.1:8082`. It is restarted and started the same way as the updater.
 
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
@@ -69,6 +72,8 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
+python3 -m setup cell sleep --company boatyard --json
+python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
 ```
@@ -92,6 +97,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `import_failed` | Unpacking the archive failed (for example, the disk is full). Nothing is left of it |
 | `not_initialized` | `init` has not run, or the metadata firewall rule is missing or not first |
 | `not_found` | No such company, or it was removed |
+| `not_sleeping` | `wake` on a company that staff stopped (`stop`); `start` starts it |
 | `busy` | Another command holds the lock too long |
 | `full` | All 4,000 slots are in use |
 | `use_update` | `add --version` names another release than the company runs; use `update` |
@@ -101,14 +107,14 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
 | `firewall_failed` | The metadata firewall rule could not be set |
-| `unhealthy` | `/healthz` did not answer through the router in time (the detail has the last log lines) |
+| `unhealthy` | `/healthz` did not answer through the router in time (`wake`: on the server's own port), and the detail has the last log lines |
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
-| `updater_failed` | `init` could not install or start the cell updater |
+| `updater_failed` | `init` could not install or start the cell updater or the wake service |
 | `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
 | `unsupported_host` | `init` was run somewhere other than the Linux host |
 | `internal` | A bug. The detail has the cause, with secrets masked |
 
-`add`, `start` and `update` answer like this:
+`add`, `start`, `wake` and `update` answer like this:
 
 ```json
 {"ok": true, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000, "ready_ms": 8400,
@@ -119,16 +125,20 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 `compose.yaml` does not pass to the server, so they do nothing) when given `--env-file`, and `"imported": true` with
 `"imported_bytes"` (the size of the files unpacked) when given `--import-data`.
 
-They return only once `/healthz` answers through the router. `ready_ms` is the time from the start of the command
+They return only once `/healthz` answers through the router (`wake`: on the server's own port, since the route
+changes only after that). `ready_ms` is the time from the start of the command
 until then. `changed` is false when nothing needed doing. The other commands answer like this:
 
 - `list`: `{"ok": true, "companies": [{"company", "url", "aliases", "port", "version", "memory", "state"}]}`.
-- `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now) and
-  `container` (`{"state", "health"}`).
+- `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now;
+  always false for a sleeping company, which is not probed, since a probe would wake it) and `container`
+  (`{"state", "health"}`).
 - `stop`: `{"ok": true, "company", "state": "stopped", "changed"}`.
+- `sleep`: `{"ok": true, "company", "state": "sleeping", "changed"}`.
 - `remove`: `{"ok": true, "company", "removed", "kept_data"}`. `removed` is false when there was nothing to remove.
 
-A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `missing` (no container) or `removed`.
+A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sleeping`, `missing` (no container) or
+`removed`.
 
 ### Rules
 
@@ -154,7 +164,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   waits until Docker says it is stopped, copies its database to `snapshots/` (the last two are kept), and only then
   points `.env` at the new release, with the update marked pending in `company.json`. If the stop or the copy fails,
   nothing changes and the old release is started again. A running company starts the new release at once. A stopped
-  company stays stopped, and its next `start` (or `add`) starts the new release. Either way, while the update is
+  company stays stopped, and its next `start` (or `add`) starts the new release; a sleeping one stays asleep, and its
+  next request (`wake`) starts it. Either way, while the update is
   pending, a release that does not answer `/healthz` is rolled back: the server is stopped (Docker must say so before
   the database files are touched), the database copy and the old release are put back, and the old release must
   answer `/healthz`. `update` back to the old release while an update is still pending is that same rollback.
@@ -165,6 +176,51 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   company stays marked `removed` with its slot, and running `remove` again finishes.
 - **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
   router config share a lock. A command reads a company's record only once it holds that company's lock.
+
+## Sleep, wake and the hold
+
+People and senders (webhooks, mail, runners) never get a 502 from the router while a company's server is down for a
+moment or asleep.
+
+- **The hold.** Each company's route retries a dial that fails (nothing listens on its port: the server is starting,
+  restarting or updating) every 250 ms for up to 30 s (`lb_try_duration`, `lb_try_interval`), so the request waits
+  and gets the server's real answer. Only a failed dial is retried for every method, since nothing reached the server;
+  an error after the connection opened is retried for `GET` only, so a write is never sent twice. What still fails is
+  answered with a plain `503` and `Retry-After: 5` ("Tico is starting. Try again in a few seconds."), never a 502
+  page. Once a request reaches the server there is no time limit: long answers, SSE (`/api/v2/events`) and
+  WebSockets work as before. A router reload (every `add`, `remove`, `stop`, `start`, `sleep` and `wake`) leaves open
+  WebSockets 5 minutes before it closes them.
+- **Sleep.** `sleep` points the company's hosts at the wake service, then stops its server (Docker must say it is
+  stopped). The record's state is `sleeping`. If the stop fails, the company is left as it was. When to sleep a
+  company (idle rules) is up to the caller.
+- **Wake.** The wake service (`tico-cell-wake.service`, `setup/cell_wake.py`) listens on `127.0.0.1:8082`. The
+  router reaches it for a sleeping company's hosts only, and the route itself names the company in a header
+  (`X-Tico-Cell-Wake`; a copy the visitor sent is replaced). The service also checks that the request's `Host` is one
+  of that company's own hosts, so a request never chooses which company starts. It holds the request, runs `wake`
+  for that company (one start, however many requests arrive), then sends the request on to the server as it came
+  (method, headers and body, streamed both ways) and returns the server's real answer. `wake` takes the company's
+  lock, starts the server the same way `start` does (a pending update is finished or rolled back there too), waits
+  for `/healthz` on the server's own port, then marks the company `running` and reloads the router, so later
+  requests go straight to the server. Staff can run `wake` by hand too.
+- **What the wake service answers itself.** All of these are short plain-text answers, never a 502 page:
+  - A wake that fails, or does not finish within 30 s: `503` with `Retry-After: 5`. A start that does not come up is
+    stopped again, so the company stays asleep. For 10 s after a failed wake, requests get the 503 at once, so a flood
+    is not a start loop. A start that is still running when its request gives up carries on, and later requests use
+    it.
+  - `GET` or `HEAD /healthz`: `503`, and the company is not woken. Cell stats and monitors probe every company, and a
+    probe must not undo a sleep.
+  - A WebSocket upgrade wakes the company, then gets `503` with `Retry-After: 1`. The client's reconnect goes straight
+    to the server.
+  - Caps: at most 512 connections at once, 256 requests waiting for a wake in all and 64 for one company. Past a cap,
+    `503` at once. A body is streamed, never stored, and refused with `413` when it is larger than the server accepts
+    (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default, plus 11 MB).
+- **Stopped is not asleep.** A company staff stopped (`stop`) is answered `503` at once ("This Tico company is
+  stopped."), and nothing wakes it. `start` routes it back to its server.
+- **Stopping a server is quick.** On `docker stop` (a restart, an update, `sleep`), the server's entry point gives the
+  server 1 s to finish what it is answering (`TICO_STOP_GRACE` in the image), then kills it. Only then does it stop
+  Litestream, so Litestream's last sync covers every write (at most 5 s, `shutdown-sync-timeout`) and its local state
+  is current for the next start. Before, the server's own shutdown outlasted Docker's 10 s stop timeout, and the
+  SIGKILL that followed also cut off Litestream's last sync.
 
 ## Moving an install in
 
@@ -279,6 +335,7 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
+| `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
