@@ -321,10 +321,6 @@ step_bot() {
   fi
   revision="$(japi GET /api/v2/bots | pick "[b for b in d if b[\"slug\"] == \"$BOT\"][0][\"revision\"]")" || return 1
   send POST "/api/v2/bots/$BOT/definition" "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
-  # A starter bot begins in onboarding, which takes chat but no tasks; the owner marks it complete, as the app's button does.
-  if [ "$(japi GET "/api/v2/bots/$BOT" | pick 'd.get("stage", "")')" = onboarding ]; then
-    send POST "/api/v2/bots/$BOT/onboarded" '{}' >/dev/null || { say "the owner could not mark onboarding complete"; return 1; }
-  fi
   retry 300 bot_ready || { say "the bot never became ready on the computer"; return 1; }
   attach_chrome_tool || { say "the chrome tool could not be added to the bot"; return 1; }
   verdict "bot: $BOT is active on the computer with the chrome tool" 0
@@ -372,6 +368,7 @@ try:
     print("prefs:", " ".join(re.findall(r'"(?:restore_on_startup|exit_type|exited_cleanly)":(?:"[A-Za-z]*"|[0-9a-z]+)', text)) or "none of them")
 except OSError as e:
     print("prefs:", e)
+print("files:", " ".join(sorted(os.listdir(p))) if os.path.isdir(p) else "no Default folder")
 for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
     try:
         c = sqlite3.connect("file:%s?mode=ro&immutable=1" % db, uri=True)

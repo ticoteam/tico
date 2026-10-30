@@ -518,6 +518,7 @@ async fn run_once(bot: &Arc<Bot>, paths: &Paths) -> Result<Duration, String> {
     bot.browser.send_replace(None);
     if stopped {
         close(&mut launched).await;
+        log(&format!("Tico runner: {}: Chrome closed", bot.name));
     } else {
         let _ = launched.child.start_kill();
         let status = launched.child.wait().await.map(|s| s.to_string()).unwrap_or_default();
@@ -560,12 +561,29 @@ async fn shutdown_signal() {
     let _ = rx.wait_for(|s| *s).await;
 }
 
+/// On a stop signal: close at once the browsers no run holds. Chrome writes cookies and preferences only now and then,
+/// so one killed when the container's stop grace runs out loses a fresh sign-in; a clean close saves it. Browsers that
+/// runs hold close in `shutdown`, once those runs end.
+pub fn close_idle() {
+    let idle: Vec<Arc<Bot>> = shared().bots.lock().unwrap().values()
+        .filter(|b| b.turns.lock().unwrap().is_empty() && !b.stopping.load(Ordering::SeqCst)).cloned().collect();
+    if idle.is_empty() {
+        return;
+    }
+    log(&format!("Tico runner: closing {} idle bot browser(s) for the stop", idle.len()));
+    for b in idle {
+        b.stopping.store(true, Ordering::SeqCst);
+        b.stop.notify_one();
+    }
+}
+
 /// Close every bot's Chrome (cleanly, so profiles are saved) before the runner exits.
 pub async fn shutdown() {
     let bots: Vec<Arc<Bot>> = shared().bots.lock().unwrap().values().cloned().collect();
     if bots.is_empty() {
         return;
     }
+    log(&format!("Tico runner: closing {} bot browser(s) before exiting", bots.len()));
     for b in &bots {
         b.stopping.store(true, Ordering::SeqCst);
         b.stop.notify_one();
