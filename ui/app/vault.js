@@ -65,10 +65,12 @@ async function vaultReveal(id) {
     dialog.appendChild(copy); VAULT_REVEAL_TIMER = setTimeout(vaultClose,60000);
   } catch(error) { if(dialog.open && generation === VAULT_DIALOG_GENERATION) dialog.querySelector('p').textContent=error.message; }
 }
-// A login's sites as the server keeps them: lowercase hostnames, no scheme, port or path.
+// A login's sites as the server keeps them: lowercase hostnames, no port or path; one written http:// keeps it (the
+// browser may then fill it on plain-http pages).
 function vaultSites(text) {
   const hosts = String(text || '').split(/[\s,]+/).filter(Boolean).map(part => {
-    try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(part) ? part : 'https://' + part).hostname.toLowerCase(); }
+    const plain = /^http:\/\//i.test(part);
+    try { const host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(part) ? part : 'https://' + part).hostname.toLowerCase(); return plain ? 'http://' + host : host; }
     catch { return part.toLowerCase(); }
   });
   return [...new Set(hosts)];

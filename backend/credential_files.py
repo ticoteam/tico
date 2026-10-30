@@ -118,8 +118,10 @@ def _add(rows, errors, number, name, username, password, totp, sites):
 
 
 def _hosts(uris):
-    """The hostnames of web addresses, in the order given. An address without a scheme is read as https; an app's
-    own scheme (androidapp://, for one) names no website and is left out."""
+    """The hostnames of web addresses, in the order given. An address without a scheme is read as https, and so is an
+    http one: an export's http address is usually stale for a site now on https, and letting a login fill plain-http
+    pages is chosen in Credentials (credentials.clean_sites). An app's own scheme (androidapp://, for one) names no
+    website and is left out."""
     found = []
     for uri in uris:
         text = _text(uri).strip()

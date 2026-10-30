@@ -55,14 +55,20 @@ def refuse_reserved(env, stored=''):
                       "(names starting TICO_, DYLD_ or LD_ are reserved)", 422)
 
 
+HTTP = 'http://'
+
+
 def clean_sites(values):
-    """A login's sites as stored: lowercase hostnames, no scheme, port or path, in order, once each. A full address is
-    taken for its hostname; anything that is not a hostname is refused."""
+    """A login's sites as stored: lowercase hostnames, no port or path, in order, once each. A full address is taken for
+    its hostname. One written `http://host` keeps that scheme: the owner's say that the browser may fill the login on the
+    site's plain-http pages, which it otherwise refuses off this machine (runner-rs/src/browser/fill.rs). Anything that
+    is not a hostname is refused."""
     out = []
     for value in values or ():
         text = str(value or '').strip().lower()
         if not text:
             continue
+        plain = text.startswith(HTTP)
         try:
             host = (urlsplit(text if '://' in text else '//' + text).hostname or '').strip('.')
             host = host.encode('idna').decode('ascii') if host and not host.isascii() else host
@@ -70,17 +76,23 @@ def clean_sites(values):
             host = ''
         if not _HOST.match(host):
             raise Problem('sites', 'A site is a hostname like acme.example', 422)
-        if host not in out:
-            out.append(host)
+        entry = HTTP + host if plain else host
+        if entry not in out:
+            out.append(entry)
     if len(out) > MAX_SITES:
         raise Problem('sites', f'A login lists at most {MAX_SITES} sites', 422)
     return out
 
 
+def site_host(site):
+    """A stored site's hostname, without the `http://` an explicitly plain-http site keeps."""
+    return site.removeprefix(HTTP)
+
+
 def site_matches(sites, host):
     """Whether a page on `host` belongs to a login for `sites`: the host itself or a subdomain of one."""
     host = str(host or '').strip().lower().strip('.')
-    return bool(host) and any(host == s or host.endswith('.' + s) for s in sites or ())
+    return bool(host) and any(host == h or host.endswith('.' + h) for h in map(site_host, sites or ()))
 
 
 def sites_of(row):

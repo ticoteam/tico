@@ -41,6 +41,13 @@ def test_bitwarden_export_keeps_logins_with_their_hosts_and_totp():
     assert errors == [{"row": 3, "reason": "no web address to log in to"}]
 
 
+def test_an_http_address_in_an_export_is_kept_as_its_bare_host():
+    export = json.dumps({"encrypted": False, "items": [{"type": 1, "name": "", "login": {
+        "username": "ana", "password": "pw", "uris": [{"uri": "http://Router.Home.example:8080/"}, {"uri": "https://router.home.example"}]}}]})
+    [row], _ = parse("bitwarden", export)
+    assert row["sites"] == ["router.home.example"] and row["name"] == "router.home.example"
+
+
 def test_keepassxc_csv_reads_quoted_fields_and_the_totp_column():
     rows, errors = parse("keepass", KEEPASS)
     assert [(r["name"], r["username"], r["password"], r["totp"], r["sites"]) for r in rows] == [

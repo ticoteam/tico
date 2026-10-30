@@ -96,11 +96,53 @@ fn build(secrets: &[String]) -> Built {
 
 pub struct Redactor {
     inner: RwLock<Built>,
+    /// Authenticator codes the browser typed: too short to mask inside other text, so only a whole run of digits
+    /// equal to one is; the newest few are kept, an old code being worthless.
+    codes: RwLock<Vec<String>>,
+}
+
+/// How many authenticator codes a redactor keeps.
+const CODES_KEPT: usize = 32;
+
+fn mask_codes(data: &[u8], codes: &[String]) -> Option<Vec<u8>> {
+    let (mut out, mut i, mut hit) = (Vec::with_capacity(data.len()), 0, false);
+    while i < data.len() {
+        let end = i + data[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if end == i {
+            out.push(data[i]);
+            i += 1;
+            continue;
+        }
+        if codes.iter().any(|c| c.as_bytes() == &data[i..end]) {
+            out.extend_from_slice(MASK.as_bytes());
+            hit = true;
+        } else {
+            out.extend_from_slice(&data[i..end]);
+        }
+        i = end;
+    }
+    hit.then_some(out)
 }
 
 impl Redactor {
     pub fn new(secrets: &[String]) -> Redactor {
-        Redactor { inner: RwLock::new(build(secrets)) }
+        Redactor { inner: RwLock::new(build(secrets)), codes: RwLock::new(vec![]) }
+    }
+
+    /// Authenticator codes to mask from now on (digits only; anything else is not a code and is ignored).
+    pub fn add_codes(&self, codes: &[String]) {
+        let mut kept = self.codes.write().unwrap();
+        for c in codes.iter().filter(|c| c.len() >= 6 && c.bytes().all(|b| b.is_ascii_digit())) {
+            kept.retain(|k| k != c);
+            kept.push(c.clone());
+        }
+        let extra = kept.len().saturating_sub(CODES_KEPT);
+        kept.drain(..extra);
+    }
+
+    fn masked_codes(&self, data: &[u8]) -> Option<Vec<u8>> {
+        let codes = self.codes.read().unwrap();
+        if codes.is_empty() { None } else { mask_codes(data, &codes) }
     }
 
     /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread; `held` hears
@@ -113,7 +155,7 @@ impl Redactor {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.read().unwrap().matcher.is_none()
+        self.inner.read().unwrap().matcher.is_none() && self.codes.read().unwrap().is_empty()
     }
 
     #[allow(dead_code)]
@@ -133,18 +175,21 @@ impl Redactor {
     }
 
     pub fn scrub_text(&self, text: &str) -> String {
-        match &self.inner.read().unwrap().matcher {
+        let out = match &self.inner.read().unwrap().matcher {
             Some(m) => m.replace_all(text, &vec![MASK; m.patterns_len()]),
             None => text.to_string(),
-        }
+        };
+        // Only ASCII digits are replaced, so the text stays UTF-8.
+        self.masked_codes(out.as_bytes()).map(|b| String::from_utf8(b).unwrap_or_default()).unwrap_or(out)
     }
 
     /// Bytes scrubbed as they are: bytes that are not UTF-8 are kept, not replaced (Python's surrogateescape).
     pub fn scrub_bytes(&self, data: &[u8]) -> Vec<u8> {
-        match &self.inner.read().unwrap().matcher {
+        let out = match &self.inner.read().unwrap().matcher {
             Some(m) => m.replace_all_bytes(data, &vec![MASK.as_bytes(); m.patterns_len()]),
             None => data.to_vec(),
-        }
+        };
+        self.masked_codes(&out).unwrap_or(out)
     }
 
     /// The same structure with every string scrubbed; keys are left as they are.
@@ -157,7 +202,8 @@ impl Redactor {
         }
     }
 
-    /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check).
+    /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check). Codes are
+    /// left out: they expire in seconds, and a number in a checkout matching one is far likelier chance.
     pub fn holds(&self, data: &[u8]) -> bool {
         match &self.inner.read().unwrap().matcher {
             Some(m) => {
@@ -497,6 +543,17 @@ pub fn add_to(aid: &str, secrets: &[String]) {
     }
 }
 
+/// Authenticator codes for a running turn's redactor, as `add_to` does for secrets.
+pub fn add_codes_to(aid: &str, codes: &[String]) {
+    let found = active().lock().unwrap().iter().find(|(a, _)| a == aid).map(|(_, r)| r.clone());
+    let r = found.unwrap_or_else(|| {
+        let r = Arc::new(Redactor::new(&[]));
+        register(aid, r.clone());
+        r
+    });
+    r.add_codes(codes);
+}
+
 /// A log line with every running turn's secrets taken out.
 pub fn scrub_log(line: &str) -> String {
     let list: Vec<Arc<Redactor>> = active().lock().map(|l| l.iter().map(|(_, r)| r.clone()).collect()).unwrap_or_default();
@@ -564,5 +621,24 @@ mod tests {
             .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(r.scrub_text(sample), String::from_utf8_lossy(&out.stdout).trim_end_matches('\n'));
+    }
+
+    #[test]
+    fn a_typed_code_is_masked_as_a_whole_number_only() {
+        let r = Redactor::new(&[]);
+        r.add_codes(&["287082".into(), "abc123".into(), "12345".into()]);
+        assert!(!r.is_empty());
+        assert_eq!(r.scrub_text("value=287082, 2870821 a287082b \"287082\""), "value=••••, 2870821 a••••b \"••••\"");
+        assert_eq!(r.scrub_text("abc123 12345"), "abc123 12345", "not codes, never masked");
+        assert_eq!(r.scrub_bytes(b"\xff287082"), b"\xff\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2");
+        assert_eq!(r.scrub_json(&serde_json::json!({"out": ["287082"]}))["out"][0], MASK);
+        assert!(!r.holds(b"287082"), "a checkout is not searched for codes");
+        for n in 0..CODES_KEPT as u32 {
+            r.add_codes(&[format!("{:06}", 900000 + n)]);
+        }
+        assert_eq!(r.scrub_text("287082 900001"), "287082 ••••", "the oldest code goes first");
+        add_codes_to("a-code-turn", &["135790".into()]);
+        assert_eq!(scrub_log("code 135790"), "code ••••");
+        release("a-code-turn");
     }
 }

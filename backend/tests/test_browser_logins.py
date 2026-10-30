@@ -262,3 +262,16 @@ def test_a_website_card_waits_the_task_until_done_and_a_saved_login_for_the_host
     done = post(api, "reconnects/unknown/done", {"task": fifth["id"], "key": opened["key"]})
     assert done["id"] == opened["id"] and done["status"] == "fixed" and len(wakes(api, fifth)) == 1
     assert leaks(api, PASSWORD, KEY) == []
+
+
+def test_a_site_keeps_http_only_when_written_so_and_matches_by_its_host(api):
+    from backend.credentials import clean_sites, site_matches
+    assert clean_sites(["https://Portal.Acme.example:8443/x", "HTTP://Login.Practice.test:8080/in", "acme.example",
+                        "http://login.practice.test"]) == ["portal.acme.example", "http://login.practice.test", "acme.example"]
+    assert site_matches(["http://practice.test"], "login.practice.test") and not site_matches(["http://practice.test"], "http")
+    # A website card for a plain-http page: the reconnect is the bare host's, its login card keeps http://.
+    machine, t, attempt = ops_on_a_task(api)
+    opened = ask(api, attempt, "browser/needs-you", {"host": "http://Login.Practice.test:8080/in", "task": t["id"]})
+    assert opened["host"] == "login.practice.test" and opened["key"].endswith(":login.practice.test")
+    [card] = cards(api, t)
+    assert get(api, f"credential-requests/{card['fix']['request']}")["sites"] == ["http://login.practice.test"]

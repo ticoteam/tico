@@ -30,7 +30,7 @@ from pydantic import Field, SecretStr
 
 from .auth import validate_identity
 from .credentials import (CredentialWrite, LOGIN, administrator, admin_names as _admin_names, ask_admin_detail, clean_sites,
-                          create_login, owned, sites_of, update_login)
+                          create_login, owned, site_host, sites_of, update_login)
 from .models import Contract, ID
 from . import reconnects
 from .store import H, Problem
@@ -193,13 +193,14 @@ def store_login_for_bot(c, vault, who, bot, sites, username, password, totp=None
     mine = set() if admin else owned(c, who)
     same = [r for r in c.execute("SELECT * FROM credentials WHERE kind=? ORDER BY created", (LOGIN,))
             if (admin or r["id"] in mine) and grants.get(r["id"], set()) <= {subject}
-            and (r["username"] or "").lower() == (username or "").lower() and set(sites_of(r)) & set(sites)]
+            and (r["username"] or "").lower() == (username or "").lower()
+            and {site_host(s) for s in sites_of(r)} & {site_host(s) for s in sites}]
     existing = next((r for r in same if subject in grants.get(r["id"], set())), None) or next(iter(same), None)
     if existing:
         cid = update_login(c, who, existing["id"], username=username, password=password, totp=totp or None,
                            sites=list(dict.fromkeys(sites_of(existing) + sites)), for_bot=bot, vault=vault)
     else:
-        label = (name or "").strip() or sites[0]
+        label = (name or "").strip() or site_host(sites[0])
         if c.execute("SELECT 1 FROM credentials WHERE name=?", (label,)).fetchone():
             label = f"{label} ({row['display_name'] or bot})"
         cid = create_login(c, who, name=label, username=username, password=password, totp=totp or None, sites=sites,
@@ -407,7 +408,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if not login and not body.env:
                 raise Problem("env", "Name the variable, like JIRA_BASIC_AUTH", 422)
             env = "" if login else body.env
-            key = reconnects.site_key(target, sites[0]) if login else reconnects.secret_key(target, env)
+            key = reconnects.site_key(target, site_host(sites[0])) if login else reconnects.secret_key(target, env)
             again = reconnects.request_of(c, task["id"], key) if task else None
             if again and again["requester"] != person.actor:
                 # Someone else is to save it now: their card replaces the old one (reconnects.open retires it).
@@ -437,7 +438,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                                     {"credential_request": rid, **({"task": task["id"]} if task else {})}, None, None,
                                     delivered_at=H.now())
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
-            fix = {"kind": "secret", "request": rid, **({"host": sites[0]} if login else {})}
+            fix = {"kind": "secret", "request": rid, **({"host": site_host(sites[0])} if login else {})}
             if task and not reconnects.open(c, task["id"], target, key, "secret",
                                             body.label.strip() or (f"a login for {sites[0]}" if login else env),
                                             person.actor, fix, message_id=card["id"], owner=task["owner"]):

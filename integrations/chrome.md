@@ -54,7 +54,12 @@ hub browser status
 - A fill answers only `{"ok": true}` or `{"ok": false, "error": ...}`; values never come back to the bot.
   It refuses a login not granted to the bot (`not_granted`), a page whose top-level host is not one of the
   login's sites (`site_mismatch`, a subdomain of a listed site counts), a field inside a frame from
-  another host, and a run that has ended (`no_run`).
+  another host, a plain-http page off this computer unless the login lists the site as `http://host`
+  (`insecure_page`), focus moved off the field before the text went in (`focus_changed`: fill again), and a
+  run that has ended (`no_run`).
+- Fill keeps a secret out of the model's context and the transcript; it is not a wall against the bot.
+  A bot that reads the field back afterwards gets the value, and what the run records has passwords and
+  2FA codes masked. Owners grant a login only to a bot they would trust with the password.
 - No login yet: ask the owner with `hub_credential_request` kind `login` and the site. A captcha or a
   check only a person can pass: `hub_browser_needs_you(host, reason)`; the person takes over from the
   computer's screen and presses Done.

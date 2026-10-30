@@ -9,11 +9,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const ATTEMPT: &str = "live-run";
 const STALE: &str = "gone";
 
+/// This machine's address on its network, for a plain-http page that is not on this machine.
+fn lan_address() -> Option<String> {
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("10.255.255.255:9").ok()?;
+    let ip = probe.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
+}
+
 fn logins() -> Value {
+    let lan = lan_address().unwrap_or_else(|| "lan.invalid".into());
     json!({"logins": [
         {"id": "c1", "name": "Acme", "username": "ann@acme.example", "sites": ["127.0.0.1"], "password": "correct horse 1",
          "totp": {"secret": "JBSWY3DPEHPK3PXP", "digits": 6, "period": 30, "algorithm": "SHA1"}},
         {"id": "c2", "name": "Beta", "username": "ben@acme.example", "sites": ["127.0.0.1"], "password": "battery staple 2", "totp": null},
+        {"id": "c3", "name": "Network", "username": "nat@acme.example", "sites": [lan], "password": "plain text 3", "totp": null},
+        {"id": "c4", "name": "Network http", "username": "nat@acme.example", "sites": [format!("http://{lan}")], "password": "plain text 4", "totp": null},
     ]})
 }
 
@@ -81,6 +92,7 @@ async fn playwright_devtools_mcp_and_fill_work_through_the_endpoint() {
         .env("TICO_BROWSER_URL_STALE", &stale.url)
         .env("TICO_BROWSER_URL_DROPPED", &dropped_url)
         .env("TICO_BROWSER_MCP", mcp.to_string())
+        .env("TICO_LIVE_LAN", lan_address().unwrap_or_default())
         .status()
         .await
         .unwrap();

@@ -51,12 +51,27 @@ pub fn code_at(secret: &str, digits: u32, period: u64, algorithm: &str, at: u64)
 
 /// The current code for a login's `totp` object (`{"secret","digits","period","algorithm"}`).
 pub fn current(totp: &Value) -> Option<String> {
+    code_near(totp, now()?, 0)
+}
+
+/// The codes a site may still accept or soon will: the period before, the current one and the next. Each is masked
+/// once one is typed, so a code read back from the page late or early is hidden too.
+pub fn window(totp: &Value) -> Vec<String> {
+    let Some(at) = now() else { return vec![] };
+    [-1, 0, 1].into_iter().filter_map(|step| code_near(totp, at, step)).collect()
+}
+
+fn now() -> Option<u64> {
+    Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+}
+
+fn code_near(totp: &Value, at: u64, step: i64) -> Option<String> {
     let secret = totp["secret"].as_str().filter(|s| !s.trim().is_empty())?;
     let digits = totp["digits"].as_u64().unwrap_or(6) as u32;
     let period = totp["period"].as_u64().unwrap_or(30);
     let algorithm = totp["algorithm"].as_str().unwrap_or("SHA1");
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    code_at(secret, digits, period, algorithm, now)
+    let at = at.checked_add_signed(step.checked_mul(period as i64)?)?;
+    code_at(secret, digits, period, algorithm, at)
 }
 
 #[cfg(test)]
@@ -111,5 +126,15 @@ mod tests {
         assert_eq!(code_at("GEZDGNBV", 4, 30, "SHA1", 59), None);
         assert_eq!(code_at("GEZDGNBV", 6, 0, "SHA1", 59), None);
         assert_eq!(current(&serde_json::json!(null)), None);
+        assert!(window(&serde_json::json!({"secret": "not base32!"})).is_empty());
+    }
+
+    #[test]
+    fn the_window_holds_the_current_code_between_its_neighbours() {
+        let totp = serde_json::json!({"secret": encode(b"12345678901234567890"), "digits": 6, "period": 30});
+        let (before, w, after) = (current(&totp).unwrap(), window(&totp), current(&totp).unwrap());
+        assert_eq!(w.len(), 3);
+        assert!(w.contains(&before) || w.contains(&after), "{w:?}");
+        assert_eq!(code_near(&totp, 59, -1).as_deref(), code_at(&encode(b"12345678901234567890"), 6, 30, "SHA1", 29).as_deref());
     }
 }
