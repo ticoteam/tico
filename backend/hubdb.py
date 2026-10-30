@@ -9116,9 +9116,9 @@ def notices(conn, actor, at=None):
 TASK_SQL = "SELECT * FROM tasks WHERE id=?"
 
 
-def prime_tasks(conn, ids):
+def prime_tasks(conn, ids, tags=True):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
-    (a Needs you card reads its task, its ancestors and what they block, one at a time)."""
+    (a Needs you card reads its task, its ancestors and what they block, one at a time). `tags=False`: the rows only."""
     from .read_cache import cache, prime, prime_rows
     values = cache(conn)
     if values is None:
@@ -9130,7 +9130,7 @@ def prime_tasks(conn, ids):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
-    for part in chunks(sorted(tid for tid in wanted if (TASK_TAGS_SQL % "?", (tid,)) not in values)):
+    for part in chunks(sorted(tid for tid in wanted if tags and (TASK_TAGS_SQL % "?", (tid,)) not in values)):
         marks = ",".join("?" * len(part))
         tags = {tid: [] for tid in part}
         for row in conn.execute(TASK_TAGS_SQL % marks, part):
