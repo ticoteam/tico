@@ -1553,10 +1553,10 @@ def install(app, store, auth, mutate, onboarding):
             bot = chat_bot_for(c, who, uploads is not None)
             room = chat_room(c, settings, who)
             said, kind, fast_links = reply, intent, links
-            # The canned hello once per chat: a later "hi" goes to the model rather than repeating the same line.
-            if kind == "greeting" and c.execute(
-                    "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? "
-                    "AND json_extract(refs_json,'$.intent')='greeting' LIMIT 1", (room["id"], "bot:" + bot)).fetchone():
+            # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
+            # what came before, rather than repeating the same line.
+            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? LIMIT 1",
+                                                (room["id"], who.actor)).fetchone():
                 said, kind, fast_links = None, None, []
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":

@@ -133,7 +133,8 @@ async function open(browser, state) {
     const old = page.locator('.asst-card[data-action="act2"]');
     const title = await old.locator('[data-what]').innerText();
     assert.ok(!/\/api\/|^(POST|PUT|PATCH|DELETE)\b/.test(title), 'old card: no method or path as its title, got ' + title);
-    assert.equal(title, 'A change for you', 'old card: a plain sentence');
+    // What it does is on the card before the click: the bot's own summary, not a generic line over a hidden action.
+    assert.equal(title, 'Ops asked BotOps for this for you: Launch Ops', 'old card: its summary is the title');
     assert.equal(await old.locator('.asst-who').innerText(), 'BotOps asks', 'old card: who asks, above the title');
     // Two buttons and no helper line: what Confirm does is its tooltip.
     assert.deepEqual(await old.locator('button').allInnerTexts(), ['Confirm', 'Cancel']);

@@ -843,6 +843,13 @@ def test_a_greeting_is_answered_at_once_with_no_model_or_job(api, monkeypatch):
     assert [m["body"] for m in room(api)["messages"]].count(result["reply"]["body"]) == 1
 
 
+def test_a_greeting_after_real_work_goes_to_the_model(api, monkeypatch):
+    no_decisions(monkeypatch)
+    assert post(api, "assistant/messages", {"text": "plan tomorrow's launch with the venue"}, key="work")["fast"] is False
+    later = post(api, "assistant/messages", {"text": "hi"}, key="hi-later")
+    assert later["fast"] is False and later["reply"] is None
+
+
 @pytest.mark.parametrize("status_code", [403])
 def test_task_types_the_api_refuses_are_not_shown_as_none(api, monkeypatch, status_code):
     decisions = no_decisions(monkeypatch)

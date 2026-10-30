@@ -108,7 +108,7 @@ and as you (what you may see, nothing more), with no run and no model:
 
 | You ask | It answers from |
 |---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting, once per chat; no provider or runner turn (a later one goes to the model) |
+| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the chat; no provider or runner turn (later, it goes to the model) |
 | What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
 | What needs me | Needs you |
 | Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |

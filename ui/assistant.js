@@ -62,11 +62,14 @@
     const by = action.proposer || action.proposed_via;
     // A card the Strategy Bot put in the owner's earlier chat with it names it (`by_name`), never "the Assistant".
     const name = action.by_name || {assistant: assistantName || 'The Assistant', botops: 'BotOps'}[by] || 'A bot';
-    const what = String(action.description || '').trim();
-    const title = what && !RAW_TITLE.test(what) ? what : 'A change for you';
+    const what = String(action.description || '').trim(), plain = what && !RAW_TITLE.test(what);
+    // What the card does is always in view before the click: with no sentence from the server, the bot's own summary
+    // is the title, and with neither, the fields stay on the card.
+    const summary = String(action.summary || '').trim();
+    const title = plain ? what : summary || 'A change for you';
     // A task change (old → new) and a bulk card's one line per step read as words; any other card's fields are the
     // request itself, so they go under Details with the method and path.
-    const readable = action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group);
+    const readable = action.path === '/api/v2/assistant/batch' || (action.diff || []).some(d => 'old' in d || d.group) || !plain && !summary;
     const fields = action.diff?.length
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
@@ -77,7 +80,7 @@
       .map(([, v]) => `<blockquote class="asst-said" aria-label="What is sent">${shown(v)}</blockquote>`).join('');
     const who = action.by_name ? action.by_name + ' says: ' : {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
     // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
-    const said = String(action.summary || '').trim(), repeats = said === title || said.length >= 300 && title.startsWith(said);
+    const said = summary, repeats = said === title || said.length >= 300 && title.startsWith(said);
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <div class="asst-who">${esc(name.replace(/^The /, ''))} asks</div>
       <details class="asst-raw"${open ? ' open' : ''}><summary title="Details"><b data-what>${esc(title)}</b><span class="nav-icon" aria-hidden="true">expand_more</span></summary>

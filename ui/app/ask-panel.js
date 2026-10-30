@@ -294,6 +294,8 @@ const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardA
 // A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
 // or more picks are one list and Send.
 const ASK_Q_LONG = 160;
+// A pick chosen in a list and not yet sent, by question: the thread is drawn again whenever the chat changes.
+const askPicks = new Map();
 function askQuestionHTML(it) {
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
   const text = plainActors(q ? q.question : it.ask.body);
@@ -302,7 +304,7 @@ function askQuestionHTML(it) {
   const structured = it.kind === 'question' && (it.ask.refs?.questions || []).length;
   const answer = q?.multi || (structured && !q) ? `<a href="#/task/${encodeURIComponent(it.id)}">Answer</a>`
     : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i) =>
-      `<option value="${i}"${o.recommended ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
+      `<option value="${i}"${(askPicks.has(it.id) ? askPicks.get(it.id) === i : o.recommended) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
     : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
     : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
   return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
@@ -539,6 +541,10 @@ function askRowsIn(thread, seen, animate, delay = 0) {
 $('#ask-fab')?.addEventListener('click', () => askToggle());
 $('#mobile-ask')?.addEventListener('click', () => askToggle());
 $('#ask-panel')?.addEventListener('click', askClick);
+$('#ask-panel')?.addEventListener('change', ev => {
+  const choose = ev.target.closest('[data-ask-choose]');
+  if (choose) askPicks.set(choose.closest('[data-ask-q]').dataset.askQ, Number(choose.elements.pick.value));
+});
 $('#ask-panel')?.addEventListener('submit', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
   if (choose) { ev.preventDefault(); void askAnswer(choose.closest('[data-ask-q]'), {pick: Number(choose.elements.pick.value)}); return; }
