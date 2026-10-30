@@ -103,13 +103,19 @@ _ANY_COLUMN = "__any_column_changed__"
 FAN_CAP = 100      # more tasks than this in one change: one `bulk` row, and lists read in full
 
 
-def _fan(kind, ids):
+def _fan(kind, ids, whole=None):
     """A `tasks` row for each task id `ids` (a SELECT of one column, `id`) yields: a change to
     something many tasks show, such as a tag or a step. Past FAN_CAP tasks (a type holding hundreds),
     one `bulk` row instead: per-task rows would be hundreds of events to every open page, each
-    task loaded per viewer, where one full read of the list costs less."""
+    task loaded per viewer, where one full read of the list costs less. `whole` (the same kind of
+    SELECT) is what is counted against FAN_CAP when it is more than `ids`: a type's steps are saved
+    one row at a time, and each step of a big type under the cap made its own hundred rows (TIDY,
+    Oct 30: one type edit, 1,412 rows over 353 tasks, and every open Bot Desk read the roster again)."""
     found = f"(SELECT id FROM ({ids}) WHERE id IS NOT NULL)"
-    many = f"(SELECT count(*) FROM (SELECT 1 FROM {found} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
+    counted = f"(SELECT id FROM ({whole}) WHERE id IS NOT NULL)" if whole else found
+    many = f"(SELECT count(*) FROM (SELECT 1 FROM {counted} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
+    if whole:
+        many += f" AND EXISTS(SELECT 1 FROM {found})"
     return (f"INSERT INTO changes(topic,kind,subject_id,at) SELECT 'tasks','{kind}',id,{_NOW} FROM {found} "
             f"WHERE NOT {many};"
             f"INSERT INTO changes(topic,kind,at) SELECT 'tasks','bulk',{_NOW} WHERE {many};")
@@ -183,9 +189,13 @@ TRIGGERS = [
      _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id")),
     ("changes_task_types_update", "UPDATE", "task_types", None,
      _fan("type", "SELECT id FROM tasks WHERE type_id=NEW.id")),
-    ("changes_task_steps_insert", "INSERT", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id")),
-    ("changes_task_steps_update", "UPDATE", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id")),
-    ("changes_task_steps_delete", "DELETE", "task_steps", None, _fan("type", "SELECT id FROM tasks WHERE step_id=OLD.id")),
+    # A step's tasks, counted against FAN_CAP with the rest of its type; a write that changes nothing is no change.
+    ("changes_task_steps_insert", "INSERT", "task_steps", None,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id")),
+    ("changes_task_steps_update", "UPDATE", "task_steps", _ANY_COLUMN,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id")),
+    ("changes_task_steps_delete", "DELETE", "task_steps", None,
+     _fan("type", "SELECT id FROM tasks WHERE step_id=OLD.id", "SELECT id FROM tasks WHERE type_id=OLD.type_id")),
     ("changes_attempts_carried", "UPDATE", "attempts", _changed("state"),
      _fan("run", "SELECT id FROM tasks WHERE carried_by=NEW.id")),
     ("changes_messages_insert", "INSERT", "messages", None,
