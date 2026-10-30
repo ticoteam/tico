@@ -14,10 +14,15 @@ Update now, an update service key (the Release Manager's rollout), Tico support'
 The work is setup/cell.py's own `update` for that company: the image pulled first, the database snapshotted with the
 server stopped, the new release health-checked through the router, and the old release and database put back when it
 does not come up. A release is refused (state failed, nothing changed) unless it is published (its SHA256SUMS
-downloads, as the sidecar's bundle check needs) and no newer than this host's core: a company's compose.yaml is the
-core's own file (`update` rewrites it from there), and a later release may need settings or mounts that file does
-not pass. Tico moves the core with `cell init` from a newer core folder, never this service. Older than the company
-runs is refused as the sidecar refuses it.
+downloads, as the sidecar's bundle check needs); older than the company runs is refused as the sidecar refuses it.
+
+A company's compose.yaml is the core's own file (`update` rewrites it from there), and a later release may need
+settings or mounts an older core's file does not pass. So a release newer than this host's core runs with that
+release's own core: its folder installed beside the others as HQ installs one (/opt/tico-cell/core-<vX.Y.Z>, from
+GitHub's tag archive, unpacked in a staging folder and renamed into place; an existing folder is used as it is),
+then that folder's own `python3 -m setup cell update` run as a child, which takes the company's lock itself. This
+service never runs `cell init`: that restarts it, and the router and the tunnel stay with staff (HQ's core install).
+The status and diagnostics say the host's core lags until then.
 
 Isolation. One process (systemd unit tico-cell-updater, `cell init`), one listener per company. It runs as root, as
 staff's cell commands do, because the work is `update`: Docker and the company's root-owned folder. A unit, not a
@@ -48,14 +53,20 @@ import ipaddress
 import json
 import os
 import re
+import posixpath
+import shutil
 import signal
 import socket
 import stat
+import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import cell as C
 
@@ -66,6 +77,14 @@ TOKEN_MIN, TOKEN_MAX = 32, 4096
 STATUS_FILE = "updater-status.json"
 RESCAN = 5.0                     # how soon a new company's listener is up, and a removed one's gone
 FREEBIND = getattr(socket, "IP_FREEBIND", 15)   # Linux: bind before Docker has made the company's bridge
+CORES = Path("/opt/tico-cell")  # core-<vX.Y.Z> per release, where HQ installs them (tico-services hosting/cloud.py)
+CORE_URL = "https://github.com/ticoteam/tico/archive/refs/tags/%s.tar.gz"
+CORE_MAX = 256 << 20             # the archive as downloaded (a release's is a few MB)
+CORE_TREE_MAX = 1 << 30          # and unpacked: a bad archive cannot fill the disk the companies share
+CORE_MEMBERS = 100_000
+CORE_FETCH_S = 300               # the whole download
+CORE_RUN_S = 1800                # the core's own `cell update`: pull, stop, snapshot, the health wait (TimeoutStopSec)
+CORE_NAME = re.compile(r"core-(v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})")
 INSPECT = ('{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|'
            '{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}')    # docker/updater.py's own
 
@@ -84,16 +103,100 @@ def log(text: str) -> None:
     print("tico-cell-updater: " + text, file=sys.stderr, flush=True)
 
 
+def host_core(folder: Path | None = None) -> str:
+    """This core's release: .tico-installer.json (the bundle's), else its folder's name, core-vX.Y.Z, as HQ installs a
+    core from GitHub's archive, which has no .tico-installer.json. "" when neither says."""
+    if folder is None:
+        found = C._installer_version()
+        if found:
+            return found
+        folder = Path(C.__file__).resolve().parent.parent
+    m = CORE_NAME.fullmatch(Path(folder).name)
+    return m.group(1) if m else ""
+
+
+class Refused(Exception):
+    """A core that is not installed: the reason, for the status."""
+
+
+def fetch_archive(url: str, dest: Path) -> None:
+    """`url` into `dest` (a new file), at most CORE_MAX bytes and CORE_FETCH_S seconds in all."""
+    deadline, n = time.monotonic() + CORE_FETCH_S, 0
+    request = urllib.request.Request(url, headers={"User-Agent": "tico-cell-updater"})
+    with urllib.request.urlopen(request, timeout=60) as r, open(dest, "xb") as f:
+        while chunk := r.read(1 << 20):
+            n += len(chunk)
+            if n > CORE_MAX:
+                raise Refused(f"the archive is over {CORE_MAX >> 20} MB")
+            if time.monotonic() > deadline:
+                raise Refused(f"the download took over {CORE_FETCH_S} s")
+            f.write(chunk)
+
+
+def _inside(path: str) -> bool:
+    """A relative path that stays inside the folder it is taken from."""
+    norm = posixpath.normpath(path)
+    return not path.startswith("/") and norm != ".." and not norm.startswith("../")
+
+
+def unpack(archive: Path, into: Path) -> None:
+    """The files under the archive's one top folder, into `into` (which exists, empty): `tar --strip-components=1`,
+    except that the whole archive is checked first. Refused for an absolute name or a `..`, a link that leads out of
+    the tree, a device or FIFO, a second top folder, or more than CORE_MEMBERS files or CORE_TREE_MAX bytes. Python's
+    "data" filter is the second lock on the same rules."""
+    with tarfile.open(archive, "r:gz") as t:
+        keep, total, top = [], 0, None
+        for m in t:
+            parts = PurePosixPath(m.name).parts
+            if not parts or m.name.startswith("/") or ".." in parts:
+                raise Refused(f"the archive has a member outside its folder: {m.name[:120]!r}")
+            if not (m.isfile() or m.isdir() or m.issym() or m.islnk()):
+                raise Refused(f"the archive has a device or FIFO: {m.name[:120]!r}")
+            top = top or parts[0]
+            if parts[0] != top:
+                raise Refused("the archive has more than one top folder")
+            rest = PurePosixPath(*parts[1:]) if len(parts) > 1 else None
+            if rest is None:
+                continue
+            if m.issym() and not _inside(str(rest.parent / m.linkname)):
+                raise Refused(f"the archive has a link out of its folder: {m.name[:120]!r}")
+            if m.islnk():
+                target = PurePosixPath(m.linkname).parts
+                if m.linkname.startswith("/") or ".." in target or target[:1] != (top,) or len(target) < 2:
+                    raise Refused(f"the archive has a link out of its folder: {m.name[:120]!r}")
+                m.linkname = str(PurePosixPath(*target[1:]))
+            total += max(m.size, 0)
+            if len(keep) >= CORE_MEMBERS or total > CORE_TREE_MAX:
+                raise Refused("the archive is too big")
+            m.name = str(rest)
+            keep.append(m)
+        t.extractall(into, members=keep, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+
+
+def run_child(argv: list[str], cwd: Path, env: dict, timeout: float) -> tuple[int, str]:
+    """(exit code, stdout). stderr is not kept: the answer is the JSON line, scrubbed by the cell itself."""
+    try:
+        p = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    except OSError:
+        return 127, ""
+    return p.returncode, p.stdout
+
+
 class Service:
     """Every company's updater state, the listeners, and the update threads. `make_cell` gives a fresh setup/cell.py
     Cell per use (tests pass one on a fake System); `core` is this host's core release ("" when unknown); `bind` and
-    `subnet` are company i's address and the peers it answers (tests move both to loopback)."""
+    `subnet` are company i's address and the peers it answers (tests move both to loopback); `cores`, `fetch` and
+    `run_core` are where release cores go, the download, and the child run of a core's `cell update`."""
 
     def __init__(self, root: Path, system: C.System | None = None, *, make_cell=None, core=None, bind=None,
-                 subnet=None):
+                 subnet=None, cores=None, fetch=None, run_core=None):
         self.root, self.system = Path(root), system or C.System()
         self.make_cell = make_cell or (lambda: C.Cell(self.root, self.system))
-        self.core = core or C._installer_version
+        self.core = core or host_core
+        self.cores, self.fetch, self.run_core = Path(cores or CORES), fetch or fetch_archive, run_core or run_child
+        self.installing = threading.Lock()      # one core install at a time: two companies to one release share it
         self.bind = bind or (lambda index: (C.networks(index)["default_gateway"], C.UPDATER_PORT))
         self.subnet = subnet or (lambda index: C.networks(index)["default_subnet"])
         self.guard = threading.Lock()
@@ -226,16 +329,26 @@ class Service:
         cell = self.make_cell()
         cell.lock_wait = 0              # a command that took the company since the request: refused, not queued
         try:
-            target, refused = self.check(cell, slug, version)
+            target, refused, newer = self.check(cell, slug, version)
             if refused:
                 self.set(slug, state="failed", message="Not updated: " + refused)
                 return
+            folder = None
+            if newer:
+                try:
+                    folder = self.install_core(target)
+                except (Refused, OSError, tarfile.TarError) as e:
+                    self.set(slug, state="failed", message=cell.scrub(f"Not updated: could not install the {target} "
+                                                                       f"core: {e}")[:600])
+                    return
             try:
                 cell.pull(target)
             except C.CellError as e:
                 self.set(slug, state="failed", message="Not updated: " + cell.scrub(e.detail))
                 return
             self.set(slug, state="restarting")
+            if folder is not None:
+                return self.through_core(cell, slug, target, folder)
             cell.update(argparse.Namespace(company=slug, version=target, timeout=C.HEALTH_TIMEOUT))
             self.set(slug, state="healthy", message="", snapshot=cell.taken)
         except C.CellError as e:
@@ -253,35 +366,92 @@ class Service:
             with self.guard:
                 self.workers.discard(threading.current_thread())
 
-    def check(self, cell: C.Cell, slug: str, version: str) -> tuple[str, str]:
-        """(the release to run, why not or ""): latest looked up, then published, not older than the company runs, and
-        no newer than this host's core."""
+    def check(self, cell: C.Cell, slug: str, version: str) -> tuple[str, str, bool]:
+        """(the release to run, why not or "", whether it needs its own core): latest looked up, then published, not
+        older than the company runs. Newer than this host's core (or a core that does not say) runs with its own."""
         target = version
         if version == "latest":
             target = self.system.latest_release() or ""
             if not triple(target):
-                return "", "could not look up the latest release"
+                return "", "could not look up the latest release", False
             target = tag(target)
-        elif target not in self.published:
+        if target not in self.published:
             known = self.system.release_published(target)
             if known is None:
-                return "", f"could not check that {target} is a published release; try again later"
+                return "", f"could not check that {target} is a published release; try again later", False
             if not known:
-                return "", f"{target} is not a published release"
+                return "", f"{target} is not a published release", False
             self.published.add(target)
         c = cell.load(slug)
         if not c or c.get("state") == "removed":
-            return "", "the company is not on this host"
+            return "", "the company is not on this host", False
         if triple(c["version"]) and triple(target) < triple(c["version"]):
-            return "", f"{target} is older than {c['version']}, which it runs"
+            return "", f"{target} is older than {c['version']}, which it runs", False
         core = self.core()
-        if not triple(core):
-            return "", "this host's core has no release recorded (.tico-installer.json), so no release can be checked " \
-                       "against it; Tico staff update it with `cell update`"
-        if triple(target) > triple(core):
-            return "", (f"{target} needs this host's core at {target} or later, and it is at {core}. Tico moves the "
-                        "core with `cell init` from that release's core folder, then this update can run")
-        return target, ""
+        return target, "", not triple(core) or triple(target) > triple(core)
+
+    def lag(self, version: str) -> str:
+        return f"updated with core {version}; host init still at {self.core() or 'an unknown release'}"
+
+    def install_core(self, target: str) -> Path:
+        """Release `target`'s core folder, installed when missing as HQ installs one: GitHub's tag archive downloaded
+        and unpacked into a staging folder beside it (.core-<tag>.<random>), then renamed into place, so a half-done
+        install never looks installed. An existing folder is used as it is, never touched."""
+        final = self.cores / f"core-{target}"
+        with self.installing:
+            if final.is_symlink() or (final.exists() and not final.is_dir()):
+                raise Refused(f"{final} is not a folder")
+            if not final.exists():
+                self.cores.mkdir(mode=0o755, parents=True, exist_ok=True)
+                stage = Path(tempfile.mkdtemp(prefix=f".core-{target}.", dir=self.cores))
+                try:
+                    tree = stage / "tree"
+                    tree.mkdir(mode=0o755)
+                    self.fetch(CORE_URL % target, stage / "core.tar.gz")
+                    unpack(stage / "core.tar.gz", tree)
+                    if not (tree / "setup" / "cell.py").is_file():
+                        raise Refused("the archive has no setup/cell.py")
+                    os.chmod(tree, 0o755)
+                    os.rename(tree, final)
+                finally:
+                    shutil.rmtree(stage, ignore_errors=True)
+            if not (final / "setup" / "cell.py").is_file():
+                raise Refused(f"{final} has no setup/cell.py")
+        return final
+
+    def through_core(self, cell: C.Cell, slug: str, target: str, folder: Path) -> None:
+        """That core's own `cell update` for this company, as a child (the company's compose.yaml then comes from the
+        matching core), mapped to the status as the in-process update is. This worker holds no lock: the child takes
+        the company's lock, as staff's command would."""
+        snaps = self.root / "companies" / slug / "snapshots"
+        before = set(os.listdir(snaps)) if snaps.is_dir() else set()
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("COMPOSE_", "TICO_"))}
+        env["TICO_CELL_ROOT"] = str(self.root)
+        code, out = self.run_core([sys.executable, "-m", "setup", "cell", "update", "--company", slug, "--version", target,
+                                   "--json"], folder, env, CORE_RUN_S)
+        answer = {}
+        for line in reversed(out.splitlines()):
+            with contextlib.suppress(ValueError):
+                found = json.loads(line)
+                if isinstance(found, dict):
+                    answer = found
+                    break
+        new = sorted((set(os.listdir(snaps)) if snaps.is_dir() else set()) - before)
+        taken = new[-1] if new else ""
+        error, detail = str(answer.get("error") or ""), cell.scrub(str(answer.get("detail") or ""))[:600]
+        if answer.get("ok") is True:
+            self.set(slug, state="healthy", message=self.lag(target) + ".", snapshot=taken)
+        elif error == "update_failed":
+            self.set(slug, state="rolled_back", message=detail, snapshot=taken, restored=True)
+        elif error in ("rollback_failed", "unhealthy"):
+            self.set(slug, state="failed", message=detail, snapshot=taken)
+        elif error:
+            self.set(slug, state="failed", message="Not updated: " + detail)
+        else:
+            self.set(slug, state="failed", message=(
+                f"The {target} core's `cell update` gave no answer (exit {code}"
+                + (f", stopped after {CORE_RUN_S // 60} minutes" if code == 124 else "")
+                + "). `cell status` says where the company is; its next start finishes a pending update or rolls it back."))
 
     def diagnostics(self, slug: str) -> dict:
         """docker/updater.py's diagnostics, for this company's containers only."""
@@ -299,9 +469,12 @@ class Service:
         with self.guard:
             self.state(slug)
             recent = list(self.errors[slug])
-        return {"mode": "cell", "version": self.core(), "docker": out(["docker", "version", "--format",
-                                                                       "{{.Server.Version}}"]),
-                "compose": out(["docker", "compose", "version", "--short"]), "containers": containers, "errors": recent}
+        core, c = self.core(), cell.load(slug) or {}
+        runs = c.get("version") if isinstance(c.get("version"), str) else ""
+        note = self.lag(runs) if triple(runs) and (not triple(core) or triple(runs) > triple(core)) else ""
+        return {"mode": "cell", "version": core, "docker": out(["docker", "version", "--format", "{{.Server.Version}}"]),
+                "compose": out(["docker", "compose", "version", "--short"]), "containers": containers, "errors": recent,
+                "note": note}
 
     # --- listeners --------------------------------------------------------------------------------------------
 

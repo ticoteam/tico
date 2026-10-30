@@ -226,23 +226,33 @@ A company updates through the same contract as a hosted install's updater sideca
 calls `POST /update` and `GET /status` at `TICO_UPDATER_URL` with the token in `/control/updater-token`. So Update now,
 an update service key (the Release Manager's rollout), Tico support's idle-time target, the `system.update` events and
 Health's Version line work unchanged. The answers, states and 409s are the sidecar's; `GET /diagnostics` has
-`"mode": "cell"`. The reference implementation is `setup/cell_updater.py`.
+`"mode": "cell"` and a `note` when the host's core lags. The reference implementation is `setup/cell_updater.py`.
 
 - **One service for the host.** `tico-cell-updater.service` (installed by `init`) holds one listener per company. It
   runs as root because the work is `update`: it runs Docker and writes the company's folder, as staff's commands do.
   It is a systemd unit, not a container, so it needs no Docker socket mounted into anything. It never changes its own
-  code: it runs the checkout `init` last ran from. A stop lets an update under way finish first.
+  code: it runs the checkout `init` last ran from, and it never runs `init` (that restarts it, and the router and
+  tunnel stay with staff). A stop lets an update under way finish first.
 - **The work is `update`.** An accepted request runs this host's own `cell update` for that one company: pull first,
   stop, snapshot, the new release health-checked through the router, and the old release and database put back when
   it does not come up (state `rolled_back`, `restored: true`). It takes the company's lock, so a staff `update` (or
   `add`, `stop`) running on that company makes the request a 409, and a request under way makes staff's command wait,
   then answer `busy`. Each company's last status is kept in `updater-status.json`, so a restarted service still
   answers it.
-- **Which releases.** `latest` or a stable `X.Y.Z` (else 422), published on GitHub (its `SHA256SUMS` downloads), no
-  older than the company runs (409, as the sidecar refuses it), and no newer than this host's core. A company's
-  `compose.yaml` is the core's own file, and a later release may need settings or mounts it does not pass. A release
-  it may not run fails with a message saying why, and nothing changes. Tico moves the core with `init` from the new
-  release's checkout; then the update can run.
+- **Which releases.** `latest` or a stable `X.Y.Z` (else 422), published on GitHub (its `SHA256SUMS` downloads), and
+  no older than the company runs (409, as the sidecar refuses it). A release it may not run fails with a message
+  saying why, and nothing changes.
+- **A release newer than the host's core** runs with its own core, since a company's `compose.yaml` is the core's
+  own file and a later release may need settings or mounts an older one does not pass. The updater installs that
+  release's core beside the others, as HQ does: `/opt/tico-cell/core-<vX.Y.Z>`, from GitHub's tag archive (at most
+  256 MB, 5 minutes), unpacked into a staging folder `.core-<vX.Y.Z>.<random>` with its top folder stripped, then
+  renamed into place. An archive with an absolute name, a `..`, a link out of the tree, a device or a FIFO installs
+  nothing. A folder already there is used as it is (it must have `setup/cell.py`). Then it runs that folder's own
+  `python3 -m setup cell update --company <slug> --version <tag> --json` as a child, which takes the company's lock
+  itself, and maps its answer to the same states. The host's `init` stays at the older core until staff move it;
+  the status message and `note` say so ("updated with core vX; host init still at vY"). A core with no
+  `.tico-installer.json` is known by its folder's name (`core-vX.Y.Z`); one that says neither treats every release
+  as newer.
 - **Isolation.** Company `i`'s listener is bound to its default network's gateway, `10.208.i.1:8090`, never a public
   or loopback address, so nothing off the host and nothing through the router reaches it. Linux accepts a packet for
   any host address from any bridge, so another company's container can open a connection there. So the listener

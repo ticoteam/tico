@@ -208,7 +208,7 @@ recreated from the new file when it changes them.
 
 A cell company ([cell mode](cell.md#updates)) has no sidecar: the host's cell updater answers the same contract for it,
 so it has Update now too. It runs the cell's own `update` (no bundle to replace, since the company's `compose.yaml` is
-the host's), and a release newer than the host's core waits until Tico moves the core.
+the core's); a release newer than the host's core runs with that release's own core, which the updater installs.
 
 Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets

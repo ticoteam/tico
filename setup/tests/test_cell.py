@@ -3,6 +3,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -1253,6 +1254,9 @@ UPDATER_SOURCE = ROOT / "docker" / "updater.py"
 
 
 def service(host, core="v9.0.0", **kw):
+    def never(*a):
+        pytest.fail("a core was fetched or run")
+    kw = {"cores": host.tmp / "cores", "fetch": never, "run_core": never, **kw}
     return U.Service(host.root, host.system, core=lambda: core, **kw,
                      make_cell=lambda: cell.Cell(host.root, host.system, host.etc, ROOT / "compose.yaml"))
 
@@ -1365,22 +1369,20 @@ def test_latest_is_the_newest_published_release(ready):
     assert status(svc)["state"] == "healthy" and record(ready)["version"] == "v1.4.2"
 
 
-@pytest.mark.parametrize("case", ["unpublished", "github down", "newer than the core", "core unknown"])
+@pytest.mark.parametrize("case", ["unpublished", "github down", "unpublished, newer than the core"])
 def test_a_release_it_may_not_run_changes_nothing(ready, case):
     ready(*add_args(ready))
     d = ready.root / "companies" / "boatyard"
     before, n = (d / ".env").read_text(), len(ready.system.calls)
-    if case == "unpublished":
+    if case.startswith("unpublished"):
         ready.system.unpublished.add("v1.3.0")
     elif case == "github down":
         ready.system.unpublished = None
-    svc = service(ready, core={"newer than the core": "v1.2.9", "core unknown": ""}.get(case, "v9.0.0"))
+    svc = service(ready, core="v1.2.9" if "newer" in case else "v9.0.0")     # no core fetched for an unpublished tag
     assert ask(svc)[0] == 202
     s = status(svc)
     assert s["state"] == "failed" and s["message"].startswith("Not updated: ")
-    assert {"unpublished": "not a published release", "github down": "could not check",
-            "newer than the core": "needs this host's core at v1.3.0", "core unknown": "no release recorded"}[case] \
-        in s["message"]
+    assert ("could not check" if case == "github down" else "not a published release") in s["message"]
     assert (d / ".env").read_text() == before and record(ready)["version"] == "v1.2.3"
     assert not any("pull" in c or "stop" in c for c in ready.system.calls[n:])
     assert len(svc.diagnostics("boatyard")["errors"]) == 1
@@ -1456,7 +1458,8 @@ def test_status_and_diagnostics_have_the_sidecars_shape(ready, monkeypatch):
     ready.system.fail["ps -a -q"] = Result(0, "c1\n")
     ready.system.fail["docker inspect"] = Result(0, "server|running|healthy|2\n")
     ours = svc.diagnostics("boatyard")
-    assert set(ours) == set(theirs) and ours["mode"] == "cell" and ours["version"] == "v9.0.0"
+    assert set(ours) == set(theirs) | {"note"} and ours["mode"] == "cell" and ours["version"] == "v9.0.0"
+    assert ours["note"] == ""                                     # the company runs a release this core has
     assert ours["containers"] == [{"name": "server", "state": "running", "health": "healthy", "restarts": 2}]
     assert set(ours["containers"][0]) == set(theirs["containers"][0])
     # Only this company's project is asked about.
@@ -1609,3 +1612,181 @@ def test_scan_gives_each_live_company_a_listener_and_drops_removed_ones(ready):
         for listener in svc.listeners.values():
             listener.shutdown()
             listener.server_close()
+
+
+# --- a release newer than the host's core runs with its own core --------------------------------------------------
+
+def core_archive(path, tag="v1.3.0", extra=()):
+    """GitHub's tag archive, as small as it can be: one top folder, the core's setup/ and compose.yaml (the stock one,
+    marked, so a test can see which core's file the company got)."""
+    top = f"tico-{tag[1:]}"
+    with tarfile.open(path, "w:gz") as t:
+        def add(name, data=b"", kind=tarfile.REGTYPE, link="", mode=0o644):
+            info = tarfile.TarInfo(f"{top}/{name}" if name else top)
+            info.type, info.linkname, info.mode, info.size = kind, link, mode, len(data)
+            t.addfile(info, io.BytesIO(data) if data else None)
+        add("", kind=tarfile.DIRTYPE, mode=0o755)
+        add("setup", kind=tarfile.DIRTYPE, mode=0o755)
+        add("setup/cell.py", b"# the core's cell\n")
+        add("compose.yaml", (ROOT / "compose.yaml").read_bytes() + f"# core {tag}\n".encode())
+        add("AGENTS.md", b"x\n")
+        add("CLAUDE.md", kind=tarfile.SYMTYPE, link="AGENTS.md")
+        for item in extra:
+            item(t, top)
+    return path
+
+
+def child(host, answers=None):
+    """A core's `cell update` run as the updater runs it: this test file's cell with the core folder's compose.yaml
+    (its own is the marker), on the same fake Docker. Records each run; `answers` replaces the run's answer."""
+    runs = []
+
+    def run(argv, cwd, env, timeout):
+        assert argv[:4] == [sys.executable, "-m", "setup", "cell"] and argv[-1] == "--json"
+        # The worker holds no lock while the child runs: the child takes the company's itself.
+        with cell.Cell(Path(env["TICO_CELL_ROOT"]), host.system, host.etc).lock("company-boatyard", timeout=0):
+            pass
+        runs.append((argv, Path(cwd), env, timeout))
+        if answers is not None:
+            return answers
+        out = io.StringIO()
+        code = cell.main(argv[4:], system=host.system, root=env["TICO_CELL_ROOT"], host_root=host.etc,
+                         compose_source=Path(cwd) / "compose.yaml", out=out)
+        return code, "a line that is not JSON\n" + out.getvalue()
+    run.runs = runs
+    return run
+
+
+def fetcher(archive):
+    fetched = []
+
+    def fetch(url, dest):
+        fetched.append(url)
+        Path(dest).write_bytes(Path(archive).read_bytes())
+    fetch.fetched = fetched
+    return fetch
+
+
+def test_a_release_newer_than_the_core_installs_its_core_and_runs_its_update(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    fetch, run = fetcher(core_archive(ready.tmp / "core.tar.gz")), child(ready)
+    svc = service(ready, core="v1.2.9", fetch=fetch, run_core=run)
+    n = len(ready.system.calls)
+    assert ask(svc, body={"version": "1.3.0", "from": "1.2.3"})[0] == 202
+    s = status(svc)
+    assert s["state"] == "healthy" and s["message"] == "updated with core v1.3.0; host init still at v1.2.9."
+    assert s["snapshot"] and (d / "snapshots" / s["snapshot"] / "hub.sqlite").read_text() == "db v1"
+    folder = ready.tmp / "cores" / "core-v1.3.0"
+    assert fetch.fetched == [U.CORE_URL % "v1.3.0"] and (folder / "setup" / "cell.py").is_file()
+    assert (folder / "CLAUDE.md").is_symlink() and not (folder / "tico-1.3.0").exists()          # the top folder stripped
+    assert sorted(p.name for p in (ready.tmp / "cores").iterdir()) == ["core-v1.3.0"]            # no staging left
+    (argv, cwd, env, timeout), = run.runs
+    assert argv[4:] == ["update", "--company", "boatyard", "--version", "v1.3.0", "--json"] and cwd == folder
+    assert env["TICO_CELL_ROOT"] == str(ready.root) and timeout == U.CORE_RUN_S
+    assert (d / "compose.yaml").read_text().endswith("# core v1.3.0\n")       # the company's file is that core's
+    assert record(ready)["version"] == "v1.3.0" and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.3.0"
+    assert svc.diagnostics("boatyard")["note"] == "updated with core v1.3.0; host init still at v1.2.9"
+    # Never `cell init` (it would restart this service; the router and tunnel are staff's): no systemctl, no init.
+    assert not any("init" in a for a, *_ in run.runs) and not any(c[0] == "systemctl" for c in ready.system.calls[n:])
+
+
+def test_an_installed_core_folder_is_used_as_it_is(ready):
+    ready(*add_args(ready))
+    folder = ready.tmp / "cores" / "core-v1.3.0"
+    (folder / "setup").mkdir(parents=True)
+    (folder / "setup" / "cell.py").write_text("# HQ's\n")
+    shutil.copy(ROOT / "compose.yaml", folder / "compose.yaml")
+    run = child(ready)
+    svc = service(ready, core="v1.2.9", run_core=run)                          # fetch: never
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy" and run.runs[0][1] == folder
+    assert (folder / "setup" / "cell.py").read_text() == "# HQ's\n"
+
+
+def test_a_core_folder_with_no_cell_is_not_run(ready):
+    ready(*add_args(ready))
+    (ready.tmp / "cores" / "core-v1.3.0").mkdir(parents=True)                  # half of someone else's install
+    svc = service(ready, core="v1.2.9")
+    assert ask(svc)[0] == 202
+    s = status(svc)
+    assert s["state"] == "failed" and "has no setup/cell.py" in s["message"] and record(ready)["version"] == "v1.2.3"
+
+
+def _member(name, kind, link="", data=b""):
+    def add(t, top):
+        info = tarfile.TarInfo(name.replace("TOP", top))
+        info.type, info.linkname, info.size = kind, link.replace("TOP", top), len(data)
+        t.addfile(info, io.BytesIO(data) if data else None)
+    return add
+
+
+@pytest.mark.parametrize("bad", [
+    _member("/etc/cron.d/x", tarfile.REGTYPE),
+    _member("TOP/../outside", tarfile.REGTYPE),
+    _member("TOP/setup/../../outside", tarfile.REGTYPE),
+    _member("TOP/up", tarfile.SYMTYPE, "../../etc"),
+    _member("TOP/abs", tarfile.SYMTYPE, "/etc/passwd"),
+    _member("TOP/hard", tarfile.LNKTYPE, "/etc/passwd"),
+    _member("TOP/dev", tarfile.CHRTYPE),
+    _member("TOP/blk", tarfile.BLKTYPE),
+    _member("TOP/fifo", tarfile.FIFOTYPE),
+    _member("elsewhere/x", tarfile.REGTYPE),
+], ids=["absolute", "dotdot", "nested dotdot", "link up", "link absolute", "hard link out", "char device",
+        "block device", "fifo", "second top folder"])
+def test_a_core_archive_with_a_bad_member_installs_nothing(ready, bad):
+    ready(*add_args(ready))
+    before = (ready.root / "companies" / "boatyard" / ".env").read_text()
+    svc = service(ready, core="v1.2.9", fetch=fetcher(core_archive(ready.tmp / "bad.tar.gz", extra=[bad])))
+    n = len(ready.system.calls)
+    assert ask(svc)[0] == 202
+    s = status(svc)
+    assert s["state"] == "failed" and s["message"].startswith("Not updated: could not install the v1.3.0 core: ")
+    assert list((ready.tmp / "cores").iterdir()) == []                          # no folder, no staging
+    assert (ready.root / "companies" / "boatyard" / ".env").read_text() == before
+    assert not (ready.tmp / "outside").exists() and ready.system.calls[n:] == []
+
+
+def test_a_core_download_is_capped(ready, monkeypatch):
+    monkeypatch.setattr(U, "CORE_MAX", 10)
+
+    class Answer(io.BytesIO):
+        def __exit__(self, *a):
+            self.close()
+    monkeypatch.setattr(U.urllib.request, "urlopen", lambda request, timeout: Answer(b"x" * 11))
+    with pytest.raises(U.Refused, match="over"):
+        U.fetch_archive(U.CORE_URL % "v1.3.0", ready.tmp / "a.tar.gz")
+
+
+@pytest.mark.parametrize("answer, state, restored, starts", [
+    ({"ok": False, "error": "update_failed", "detail": "v1.3.0 did not come up; back on v1.2.3"}, "rolled_back", True,
+     "v1.3.0 did not come up"),
+    ({"ok": False, "error": "rollback_failed", "detail": "putting v1.2.3 back failed"}, "failed", False, "putting"),
+    ({"ok": False, "error": "unhealthy", "detail": "no /healthz"}, "failed", False, "no /healthz"),
+    ({"ok": False, "error": "busy", "detail": "another command holds boatyard"}, "failed", False, "Not updated: "),
+    (None, "failed", False, "The v1.3.0 core's `cell update` gave no answer (exit 124, stopped after"),
+])
+def test_a_cores_update_answer_becomes_the_status(ready, answer, state, restored, starts):
+    ready(*add_args(ready))
+    folder = ready.tmp / "cores" / "core-v1.3.0"
+    (folder / "setup").mkdir(parents=True)
+    (folder / "setup" / "cell.py").write_text("")
+    out = (1, json.dumps(answer) + "\n") if answer else (124, "")
+    svc = service(ready, core="v1.2.9", run_core=child(ready, out))
+    assert ask(svc)[0] == 202
+    s = status(svc)
+    assert (s["state"], s["restored"]) == (state, restored) and s["message"].startswith(starts)
+    assert len(svc.diagnostics("boatyard")["errors"]) == 1
+
+
+def test_latest_beyond_the_core_is_checked_as_published_before_any_install(ready):
+    ready(*add_args(ready))
+    ready.system.release = "v1.4.0"
+    ready.system.unpublished.add("v1.4.0")                    # a release GitHub lists but whose files are not up yet
+    svc = service(ready, core="v1.2.9")                       # fetch: never
+    assert ask(svc, body={"version": "latest"})[0] == 202 and "not a published release" in status(svc)["message"]
+
+
+def test_the_cores_release_is_its_folders_name_when_it_has_no_installer_file():
+    assert U.host_core(Path("/opt/tico-cell/core-v1.4.0")) == "v1.4.0"
+    assert U.host_core(Path("/opt/tico-cell/core")) == ""      # the pre-versioned folder: every newer release gets its own
