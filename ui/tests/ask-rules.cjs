@@ -1,6 +1,6 @@
-// No browser: Ask's rules (ui/app/ask-rules.js). The "Loop in Tico Support" switch: support is in the chat while an open
+// No browser: Ask's rules (ui/app/ask-rules.js). "Loop in Support": support is in the chat while an open
 // request is shown there; flipping it takes that request out, brings one taken out back, or starts a new one; with
-// support off on the server there is no switch. Peeks beside the dot: from known items only, one at a time, none while
+// support off on the server there is no link. Peeks beside the dot: from known items only, one at a time, none while
 // the panel is open, while typing or in the first 3 s, a dismissed one never again, any one at most once a day; each
 // says what waits in six words at most.
 // Turning support on shares the chat: its last 20 turns, scrubbed of keys, go to the request (a new one when none is
