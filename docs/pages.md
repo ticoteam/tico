@@ -50,8 +50,8 @@ the one person or bot viewing it. The page itself stays static: no script runs a
 - `<tico-tasks waiting-on="viewer" [bot="SLUG"] [parent="TASK"] [limit="N"]></tico-tasks>`: the tasks waiting on the
   viewer, as links. Empty, it says "Nothing waiting on you".
 - `<tico-task id="TASK"></tico-task>`: one task's title, status and a link. Nothing when the viewer may not see it.
-- `<tico-files task="TASK" [kind="page|document|image|data|media"] [limit="N"]></tico-files>`: the files on a task
-  the viewer may see, as links to the task.
+- `<tico-files task="TASK" [kind="page|document|image|data|media|video|audio"] [limit="N"]></tico-files>`: the files on a task
+  the viewer may see. A page links to its page view, any other file to the task. `video` and `audio` mean `media`.
 
 `limit` defaults to 10 and is at most 50. Links open the task in the app in a new tab. A list uses the same rules as
 Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.

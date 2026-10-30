@@ -37,7 +37,7 @@ def test_a_live_page_shows_each_viewer_only_what_they_may_see_and_escapes_titles
     shared = post(api, "tasks", {"owner": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
     html_page = (f'<html><body><h1>Asks</h1><tico-tasks waiting-on="viewer" limit="5"></tico-tasks>'
                  f'<tico-task id="{theirs["id"]}"></tico-task><tico-files task="{theirs["id"]}"></tico-files>'
-                 f'</body></html>').encode()
+                 f'<tico-files task="{shared["id"]}"></tico-files></body></html>').encode()
     fid = page(api, attempt, shared["id"], "asks.html", html_page)
     # Publishing keeps the live tags and drops nothing else about them.
     stored = api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content
@@ -53,6 +53,7 @@ def test_a_live_page_shows_each_viewer_only_what_they_may_see_and_escapes_titles
     assert cara.status_code == 200, cara.text
     assert b"Cara private ask" in cara.content and b"Renew" not in cara.content
     assert b"Weekly review" not in cara.content and b"Nothing waiting" not in cara.content
+    assert f"#/page/{fid}".encode() in cara.content                 # a page in a file list opens its page view
 
 
 def test_a_page_with_live_blocks_is_never_the_hosted_copy(api, monkeypatch):

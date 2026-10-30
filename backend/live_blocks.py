@@ -5,14 +5,17 @@ is served, from the same rules as Needs you (tasks waiting on a person), the tas
 
     <tico-tasks waiting-on="viewer" [bot="slug"] [parent="task-id"] [limit="N"]></tico-tasks>
     <tico-task id="task-id"></tico-task>
-    <tico-files task="task-id" [kind="page|document|image|data|media"] [limit="N"]></tico-files>
+    <tico-files task="task-id" [kind="page|document|image|data|media|video|audio"] [limit="N"]></tico-files>
 
-`limit` defaults to 10 and is capped at 50. Attributes not listed are dropped when a page is published
+A file list links a page to its page view and any other file to its task. `video` and `audio` are aliases of
+`media`. `limit` defaults to 10 and is capped at 50. Attributes not listed are dropped when a page is published
 (backend/visuals.py clean). A tag with no answer for this viewer shows nothing, except tico-tasks, which says so."""
 import html
 import re
 from urllib.parse import quote
 
+# Kinds a file list takes; video and audio are both kinds of the media group.
+FILE_KINDS = {"video": "media", "audio": "media"}
 LIVE_ATTRS = {"tico-tasks": ("waiting-on", "bot", "parent", "limit"), "tico-task": ("id",),
               "tico-files": ("task", "kind", "limit")}
 DEFAULT_LIMIT, MAX_LIMIT = 10, 50
@@ -37,8 +40,8 @@ def _limit(value):
     return max(1, min(number, MAX_LIMIT))
 
 
-def _link(base, task_id, title):
-    href = html.escape(f"{base}/#/task/{quote(task_id, safe='')}", quote=True)
+def _link(base, task_id, title, route=None):
+    href = html.escape(f"{base}/{route or '#/task/' + quote(task_id, safe='')}", quote=True)
     return (f'<a class="tico-live-link" href="{href}" target="_blank" rel="noopener">'
             f'{html.escape(title or "Untitled task")}</a>')
 
@@ -64,6 +67,16 @@ def _tasks(c, auth, who, attrs, base):
     return f'<ul class="tico-live-tasks">{items}</ul>'
 
 
+def _file_item(base, task_id, row):
+    if row["is_page"]:
+        link = _link(base, row["id"], row["title"], "#/page/" + quote(row["id"], safe=""))
+        kind = "page"
+    else:
+        link = _link(base, task_id, row["title"])
+        kind = row["kind"] or ""
+    return f'<li>{link} <span class="tico-live-kind">{html.escape(kind)}</span></li>'
+
+
 def _task(c, auth, who, attrs, base):
     if not attrs.get("id"):
         return ""
@@ -84,7 +97,7 @@ def _files(c, files, who, attrs, base):
     if not attrs.get("task"):
         return ""
     where, args = ["f.task_id=?", "f.state<>'deleted'", "f.archived=0", "COALESCE(p.archived,0)=0"], [attrs["task"]]
-    kind = attrs.get("kind", "")
+    kind = FILE_KINDS.get(attrs.get("kind", ""), attrs.get("kind", ""))
     if kind == "page":
         where.append("p.file_id IS NOT NULL")
     elif kind in file_library.STORED:
@@ -92,7 +105,7 @@ def _files(c, files, who, attrs, base):
         args += list(file_library.STORED[kind])
     elif kind:
         return ""                                                 # an unknown kind lists nothing
-    rows = c.execute("SELECT f.* FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE "
+    rows = c.execute("SELECT f.*,p.file_id IS NOT NULL AS is_page FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE "
                      + " AND ".join(where) + " ORDER BY f.last_activity_at DESC LIMIT ?", (*args, SCAN_LIMIT)).fetchall()
     cache, shown, limit = {}, [], _limit(attrs.get("limit"))
     for row in rows:
@@ -102,7 +115,7 @@ def _files(c, files, who, attrs, base):
             shown.append(row)
     if not shown:
         return ""
-    items = "".join(f"<li>{_link(base, attrs['task'], row['title'])}</li>" for row in shown)
+    items = "".join(_file_item(base, attrs["task"], row) for row in shown)
     return f'<ul class="tico-live-files">{items}</ul>'
 
 
