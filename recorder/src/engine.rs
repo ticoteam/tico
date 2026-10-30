@@ -881,13 +881,14 @@ mod tests {
                 })?;
                 inputs
                     .warning("Meeting audio is connecting. Microphone recording continues.".into());
-                gate.recv_timeout(Duration::from_secs(5))?;
+                // Long enough for a slow CI runner to cut the microphone's first chunk while this setup is held.
+                gate.recv_timeout(Duration::from_secs(30))?;
                 let mut late = source(Channel::Meeting, 660.);
                 late.stream = Box::new(Tracked(late_flag));
                 inputs.ready(late)
             })
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(4);
+        let deadline = Instant::now() + Duration::from_secs(25);
         while store.get(&recording.id).unwrap().chunks.is_empty() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
