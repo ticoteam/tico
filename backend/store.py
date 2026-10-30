@@ -1848,6 +1848,10 @@ class Store:
                                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
                                    ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
+                                   # One action's rows in a time window, with no target (Health's limited runs, the
+                                   # judge's month, MCP calls): events_action_target walks every row of the action
+                                   # (911 ms on TIDY), events_ts every action's rows in the window.
+                                   ("events_action_ts", "events(action, ts)"),
                                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
                                    # expression word for word, or SQLite sorts every conversation.
                                    ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),

@@ -40,8 +40,9 @@ def _snoozed(c, actor):
     """Item keys the person said "later" to, still inside their window."""
     now = H.now()
     out = set()
-    for row in c.execute("SELECT target, detail_json FROM events WHERE actor=? AND action='batch.later' "
-                         "ORDER BY ts", (actor,)):
+    # The person's own rows (events_task_origin), not every person's in ts order (events_action_ts).
+    for row in c.execute("SELECT target, detail_json FROM events INDEXED BY events_task_origin WHERE actor=? "
+                         "AND action='batch.later' ORDER BY ts", (actor,)):
         until = (H._json(row["detail_json"], {}) or {}).get("until") or ""
         if until > now:
             out.add(row["target"])
