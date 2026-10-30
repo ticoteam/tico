@@ -69,8 +69,6 @@
 .upd-reply{display:flex;gap:8px;align-items:flex-end}
 .upd-reply textarea{flex:1;resize:none;min-height:38px;border:1px solid var(--line);border-radius:12px;padding:8px 12px;background:var(--bg)}
 .upd-hint{font-size:var(--t-sm)}
-.upd-empty{display:flex;flex-direction:column;align-items:center;gap:4px;padding:48px 16px;text-align:center}
-.upd-empty .nav-icon{font-size:32px;width:32px;height:32px;color:var(--accent)}
 .upd-skel{height:108px;border-radius:14px;background:linear-gradient(90deg,var(--surface) 25%,var(--surface2) 50%,var(--surface) 75%);background-size:200% 100%;animation:updskel 1.1s linear infinite}
 @keyframes updskel{from{background-position:200% 0}to{background-position:-200% 0}}
 .upd-more{align-self:center;margin:8px 0}
@@ -96,7 +94,7 @@
 .upd-node{display:flex;flex-direction:column;gap:10px;--tree-up:10px}
 .upd-kids{margin-left:auto;padding:0 6px 0 10px;gap:0}
 .upd-kids .nav-icon{transition:transform var(--dur-fast) var(--ease)}
-.upd-kids[aria-expanded=true] .nav-icon{transform:rotate(180deg)}
+.upd-kids[aria-expanded=true] .nav-icon{transform:var(--chev-open)}
 .upd-kids .upd-dot{position:absolute;top:5px;right:3px;margin:0}
 .upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:calc(var(--upd-cx) + var(--upd-in))}
 .upd-sub>.upd-node{position:relative;--tree-x:calc(-1 * var(--upd-in))}
@@ -160,7 +158,7 @@
 @keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--surface))}}
 @media (min-width:761px){
   #main.upd-chat-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-chat);padding:0;height:100%;overflow:hidden;position:relative}
-  #main.upd-chat-layout>.upd-col{min-width:0;min-height:0;overflow-y:auto;padding:18px var(--s4) 60px 28px}
+  #main.upd-chat-layout>.upd-col{min-width:0;min-height:0;overflow-y:auto;padding:8px var(--s4) 60px 28px}
   #main.upd-chat-layout>.upd-chat{border-left:1px solid var(--line);padding:10px 12px var(--s3) 14px}
 }
 @media (max-width:760px){

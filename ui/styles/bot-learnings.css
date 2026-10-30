@@ -2,7 +2,7 @@
    A panel on the right on a desktop, a sheet from the bottom on a phone. */
 .bot-learn{position:relative;flex:none;display:inline-grid;place-items:center;width:28px;height:28px;margin-left:4px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .bot-learn:hover{color:var(--ink);background:var(--hover)}
-.bot-learn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bot-learn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bot-learn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
 .bot-learn .bl-label{display:none}
 /* At the top of More on a phone it is a labelled row: icon, "Learnings", how many are new. */
@@ -44,5 +44,5 @@
   .learn-switch button{padding:6px 10px;min-height:32px}
   .learn-head .tmodal-x{min-width:44px;min-height:44px}
   .learn-body{padding:4px 16px calc(16px + env(safe-area-inset-bottom))}
-  .bot-learn{width:36px;height:36px}
+  .bot-learn{width:40px;height:40px}
 }

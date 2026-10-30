@@ -2,8 +2,8 @@
    each indented by its depth with a thin bar under it, and the editor, a panel on the right (a sheet on a phone). */
 
 .bt-top{display:flex;align-items:center;gap:8px;margin:0 0 12px}
-.bt-q{flex:1 1 160px;min-width:0;height:34px}
-.bt-top .ghost{flex:none;height:34px;padding:0 10px;font-size:var(--t-sm);white-space:nowrap}
+.bt-q{flex:1 1 160px;min-width:0;height:var(--ctl)}
+.bt-top .ghost{flex:none;height:var(--ctl);padding:0 10px;font-size:var(--t-sm);white-space:nowrap}
 .bt-hot[aria-pressed="true"]{background:var(--surface2);color:var(--ink);border-color:var(--wait)}
 .bt-hot-n{color:var(--wait-ink);font-variant-numeric:tabular-nums}
 .bt-note{margin:10px 2px}
@@ -13,13 +13,13 @@
 .bt-r+.bt-r{border-top:1px solid var(--line)}
 .bt-fold{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;padding:0;border:0;background:none;color:var(--muted);cursor:pointer}
 span.bt-fold{cursor:default}
-.bt-fold .nav-icon{font-size:18px;width:18px;height:18px;transition:transform var(--dur-fast,.12s)}
-.bt-fold[aria-expanded="true"] .nav-icon{transform:rotate(90deg)}
+.bt-fold .nav-icon{font-size:18px;width:18px;height:18px;transition:transform var(--dur-fast) var(--ease)}
+.bt-fold[aria-expanded="true"] .nav-icon{transform:var(--chev-open)}
 button.bt-fold:hover{color:var(--ink)}
 .bt-main{position:relative;flex:1;min-width:0;display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 12px 6px 0;border:0;background:none;color:var(--ink);font:inherit;text-align:left}
 button.bt-main{cursor:pointer}
 .bt-r:hover{background:var(--surface2)}
-.bt-fold:focus-visible,button.bt-main:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bt-fold:focus-visible,button.bt-main:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .bt-gi{flex:none;font-size:17px;width:18px;height:18px;color:var(--muted)}
 .bt-name{min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base)}
 .is-g>.bt-main .bt-name{font-weight:600}
@@ -44,7 +44,7 @@ button.bt-main{cursor:pointer}
 .bt-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .bt-sec{padding:10px 0 4px}
 .bt-sec+.bt-sec{border-top:1px solid var(--line)}
-.bt-sec h3{display:flex;align-items:center;gap:6px;margin:0 0 4px;font-size:var(--t-xs);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
+.bt-sec h3{display:flex;align-items:center;gap:6px;margin:0 0 4px;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-size:var(--t-label);font-weight:600}
 .bt-sec h4{margin:10px 0 2px;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
 .bt-held{margin:10px 0 0;color:var(--fail);font-size:var(--t-sm)}
 .bt-win,.bt-cap{display:grid;align-items:center;gap:10px;min-height:40px}
@@ -72,5 +72,5 @@ button.bt-main{cursor:pointer}
   .bt-top .ghost{height:40px}
   .bt-panel{margin:auto 0 0;width:100vw;height:fit-content;max-height:88dvh;border-radius:16px 16px 0 0}
   .bt-panel .tmodal-body{max-height:none;overflow:auto}
-  .bt-win .bd-money input,.bt-cap input{font-size:16px;height:36px}
+  .bt-win .bd-money input,.bt-cap input{font-size:16px;height:40px}
 }

@@ -39,7 +39,7 @@
 .dc-who-face{flex:none;display:flex;border-radius:50%}
 .dc-who-link{color:inherit;text-decoration:none;border-radius:4px}
 .dc-who-link:hover{text-decoration:underline}
-.dc-who-face:focus-visible,.dc-who-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dc-who-face:focus-visible,.dc-who-link:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .dc-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px;display:flex;flex-direction:column;gap:12px}
 .dc-q{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:balance;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
 .dc-ctx{margin:0;color:var(--muted);font-size:var(--t-md)}
@@ -99,7 +99,7 @@
 /* the note, and the send button a task card's comment has */
 .dc-note{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
 .dc-note textarea{flex:1;min-width:0;min-height:38px;max-height:120px;box-sizing:border-box;resize:none;padding:8px 14px;border:1px solid var(--line);border-radius:19px;background:var(--bg);color:var(--ink);font:var(--t-md)/var(--lh) var(--sans)}
-.dc-note textarea:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.dc-note textarea:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--accent)}
 .dc-send{flex:none;display:grid;place-items:center;width:38px;height:38px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
 .dc-send svg{width:18px;height:18px}
 .dc-send:disabled{background:var(--surface2);color:var(--muted);opacity:1}

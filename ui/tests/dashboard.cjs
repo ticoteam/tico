@@ -133,7 +133,7 @@ async function shot(page, name) {
     {
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .dash-pin').first().waitFor();
-      assert.deepEqual(await headings(page), ['TASKS BY STATUS', 'DONE PER WEEK', 'NEEDS YOU', 'LATEST PAGES'], 'the default cards');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you', 'Latest pages'], 'the default cards');
       assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Dashboard');
       assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Overview is current');
       assert.equal(await page.locator('.dash-stat strong').first().innerText(), '4');
@@ -207,7 +207,7 @@ async function shot(page, name) {
       await page.waitForFunction(() => location.hash === '#/team/eng');
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.equal(await page.locator('.dash-head h1').innerText(), 'Engineering');
-      assert.deepEqual(await headings(page), ['TASKS BY STATUS', 'DONE PER WEEK', 'NEEDS YOU'], 'its own team goes unsaid');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you'], 'its own team goes unsaid');
       assert.match(await page.locator('[data-dash-audience]').innerText(), /Seen by Everyone$/);
       assert.equal(await page.locator('#tree a.dept-label.cur').count(), 1);
       const kids = page.locator('#tree li.org-group:has(> .noderow a.dept-label.cur) > ul');

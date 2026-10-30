@@ -1,5 +1,22 @@
-/* ui/styles/components.css — Dense rows, native title bar, cards, tables, pills.
+/* ui/styles/components.css — The house rules; dense rows, cards, tables, pills, empty states, small buttons.
    The cascade runs in the order index.html links these files; keep rules in order. */
+/* House rules. Every page follows these; a page rule that needs something else says why. Tokens in tokens.css.
+   - Hover: a row, menu item or quiet button tints to --surface2 (--hover only where it already rests on --surface2),
+     colour and background over --dur-fast --ease. Hover never moves, resizes or borders anything.
+   - Focus: var(--focus-ring) at --focus-offset, or --focus-inset on a row that meets its container's edge. A text field
+     turns its border the accent and wears --focus-halo. outline:none only where one of these replaces it.
+   - Selected / current: --surface2 and weight 600, as the sidebar's .cur. No accent fills, no bars.
+   - Chevrons: chevron_right, turned --chev-open when open, transform over --dur-fast --ease.
+   - Card headers: sentence case, --t-base 600 --ink, one row of --s3 under it. The uppercase label (.label: --t-label
+     600 --track-caps --muted) is for section and table heads and field keys, never a card's title.
+   - Empty states: .empty (one muted line), or .empty-state on a page with nothing yet: optional icon, one line, one
+     muted line, one action, centred, --s6 above and below.
+   - Buttons: .primary, .ghost, .linkish. Regular --ctl (32px), .small --ctl-sm (28px); icon and text --s1 apart.
+   - Fields: one height with the buttons beside them, --r-ctl, one --line border.
+   - Counts and badges: tabular figures, --t-xs, a 999px radius.
+   - Table heads: the uppercase label.
+   - Spacing: the --s* scale. Icons: 16px inline, 18px in a toolbar, 20px in the sidebar.
+   - Copy: short labels, no card subtitles. */
 /* dense single-line rows: Today and Live now on the Notes page */
 .card.dense{padding:var(--s3) var(--s4) var(--s1)}
 .card.dense>header{margin-bottom:var(--s1)}
@@ -33,6 +50,16 @@ td.tags .pill{margin-right:2px}
 /* Beta: a feature on the server's Beta list (backend/beta.py); sits beside a nav item, a heading or a menu entry */
 .pill.beta,.pill.unreleased{margin-left:6px;vertical-align:1px;background:color-mix(in srgb,var(--accent) 13%,var(--surface));color:var(--accent);font-weight:600}
 .empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:var(--lh)}
+/* A page or list with nothing in it yet: an optional icon, one line, one muted line, one action. */
+:is(.empty-state,.upd-empty,.tl-empty,.notes-empty){display:flex;flex-direction:column;align-items:center;gap:var(--s1);padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
+:is(.empty-state,.upd-empty,.tl-empty,.notes-empty) :is(b,strong){color:var(--ink);font-weight:600}
+:is(.empty-state,.upd-empty,.tl-empty,.notes-empty) .nav-icon{font-size:32px;width:32px;height:32px;margin-bottom:var(--s1);color:var(--muted)}
+:is(.empty-state,.upd-empty,.tl-empty,.notes-empty)>:is(button,a.primary,a.ghost){margin-top:var(--s2)}
+/* A fold with no chevron icon of its own: one small triangle that turns --chev-open, never the browser's marker. */
+:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary{list-style:none}
+:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::-webkit-details-marker{display:none}
+:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::before{content:"";display:inline-block;flex:none;width:0;height:0;margin-right:var(--s2);vertical-align:middle;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
+:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)[open]>summary::before{transform:var(--chev-open)}
 /* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
    sets left and top to the thread's foot). */
 .stick-pill{position:absolute;z-index:3;transform:translate(-50%,-100%);padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-sm) var(--sans);box-shadow:0 2px 8px rgba(0,0,0,.12);cursor:pointer;white-space:nowrap}

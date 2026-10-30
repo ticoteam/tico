@@ -31,7 +31,7 @@
 .side-section{margin-top:6px}
 .section-toggle{width:100%;display:flex;align-items:center;gap:8px;background:none;border:0;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);cursor:pointer;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-align:left;text-transform:uppercase}
 .section-toggle:hover{background:var(--surface2);color:var(--ink)}
-.section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:rotate(90deg);transition:transform var(--dur) var(--ease)}
+.section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);transition:transform var(--dur-fast) var(--ease)}
 .section-toggle[aria-expanded="false"] .section-chev{transform:none}
 .section-body[hidden]{display:none}
 .nav-row{display:flex;align-items:center;gap:2px}
@@ -141,7 +141,7 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-name{flex:1;min-width:0;font:inherit;font-size:var(--t-base);padding:2px 6px;border:1px solid var(--accent);border-radius:6px;background:var(--surface);color:var(--ink)}
 .tree li.org-new{padding:2px 0 2px var(--tree-lead);display:flex}
 /* Over the tree's lines, which are drawn above the rows. */
-.tree .noderow.drop-target,.tree .org-no-group.drop-target{position:relative;z-index:1;outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+.tree .noderow.drop-target,.tree .org-no-group.drop-target{position:relative;z-index:1;outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
 /* A report's place among its manager's reports: a line where it will go, and its Move menu (ui/app/sidebar.js). */
 #tree .node:is(.drop-before,.drop-after,.drop-refused){position:relative;z-index:1}
 #tree .node.drop-before{box-shadow:0 -2px 0 var(--accent)}#tree .node.drop-after{box-shadow:0 2px 0 var(--accent)}
@@ -159,13 +159,14 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-order-menu button:disabled{color:var(--muted);background:none;cursor:default}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;padding:5px 6px 5px var(--tree-lead);color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+.tree .dept-label{flex:1;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */
+/* a team's label starts where the TEAM header's does (.section-toggle's 10px), not at the rows' --tree-lead */
 .tree a.dept-label{text-decoration:none}
 .tree a.dept-label:hover,.tree a.dept-label.cur{color:var(--ink);text-decoration:none}
 .noderow{display:flex;align-items:center}
-.chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:rotate(90deg);transition:transform var(--dur) var(--ease);flex:none;border-radius:4px}
-.chev.col{transform:rotate(0deg)}
+.chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);transition:transform var(--dur-fast) var(--ease);flex:none;border-radius:4px}
+.chev.col{transform:none}
 .chev:hover{color:var(--ink);background:var(--surface2)}
 .tree a.node{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
 .tree a.node:hover{background:var(--surface2);text-decoration:none}

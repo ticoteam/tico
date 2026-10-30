@@ -71,12 +71,12 @@
 /* the bot page's Goals card: a goal edited in place */
 .goal-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;min-width:0}
 .goal-lines li{display:flex;align-items:center;gap:7px;line-height:var(--lh);cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-lines li:hover{background:var(--surface)}
+.goal-lines li:hover{background:var(--surface2)}
 .goal-lines li>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .head-goals{margin-top:6px;font-size:var(--t-base)}.head-goals:empty{display:none}.head-goals li{padding-left:0}.head-goals li:hover{background:var(--surface2)}
 .goal-ed-row{display:flex;align-items:center;gap:4px}
 input.goal-ed-text{flex:1;min-width:0;width:100%;font:inherit;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:4px;padding:2px 6px;margin-left:-6px}
-input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--accent);background:var(--bg)}
 .goal-ed-link{flex:none;width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .goal-ed-link .nav-icon{font-size:18px}
 .goal-ed-supports{font-size:var(--t-sm);color:var(--muted)}.goal-ed-supports:empty{display:none}.goal-ed-supports a{color:inherit;text-decoration:underline}

@@ -344,7 +344,7 @@ function updTreeHTML(state) {
     // "8" and a chevron at the right of the card open its reports' cards (the chevron turns when they are open).
     const label = `${open ? 'Hide' : 'Show'} ${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? ', unread' : ''}`;
     const toggle = kids.count ? `<button type="button" class="upd-act upd-kids" data-upd-kids="${esc(n.key)}" aria-expanded="${open}" aria-label="${label}" title="${label}">
-        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">expand_more</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
+        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">chevron_right</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
     let card;
     if (own && state.editing) card = updEditor(u?.day === updToday() ? u : null, n, state, toggle);
     else if (u) { card = updCard(u, items.length, state, toggle); items.push(u); }

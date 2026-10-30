@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* main */
 #main{grid-column:2;grid-row:2;min-width:0;padding:8px 28px 60px;overflow-y:auto;max-width:1180px}
-#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
 /* The nudge to the desktop app: browsers only, dismissable for a week (ui: appNudge). */
 /* The top bar holds the desktop-app nudge; search lives above the account in the sidebar. */
 #topbar{grid-column:2;grid-row:1;flex-wrap:wrap;display:flex;align-items:flex-start;justify-content:flex-end;gap:12px;padding:10px 28px 0}
