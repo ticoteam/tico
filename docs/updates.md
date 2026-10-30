@@ -8,7 +8,7 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-**What's new** in the sidebar and **Changelog** in the account menu show product changes you
+**What's new** in the sidebar (above Ask Tico, only while something is unread) and **Changelog** in the account menu show product changes you
 have not acknowledged. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
 Search changes, expand a release's remaining bullets, or open its full release notes. Opening the

@@ -46,8 +46,6 @@
   --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
   /* control heights: small and regular (a phone's are 40px, forms.css) */
   --ctl-sm:28px;--ctl:32px;
-  /* the Ask pill's footprint on a computer (ask.css): 16px off the bottom, 40px tall, 20px clear above it; how wide it is */
-  --fab-room:76px;--ask-pill:104px;
   /* a fold's chevron (chevron_right) turns a quarter to open */
   --chev-open:rotate(90deg);
 }

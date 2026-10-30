@@ -28,7 +28,7 @@ function ldotSet(el, state) {
   const next = ldotState(state, Number(el.dataset.size) || 24);
   if (el.dataset.state !== next) el.dataset.state = next;
 }
-// The dot hardly ever just vanishes: when it moves (a pill into a panel and back, an older turn to the newest), a copy
+// The dot hardly ever just vanishes: when it moves (a row into a panel and back, an older turn to the newest), a copy
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both
 // rects are measured once, before the flight (`to` when the caller knows better, e.g. a panel still sliding in); the
 // copy moves by a Web Animation of transform alone, on top of every clip, and is the only thing with will-change.
@@ -138,7 +138,7 @@ globalThis.document?.addEventListener('visibilitychange', () => {
   document.querySelectorAll('.ldot').forEach(el => el.toggleAttribute('data-paused', document.hidden || LDOT_OFF.has(el)));
   if (document.hidden) { clearTimeout(LDOT_TIMER); LDOT_TIMER = 0; } else ldotSchedule();
 });
-// Reduced motion turned on mid-flight: every scripted move (flights, hops, the pill, support's chip) jumps to its end
+// Reduced motion turned on mid-flight: every scripted move (flights, hops, support's chip) jumps to its end
 // at once, so nothing keeps moving after the switch. CSS animations stop on their own (liquid-dot.css).
 globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').addEventListener?.('change', e => {
   if (!e.matches || typeof document.getAnimations !== 'function') return;

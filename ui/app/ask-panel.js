@@ -3,8 +3,8 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Bot, the Librarian), and to Tico support. On a computer the "Ask Tico" pill at the bottom left of the
-// page (or ⌘J) opens a panel above it; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
+// the Strategy Bot, the Librarian), and to Tico support. On a computer the "Ask Tico" row at the bottom of the sidebar
+// (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
 // means. Like the Updates chat it keeps its own small state, never the bot pages' (chat.js V2C), and drops the
@@ -51,16 +51,15 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 function askSync() {
-  const fab = $('#ask-fab'), tab = $('#mobile-ask'), panel = $('#ask-panel');
-  if (!fab || !panel) return;
+  const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
+  if (!row || !panel) return;
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
-  askSet(fab, 'hidden', away);
+  askSet(row, 'hidden', away);
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
-  askSet(fab, 'title', name + ' (⌘J)');
-  askPill(open);
-  // While the panel is open a close mark holds the phone tab's dot place (ask.css).
-  for (const el of [fab, tab].filter(Boolean)) {
+  askSet(row, 'title', name + ' (⌘J)');
+  // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
+  for (const el of [row, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
     if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
   }
@@ -76,37 +75,19 @@ function askSync() {
   askSet(sees, 'title', 'Sees ' + page.title);
   askPeople();
 }
-// The pill scales away as the panel opens (its dot is flying into the panel) and pops back as it closes. Web
-// Animations of transform and opacity; with reduced motion it just goes and comes back.
-function askPill(open) {
-  const fab = $('#ask-fab');
-  if (!fab || open === (fab.dataset.gone === '1')) return;
-  fab.dataset.gone = open ? '1' : '';
-  fab.getAnimations().forEach(a => a.cancel());
-  fab.classList.remove('ask-gone');
-  if (fab.hidden || askPhone() || ldotCalm() || typeof fab.animate !== 'function') { fab.classList.toggle('ask-gone', open); return; }
-  if (open) {
-    const run = fab.animate([{transform: 'scale(1)', opacity: 1}, {transform: 'scale(.7)', opacity: 0}],
-      {duration: 220, delay: 120, fill: 'forwards', easing: 'ease-in'});
-    run.onfinish = () => { if (fab.dataset.gone === '1') fab.classList.add('ask-gone'); run.cancel(); };
-  } else {
-    fab.animate([{transform: 'scale(.7)', opacity: 0}, {transform: 'scale(1.06)', opacity: 1, offset: .7}, {transform: 'scale(1)', opacity: 1}],
-      {duration: 320, easing: 'cubic-bezier(.3,0,.2,1)'});
-  }
-}
-// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the pill's (or the phone tab's) while the
+// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the row's (or the phone tab's) while the
 // panel is closed, the panel's own beside its name while it is open (Tico's turns carry none); the rest hold still.
-// With reduced motion the dot is still and the closed pill says the state in a word (shown while it has one, ask.css);
+// With reduced motion the dot is still and the closed row says the state in a word (shown while it has one, ask.css);
 // the open panel says it in the thread already ("Thinking…", the reply itself).
 function askDot() {
   const state = ASK?.dotState || 'idle', open = askShown();
-  document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
+  document.querySelectorAll('#ask-row [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
   ldotSet($('#ask-panel [data-ask-dot]'), open ? state : 'still');
-  askSet($('#ask-fab [data-ask-word]'), 'textContent', open ? '' : ldotWord(state));
+  askSet($('#ask-row [data-ask-word]'), 'textContent', open ? '' : ldotWord(state));
 }
-// Where the dot is now: the open panel's, else the pill's (whichever pill shows).
-const askPillDot = () => [...document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
-const askLiveDot = () => askShown() ? $('#ask-panel [data-ask-dot]') : askPillDot();
+// Where the dot is now: the open panel's, else the button's (the row on a computer, the tab on a phone).
+const askHomeDot = () => [...document.querySelectorAll('#ask-row [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
+const askLiveDot = () => askShown() ? $('#ask-panel [data-ask-dot]') : askHomeDot();
 // Where `el` rests once the panel has finished sliding in: its box less the panel's translate right now (read in the
 // same style pass as the box, so a slide just begun, or one reversed mid-close, cancels out).
 function askSettled(el) {
@@ -115,12 +96,12 @@ function askSettled(el) {
   const dy = parseFloat(y) || 0;
   return dy ? {left: r.left, top: r.top - dy, width: r.width, height: r.height} : r;
 }
-// Open: the pill's dot flies up to its place beside the panel's name; close: back down to the pill. Both ends are
-// measured once, before anything moves: the pill pops back by a scale, so its dot is measured before that.
+// Open: the row's dot flies up to its place beside the panel's name; close: back down to the row. Both ends are
+// measured once, before anything moves.
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
   document.querySelectorAll('[data-ask-dot]').forEach(d => d._ldotFly?.cancel());   // a flight the other way lands at once
-  const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askPillDot()?.getBoundingClientRect();
+  const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askHomeDot()?.getBoundingClientRect();
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
   ASK.open = open;
   askSync();
@@ -130,7 +111,7 @@ function askToggle(open = !ASK?.open, focus = true) {
   else if (open) void ASK.refresh?.();       // cards answered or confirmed elsewhere meanwhile
   // A phone keeps its keyboard down until the person taps the box.
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
-  else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-fab'))?.focus();
+  else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-row'))?.focus();
 }
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
 function askDraft(text) {
@@ -355,6 +336,12 @@ function askPeekSave(store) {
 const askTypes = a => !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(a.type)));
 const askTyping = () => askTypes(document.activeElement);
 let ASK_PEEK_TIMER = 0;
+// On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
+// peek shows, never on the way in or out of the panel.
+function askPeekPlace(el) {
+  const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
+  if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
+}
 function askPeek() {
   const el = $('#ask-peek');
   if (!el) return;
@@ -364,7 +351,7 @@ function askPeek() {
     .concat((ASK?.pending || []).map(a => ({id: 'confirm:' + a.id, confirm: true})));
   const store = askPeekStore(), cur = el.dataset.item;
   if (open || away) { askSet(el, 'hidden', true); delete el.dataset.item; return; }
-  if (cur && !el.hidden && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) return;
+  if (cur && !el.hidden && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) { askPeekPlace(el); return; }
   const {text, ids} = askPeekLine(askPeekFresh(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown}));
   if (!text) {
     askSet(el, 'hidden', true); delete el.dataset.item;
@@ -375,6 +362,7 @@ function askPeek() {
   el.querySelector('[data-peek-go]').setAttribute('aria-label', text + '. Open ' + askName());
   el.dataset.item = ids[0];
   el.dataset.items = ids.join(' ');
+  askPeekPlace(el);
   el.hidden = false;
   askPeekSave({...store, shown: {...store.shown, ...Object.fromEntries(ids.map(id => [id, now]))}});
   ldotMove(askLiveDot(), 'hop');
@@ -549,7 +537,7 @@ function askRowsIn(thread, seen, animate, delay = 0) {
       {duration: pop ? 320 : 260, delay: row.matches('.ask-sys') ? delay : 0, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
   }
 }
-$('#ask-fab')?.addEventListener('click', () => askToggle());
+$('#ask-row')?.addEventListener('click', () => askToggle());
 $('#mobile-ask')?.addEventListener('click', () => askToggle());
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {

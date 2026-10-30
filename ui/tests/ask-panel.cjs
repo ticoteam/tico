@@ -1,12 +1,12 @@
-// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" pill at the bottom left
-// (or ⌘J) opens "Tico Assistant", a panel that names the page it sees and sends it with the message, and the pill
-// scales away; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
+// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" row at the bottom of
+// the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel beside the rail that names the
+// page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
 // The header has no + and no Show chat: "Loop in Support", a link at the top right, has an open request's messages
 // in the chat as blue-gray bubbles under a headset, a chip in the header, the box writing to it, and a line saying
 // support came in (the link hides meanwhile); the chip's × takes it out, with a line saying so. A Confirm card BotOps
 // left in its own chat and bots' questions sit in the thread by when they were asked, answered here. A peek beside
-// the dot says in six words at most that something waits (never who asked) and opens the chat on it. No BotOps or
+// the row says in six words at most that something waits (never who asked) and opens the chat on it. No BotOps or
 // Assistant rows in the rail. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -102,28 +102,50 @@ const words = text => text.trim().split(/\s+/).length;
                refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps, Assistant or ? in the rail');
-    const fab = page.locator('#ask-fab'), panel = page.locator('#ask-panel');
+    const fab = page.locator('#ask-row'), panel = page.locator('#ask-panel');
     await fab.waitFor();
     assert.equal(await fab.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on the button');
+    // The row sits in the sidebar's footer, above the account, nothing floating over the page; Search is an icon at its
+    // end (⌘K in its name) and opens Search.
+    const where = await page.evaluate(() => { const row = document.querySelector('#ask-row'), b = el => el.getBoundingClientRect();
+      return {inFooter: !!row.closest('#side .side-footer'), above: b(row).bottom <= b(document.querySelector('.side-utility')).top + 1,
+        next: row.nextElementSibling?.id, rail: b(document.querySelector('#side')).right, right: b(row).right, height: Math.round(b(row).height)}; });
+    assert.deepEqual([where.inFooter, where.above, where.next], [true, true, 'search-open'], JSON.stringify(where));
+    assert.ok(where.right < where.rail && where.height <= 36, `one plain row in the rail: ${JSON.stringify(where)}`);
+    const search = page.locator('#search-open');
+    assert.equal(await search.getAttribute('aria-label'), 'Search (⌘K)');
+    assert.equal(await search.innerText(), 'search', 'an icon, no words beside Ask');
+    await search.click();
+    await page.locator('#search-modal[open]').waitFor();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#search-modal').open);
     // A peek: Tico, in a few words, that two questions wait; never who asked or the question. × puts both away.
     const peek = page.locator('#ask-peek');
     await peek.waitFor({timeout: 8000});
     const said = await peek.locator('[data-peek-text]').innerText();
     assert.equal(said, '2 questions are waiting on you');
+    // It comes out of the rail, level with the row.
+    const level = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-peek'), r = b('#ask-row');
+      return {dy: Math.abs((p.top + p.bottom) / 2 - (r.top + r.bottom) / 2), gap: p.left - b('#side').right}; });
+    assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
     assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
     assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
     await peek.getByRole('button', {name: 'Dismiss'}).click();
     assert.equal(await peek.isHidden(), true);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
-    // Open: the pill's dot flies up to its place beside the panel's name and lands exactly there.
+    // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
+    // mark in its dot's place; the panel stands beside the rail and leaves the row in view.
     await fab.click();
     await panel.waitFor();
     await flight(page, '#ask-panel .ask-head [data-ask-dot]');
-    assert.equal(await fab.getAttribute('aria-expanded'), 'true');
-    await page.waitForFunction(() => document.querySelector('#ask-fab').classList.contains('ask-gone'));
-    assert.equal(await fab.isVisible(), false, 'the pill scaled away');
+    assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Ask Tico']);
+    assert.equal(await fab.isVisible(), true, 'the row stays');
+    assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')).opacity), '1', 'a close mark holds its place');
+    const beside = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect();
+      return {gap: b('#ask-panel').left - b('#side').right, foot: innerHeight - b('#ask-panel').bottom}; });
+    assert.ok(beside.gap > 0 && beside.gap < 16 && beside.foot <= 16, `the panel rises from the bottom left: ${JSON.stringify(beside)}`);
     // The header's dot is the one live dot while it is open; Tico's turns carry none.
-    const dots = () => page.evaluate(() => ['#ask-fab [data-ask-dot]', '#ask-panel [data-ask-dot]'].map(s => document.querySelector(s)?.dataset.state || ''));
+    const dots = () => page.evaluate(() => ['#ask-row [data-ask-dot]', '#ask-panel [data-ask-dot]'].map(s => document.querySelector(s)?.dataset.state || ''));
     const landed = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
     assert.deepEqual(await dots(), ['still', 'idle']);
     // The header: the dot, "Tico Assistant", the page it sees, support's chip; no +, no Show chat.
@@ -242,18 +264,22 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
-    // Esc closes the panel: the dot flies back down to the pill and lands on its dot; ⌘J opens it again.
+    // Esc closes the panel: the dot flies back down to the row and lands on its dot, focus back on the row; ⌘J opens it
+    // again.
     await box.focus();
     await page.keyboard.press('Escape');
     await panel.waitFor({state: 'hidden'});
-    await flight(page, '#ask-fab [data-ask-dot]');
-    assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the dot is back on the pill');
+    await flight(page, '#ask-row [data-ask-dot]');
+    assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the dot is back on the row');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'ask-row');
+    assert.equal(await fab.getAttribute('aria-label'), null);
     await page.keyboard.press('Control+j');
     await panel.waitFor();
     await flight(page, '#ask-panel .ask-head [data-ask-dot]');
-    // The Assistant page is this chat already: there the button is not needed.
+    // The Assistant page is this chat already: there the row is not needed, and Search is the whole row again.
     await page.evaluate(() => { location.hash = '#/assistant'; });
     await fab.waitFor({state: 'hidden'});
+    assert.equal((await search.innerText()).replace(/\s+/g, ' '), 'search Search ⌘K');
     assert.deepEqual(errors, []);
     await page.close();
 
@@ -264,7 +290,7 @@ const words = text => text.trim().split(/\s+/).length;
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
-    // The Ask tab is the pill too, words and all: the dot, or a close mark in its place while the sheet is open.
+    // The Ask tab is the row too, words and all: the dot, or a close mark in its place while the sheet is open.
     const glyph = async () => {
       await page.waitForFunction(() => !document.querySelector('.ldot-fly')
         && !document.querySelector('#mobile-ask').getAnimations({subtree: true}).some(a => a instanceof CSSTransition));
@@ -276,7 +302,7 @@ const words = text => text.trim().split(/\s+/).length;
     // The dot sits in the middle of the bar, live, and there is no second, floating Ask button.
     const centre = await page.evaluate(() => { const t = document.querySelector('#mobile-ask').getBoundingClientRect(); return t.left + t.width / 2; });
     assert.ok(Math.abs(centre - 195) < 24, `the dot is in the middle of the tab bar (${centre})`);
-    assert.equal(await page.locator('#ask-fab').isVisible(), false, 'no floating Ask button on a phone');
+    assert.equal(await page.locator('#ask-row').isVisible(), false, 'no Ask row on a phone');
     assert.equal(await tab.locator('[data-ask-dot]').getAttribute('data-state'), 'idle');
     // A peek above the bar after a few seconds; tapping it opens the chat on the first question, the dot flying up to
     // the sheet's header.

@@ -14,7 +14,7 @@ const moving = page => page.evaluate(() => document.getAnimations().filter(a => 
   const el = a.effect?.target;
   return `${a.animationName || a.transitionProperty || a.constructor.name} on ${el ? el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + [...el.classList].slice(0, 2).map(c => '.' + c).join('') : '?'}`;
 }));
-const askButton = phone => phone ? '#mobile-ask' : '#ask-fab';
+const askButton = phone => phone ? '#mobile-ask' : '#ask-row';
 
 run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/overview'});
