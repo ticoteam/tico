@@ -363,6 +363,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 @media(max-width:760px){
   .meet-review-tabs button{padding:6px 8px;font-size:var(--t-base);min-height:40px}
   .meet-review-bar{gap:10px}
+  #meet-recorder{display:none}
   .mg-line .mg-count{display:none}
   #main:has(.meet-review-bar){padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
   .meet-row.review-pending .meet-main{grid-column:3 / -1}
@@ -408,6 +409,8 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-transcript>p>small:first-child{grid-column:1}
 .live-transcript>p:focus{outline:var(--focus-ring);outline-offset:var(--focus-inset);border-radius:6px}
 .live-chat>p{grid-template-columns:minmax(80px,130px) minmax(0,1fr)}
+.live-chat>p.live-notice{padding:4px;color:var(--muted);font-size:var(--t-sm)}.live-chat>p.live-notice b{font-weight:500}
+.live-chat>p.live-notice.failed{color:var(--wait-ink)}
 .live-transcript-link{padding:0;border:0;color:var(--accent);background:transparent;text-decoration:underline;cursor:pointer}
 .live-router details{padding:7px 0;border-bottom:1px solid var(--line)}
 .live-router summary{display:flex;gap:8px;align-items:center;cursor:pointer}

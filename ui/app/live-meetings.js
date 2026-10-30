@@ -161,7 +161,7 @@ function livePaintDetail(state, detail) {
   const active = detail.state !== 'ended';
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
   const candidates = state.candidates.filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.slug));
-  const chunks = detail.chunks || [], chat = detail.chat || [], router = detail.router || {windows: [], turns: []};
+  const chunks = detail.chunks || [], chat = detail.chat || [], notices = detail.notices || [], router = detail.router || {windows: [], turns: []};
   const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.bot)}${me && active ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
@@ -177,7 +177,7 @@ function livePaintDetail(state, detail) {
     <div class="live-members"><span>People: ${(detail.humans || []).map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
       <span>Teammates: ${teammates || '—'}</span></div>
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
-    <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length ? chat.map(message => `<p><b>${esc(liveActor(message.actor))}</b><span>${esc(message.text)}</span>${message.transcript_seq ? `<small><button type="button" class="live-transcript-link" data-live-transcript-seq="${message.transcript_seq}">Transcript #${message.transcript_seq}</button></small>` : ''}</p>`).join('') : '<p class="muted">No chat messages yet.</p>'}</div>
+    <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length || notices.length ? liveChatRows(chat, notices) : '<p class="muted">No chat messages yet.</p>'}</div>
       ${me && active ? '<form id="live-chat-form" class="live-chat-form"><input name="text" data-live-focus-key="chat-input" maxlength="20000" required aria-label="Meeting chat" placeholder="Write to the meeting"><button class="primary" type="submit">Send</button></form>' : ''}</section>
     <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 5} turns per window</p>
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
@@ -212,6 +212,33 @@ function livePaintDetail(state, detail) {
   });
 }
 
+// Chat messages and the bot notices (why a bot has not answered yet, or did not) in time order.
+function liveChatRows(chat, notices) {
+  const rows = [];
+  let next = 0;
+  for (const message of chat) {
+    while (next < notices.length && message.created && !(notices[next].created > message.created)) rows.push(liveNotice(notices[next++]));
+    rows.push(`<p><b>${esc(liveActor(message.actor))}</b><span>${esc(message.text)}</span>${message.transcript_seq ? `<small><button type="button" class="live-transcript-link" data-live-transcript-seq="${message.transcript_seq}">Transcript #${message.transcript_seq}</button></small>` : ''}</p>`);
+  }
+  while (next < notices.length) rows.push(liveNotice(notices[next++]));
+  return rows.join('');
+}
+
+function liveNotice(notice) {
+  const bot = botDisplayName(notice.bot);
+  const text = notice.kind === 'deferred' ? (notice.reason === 'replying_in_meeting' ? 'Will answer this in the reply it is giving.' : 'Busy. Will answer after its current work.')
+    : notice.kind === 'retried' ? 'Gave an empty reply. Asking again.'
+    : liveNoticeDetail(notice.detail, bot, notice.bot) || (notice.kind === 'waiting' ? 'Waiting for its computer.' : 'Could not answer.');
+  return `<p class="live-notice ${notice.kind === 'failed' ? 'failed' : ''}" data-live-notice="${esc(notice.kind)}"><b>${esc(bot)}</b><span>${esc(text)}</span></p>`;
+}
+
+// The server's sentence can start with the bot's name (or slug), which the row already shows.
+function liveNoticeDetail(detail, ...names) {
+  const text = String(detail || ''), lower = text.toLowerCase();
+  const name = names.find(n => n && lower.startsWith(String(n).toLowerCase() + ' '));
+  return name ? text.charAt(name.length + 1).toUpperCase() + text.slice(name.length + 2) : text;
+}
+
 function liveActor(actor) {
   if (String(actor || '').startsWith('human:')) return personDisplay(actor.slice(6));
   if (String(actor || '').startsWith('bot:')) return botDisplayName(actor.slice(4));
@@ -236,6 +263,7 @@ function liveSubscribe(state, id, after) {
   state.sources.set(id, source);
   const types = ['meeting.state', 'meeting.joined', 'meeting.chunk', 'meeting.chunk_corrected', 'meeting.chat',
     'meeting.bot_joined', 'meeting.bot_left', 'meeting.bot_turn', 'meeting.bot_turn_claimed', 'meeting.bot_turn_skipped',
+    'meeting.bot_turn_failed', 'meeting.bot_turn_waiting', 'meeting.bot_turn_deferred', 'meeting.bot_turn_retried',
     'meeting.bot_reply', 'meeting.router', 'meeting.finalized'];
   for (const type of types) source.addEventListener(type, event => {
     state.cursor[id] = Number(event.lastEventId) || state.cursor[id] || 0;

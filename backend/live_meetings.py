@@ -190,6 +190,10 @@ def _connector(c, auth, who, rid, *, states=None):
     return row
 
 
+NOTICE_EVENTS = ("meeting.bot_turn_failed", "meeting.bot_turn_waiting", "meeting.bot_turn_deferred",
+                 "meeting.bot_turn_retried")
+
+
 def _view(c, auth, who, rid):
     row = _require_read(c, auth, who, rid)
     chunks = [dict(r) for r in c.execute(
@@ -225,6 +229,12 @@ def _view(c, auth, who, rid):
         payload = json.loads(event["payload_json"])
         if payload.get("bypass") == "named":
             bypasses.append({"event_id": event["event_id"], "created": event["created"], **payload})
+    # Why a bot has not answered yet, or did not: shown in the meeting's chat as quiet lines.
+    notices = [{"event_id": event["event_id"], "kind": event["type"].removeprefix("meeting.bot_turn_"),
+                "created": event["created"], **json.loads(event["payload_json"])}
+               for event in c.execute("SELECT event_id,type,created,payload_json FROM live_meeting_events "
+                                      "WHERE meeting_id=? AND type IN (?,?,?,?) ORDER BY event_id",
+                                      (rid, *NOTICE_EVENTS))]
     access = []
     for r in c.execute("SELECT actor FROM live_meeting_access WHERE meeting_id=? ORDER BY added_at,actor", (rid,)):
         person = H.human(c, H.actor_id(r["actor"]))
@@ -240,7 +250,7 @@ def _view(c, auth, who, rid):
                                     else providers.load(c, auth.settings)["meeting_model"]),
         "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
         "imported_meeting_id": row["imported_meeting_id"], "humans": humans, "bots": bots,
-        "chunks": chunks, "chat": chat,
+        "chunks": chunks, "chat": chat, "notices": notices,
         "router": {"windows": windows, "chat_routes": chat_routes,
                    "turns": pending_turns, "bypasses": bypasses},
     }
