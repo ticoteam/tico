@@ -23,8 +23,8 @@ HARNESS = {"claude": "claude-code", "codex": "codex", "muse": "muse-code", "gemi
            "grok": "grok", "cursor-agent": "cursor-agent", "pi": "pi", "agy": "antigravity"}.get(NAME, NAME)
 VERSIONS = {"claude": "2.1.0 (Claude Code)", "codex": "codex-cli 0.163.0", "muse": "muse 1.4.8",
             "gemini": "0.30.0", "grok": "0.9.0", "cursor-agent": "2026.10.01-abcdef1", "pi": "0.70.0", "agy": "1.2.0"}
-HERE = os.path.dirname(os.path.abspath(__file__))
-PROBE = os.environ.get("HARNESS_PROBE", os.path.join(HERE, "probe.mjs"))
+# The copies in the runner's PATH are not next to the probe, so it lives at a fixed place there.
+PROBE = os.environ.get("HARNESS_PROBE", "/opt/harness/probe.mjs")
 ROOT = os.environ.get("HARNESS_DIR", "/home/runner/harness")
 RUN = re.compile(r"harness-run (\S+) ([a-z-]+)((?: [A-Za-z_]+=\S+)*)")
 ALLOWED = {"PRACTICE", "HOST", "LABEL", "OTHER"}

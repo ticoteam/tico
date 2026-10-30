@@ -37,6 +37,7 @@ TURN_WHY=""
 LAST_RESULT=""
 mkdir -p "$WORK/rows" "$WORK/results" "$WORK/dumps"
 
+# The modes are set on the host before the copy: root in the runner cannot chmod a file the host user owns.
 # The stand-in CLIs take the runner's harness names: each name the runner starts is the same program.
 install_fakes() {
   install -m 755 "$REPO/e2e/browser/harness/fake_cli.py" "$WORK/fake_cli.py" &&
@@ -44,7 +45,7 @@ install_fakes() {
     docker exec "$RUNNER" mkdir -p /opt/harness "$HARNESS_RESULTS" "$HARNESS_ROOT/dumps" &&
     docker cp "$WORK/fake_cli.py" "$RUNNER:/opt/harness/fake_cli.py" &&
     docker cp "$WORK/probe.mjs" "$RUNNER:/opt/harness/probe.mjs" &&
-    docker exec "$RUNNER" sh -c "chmod 755 /opt/harness/fake_cli.py && chmod 644 /opt/harness/probe.mjs && chmod -R 777 $HARNESS_ROOT &&
+    docker exec "$RUNNER" sh -c "chmod -R 777 $HARNESS_ROOT &&
       for name in claude codex muse gemini grok cursor-agent pi agy; do install -m 755 /opt/harness/fake_cli.py /usr/local/bin/\$name || exit 1; done"
 }
 
