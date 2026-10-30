@@ -168,6 +168,14 @@ const sentAs = (name, r) => `${r.error || 'filled'} (card ${JSON.stringify(name)
 const onPath = (tab, path) => tab.waitFor(`location.pathname === ${JSON.stringify(path)}`);
 const clickIn = (tab, selector) => tab.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return false; e.click(); return true; })()`);
 const focusIn = (tab, expression) => tab.eval(`(${expression}).focus(), true`);
+// A press and release at the element's centre, as the mouse makes them (a user gesture the page can act on).
+const trustedClick = async (browser, tab, selector) => {
+  const at = await tab.eval(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await browser.send('Input.dispatchMouseEvent', {type, x: at.x, y: at.y, button: 'left', clickCount: 1}, tab.sessionId);
+  }
+};
 // The next minute boundary at least `ahead` ms away.
 const boundaryAfter = ahead => { const now = Date.now(); let b = Math.ceil(now / 60000) * 60000; while (b - now < ahead) b += 60000; return b; };
 const until = ms => sleep(Math.max(0, ms - Date.now()));
@@ -258,7 +266,8 @@ const variants = {
     const tab = await browser.newTab();
     await tab.go(practice + '/sites/popup');
     await tab.waitFor('!!document.getElementById("open")');
-    await clickIn(tab, '#open');
+    // A trusted click: a script's click() is no user gesture, and Chrome's popup blocker would refuse the window.
+    await trustedClick(browser, tab, '#open');
     // The sign-in window is a page of its own: the bot finds its target and fills by that target id.
     let popupId = '';
     const end = Date.now() + 15000;
@@ -377,11 +386,7 @@ const variants = {
     const covered = await tab.eval(`(() => { const r = document.querySelector("input[name=username]").getBoundingClientRect();
       const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!(top && top.closest("#consent")); })()`);
     check('consent: the banner covers the form', covered === true);
-    const at = await tab.eval(`(() => { const r = document.getElementById("accept").getBoundingClientRect();
-      return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()`);
-    for (const type of ['mousePressed', 'mouseReleased']) {
-      await browser.send('Input.dispatchMouseEvent', {type, x: at.x, y: at.y, button: 'left', clickCount: 1}, tab.sessionId);
-    }
+    await trustedClick(browser, tab, '#accept');
     check('consent: the bot dismissed the banner with a click', await tab.waitFor('!document.getElementById("consent")'));
     const r = await signInWith(tab, cred);
     check('consent: the form filled after the banner', r.p.ok === true, sentAs(cred, r.p));
