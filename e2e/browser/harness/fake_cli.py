@@ -229,8 +229,13 @@ def codex_app_server():
         try:
             msg = json.loads(line)
         except ValueError:
+            with open(os.path.join(ROOT, "codex-protocol.log"), "a") as trace:
+                trace.write("unparsed: %s\n" % line[:160])
             continue
         method, params, rid = msg.get("method"), msg.get("params") or {}, msg.get("id")
+        # Every message the host sends, by name, so a turn that never starts shows where the protocol stopped.
+        with open(os.path.join(ROOT, "codex-protocol.log"), "a") as trace:
+            trace.write("%s id=%s pid=%d\n" % (method, rid, os.getpid()))
         if rid is None:
             continue
         if method in ("thread/start", "thread/resume", "thread/fork"):
