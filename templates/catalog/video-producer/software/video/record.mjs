@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Records a scripted browser session to MP4 with a visible cursor.
-// Usage: node record.mjs <shots.json> --out out.mp4 [--size 1920x1080] [--headed | --headless] [--keep-webm]
+// Usage: node record.mjs <shots.json> --out out.mp4 [--size 1920x1080] [--headed | --headless] [--keep-webm] [--as-bot]
 // Steps are described in README.md. Headed is the default on Linux when DISPLAY is set.
+// --as-bot records your company's Tico as this bot (during a bot turn only); paths starting with / go to your Tico.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -64,6 +65,53 @@ export function validateShots(doc) {
     }
   });
   return errors;
+}
+
+const TOKEN_FILE = 'tico-file:';
+
+// Reads the Tico server and this bot's token from the turn's environment. Throws one plain line when one is missing.
+// The token is never put in a message.
+export function hubAuth(env) {
+  const base = (env.HUB_API_URL || '').trim();
+  if (!base) throw new Error('--as-bot needs HUB_API_URL, which the runner sets during a bot turn');
+  let origin;
+  try {
+    origin = new URL(base).origin;
+  } catch {
+    throw new Error(`HUB_API_URL is not a URL: ${base}`);
+  }
+  let token = (env.HUB_TOKEN || '').trim();
+  if (!token) throw new Error('--as-bot needs HUB_TOKEN, which the runner sets during a bot turn');
+  if (token.startsWith(TOKEN_FILE)) {
+    const file = resolve(token.slice(TOKEN_FILE.length));
+    try {
+      token = readFileSync(file, 'utf8').trim();
+    } catch {
+      throw new Error(`cannot read the bot token file ${file}`);
+    }
+    if (!token) throw new Error(`the bot token file ${file} is empty`);
+  }
+  return { origin, token };
+}
+
+// Headers for one request. Only requests to the Tico server get the bot token; other sites get null (no change).
+export function botHeaders(url, hub, headers) {
+  if (!hub) return null;
+  let origin = null;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return null;
+  }
+  if (origin !== hub.origin) return null;
+  return { ...headers, authorization: `Bearer ${hub.token}` };
+}
+
+// Where a goto step points. With a Tico origin (--as-bot), "/path" is on the Tico server.
+// Otherwise relative paths are files next to the shots file.
+export function resolveStepUrl(url, shotsDir, hubOrigin) {
+  if (hubOrigin && url.startsWith('/')) return new URL(url, hubOrigin).href;
+  return /^(https?|file):/.test(url) ? url : pathToFileURL(join(shotsDir, url)).href;
 }
 
 // In-page cursor overlay. Injected into every page of the recording context (top frame only).
@@ -154,10 +202,18 @@ function rng(seed) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2), {
-    out: 'value', size: 'value', headed: 'bool', headless: 'bool', 'keep-webm': 'bool',
+    out: 'value', size: 'value', headed: 'bool', headless: 'bool', 'keep-webm': 'bool', 'as-bot': 'bool',
   });
   const [shotsArg] = args._;
-  if (!shotsArg || !args.out) fail('usage: record.mjs <shots.json> --out out.mp4 [--size WxH] [--headed]', 2);
+  if (!shotsArg || !args.out) fail('usage: record.mjs <shots.json> --out out.mp4 [--size WxH] [--headed] [--as-bot]', 2);
+  let hub = null;
+  if (args['as-bot']) {
+    try {
+      hub = hubAuth(process.env);
+    } catch (e) {
+      fail(e.message, 2);
+    }
+  }
   requireFfmpeg();
 
   const shotsPath = resolve(shotsArg);
@@ -188,6 +244,13 @@ async function main() {
       viewport: { width, height },
       recordVideo: { dir: workDir, size: { width, height } },
     });
+    if (hub) {
+      // The bot token goes to the Tico server only. Every other request is passed on unchanged.
+      await context.route('**/*', (route, request) => {
+        const headers = botHeaders(request.url(), hub, request.headers());
+        return headers ? route.continue({ headers }) : route.continue();
+      });
+    }
     await context.addInitScript(CURSOR_JS);
     const page = await context.newPage();
     const pageStarted = Date.now();
@@ -208,7 +271,7 @@ async function main() {
       cursor.x = x;
       cursor.y = y;
     };
-    const resolveUrl = (u) => (/^(https?|file):/.test(u) ? u : pathToFileURL(join(shotsDir, u)).href);
+    const resolveUrl = (u) => resolveStepUrl(u, shotsDir, hub && hub.origin);
     const locate = async (selector) => {
       const loc = page.locator(selector).first();
       await loc.waitFor({ state: 'visible', timeout: 15000 });
