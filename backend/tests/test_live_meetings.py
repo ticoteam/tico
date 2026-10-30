@@ -11,7 +11,7 @@ from backend import live_meetings as live_meetings_module
 from backend import gateway_connection, providers, task_models
 from backend.auth import Identity
 from backend.store import H, digest, encode
-from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, restrict, runner  # noqa: F401
 
 
 @pytest.fixture
@@ -28,6 +28,12 @@ def live(api):
                   ("finance", "hermes", digest("synthetic-finance-agent"), H.now(), "human:ana"))
     yield api
     assert settle(api)
+
+
+def ready(api, r, bots, capabilities=("private_lanes_v1",)):
+    """A current runner: it advertises private lanes, so it takes a private meeting's turns (execution.PRIVATE_LANES)."""
+    return post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": list(capabilities),
+                "readiness": {bot: True for bot in bots}}, token=r["token"])
 
 
 def settle(api):
@@ -1091,8 +1097,7 @@ def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_i
     the server hands its turns that lane and says when the meeting ended. A team meeting's turns stay in the main lane."""
     machine = runner(live)
     assign(live, machine, "ops")
-    post(live, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["task_lanes_v2"],
-                                     "readiness": {"ops": True}}, token=machine["token"])
+    ready(live, machine, ["ops"], ["task_lanes_v2", "private_lanes_v1"])
     turns = {}
     for visibility in ("private", "team"):
         meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
@@ -1112,6 +1117,40 @@ def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_i
     assert asked() == [{**mine, "status": "open"}]
     post(live, f"live-meetings/{mid}/control", {"action": "end"})
     assert asked() == [{**mine, "status": "done"}]
+
+
+def test_a_runner_without_private_lanes_never_takes_a_private_meetings_turn(live):
+    """An older runner would run a private meeting's turn in the bot's own checkout with write tokens: the server does
+    not hand it one. The turn waits, the meeting says once why, and the runner takes it after its update."""
+    from backend.execution import queued_reasons
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"], capabilities=["task_lanes_v2"])
+    private = post(live, "live-meetings", {"title": "Private", "visibility": "private", "cooldown_seconds": 0})
+    attach(live, private["id"], "ops")
+    chunk(live, private["id"], 1, 0, 1000, "Ops, the press embargo lifts Nov 17 9am PT. Got it?")
+    chunk(live, private["id"], 2, 1000, 2000, "Ops, and the launch price is $40?")
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    with live.app.state.store.read() as c:
+        reasons = [why for _, why in queued_reasons(c, live.app.state.store.settings, machine["runner_id"], "ops")]
+        waiting = [json.loads(r["payload_json"]) for r in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting'",
+            (private["id"],))]
+    assert reasons and set(reasons) == {"private_update"}
+    assert [(w["bot"], w["reason"], w["detail"]) for w in waiting] == [
+        ("ops", "runner_update", "Test Mac needs a Tico update before it can join private meetings")], "said once"
+    team = post(live, "live-meetings", {"title": "Team", "visibility": "team", "cooldown_seconds": 0})
+    attach(live, team["id"], "ops")
+    chunk(live, team["id"], 1, 0, 1000, "Ops, the standup moved to 10. Got it?")
+    attempt = claimed_turn(live, machine)
+    assert attempt["lane"] == "main" and "standup" in attempt["message"]["body"], "a team meeting's turn still goes to it"
+    post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Got it.", "last_seq": 0},
+         token=machine["token"])
+    ready(live, machine, ["ops"], ["task_lanes_v2", "private_lanes_v1"])
+    attempt = claimed_turn(live, machine)
+    assert attempt["lane"] == "private:" + attempt["conversation"]["id"]
+    post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Got it.", "last_seq": 0},
+         token=machine["token"])
 
 
 def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):

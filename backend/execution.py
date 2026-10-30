@@ -114,6 +114,11 @@ TASK_GOALS = "task_goals_v1"
 # A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
 # other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
 CAPACITY_CONTINUE = "capacity_continue_v1"
+
+# A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
+# (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
+# wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
+PRIVATE_LANES = "private_lanes_v1"
 SOURCE_CONTINUE = "source_continue_v1"
 
 
@@ -190,6 +195,16 @@ def _capability_set(capabilities_json):
 
 def lanes_on(runner):
     return bool(runner) and LANES in _capability_set(runner["capabilities_json"])
+
+
+def private_lanes_on(runner):
+    return bool(runner) and PRIVATE_LANES in _capability_set(runner["capabilities_json"])
+
+
+def private_job(c, job):
+    """Whether a queued job is a private live meeting's turn (private_lane): only a private_lanes_on runner takes it."""
+    message = H.message(c, job["message_id"])
+    return bool(message and private_lane(c, H.conversation(c, message["conversation_id"])))
 
 
 def roots_on(runner):
@@ -2047,6 +2062,8 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
+        elif not private_lanes_on(runner) and private_job(c, job):
+            why = "private_update"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
@@ -2101,6 +2118,8 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
             why = "scoped"
         elif not job["free"]:
             why = "uncertain"
+        elif not private_lanes_on(runner) and private_job(c, job):
+            why = "private_update"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
@@ -2746,6 +2765,7 @@ class Execution:
         a bot-wide check that raises, and stops picking once CLAIM_HOLDS jobs are held; without it the error
         propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
         lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
+        private_lanes = private_lanes_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = set(live_lanes(c))
@@ -2839,6 +2859,8 @@ class Execution:
                     continue        # old strict-primary runners cannot route a saved fallback
                 if not continues and continuation_thread(c, row["id"]):
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
+                if not private_lanes and private_job(c, row):
+                    continue        # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
                 why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.

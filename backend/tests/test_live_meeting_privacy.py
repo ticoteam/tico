@@ -8,8 +8,8 @@ from backend import live_meetings as meetings
 from backend import task_privacy
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import assign, get, headers, post, ready, runner
-from backend.tests.test_live_meetings import api, attach, chunk, live  # noqa: F401
+from backend.tests.test_api import assign, get, headers, post, runner
+from backend.tests.test_live_meetings import api, attach, chunk, live, ready  # noqa: F401
 from backend.tests.test_botops_parity import act
 from backend.tests.test_member_bots import botops, turn as botops_turn  # noqa: F401
 from backend.tests.test_sql import query

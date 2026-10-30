@@ -129,7 +129,7 @@ def heartbeat_body(bot):
     return {"version": "0.5.0", "platform": "Linux-6.8-x86_64", "capacity": 4,
             "capabilities": ["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1",
                              "source_continue_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1",
-                             "model_remove_v1", "model_switch_to_key_v1", "turns_at_once_v1"],
+                             "model_remove_v1", "model_switch_to_key_v1", "turns_at_once_v1", "private_lanes_v1"],
             "readiness": readiness(bot), "mail_agent_instructions": {}, "agent_instructions": {},
             "release": "0.5.0", "kind": "docker", "update": {"state": "idle", "target": "", "error": ""},
             "profiles": [], "worktrees": []}

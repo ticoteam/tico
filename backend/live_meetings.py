@@ -438,6 +438,26 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
     # A retry says so, and is a new event rather than a repeat the wake hold drops (wake_presets._SAME_EVENT).
     again = "Your last reply to this turn was empty. Answer it now, or answer exactly PASS.\n" if retry else ""
     H.feed(c, "bot:" + slug, again + _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
+    if meeting["visibility"] != "team":
+        _wait_for_update(c, rid, turn_id, slug)
+
+
+def _wait_for_update(c, rid, turn_id, slug):
+    """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
+    private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
+    from .execution import PRIVATE_LANES, _capability_set
+    computers = c.execute("SELECT r.label,r.capabilities_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                          "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchall()
+    old = [r["label"] or "This bot's computer" for r in computers
+           if PRIVATE_LANES not in _capability_set(r["capabilities_json"])]
+    if not computers or len(old) < len(computers):
+        return
+    if c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting' "
+                 "AND json_extract(payload_json,'$.bot')=?", (rid, slug)).fetchone():
+        return
+    _event(c, rid, "meeting.bot_turn_waiting", {
+        "turn_id": turn_id, "bot": slug, "reason": "runner_update",
+        "detail": f"{old[0]} needs a Tico update before it can join private meetings"})
 
 
 def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None, named=False):
