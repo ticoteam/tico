@@ -557,11 +557,55 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(30);
 /// token file it reads HUB_TOKEN from (`tico-file:`, crate::warm): written with each attempt's token, blanked when the
 /// attempt ends. A host takes a thread's process for its attempt and gives it back at `release`. A process is stopped
 /// after IDLE unused, when more than `limit` are kept (oldest first), and when the runner stops.
+///
+/// A process that runs as a leased turn user (a Gateway turn's, Docker) is kept with that user and its relay (`Held`),
+/// for the bot's next turn in the same conversation (`owner`): `reclaim` hands them to that attempt before it takes a
+/// user of its own, and a turn that finds no user free has the oldest such process stopped and its user returned
+/// (`evict`).
 pub struct Pool {
     dir: PathBuf,
     limit: usize,
     idle: Duration,
-    kept: Mutex<HashMap<String, (Arc<Proc>, Instant)>>,
+    kept: Mutex<HashMap<String, Kept>>,
+}
+
+/// What a leased attempt leaves with its kept pi: its turn user and its Gateway relay, paused between turns.
+#[derive(Default)]
+pub struct Held {
+    pub user: Option<crate::turn_users::Lease>,
+    pub relay: Option<crate::gateway_relay::Relay>,
+}
+
+impl Held {
+    fn is_empty(&self) -> bool {
+        self.user.is_none() && self.relay.is_none()
+    }
+
+    /// The relay stopped (its token no longer opens anything), then the user cleaned and returned to the turn-user pool.
+    pub(crate) async fn end(self) {
+        if let Some(mut relay) = self.relay {
+            relay.stop().await;
+        }
+        if let Some(mut user) = self.user {
+            user.permit_reuse();
+            let _ = tokio::task::spawn_blocking(move || drop(user)).await;
+        }
+    }
+}
+
+struct Kept {
+    proc: Arc<Proc>,
+    used: Instant,
+    /// The bot and conversation whose attempts may reclaim `held`.
+    owner: String,
+    held: Held,
+}
+
+impl Kept {
+    async fn end(self) {
+        self.proc.stop().await;
+        self.held.end().await;
+    }
 }
 
 impl Pool {
@@ -569,40 +613,76 @@ impl Pool {
         Pool { dir, limit, idle: crate::warm::IDLE, kept: Mutex::new(HashMap::new()) }
     }
 
-    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Arc<Proc>, Instant)>> {
+    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, Kept>> {
         self.kept.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn take(&self, thread: &str) -> Option<Arc<Proc>> {
-        self.kept().remove(thread).map(|(p, _)| p)
+    /// The thread's kept process; one still holding a user and relay no attempt reclaimed is stopped instead.
+    async fn take(&self, thread: &str) -> Option<Arc<Proc>> {
+        let kept = self.kept().remove(thread)?;
+        if kept.held.is_empty() {
+            return Some(kept.proc);
+        }
+        kept.end().await;
+        None
     }
 
-    async fn keep(&self, thread: String, proc: Arc<Proc>) {
+    async fn keep(&self, thread: String, owner: String, proc: Arc<Proc>, held: Held) {
         proc.token("");
-        // Another attempt on the thread gave its own back first: the newer one stays.
-        let old = self.kept().insert(thread, (proc, Instant::now()));
-        if let Some((old, _)) = old {
-            old.stop().await;
+        if let Some(relay) = &held.relay {
+            relay.pause().await;
+        }
+        let gone: Vec<Kept> = {
+            let mut kept = self.kept();
+            // A process on this user from a thread the conversation has left goes, as does an older one on the thread.
+            let left: Vec<String> = kept.iter().filter(|(_, k)| !held.is_empty() && k.owner == owner).map(|(t, _)| t.clone()).collect();
+            let mut gone: Vec<Kept> = left.iter().filter_map(|t| kept.remove(t)).collect();
+            gone.extend(kept.insert(thread, Kept { proc, used: Instant::now(), owner, held }));
+            gone
+        };
+        for k in gone {
+            k.end().await;
         }
         self.prune(false).await;
     }
 
+    /// The turn user and relay kept with `owner`'s process, for its next attempt; the process stays for its host.
+    pub fn reclaim(&self, owner: &str) -> Option<Held> {
+        let mut kept = self.kept();
+        let k = kept.values_mut().find(|k| k.owner == owner && !k.held.is_empty() && k.proc.alive())?;
+        k.used = Instant::now();
+        Some(std::mem::take(&mut k.held))
+    }
+
+    /// Stop the longest-idle process holding a turn user, returning the user; false when none does.
+    pub async fn evict(&self) -> bool {
+        let oldest = {
+            let mut kept = self.kept();
+            let thread = kept.iter().filter(|(_, k)| !k.held.is_empty()).min_by_key(|(_, k)| k.used).map(|(t, _)| t.clone());
+            thread.and_then(|t| kept.remove(&t))
+        };
+        let Some(oldest) = oldest else { return false };
+        oldest.end().await;
+        true
+    }
+
     /// Stop the processes past their idle time, dead, or over the limit (oldest first); every one with `close`.
     pub async fn prune(&self, close: bool) {
-        let stopping: Vec<Arc<Proc>> = {
+        let stopping: Vec<Kept> = {
             let mut kept = self.kept();
-            let mut idle: Vec<(String, Instant)> = kept.iter().map(|(k, (_, used))| (k.clone(), *used)).collect();
+            let mut idle: Vec<(String, Instant)> = kept.iter().map(|(k, e)| (k.clone(), e.used)).collect();
             idle.sort_by_key(|(_, used)| *used);
             let mut out = vec![];
             for (thread, used) in idle {
-                if close || kept.len() > self.limit || used.elapsed() >= self.idle || !kept[&thread].0.alive() {
-                    out.extend(kept.remove(&thread).map(|(p, _)| p));
+                if close || kept.len() > self.limit || used.elapsed() >= self.idle || !kept[&thread].proc.alive() {
+                    out.extend(kept.remove(&thread));
                 }
             }
             out
         };
-        for p in stopping {
-            p.stop().await;
+        for k in stopping {
+            // A turn user's cleanup sweeps its files: off the runner's tick, but awaited when the runner stops.
+            if close || k.held.is_empty() { k.end().await } else { tokio::spawn(k.end()); }
         }
     }
 
@@ -629,9 +709,10 @@ struct Proc {
     stdin: mpsc::UnboundedSender<String>,
     stopper: super::Stopper,
     exited: watch::Receiver<bool>,
-    /// Its token file's folder; None for a process that reads its attempt's token itself (a leased turn user's, never
-    /// kept past its attempt).
-    home: Option<PathBuf>,
+    /// Its token file's folder.
+    home: PathBuf,
+    /// The leased turn user it runs as, who alone (with this runner) reads its token file.
+    identity: Option<(u32, u32)>,
     /// The running turn's host's events, for the process's stderr.
     sink: Arc<Mutex<Option<Events>>>,
     live: Mutex<Live>,
@@ -675,9 +756,7 @@ impl Proc {
     }
 
     fn token(&self, token: &str) {
-        if let Some(home) = &self.home {
-            crate::warm::write_token(&home.join("lease-token"), token);
-        }
+        crate::warm::write_token_for(&self.home.join("lease-token"), token, self.identity);
     }
 
     /// `command` with an id of its own, and pi's reply to it.
@@ -837,21 +916,21 @@ impl Proc {
 
 impl Drop for Proc {
     fn drop(&mut self) {
-        if let Some(home) = &self.home {
-            let _ = std::fs::remove_dir_all(home);
-        }
+        let _ = std::fs::remove_dir_all(&self.home);
     }
 }
 
 /// What a process for this turn would be started with, its effort aside: its command line, environment (HUB_TOKEN
-/// aside, which is the token file's), user and folder, and what its agent directory holds.
+/// aside, which is the token file's), user, groups and folder, and what its agent directory holds.
 fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     let mut argv = argv.to_vec();
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
         argv.drain(at..(at + 2).min(argv.len()));
     }
     let rest: Env = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), v.clone())).collect();
-    let text = json!([argv, rest, s.cwd, s.identity, mcp_json(s, env), s.compact_at, s.gateway_inputs]).to_string();
+    // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
+    let groups = s.identity.map(|(uid, _)| crate::checkout_groups::granted(uid));
+    let text = json!([argv, rest, s.cwd, s.identity, groups, mcp_json(s, env), s.compact_at, s.gateway_inputs]).to_string();
     ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -915,17 +994,19 @@ impl PiHost {
         }
     }
 
-    /// The attempt is over: after a turn that completed, each process that may outlive its attempt goes back to the
-    /// pool with its token blanked; any other is stopped.
-    pub async fn release(&self, completed: bool) {
+    /// The attempt is over: after a turn that completed, each process goes back to the pool with its token blanked,
+    /// for `owner` (the bot and conversation); any other is stopped. One that runs as a leased turn user goes back only
+    /// with `held`, that user and its relay; what no kept process took is handed back.
+    pub async fn release(&self, completed: bool, owner: &str, mut held: Held) -> Held {
         let procs: Vec<(String, Arc<Proc>)> = self.inner().procs.drain().collect();
         for (thread, p) in procs {
-            if completed && p.home.is_some() && p.alive() && p.live().run.is_none() {
-                self.0.pool.keep(thread, p).await;
+            if completed && p.alive() && p.live().run.is_none() && (p.identity.is_none() || !held.is_empty()) {
+                self.0.pool.keep(thread, owner.into(), p, std::mem::take(&mut held)).await;
             } else {
                 p.stop().await;
             }
         }
+        held
     }
 
     pub fn start_thread(&self, settings: &Settings) -> String {
@@ -984,7 +1065,7 @@ impl PiHost {
         Ok((child, stderr))
     }
 
-    fn spawn(&self, argv: &[String], settings: &Settings, env: &Env, key: String, home: Option<PathBuf>, thinking: &str) -> std::io::Result<Arc<Proc>> {
+    fn spawn(&self, argv: &[String], settings: &Settings, env: &Env, key: String, home: PathBuf, thinking: &str) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
@@ -1006,7 +1087,7 @@ impl PiHost {
         let (stopper, exited) = super::own(child);
         let (done, dead) = watch::channel(false);
         let live = Live { thinking: thinking.into(), ..Default::default() };
-        let proc = Arc::new(Proc { key, stdin: lines, stopper, exited: dead, home, sink, live: Mutex::new(live) });
+        let proc = Arc::new(Proc { key, stdin: lines, stopper, exited: dead, home, identity: settings.identity, sink, live: Mutex::new(live) });
         tokio::spawn(Proc::read(Arc::downgrade(&proc), stdout, exited, stderr, done));
         Ok(proc)
     }
@@ -1018,7 +1099,11 @@ impl PiHost {
         let mut env = Pi::env(&t.settings);
         let key = fingerprint(&argv, &env, &t.settings);
         let token = env.get("HUB_TOKEN").cloned().unwrap_or_default();
-        let held = self.inner().procs.remove(thread_id).or_else(|| self.0.pool.take(thread_id));
+        let held = self.inner().procs.remove(thread_id);
+        let held = match held {
+            Some(p) => Some(p),
+            None => self.0.pool.take(thread_id).await,
+        };
         if let Some(p) = held {
             if p.key == key && p.alive() {
                 p.token(&token);
@@ -1027,13 +1112,10 @@ impl PiHost {
             }
             p.stop().await;
         }
-        // A leased turn user's process reads its own token and ends with its attempt (turn_users::Lease).
-        let home = if t.settings.identity.is_none() { Some(self.0.pool.home()?) } else { None };
-        if let Some(home) = &home {
-            let file = home.join("lease-token");
-            crate::warm::write_token(&file, &token);
-            env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
-        }
+        let home = self.0.pool.home()?;
+        let file = home.join("lease-token");
+        crate::warm::write_token_for(&file, &token, t.settings.identity);
+        env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
         let proc = self.spawn(&argv, &t.settings, &env, key, home, thinking).map_err(|e| e.to_string())?;
         self.inner().procs.insert(thread_id.into(), proc.clone());
         Ok(proc)
@@ -1281,6 +1363,25 @@ while True:
     pub fn logged(dir: &Path, name: &str) -> Vec<Value> {
         std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
     }
+
+    /// A fake pi in `dir`, kept in `pool` for `owner` with `held` after one turn that completed.
+    pub async fn kept(pool: std::sync::Arc<super::Pool>, dir: &Path, owner: &str, held: super::Held) {
+        let fixture = dir.join("kept.jsonl");
+        std::fs::write(&fixture, r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}"#).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = super::PiHost::new("acme", fake(dir, &fixture), tx, pool);
+        host.start();
+        let mut s = crate::hosts::Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", "or-synthetic".into())] {
+            s.env.insert(k.into(), v);
+        }
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        while let Some(ev) = rx.recv().await {
+            if ev["kind"] == "turn_completed" { break; }
+        }
+        assert!(host.release(true, owner, held).await.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -1289,6 +1390,8 @@ mod tests {
     use super::testing::{fake, logged};
     use super::*;
     use tokio::sync::mpsc;
+
+    const OWNER: &str = "acme\nchat:c1";
 
     fn pool(dir: &std::path::Path) -> Arc<Pool> {
         Arc::new(Pool::new(dir.join("pool"), 4))
@@ -1725,7 +1828,7 @@ mod tests {
         // pi reads the attempt's token from a file of its own, never from its environment.
         let file = token_file(&dir);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "synthetic-turn-1");
-        host.release(true).await;
+        host.release(true, OWNER, Held::default()).await;
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
         // The next attempt (a new host) takes the same process, with its own token.
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1736,7 +1839,7 @@ mod tests {
         assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
         assert_eq!((logged(&dir, "starts.log").len(), std::fs::read_to_string(&file).unwrap()), (1, "synthetic-turn-2".to_string()));
         assert_eq!(sessions(&dir), vec![thread.clone(); 3]);
-        next.release(true).await;
+        next.release(true, OWNER, Held::default()).await;
         // The runner stopping stops it, and its token folder goes with it.
         host.0.pool.prune(true).await;
         assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().trim(), text_of(&logged(&dir, "starts.log")[0]["pid"]));
@@ -1858,19 +1961,102 @@ mod tests {
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(true).await;
+        host.release(true, OWNER, Held::default()).await;
         assert!(idle.kept().is_empty());
         assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count(), 1);
         let (other, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&other, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(false).await;
+        host.release(false, OWNER, Held::default()).await;
         assert!(host.0.pool.kept().is_empty());
         assert_eq!(std::fs::read_to_string(other.join("exits.log")).unwrap().lines().count(), 1);
         for d in [dir, other, idle.dir.clone()] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// The first line of the relay's answer to a model call with `token`; None once nothing listens there.
+    async fn relay_answer(url: &str, token: &str) -> Option<String> {
+        use tokio::io::AsyncReadExt;
+        let mut socket = tokio::net::TcpStream::connect(url.trim_start_matches("http://").split('/').next().unwrap()).await.ok()?;
+        let request = format!("POST /gateway/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\n\r\n{{}}");
+        socket.write_all(request.as_bytes()).await.ok()?;
+        let mut out = String::new();
+        socket.read_to_string(&mut out).await.ok()?;
+        out.lines().next().map(String::from)
+    }
+
+    #[tokio::test]
+    async fn a_gateway_pi_keeps_its_relay_between_turns_closed_to_calls_and_both_go_when_it_is_evicted() {
+        const GATEWAY: &str = "http://127.0.0.1:9/v1/gateway";
+        let relay = crate::gateway_relay::start(GATEWAY, "tgw-synthetic-1".into(), None).await.unwrap();
+        let (url, token) = (relay.url.clone(), relay.token.clone());
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let pool = host.0.pool.clone();
+        let agent = dir.join("agent").display().to_string();
+        let gateway = |hub: &str| {
+            let mut s = rpc_settings(&dir, &[("HUB_TOKEN", hub), (GATEWAY_URL_ENV, &url), (GATEWAY_KEY_ENV, &token), (GATEWAY_DIR_ENV, &agent)]);
+            s.model = Some("tico-mid-1.0".into());
+            s
+        };
+        let thread = host.start_thread(&gateway("synthetic-turn-1"));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        // During a turn the relay passes calls on (nothing answers at GATEWAY).
+        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
+        let back = host.release(true, OWNER, Held { user: None, relay: Some(relay) }).await;
+        assert!(back.is_empty(), "the kept pi takes the relay");
+        // Between turns it refuses every call, its own token or not.
+        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 503 Service Unavailable"));
+        assert!(pool.reclaim("acme\nchat:other").is_none());
+        // The conversation's next attempt reclaims it, resumes it with its own key, and runs on the same pi.
+        let mut held = pool.reclaim(OWNER).unwrap();
+        assert!(pool.reclaim(OWNER).is_none());
+        let relay = held.relay.as_mut().unwrap();
+        assert!(!relay.resume("https://elsewhere.example/v1/gateway", "tgw-synthetic-2".into(), None), "another Gateway takes a relay of its own");
+        assert!(relay.resume(GATEWAY, "tgw-synthetic-2".into(), None));
+        assert_eq!((relay.url.as_str(), relay.token.as_str()), (url.as_str(), token.as_str()));
+        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let next = PiHost::new("acme", host.0.cmd.clone(), tx, pool.clone());
+        next.start();
+        next.resume_thread(&thread, &gateway("synthetic-turn-2"));
+        next.start_turn(&thread, "again", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert_eq!(logged(&dir, "starts.log").len(), 1, "one pi for both turns");
+        assert!(next.release(true, OWNER, held).await.is_empty());
+        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 503 Service Unavailable"));
+        // A turn short of a turn user stops the idle pi and gets its user; its relay is stopped, its token useless.
+        assert!(pool.evict().await);
+        assert!(!pool.evict().await, "nothing else holds a user");
+        assert_eq!(relay_answer(&url, &token).await, None);
+        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().trim(), text_of(&logged(&dir, "starts.log")[0]["pid"]));
+        assert!(pool.kept().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_leased_pi_is_kept_only_with_its_user_and_relay_and_hands_them_back_when_not_kept() {
+        let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "tgw-synthetic".into(), None).await.unwrap();
+        let (url, token) = (relay.url.clone(), relay.token.clone());
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        turn_events(&mut rx).await;
+        // A turn that failed keeps nothing: the relay goes back to the attempt, which stops it.
+        let mut back = host.release(false, OWNER, Held { user: None, relay: Some(relay) }).await;
+        assert!(back.relay.is_some() && host.0.pool.kept().is_empty());
+        assert_eq!(relay_answer(&url, &token).await.as_deref(), Some("HTTP/1.1 502 Bad Gateway"));
+        back.relay.as_mut().unwrap().stop().await;
+        // A process that runs as a leased user and comes back without its user and relay is not kept either.
+        let leased = host.0.pool.home().unwrap();
+        let proc = Proc { key: String::new(), stdin: mpsc::unbounded_channel().0, stopper: super::super::Stopper(mpsc::unbounded_channel().0), exited: watch::channel(false).1,
+                          home: leased.clone(), identity: Some((10100, 10002)), sink: Arc::default(), live: Mutex::default() };
+        host.inner().procs.insert(thread.clone(), Arc::new(proc));
+        assert!(host.release(true, OWNER, Held::default()).await.is_empty());
+        assert!(host.0.pool.kept().is_empty() && !leased.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

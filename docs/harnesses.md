@@ -119,8 +119,14 @@ secret (a new GitHub token too), a different agent folder (MCP servers, Compact 
 session. A message sent while a turn runs is pi's `steer` (`steer`): pi writes it in after the turn's current tool
 calls, before its next model call. One steered in after the turn's last model call is sent as a new prompt within the
 same turn. One pi had not yet read when the turn ended is taken back out of its queue and waits for the next turn. A
-turn on a Tico model, or one run as a leased turn user, has a relay and a user of its own, so its process lasts only as
-long as its attempt.
+pi run as a leased turn user (a Tico model's turn on a Docker runner) is kept with that user and its Gateway relay, for
+the same bot's next turn in the same conversation, which takes them back before it would lease a user of its own. The
+relay keeps its URL and token and gets each attempt's key; between turns it refuses every call, and calls still open
+when the turn ends are cut off. The token file and granted credential files are readable by that user only, and the
+files sit at the same paths every attempt. A turn that finds every turn user busy stops the longest-idle kept pi and
+takes its user. A kept pi's relay is stopped and its user cleaned and returned when the pi goes (idle, eviction, a
+crash, a failed turn, the runner stopping); a pi started again for a changed start keeps both. A new GitHub token
+still restarts it, about hourly.
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
@@ -162,7 +168,8 @@ preview of its first and last three characters. What the owner sees and does is 
 
 No bot gets the key. For a bot on a Tico model, or whose own fallback is one, the runner fetches it
 (`GET /api/v2/runner-gateway-credentials`, runner only) and starts a relay on 127.0.0.1 for that turn
-(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only, as
+(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only (a
+pi kept between turns keeps both, closed between its turns), as
 `TICOAI_GATEWAY_URL` and `TICOAI_GATEWAY_KEY`. pi reads them through a `tico` provider in the turn's own `models.json`
 (OpenAI chat completions, streamed), in a directory removed when the turn ends. A runner hands out the key only when
 it runs bot code as another user (Tico's Docker runner); elsewhere a Tico model's turn is refused once

@@ -742,6 +742,8 @@ impl Runner {
             match take() {
                 Ok(user) => return Ok(user),
                 Err(why) if why != crate::turn_users::BUSY => return Err(Fail::runtime(why)),
+                // A user kept with an idle pi (hosts/pi.rs Pool) goes back for this turn.
+                Err(_) if self.pi.evict().await => continue,
                 Err(_) if !said => {
                     said = true;
                     log(&format!("Tico runner: turn {}: waiting for a free Docker turn user", text_of(&attempt["id"])));
@@ -1210,6 +1212,7 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
+        let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
         let mut execution_path: PathBuf = crate::sessions::local_path(&self.config, &bot, &config);
@@ -1302,8 +1305,13 @@ impl Runner {
             // turn can still enter every bot's checkout, as can the runner's own git (SECURITY.md).
             let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
             if crate::hosts::pi::is_gateway(model.as_deref()) || (own_user(&runtime, &text_of(&config["harness"])) && crate::turn_users::available()) {
-                let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
-                vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
+                // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
+                if let Some(held) = self.pi.reclaim(&owner).filter(|_| runtime == "pi" && session_runtime == runtime) {
+                    (vault.turn_user, vault.relay) = (held.user, held.relay);
+                } else {
+                    let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
+                    vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
+                }
             }
             env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
             // The subscription this bot runs on: Claude keys its login to HOME, so it is the turn's own environment,
@@ -1821,7 +1829,11 @@ impl Runner {
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
                     // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
                     // started, so it does not wait for a free user: with none free the fallback runs as `bot`.
-                    match crate::turn_users::Lease::take() {
+                    let mut taken = crate::turn_users::Lease::take();
+                    while taken.as_ref().is_err_and(|e| e == crate::turn_users::BUSY) && self.pi.evict().await {
+                        taken = crate::turn_users::Lease::take();
+                    }
+                    match taken {
                         Ok(user) => vault.turn_user = Some(user),
                         Err(e) => log(&format!("Tico runner: turn {aid}: its {} fallback runs as the bot user: {e}", hop.harness)),
                     }
@@ -2068,6 +2080,8 @@ impl Runner {
                 }
             }
         }
+        // The Gateway's reset, read before a kept pi takes the relay with it.
+        let gateway_reset = vault.relay.as_ref().and_then(|relay| relay.limit_reset());
         if let Some(h) = &host {
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
@@ -2084,7 +2098,13 @@ impl Runner {
                 self.warm.release(warm, drove.outcome == "completed").await;
             }
             if let Host::Pi(pi) = h {
-                pi.release(drove.outcome == "completed").await;
+                // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
+                let held = if fallback.is_none() {
+                    crate::hosts::pi::Held { user: vault.turn_user.take(), relay: vault.relay.take() }
+                } else { Default::default() };
+                let back = pi.release(drove.outcome == "completed", &owner, held).await;
+                vault.turn_user = vault.turn_user.take().or(back.user);
+                vault.relay = vault.relay.take().or(back.relay);
             }
         }
         // A barrier settles final stderr before last_seq is frozen; cleanup's process exits are discarded.
@@ -2229,7 +2249,7 @@ impl Runner {
             // The provider's own reset, so the bot resumes then; only a server that takes the field is sent it.
             let reset = segments.last().and_then(|s| {
                 if crate::hosts::pi::is_gateway(s.config["model"].as_str()) {
-                    vault.relay.as_ref().and_then(|relay| relay.limit_reset())
+                    gateway_reset.clone()
                 } else {
                     crate::profiles::limit_reset(s.profile.as_deref().unwrap_or_default(), &text_of(&s.config["runtime"]), crate::util::epoch_s())
                 }
@@ -2684,6 +2704,25 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 4);
         assert!(runner.places.lock().unwrap().contains("a1"));
         assert!(runner.state.pending("a1").unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_turn_short_of_a_turn_user_takes_the_one_an_idle_kept_pi_holds_instead_of_waiting() {
+        let (url, seen) = crate::client::tests::serve(vec![]).await;
+        let (runner, dir) = lease_runner(&url, "kept-pool");
+        let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "tgw-synthetic".into(), None).await.unwrap();
+        let address = relay.url.trim_start_matches("http://").split('/').next().unwrap().to_string();
+        crate::hosts::pi::testing::kept(runner.pi.clone(), &dir, "acme\nchat:c1", crate::hosts::pi::Held { user: None, relay: Some(relay) }).await;
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        runner.state.record(&turn).unwrap();
+        // Busy while the kept pi holds its user (here, its relay listens).
+        let user = runner.take_turn_user(&turn, &lease_flags(), || {
+            if std::net::TcpStream::connect(&address).is_ok() { Err(crate::turn_users::BUSY.to_string()) } else { Ok(10100) }
+        }).await.unwrap();
+        assert_eq!(user, 10100);
+        assert!(seen.lock().unwrap().is_empty(), "the turn never gave its place back to wait");
+        assert!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count() == 1, "the kept pi was stopped");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
