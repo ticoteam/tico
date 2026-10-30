@@ -5407,7 +5407,7 @@ def image_outputs(out, count):
 
 
 @tool("hub_gateway_image", "Make an image through the Tico AI Gateway and save it to files on this computer; the answer is the "
-      "saved paths, the model and the cost, never the image bytes. `category`: storyboard (the cheapest), photo, character "
+      "saved paths, the model and the cost, never the image bytes. `category`: storyboard (fast, keeps references), photo, character "
       "(keeps a person or character from the reference files) or graphic (text and layout). `refs` are up to 4 reference "
       "files (PNG, JPEG or WebP, 2 MiB each). `out` is the file for the first image; more images are saved beside it as "
       "name-2.png, name-3.png. Each image gets a sidecar `<file>.json` with its prompt, category, model, cost, the reference "

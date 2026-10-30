@@ -2511,7 +2511,7 @@ def parser():
     s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
     s.add_argument("prompt")
     s.add_argument("--category", required=True, choices=("storyboard", "photo", "character", "graphic"),
-                   help="storyboard (cheapest), photo, character (keeps people from --ref), graphic (text and layout)")
+                   help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)")
     s.add_argument("--ref", dest="refs", action="append", default=[], metavar="FILE",
                    help="a reference image (PNG, JPEG or WebP, 2 MiB at most); up to 4")
     s.add_argument("--size", help="WxH, for example 1920x1080 (the nearest aspect ratio is asked for)")

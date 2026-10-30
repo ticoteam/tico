@@ -258,7 +258,7 @@ skill is `skills/gateway/SKILL.md`.
 
 `hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
 
-- **storyboard**: the cheapest model, for rough frames.
+- **storyboard**: a fast model that keeps people and places from `--ref` images, for frames (about 4 to 8 US cents an image).
 - **photo**: for photographic images.
 - **character**: keeps a person or character from the `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
 - **graphic**: best for text and layout.
