@@ -1021,8 +1021,8 @@ the server; updating the image alone keeps the old environment list.
 
 ## Backups and restore
 
-Backups are on from the first start. Inside the server container, Litestream copies the database within seconds
-and attachments (`/data/blobs`) follow every 30 seconds.
+Backups are on from the first start. Inside the server container, Litestream copies the database about once a minute
+(`TICO_BACKUP_SYNC_INTERVAL`, default `1m`) and attachments (`/data/blobs`) follow every 30 seconds.
 
 | `.env` | Where the copies go | Survives |
 |---|---|---|
@@ -1041,6 +1041,10 @@ TICO_BACKUP_REGION=auto                                            # omit for AW
 LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
 ```
+
+`TICO_BACKUP_SYNC_INTERVAL` sets how often Litestream sends database changes: a whole number with `s`, `m` or `h`
+from `1s` to `1h` (for example `10s`, `5m`, `1h`). The default `1m` is the most that can be lost if the server is
+lost, and a shorter interval means more bucket writes. Any other value stops the container at start with an error.
 
 `python3 -m setup` offers to create that storage: on AWS a versioned, encrypted, private S3 bucket and an IAM user
 limited to it, on Cloudflare an R2 bucket (with an API token that has Workers R2 Storage: Edit), or a bucket you

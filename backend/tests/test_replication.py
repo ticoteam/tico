@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend import replication
 from backend.config import ROOT
@@ -253,6 +254,38 @@ def test_a_failed_restore_of_an_existing_company_refuses_to_start(tmp_path):
     result, data = prepare(tmp_path, restore_fails=True)
     assert result.returncode != 0 and "existing company" in result.stderr and "TICO_INITIALIZE_EMPTY" in result.stderr
     assert not (data / "hub.sqlite").exists() and not (data / replication.LOCAL_MARKER).exists()
+
+
+def litestream_config(tmp_path, monkeypatch, sync_interval=None):
+    """`prepare` writes the Litestream config; returns its parsed replica block, or the refused prepare's result."""
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    config = tmp_path / "litestream.yml"
+    extra = {} if sync_interval is None else {"TICO_BACKUP_SYNC_INTERVAL": sync_interval}
+    result, _ = prepare(tmp_path, TICO_LITESTREAM_CONFIG=str(config), **extra)
+    if result.returncode != 0:
+        return result
+    return yaml.safe_load(config.read_text())
+
+
+def test_litestream_syncs_every_minute_unless_the_install_sets_an_interval(tmp_path, monkeypatch):
+    config = litestream_config(tmp_path, monkeypatch)
+    assert config["dbs"][0]["replica"]["sync-interval"] == "1m"
+    assert config["dbs"][0]["monitor-interval"] == "1s" and config["dbs"][0]["checkpoint-interval"] == "1m"
+    assert config["snapshot"] == {"interval": "24h", "retention": "720h"}
+
+
+@pytest.mark.parametrize("value", ["1s", "30s", "60m", "1h"])
+def test_a_valid_sync_interval_is_written_and_nothing_else_changes(tmp_path, monkeypatch, value):
+    config = litestream_config(tmp_path, monkeypatch, value)
+    assert config["dbs"][0]["replica"]["sync-interval"] == value
+    assert config["dbs"][0]["monitor-interval"] == "1s" and config["dbs"][0]["checkpoint-interval"] == "1m"
+
+
+@pytest.mark.parametrize("value", ["0s", "61m", "2h", "10ms", "1.5m", "1h30m", "m", "3600"])
+def test_an_invalid_sync_interval_is_refused_before_anything_starts(tmp_path, monkeypatch, value):
+    result = litestream_config(tmp_path, monkeypatch, value)
+    assert result.returncode != 0 and "TICO_BACKUP_SYNC_INTERVAL must be" in result.stderr
+    assert not (tmp_path / "litestream.yml").exists() and not (tmp_path / "data" / "hub.sqlite").exists()
 
 
 @pytest.mark.slow
