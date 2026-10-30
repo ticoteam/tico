@@ -107,6 +107,8 @@ PY
   if [ "$ran" = 1 ]; then say "$name: probe finished"; else
     say "$name: not run: $why"
     docker logs --tail 400 "$RUNNER" 2>&1 | grep -i "error\|fail\|refus\|timed\|panic\|warn" | tail -6 | cut -c1-240 | sed 's/^/    runner: /'
+    docker logs --tail 6 "$RUNNER" 2>&1 | cut -c1-240 | sed 's/^/    runner (last): /'
+    docker exec "$RUNNER" sh -c "ls $HARNESS_ROOT/dumps $HARNESS_ROOT/results 2>&1 | tail -12; tail -c 400 $HARNESS_ROOT/fake-cli.log 2>/dev/null" 2>&1 | cut -c1-240 | sed 's/^/    stand-in: /'
   fi
   return 0
 }
