@@ -32,6 +32,7 @@ class FakeSystem:
         self.imds = True                   # the metadata block is DOCKER-USER's first rule
         self.docker_user = None            # or the chain's rules as `iptables -S` prints them
         self.release = "v1.2.3"
+        self.hosts = {}                    # host -> slug, for a host that is not <slug>.<anything>
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -70,7 +71,7 @@ class FakeSystem:
     def http_status(self, host, path, timeout=3):
         if host == cell.ROUTER_HEALTH_HOST:
             return 200
-        slug = host.split(".")[0]
+        slug = self.hosts.get(host) or host.split(".")[0]
         if self.ps.get(slug, ("",))[0] != "running":
             return 502
         return self.health.get(host, 200)
@@ -80,6 +81,9 @@ class FakeSystem:
 
     def chown(self, path, uid, gid):
         self.chowns.append((str(path), uid, gid))
+
+    def open_archive(self, path):
+        return cell.System.open_archive(self, path)
 
     def linux(self):
         return True
@@ -867,3 +871,365 @@ def test_commands_read_the_record_once_they_hold_its_lock(ready, argv):
     ready.system.sleep = sleep
     answer = ready(argv[0], "--company", "boatyard", *argv[1:])
     assert answer["error"] == "not_found" and record(ready)["state"] == "removed"
+
+
+# --- moving an existing install in: own domain, aliases, carried settings, its data -------------------------------
+
+def move_args(host, *extra, slug="ticoteam", domain="hub.tico.team"):
+    host.system.hosts[domain] = slug
+    args = add_args(host, slug)
+    args[args.index("--domain") + 1] = domain
+    return [*args[:-1], "--own-domain", *extra, "--json"]
+
+
+def test_an_own_domain_needs_the_flag(ready):
+    args = move_args(ready)
+    without = [a for a in args if a != "--own-domain"]
+    assert ready(*without)["error"] == "bad_domain"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+    answer = ready(*args)
+    assert answer["ok"] and answer["url"] == "https://hub.tico.team"
+    env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
+    assert env["TICO_DOMAIN"] == "hub.tico.team"
+    assert "http://hub.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000" in (ready.root / "router" / "Caddyfile").read_text()
+
+
+def test_an_own_domain_company_can_be_hosted_own(ready):
+    answer = ready(*move_args(ready, "--hosted", "own", slug="tidy", domain="tidy.rocks"))
+    assert answer["ok"] and answer["url"] == "https://tidy.rocks"
+    env = envfile.parse((ready.root / "companies" / "tidy" / ".env").read_text())
+    assert env["TICO_HOSTED"] == "own" and env["TICO_DOMAIN"] == "tidy.rocks"
+    assert env["TICO_AUTH_PROXY"] == "oidc" and len(env["TICO_OWNER_LINK_HASH"]) == 64
+
+
+@pytest.mark.parametrize("bad", ["tico.team", "10.0.0.1", "localhost", "*.tico.team", "hub_x.example.com",
+                                 "hub-.example.com", "hub..example.com", "cell-health.invalid", "https://hub.example.com"])
+def test_own_domains_and_aliases_are_plain_hostnames(ready, bad):
+    args = move_args(ready)
+    args[args.index("--domain") + 1] = bad
+    assert ready(*args)["error"] == "bad_domain"
+    assert ready(*move_args(ready, "--alias", bad))["error"] == "bad_domain"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+
+
+def test_alias_rules(ready):
+    assert ready(*move_args(ready, "--alias", "hub.tico.team"))["error"] == "bad_domain"
+    assert ready(*move_args(ready, "--alias", "runner.tico.team", "--alias", "runner.tico.team"))["error"] == "bad_domain"
+    six = [x for i in range(6) for x in ("--alias", f"a{i}.example.com")]
+    assert ready(*move_args(ready, *six))["error"] == "bad_args"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+
+
+def test_no_host_belongs_to_two_companies(ready):
+    ready(*add_args(ready, "boatyard"))
+    answer = ready(*move_args(ready, "--alias", "boatyard.tico.team"))
+    assert answer["error"] == "domain_taken" and "boatyard" in answer["detail"]
+    assert ready(*move_args(ready, "--alias", "runner.tico.team"))["ok"]
+    # Another company's own domain or new name cannot take an alias of ticoteam's.
+    assert ready(*move_args(ready, slug="other", domain="runner.tico.team"))["error"] == "domain_taken"
+    assert ready(*add_args(ready, "runner2"))["ok"]
+    # A removed company's hosts are free again.
+    ready("remove", "--company", "ticoteam", "--keep-data")
+    assert ready(*move_args(ready, slug="other", domain="runner.tico.team"))["ok"]
+
+
+def test_aliases_are_kept_replaced_and_shown(ready):
+    first = move_args(ready, "--alias", "runner.tico.team", "--alias", "hub.ticofiles.com")
+    assert ready(*first)["ok"]
+    assert record(ready, "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
+    caddy = (ready.root / "router" / "Caddyfile").read_text()
+    assert ("http://hub.tico.team:8080, http://runner.tico.team:8080, http://hub.ticofiles.com:8080 {\n"
+            "\treverse_proxy 127.0.0.1:20000") in caddy
+    again = ready(*move_args(ready))                                # left out: kept
+    assert again["changed"] is False and record(ready, "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
+    assert ready("list")["companies"][0]["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
+    assert ready("status", "--company", "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
+    ready(*move_args(ready, "--alias", "runner.tico.team"))         # given: replaces
+    assert record(ready, "ticoteam")["aliases"] == ["runner.tico.team"]
+    assert "hub.ticofiles.com" not in (ready.root / "router" / "Caddyfile").read_text()
+    ready(*move_args(ready, "--alias", ""))                         # "" alone: none
+    assert "aliases" not in record(ready, "ticoteam")
+    assert ready("status", "--company", "ticoteam")["aliases"] == []
+
+
+# the tunnel
+
+def test_tunnel_config_lists_hosts_the_wildcard_misses_first():
+    companies = [{"domain": "hub.tico.team", "aliases": ["runner.tico.team", "hub.ticofiles.com"]},
+                 {"domain": "tidy.rocks", "aliases": ["a.b.tico.team"]}, {"domain": "boatyard.tico.team"}]
+    hosts = cell.tunnel_hosts("tico.team", companies)
+    assert hosts == ["a.b.tico.team", "hub.ticofiles.com", "tidy.rocks"]
+    text = cell.tunnel_config("tico.team", hosts)
+    assert text.index('"hub.ticofiles.com"') < text.index('"tidy.rocks"') < text.index('"*.tico.team"') \
+        < text.index("http_status:404")
+    assert text.count("service: http://127.0.0.1:8080") == 4
+    # Without such hosts: the file every cell already has, so upgrading restarts nothing.
+    assert cell.tunnel_config("tico.team") == (
+        "# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.\n"
+        "ingress:\n  - hostname: \"*.tico.team\"\n    service: http://127.0.0.1:8080\n  - service: http_status:404\n")
+
+
+@pytest.fixture
+def tunneled(host):
+    assert host("init", "--tunnel-token-file", secret_file(host.tmp, "token", TOKEN), "--json")["ok"]
+    return host
+
+
+def restarts(host, since):
+    return sum(1 for c in host.system.calls[since:] if c[-2:] == ["restart", "tunnel"] and cell.EDGE_PROJECT in c)
+
+
+def test_the_tunnel_restarts_only_when_its_routes_change(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    plain = routes.read_text()
+    n = len(tunneled.system.calls)
+    tunneled(*add_args(tunneled, "boatyard"))                       # under the wildcard: nothing to add
+    assert restarts(tunneled, n) == 0 and routes.read_text() == plain
+    n = len(tunneled.system.calls)
+    tunneled.system.chowns.clear()
+    assert tunneled(*move_args(tunneled, "--alias", "runner.tico.team", "--alias", "hub.ticofiles.com"))["changed"]
+    text = routes.read_text()
+    assert '"hub.ticofiles.com"' in text and '"runner.tico.team"' not in text and '"hub.tico.team"' not in text
+    assert text.index('"hub.ticofiles.com"') < text.index('"*.tico.team"')
+    assert restarts(tunneled, n) == 1 and (str(routes), 65532, 65532) in tunneled.system.chowns
+    n = len(tunneled.system.calls)
+    assert tunneled(*move_args(tunneled))["changed"] is False       # the same again
+    assert tunneled("init", "--json")["changed"] == []               # init writes the same routes
+    assert restarts(tunneled, n) == 0 and routes.read_text() == text
+    tunneled("remove", "--company", "ticoteam")
+    assert routes.read_text() == plain and restarts(tunneled, n) == 1
+
+
+def test_a_tunnel_that_fails_to_restart_gets_its_old_routes_back(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    plain = routes.read_text()
+    tunneled.system.fail["restart tunnel"] = Result(1, "", "Error response from daemon")
+    answer = tunneled(*move_args(tunneled, "--alias", "hub.ticofiles.com"))
+    assert answer["error"] == "docker_failed" and "tunnel" in answer["detail"]
+    assert routes.read_text() == plain
+    tunneled.system.fail.clear()
+    n = len(tunneled.system.calls)
+    assert tunneled(*move_args(tunneled))["ok"] and restarts(tunneled, n) == 1     # the next run tries again
+    assert '"hub.ticofiles.com"' in routes.read_text()
+
+
+def test_without_a_tunnel_the_routes_are_written_but_nothing_restarts(ready):
+    ready(*move_args(ready, slug="tidy", domain="tidy.rocks"))
+    assert '"tidy.rocks"' in (ready.root / "tunnel" / "cloudflared.yml").read_text()
+    assert restarts(ready, 0) == 0
+
+
+# carried settings
+
+CARRIED = ("# from hub.tico.team's .env\n"
+           "TICO_RUNNER_URL=https://runner.tico.team\nTICO_VISUAL_ORIGIN=https://hub.ticofiles.com\n"
+           "TICO_BLOB_BUCKET=tico-team-blobs\nTICO_BLOB_REGION=us-west-2\nTICO_INBOUND_KEY=inbound-" + "k" * 30 + "\n"
+           "TYPESAFE_API_KEY=ts-" + "y" * 30 + "\nTICO_STALE_REVIEW=48\nTICO_SUPPORT_ACCESS=on\n"
+           "TICO_MIGRATE_TO_AUTOMATIONS=1\nTICO_OIDC_ALLOWED_DOMAINS=tico.team\n"
+           # the cell's own, or a single-company install's: never kept
+           "TICO_DOMAIN=old.example.com\nTICO_OIDC_LABEL=Google\nTICO_TAG=v0.0.1\nTICO_PORT=8765\nCOMPOSE_PROFILES=caddy\n"
+           "CLOUDFLARE_TUNNEL_TOKEN=" + "c" * 40 + "\nTICO_CADDY_VISUALS=1\nTICO_TUNNEL_X=1\n"
+           "TICO_EXPECTED_AWS_ACCOUNT=123456789012\nTICO_OWNER_LINK_HASH=" + "0" * 64 + "\n")
+IGNORED = ["CLOUDFLARE_TUNNEL_TOKEN", "COMPOSE_PROFILES", "TICO_CADDY_VISUALS", "TICO_DOMAIN",
+           "TICO_EXPECTED_AWS_ACCOUNT", "TICO_OIDC_LABEL", "TICO_OWNER_LINK_HASH", "TICO_PORT", "TICO_TAG", "TICO_TUNNEL_X"]
+
+
+def test_carried_settings_are_kept_and_the_cells_own_win(ready):
+    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "old.env", CARRIED)))
+    assert answer["ok"] and answer["ignored"] == IGNORED and answer["unused"] == ["TICO_MIGRATE_TO_AUTOMATIONS"]
+    assert "k" * 30 not in json.dumps(answer) and "123456789012" not in json.dumps(answer)
+    d = ready.root / "companies" / "ticoteam"
+    assert stat.S_IMODE((d / "extra.env").stat().st_mode) == 0o600
+    extra = envfile.parse((d / "extra.env").read_text())
+    assert set(extra).isdisjoint(IGNORED) and extra["TICO_RUNNER_URL"] == "https://runner.tico.team"
+    env = envfile.parse((d / ".env").read_text())
+    assert env["TICO_RUNNER_URL"] == "https://runner.tico.team" and env["TICO_BLOB_BUCKET"] == "tico-team-blobs"
+    assert env["TYPESAFE_API_KEY"] == "ts-" + "y" * 30 and env["TICO_OIDC_ALLOWED_DOMAINS"] == "tico.team"
+    assert env["TICO_DOMAIN"] == "hub.tico.team" and env["TICO_OIDC_LABEL"] == "Tico account"
+    assert env["TICO_TAG"] == "v1.2.3" and env["TICO_PORT"] == "20000" and env["TICO_OWNER_LINK_HASH"] != "0" * 64
+    for key in ("COMPOSE_PROFILES", "CLOUDFLARE_TUNNEL_TOKEN", "TICO_CADDY_VISUALS", "TICO_EXPECTED_AWS_ACCOUNT"):
+        assert key not in env
+    # Left out again: kept, nothing changes. Then `update` keeps them too.
+    files = {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
+    again = ready(*move_args(ready))
+    assert again["changed"] is False and "ignored" not in again
+    assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files
+    assert ready("update", "--company", "ticoteam", "--version", "v1.3.0")["ok"]
+    env = envfile.parse((d / ".env").read_text())
+    assert env["TICO_TAG"] == "v1.3.0" and env["TICO_BLOB_REGION"] == "us-west-2" and env["TICO_STALE_REVIEW"] == "48"
+
+
+def test_a_new_env_file_replaces_the_carried_settings(ready):
+    ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "old.env", CARRIED)))
+    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "new.env", "TICO_STALE_REVIEW=24")))
+    assert answer["changed"] is True and answer["ignored"] == []
+    env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
+    assert env["TICO_STALE_REVIEW"] == "24" and "TICO_BLOB_BUCKET" not in env and "TICO_RUNNER_URL" not in env
+
+
+@pytest.mark.parametrize("text", ["lower_case=1", "TICO_X", "1TICO=1", "TICO X=1", "TICO_X=a\x07b",
+                                  "K" + "X" * 64 + "=1"])
+def test_bad_env_files_are_refused_without_their_values(ready, text):
+    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "bad.env", "TICO_OK=1\n" + text)))
+    assert answer["error"] == "secret_file" and "--env-file" in answer["detail"] and "a\x07b" not in answer["detail"]
+    assert not (ready.root / "companies" / "ticoteam").exists()
+
+
+def test_an_env_file_others_can_read_is_refused(ready):
+    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "loose.env", "TICO_STALE_REVIEW=1", 0o644)))
+    assert answer["error"] == "secret_file"
+
+
+def test_carried_values_are_scrubbed_from_answers(ready):
+    ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "old.env", CARRIED)))
+    ready.system.health["hub.tico.team"] = 503
+    ready.system.fail["logs"] = Result(0, "server: bad TYPESAFE_API_KEY=ts-" + "y" * 30 + "\n")
+    answer = ready("update", "--company", "ticoteam", "--version", "v1.3.0", "--timeout", "1")
+    assert answer["ok"] is False and "y" * 30 not in json.dumps(answer) and "********" in answer["detail"]
+
+
+# importing its data
+
+import tarfile  # noqa: E402
+
+
+def data_tar(tmp_path, name="data.tar.gz", extra=None, mode=0o600, hub=True):
+    """An install's /data as `tar -C /data -czf ... .` makes it, plus `extra` (TarInfo, bytes) members."""
+    import io as _io
+    path = tmp_path / name
+    files = {"hub.sqlite": b"db", "hub.sqlite-wal": b"wal", "credential.key": b"k" * 32, "github-app.key": b"pem",
+             "tico-session-secret": b"s", "visual-secret": b"v", "registry/bots/a.yaml": b"name: a\n",
+             "blobs/ab/abcdef": b"x" * 100}
+    if not hub:
+        files.pop("hub.sqlite")
+    with tarfile.open(path, "w:gz" if name.endswith("gz") else "w") as tar:
+        root = tarfile.TarInfo("./")
+        root.type, root.mode = tarfile.DIRTYPE, 0o755
+        tar.addfile(root)
+        for dname in ("registry", "registry/bots", "blobs", "blobs/ab"):
+            info = tarfile.TarInfo(f"./{dname}")
+            info.type, info.mode = tarfile.DIRTYPE, 0o755
+            tar.addfile(info)
+        for fname, body in files.items():
+            info = tarfile.TarInfo(f"./{fname}")
+            info.size, info.mode, info.uid = len(body), 0o600, 10001
+            tar.addfile(info, _io.BytesIO(body))
+        for info, body in extra or []:
+            tar.addfile(info, _io.BytesIO(body) if body is not None else None)
+    os.chmod(path, mode)
+    return str(path), sum(len(b) for b in files.values())
+
+
+def member(name, kind=tarfile.REGTYPE, linkname="", body=b""):
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname, info.size = kind, linkname, len(body) if kind == tarfile.REGTYPE else 0
+    return info, (body if kind == tarfile.REGTYPE else None)
+
+
+def test_import_fills_a_new_companys_data_before_its_first_start(ready):
+    archive, size = data_tar(ready.tmp, extra=[member("./registry/b.yaml", tarfile.LNKTYPE, "./registry/bots/a.yaml")])
+    d = ready.root / "companies" / "ticoteam"
+    seen, real = [], ready.system.run
+
+    def run(argv, **kw):
+        if "up" in argv and "--project-name" in argv:
+            seen.append((d / "data" / "hub.sqlite").read_bytes())
+        return real(argv, **kw)
+    ready.system.run = run
+    answer = ready(*move_args(ready, "--import-data", archive))
+    assert answer["ok"] and answer["imported"] is True and answer["imported_bytes"] == size and answer["changed"]
+    assert seen == [b"db"]                                          # in place before the server first started
+    assert (d / "data" / "registry" / "bots" / "a.yaml").read_text() == "name: a\n"
+    assert (d / "data" / "registry" / "b.yaml").read_text() == "name: a\n"
+    assert not (d / cell.IMPORT_STAGING).exists() and stat.S_IMODE((d / "data").stat().st_mode) == 0o700
+    # Owned while still in the staging folder: the rename keeps the owner.
+    owned = {p.replace(cell.IMPORT_STAGING, "data") for p, uid, gid in ready.system.chowns if uid == gid == 10001}
+    for p in (d / "data").rglob("*"):
+        assert str(p) in owned
+    assert str(d / "data") in owned
+    # Imported once: the same command again is refused and touches nothing; without it the company converges.
+    assert ready(*move_args(ready, "--import-data", archive))["error"] == "data_exists"
+    assert ready(*move_args(ready))["changed"] is False
+
+
+def test_a_plain_tar_imports_too(ready):
+    archive, size = data_tar(ready.tmp, name="data.tar")
+    assert ready(*move_args(ready, "--import-data", archive))["imported_bytes"] == size
+
+
+def test_import_refuses_a_company_that_has_data(ready):
+    ready(*add_args(ready, "boatyard"))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("live db")
+    archive, _ = data_tar(ready.tmp)
+    assert ready(*add_args(ready, "boatyard", "--import-data", archive))["error"] == "data_exists"
+    assert (d / "data" / "hub.sqlite").read_text() == "live db" and not (d / cell.IMPORT_STAGING).exists()
+
+
+def test_import_into_a_kept_but_empty_data_folder(ready):
+    ready(*add_args(ready, "boatyard"))
+    ready("remove", "--company", "boatyard", "--keep-data")
+    archive, _ = data_tar(ready.tmp)
+    answer = ready(*add_args(ready, "boatyard", "--import-data", archive))
+    assert answer["imported"] is True
+    assert (ready.root / "companies" / "boatyard" / "data" / "hub.sqlite").read_bytes() == b"db"
+
+
+@pytest.mark.parametrize("bad", [
+    member("/etc/cron.d/x", body=b"x"), member("./../escape", body=b"x"), member("./a/../../escape", body=b"x"),
+    member("./link", tarfile.SYMTYPE, "../../etc/passwd"), member("./link", tarfile.SYMTYPE, "hub.sqlite"),
+    member("./hard", tarfile.LNKTYPE, "/etc/passwd"), member("./hard", tarfile.LNKTYPE, "../outside"),
+    member("./hard", tarfile.LNKTYPE, "./not-in-the-archive"),
+    member("./tty", tarfile.CHRTYPE), member("./disk", tarfile.BLKTYPE), member("./pipe", tarfile.FIFOTYPE)])
+def test_a_bad_archive_is_refused_whole_and_leaves_nothing(ready, bad):
+    archive, _ = data_tar(ready.tmp, extra=[bad])
+    answer = ready(*move_args(ready, "--import-data", archive))
+    assert answer["error"] == "bad_archive"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+    assert not (ready.tmp / "escape").exists() and not (ready.root / "companies" / "escape").exists()
+
+
+def test_an_archive_of_the_folder_not_its_contents_is_refused(ready):
+    archive, _ = data_tar(ready.tmp, hub=False, extra=[member("./data/hub.sqlite", body=b"db")])
+    assert ready(*move_args(ready, "--import-data", archive))["error"] == "bad_archive"
+
+
+def test_not_an_archive_or_not_private(ready):
+    junk = ready.tmp / "junk.tar.gz"
+    junk.write_bytes(b"not a tar at all" * 100)
+    os.chmod(junk, 0o600)
+    assert ready(*move_args(ready, "--import-data", str(junk)))["error"] == "bad_archive"
+    loose, _ = data_tar(ready.tmp, name="loose.tar.gz", mode=0o644)
+    assert ready(*move_args(ready, "--import-data", loose))["error"] == "secret_file"
+    link = ready.tmp / "link.tar.gz"
+    link.symlink_to(data_tar(ready.tmp)[0])
+    assert ready(*move_args(ready, "--import-data", str(link)))["error"] == "bad_archive"
+    assert ready(*move_args(ready, "--import-data", str(ready.tmp / "missing.tar")))["error"] == "bad_archive"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+
+
+def test_an_import_whose_add_fails_later_leaves_nothing(ready):
+    ready(*add_args(ready, "boatyard"))
+    archive, _ = data_tar(ready.tmp)
+    answer = ready(*move_args(ready, "--alias", "boatyard.tico.team", "--import-data", archive))
+    assert answer["error"] == "domain_taken"
+    assert not (ready.root / "companies" / "ticoteam").exists()
+
+
+def test_a_whole_move_is_idempotent(tunneled):
+    archive, _ = data_tar(tunneled.tmp)
+    env_file = secret_file(tunneled.tmp, "old.env", CARRIED)
+    aliases = ["--alias", "runner.tico.team", "--alias", "hub.ticofiles.com"]
+    first = tunneled(*move_args(tunneled, *aliases, "--env-file", env_file, "--import-data", archive,
+                                "--company-name", "Tico Team", "--signin-label", "Google"))
+    assert first["ok"] and first["imported"] is True
+    d = tunneled.root / "companies" / "ticoteam"
+    files = {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
+    n = len(tunneled.system.calls)
+    second = tunneled(*move_args(tunneled, *aliases, "--env-file", env_file, "--company-name", "Tico Team",
+                                 "--signin-label", "Google"))
+    assert second["changed"] is False and second["ignored"] == first["ignored"]
+    assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files
+    assert restarts(tunneled, n) == 0
+    env = envfile.parse((d / ".env").read_text())
+    assert env["TICO_TEAM_NAME"] == "Tico Team" and env["TICO_OIDC_LABEL"] == "Google"
