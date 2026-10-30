@@ -4,8 +4,9 @@ Every human has one private chat with the team's assistant (the `coo` bot; you m
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: the
 pill at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the Liquid Dot in the
 middle of the tab bar opens it as a sheet (there is no second, floating button on a phone). The panel names the page it sees, and a message sent from it carries that
-page, so "this" and "here" mean what you are looking at. **Show chat** in the panel opens it
-as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
+page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
+gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The chat is also a
+page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. An Assistant's room
 takes text only, for the owner too, so the composer has no attach button. There is no BotOps, Strategy Bot, Librarian or Assistant row in
@@ -13,23 +14,26 @@ the rail: you ask the Assistant, and it hands its helpers what needs them (below
 `#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
-In the thread the Assistant's turns are plain text, with the dot beside the newest; yours are dark bubbles on the right.
+In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
+header: opening flies it up from the button to its place beside the name, closing flies it back down. Bots' questions
+and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
 
-**Loop in Tico Support**, one switch under the thread, brings Tico support into the chat. It rides on your support
+**Loop in Support**, a link at the top right of the panel, brings Tico support into the chat. It rides on your support
 requests ([Support](support.md)): while one of your open requests is in the chat, its chip **Tico Support ×** sits at
 the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
 time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
-support instead of the Assistant. Turning the switch on shares the chat, as its label says: the chat's last 20 turns
+support instead of the Assistant; the link hides while support is in. Looping support in shares the chat, as the line says: the chat's last 20 turns
 (yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
 out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
-With no open request, turning it on sends a new request holding them, with no form; a request taken out earlier comes
-back and gets them instead. The chip's **×**, or the switch, takes it out: "Tico Support can no longer see chats."
+With no open request, it sends a new request holding them, with no form; a request taken out earlier comes
+back and gets them instead. The chip's **×** takes it out: "Tico Support can no longer see chats."
 Nothing more from this chat goes to support; the request itself stays open in Support, only this chat stops showing it
-(remembered on this browser). The **+** still opens **Tico support** (free: every request, diagnostics, a new request
-of its own) or **Tico team** (full management of your company).
+(remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
+`#/support`, such as the Assistant's "Loop in Tico support" reply.
 
-A **peek** is one line beside the closed dot (above the tab bar on a phone) about a bot's question waiting on you:
-"BotOps asks: …". Tap it and the chat opens on that question; × dismisses it for good. One at a time, none in the first
+A **peek** is a few words beside the closed dot (above the tab bar on a phone), Tico saying something waits on you:
+"Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
+never who asked. Tap it and the chat opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
 few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
 count on the dot.
 

@@ -172,20 +172,14 @@
 </div>
 <main id="main"></main>
 <button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word hidden></span></button>
-<div class="ask-peek" id="ask-peek" hidden><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span><span class="ask-peek-act" data-peek-act></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
+<div class="ask-peek" id="ask-peek" hidden><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" hidden>
-  <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Assistant</h2>
+  <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
     <span class="ask-sees" data-ask-sees hidden><span data-ask-sees-name></span></span>
     <span class="ask-people" data-ask-people></span>
-    <button type="button" class="ask-ib" id="ask-add" aria-haspopup="menu" aria-expanded="false" aria-label="Add to this chat" title="Add to this chat">+</button>
-    <a class="ask-full" href="#/assistant">Show chat</a>
+    <button type="button" class="ask-loop" data-ask-loop title="Shares this chat with Tico Support" hidden>Loop in Support</button>
     <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
-  <div class="ask-menu" data-ask-menu role="menu" hidden>
-    <button type="button" role="menuitem" id="ask-support">Tico support<span>Free</span></button>
-    <button type="button" role="menuitem" id="ask-manage">Tico team<span>Full management</span></button></div>
   <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
-  <div class="ask-loop" data-ask-loop hidden><span class="ask-loop-label" id="ask-loop-label"><span class="nav-icon" aria-hidden="true">headset_mic</span>Loop in Tico Support</span>
-    <button type="button" class="ask-switch" data-ask-switch role="switch" aria-checked="false" aria-labelledby="ask-loop-label"></button></div>
   <div class="ask-form"></div>
   <p class="err" data-ask-error role="alert" hidden></p>
 </section>

@@ -1,7 +1,8 @@
-// No browser: Ask's rules (ui/app/ask-rules.js). The "Loop in Tico Support" switch: support is in the chat while an open
+// No browser: Ask's rules (ui/app/ask-rules.js). "Loop in Support": support is in the chat while an open
 // request is shown there; flipping it takes that request out, brings one taken out back, or starts a new one; with
-// support off on the server there is no switch. Peeks beside the dot: from known items only, one at a time, none while
-// the panel is open, while typing or in the first 3 s, a dismissed one never again, any one at most once a day.
+// support off on the server there is no link. Peeks beside the dot: from known items only, one at a time, none while
+// the panel is open, while typing or in the first 3 s, a dismissed one never again, any one at most once a day; each
+// says what waits in six words at most.
 // Turning support on shares the chat: its last 20 turns, scrubbed of keys, go to the request (a new one when none is
 // open); turning it off stops what this chat sends going there.
 const assert = require('node:assert/strict');
@@ -11,9 +12,9 @@ const path = require('node:path');
 
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/ask-rules.js'), 'utf8')
-  + '\n;globalThis.api = {askSupportState, askSupportFlip, askPeekPick, askPeekTidy, ASK_PEEK_WAIT_MS, ASK_PEEK_DAY_MS,'
+  + '\n;globalThis.api = {askSupportState, askSupportFlip, askPeekPick, askPeekLine, askPeekTidy, ASK_PEEK_WAIT_MS, ASK_PEEK_DAY_MS,'
   + ' askSupportSwitch, askSendTo, askScrub, askShareText, askShared};', context);
-const {askSupportState, askSupportFlip, askPeekPick, askPeekTidy, ASK_PEEK_WAIT_MS, ASK_PEEK_DAY_MS,
+const {askSupportState, askSupportFlip, askPeekPick, askPeekLine, askPeekTidy, ASK_PEEK_WAIT_MS, ASK_PEEK_DAY_MS,
   askSupportSwitch, askSendTo, askScrub, askShareText, askShared} = context.api;
 const plain = v => JSON.parse(JSON.stringify(v));
 
@@ -59,6 +60,19 @@ assert.equal(pick({dismissed: ['q1', 'q2', 'q3']}), null);
 assert.equal(pick({shown: {q1: now - 60_000}}), 'q2', 'shown today: not again');
 assert.equal(pick({shown: {q1: now - ASK_PEEK_DAY_MS}}), 'q1', 'a day later it may');
 assert.equal(pick({shown: {q1: 'junk'}}), 'q1', 'a broken store does not block');
+// What it says: Tico talking, six words at most, never who asked or the question; it speaks for the fresh items of the
+// first one's kind.
+const line = list => plain(askPeekLine(list));
+assert.deepEqual(line([{id: 'q1'}]), {text: 'Got a quick question for you', ids: ['q1']});
+assert.deepEqual(line(items), {text: '3 questions are waiting on you', ids: ['q1', 'q2', 'q3']});
+assert.deepEqual(line([{id: 'c1', confirm: true}, {id: 'q1'}]), {text: 'Need your OK on something', ids: ['c1']});
+assert.deepEqual(line([{id: 'q1'}, {id: 'c1', confirm: true}, {id: 'c2', confirm: true}]).ids, ['q1']);
+assert.equal(line([{id: 'c1', confirm: true}, {id: 'c2', confirm: true}]).text, '2 things need your OK');
+assert.deepEqual(line([]), {text: '', ids: []});
+for (const n of [1, 2, 12, 140]) for (const confirm of [false, true]) {
+  const text = askPeekLine([...Array(n).keys()].map(i => ({id: 'x' + i, confirm}))).text;
+  assert.ok(text.split(/\s+/).length <= 6 && !/asks/i.test(text), text);
+}
 // The store keeps the last 50 dismissed and a day of shown times.
 const tidy = plain(askPeekTidy({dismissed: [...Array(60).keys()].map(String).concat('5'), shown: {old: now - ASK_PEEK_DAY_MS - 1, fresh: now - 1}}, now));
 assert.equal(tidy.dismissed.length, 50);

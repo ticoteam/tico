@@ -102,9 +102,9 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
-  // The number of unread replies shows only inside Ask's panel: on Tico support in its + menu here, and on the
-  // support chip (ui/app/ask-panel.js, which hears `tico:support` to show an open request as in its chat). Ask's
-  // button and the phone's Ask tab carry no count.
+  // Unread replies show only inside Ask's panel, as support's messages in the chat (ui/app/ask-panel.js hears
+  // `tico:support`); an #ask-support item, where a page has one, carries the count. Ask's button and the phone's Ask
+  // tab carry no count.
   function mark() {
     const n = state.unread, item = document.getElementById('ask-support');
     if (item) {
