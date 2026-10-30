@@ -1985,6 +1985,14 @@ class GatewayFetch(Contract):
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
+class GatewayImage(Contract):
+    prompt: str = Field(min_length=1, max_length=4000)
+    category: Literal["storyboard", "photo", "character", "graphic"]
+    images: list[str] = Field(default_factory=list, max_length=4)       # base64 data URLs, checked by the Gateway
+    size: str | None = Field(default=None, max_length=20)
+    count: int = Field(default=1, ge=1, le=4)
+
+
 class SystemUpdate(Contract):
     version: str = Field(min_length=1, max_length=64)
 

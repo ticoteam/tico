@@ -254,6 +254,24 @@ the same list with the `hub_gateway_catalog` tool and search the web with `hub_g
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
+## Images
+
+`hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
+
+- **storyboard**: the cheapest model, for rough frames.
+- **photo**: for photographic images.
+- **character**: keeps a person or character from the `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
+- **graphic**: best for text and layout.
+
+`--size WxH` asks for the nearest aspect ratio, `--count N` makes up to 4 images. The first image is saved to `PATH`, the
+others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, category, model,
+cost, the reference names and their sha256. An existing file is never overwritten.
+
+Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
+varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
+Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
+the image bytes.
+
 ## Webhooks through the Gateway
 
 With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Webhooks → Through Tico
