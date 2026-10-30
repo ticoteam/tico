@@ -601,6 +601,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     from .execution import _queue_suspects, queued_jobs_sql
     every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
     suspect = _queue_suspects(c, every_job)
+    # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
+    from .cloud_machines import homes
+    on_cloud = homes(c)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
@@ -618,6 +621,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             stuck.append({**row, "reason": "login_holder_unknown", "runner_id": where[0], "runtime": ""})
             continue
         report = report_for(slug, where) if count else {}
+        cloud = on_cloud.get(slug)
+        if cloud and (not where or where[0] not in online_ids):
+            # Started when it has work: only a refusal, or work that waited too long for it, is stuck.
+            if count and (cloud["problem"] or (oldest and oldest < cutoff)):
+                from .cloud_machines import problem_words
+                stuck.append({**row, "reason": "cloud_machine", "runner_id": where[0] if where else "", "runtime": "",
+                              "problem": problem_words(cloud["problem"]) or "Starting"})
+            continue
         if where and where[0] not in online_ids:
             waiting.append({**row, "reason": "computer_offline"})
             if count:
@@ -856,6 +867,9 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                         else _fix("Open Computers", "#/settings", "devices")
             else:
                 fix = _fix("Open bot settings", "#/settings", "bots")
+        elif reason == "cloud_machine":
+            text = "Cloud machine: " + (row.get("problem") or "Starting")
+            fix = _fix(*(BILLING if row.get("problem") == "Out of credit" else BOT_SETTINGS))
         elif reason == "limit":
             text = "Over its spending limit"
             fix = _fix("Raise limit", "#/usage")

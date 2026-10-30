@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs every example end to end and writes outputs to examples/media/ (ignored by git).
-# Needs ffmpeg, ffprobe, Node 20+ and Chromium (npx playwright install chromium).
+# Needs ffmpeg, ffprobe, Node 20+ and a browser: Google Chrome, or Chromium (npx playwright install chromium).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 tool=$(dirname "$here")

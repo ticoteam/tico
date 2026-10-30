@@ -2266,10 +2266,16 @@ class Execution:
                 raise Problem("enrollment", "Enrollment code is invalid or expired", 401)
             # Deterministic credential makes a lost enrollment response safely retryable.
             token = digest("tico-runner:" + body.code)
+            # A code minted for a cloud machine (backend/cloud_machines.py): the computer is named for it whatever label
+            # the machine sends, and given to the bots set to run there only: a bot's own is closed to other bots, the
+            # shared one takes members' bots.
+            from . import cloud_machines
+            cloud_bot = cloud_machines.enrolling(c, digest(body.code))
+            label = cloud_machines.label_for(c, cloud_bot) if cloud_bot else body.label
             if row["consumed_at"]:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
                                    (row["runner_id"],)).fetchone()
-                if not runner or runner["label"] != body.label:
+                if not runner or (runner["label"] != body.label and not cloud_bot):
                     raise Problem("enrollment", "Enrollment code was already used", 409)
                 return {"runner_id": runner["id"], "token": token, "operator": row["operator"]}
             rid = H.new_id()
@@ -2278,12 +2284,15 @@ class Execution:
             # (backend/screen.py).
             # Computers that existed before these defaults keep what they had.
             c.execute("INSERT INTO runners(id,label,operator,token_hash,created,platform,accepts_member_bots,"
-                      "screen_default_pending) VALUES(?,?,?,?,?,?,1,1)",
-                      (rid, body.label, row["operator"], digest(token), H.now(), body.platform))
+                      "screen_default_pending) VALUES(?,?,?,?,?,?,?,1)",
+                      (rid, label, row["operator"], digest(token), H.now(), body.platform,
+                       int(cloud_machines.opens(cloud_bot)) if cloud_bot else 1))
             c.execute("UPDATE enrollments SET consumed_at=?,runner_id=? WHERE code_hash=?",
                       (H.now(), rid, digest(body.code)))
             H.event(c, "human:" + row["operator"], "runner.enrolled", rid)
-            if self.runner_enrolled:
+            if cloud_bot:
+                cloud_machines.enrolled(c, self, rid, cloud_bot)    # not onboarding's: only its own bots go on it
+            elif self.runner_enrolled:
                 self.runner_enrolled(c, rid, row["operator"])
             return {"runner_id": rid, "token": token, "operator": row["operator"]}
 
@@ -2495,6 +2504,8 @@ class Execution:
         if (runner["operator"] not in (operator, self.auth.owner_id(c))
                 and not (member_bot and (runner["accepts_member_bots"] or self.auth.bot_admin(who)))):
             raise Problem("forbidden", "This machine's operator is not authorized to host this bot", 403)
+        from . import cloud_machines
+        cloud_machines.check_host(c, bot, body.runner_id)
         old = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
         generation = old["generation"] if old else 0
         if body.expected_generation != generation:
@@ -2523,6 +2534,7 @@ class Execution:
         built_on.forget(c, bot)                   # placed: its computer reports the checkout from now on
         if old and old["runner_id"] != body.runner_id:
             forget_report(c, old["runner_id"], bot)
+        cloud_machines.placed(c, bot, body.runner_id, who.actor)
         return dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
 
     def grace_leases(self):

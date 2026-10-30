@@ -831,6 +831,8 @@ class Onboarding:
                 continue
             if c.execute("SELECT 1 FROM assignments WHERE bot=?", (row["bot"],)).fetchone():
                 continue                     # a bot a person already placed is never moved
+            if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
+                continue                     # it runs on a cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
                     computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
@@ -1079,6 +1081,7 @@ class Onboarding:
                     c.execute("UPDATE runners SET operator=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
                     H.event(c, actor, "runner.adopted", row["id"], {"operator": self.auth.owner_id(c)})
         if not row:
+            self._adopt_cloud(c, actor)
             return []
         placed = self.assign_pending(c, row["id"])
         self._activate_bootstrap(c, actor)
@@ -1088,15 +1091,36 @@ class Onboarding:
             H.event(c, actor, "onboarding.assigned", row["id"], {"bots": placed})
         return placed
 
+    def _adopt_cloud(self, c, actor):
+        """Tico Cloud with no computer yet: bots run on cloud machines (shared, or their own by role), made for work,
+        and the bootstrap bots are activated on them. Nothing until HQ has listed its sizes (`on_cloud_offered`)."""
+        from . import cloud_machines
+        if not cloud_machines.offered(c, self.settings):
+            return False
+        for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot LEFT JOIN "
+                               "assignments a ON a.bot=bc.bot WHERE a.bot IS NULL AND b.state<>'archived' "
+                               "ORDER BY bc.bot").fetchall():
+            cloud_machines.adopt(c, found["bot"], actor)
+        self._activate_bootstrap(c, actor)
+        return True
+
+    def on_cloud_offered(self, c):
+        """HQ has just listed its machine sizes (the cloud machines manager's sync). A setup finished before then, with
+        no computer, left its bots unplaced and its bootstrap bots planned: they go on cloud machines now, the same way
+        as had the sizes been known when it finished."""
+        if load(c)["completed"]:
+            self._adopt_cloud(c, H.KEEPER)
+
     def _activate_bootstrap(self, c, actor):
         """Activate the bootstrap bots (the assistant, BotOps) and the starters once a machine hosts
         them. Every other bot is set up by BotOps, and BotOps cannot be handed a task while it is
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc "
-                             "JOIN assignments a ON a.bot=bc.bot JOIN bots b ON b.slug=bc.bot "
-                             "WHERE b.state='planned' ORDER BY bc.bot").fetchall():
+        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                             "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
+                             "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
+                             "ORDER BY bc.bot").fetchall():
             declared = _json(row["config_json"], {}) or {}
             # A starter is parked (`needs_onboarding`), so activating it lets it answer a person and nothing else.
             if not ((cards.get(declared.get("template")) or {}).get("bootstrap") or declared.get("materialize")):

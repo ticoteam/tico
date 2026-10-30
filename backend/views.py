@@ -828,6 +828,11 @@ def free_turn(c, bot, location, human=False):
     return (machine.get("label") or "its computer") if sum(held.values()) >= turn_limit(row) else ""
 
 
+def cloud_machine_wait(c, bot):
+    from .cloud_machines import waiting
+    return waiting(c, bot)
+
+
 def queued_label(c, bot, location, settings=None, human=False, behind=False, queued=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
@@ -848,6 +853,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif (stop := bot_stops.queued_reason(c, bot, human)):
         # Tico stopped the bot (failed runs, run budget) or it waits out a failed run: the words say why.
         label = "Saved — " + stop
+    elif not location["online"] and (cloud := cloud_machine_wait(c, bot)):
+        # Its own cloud machine is stopped or starting (backend/cloud_machines.py): the words say which, or why not.
+        label = "Saved — " + cloud
     elif not location["online"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label") or "a registered computer")
     elif not location["awake"]:
@@ -2008,6 +2016,9 @@ def install_views(app, store, auth, mutate, task_view):
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
+        from . import cloud_machines
+        # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
+        cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
             "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
@@ -2153,7 +2164,10 @@ def install_views(app, store, auth, mutate, task_view):
                                                      and lifecycle.may_complete(auth, c, who, slug)),
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.
                          "app_delivery": app_delivery.view(c, config),
-                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
+                         "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
+                         "cloud_machine": None if cloud_rows is None or location.get("agent") else
+                         cloud_machines.shown(slug, cloud_rows.get(slug), bool(location.get("machine")),
+                                              cloud_rows.get(cloud_machines.SHARED))})
         return rows
 
     @app.get("/api/me")
@@ -2310,6 +2324,13 @@ def install_views(app, store, auth, mutate, task_view):
             from .subscription_identity import display_names
             # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
             login_names = display_names(c)
+            from . import cloud_machines
+            # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
+            # company's shared one (`shared`, bot None).
+            cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
+                                         "shared": r["bot"] == cloud_machines.SHARED,
+                                         "size": r["machine_size"] or r["size"], "state": r["state"]}
+                        for r in cloud_machines.rows(c).values() if r["runner_id"]}
             runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
                                       "restart_since,"
@@ -2404,7 +2425,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": harness_recent.get(row["id"]) or [],
-                                 "harness_choices": harness_choice.get(row["id"]) or {}})
+                                 "harness_choices": harness_choice.get(row["id"]) or {},
+                                 "cloud_machine": cloud_of.get(row["id"])})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
                       for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
             from .agents import listing as agent_listing
