@@ -108,8 +108,8 @@ does the grant and revoke by hand. A grant to a person, or to every computer, st
 
 A credential administrator can bring logins over from Bitwarden or Vaultwarden (an unencrypted JSON export) or from KeePass
 or KeePassXC (a CSV export): Tools → Credentials → Import, or `hub credential import --format bitwarden|keepass FILE`.
-Each login keeps its name, username, password, authenticator key and the hostnames of its web addresses (an `http://` one as
-`http://host`, see Website logins); an entry without a
+Each login keeps its name, username, password, authenticator key and the hostnames of its web addresses (an `http://` one as its bare host: filling plain-http pages is chosen in Credentials,
+see Website logins); an entry without a
 web address or a password is left out and the reply says why. A login already stored with the same name, username and
 hostnames is skipped. Imported logins are granted to no bot, so a bot gets one only when someone grants it. An encrypted
 Bitwarden export is refused; export again with the unencrypted format.
@@ -192,8 +192,8 @@ A **login** is a credential for a website a bot's browser signs in to: a usernam
 sites it is for. Sites are lowercase hostnames (`app.acme.example`); a page on a listed host or any subdomain of one
 matches. The browser types a login only into an https page, or a plain-http one on the computer itself (`localhost`,
 `127.0.0.1`); a site written `http://intranet.acme.example` is the owner's say that its plain-http pages may take it
-too (anyone on the network between could read it there). That form is kept wherever a site is saved: Credentials, a
-login card, an import (an export's `http://` address). The password and the 2FA key are sealed together as one value (`{"password", "totp"}`); the username, the sites
+too (anyone on the network between could read it there). A person writes that form in Credentials, on a login card or
+with `--site`; an import takes an export's `http://` address as its bare host. The password and the 2FA key are sealed together as one value (`{"password", "totp"}`); the username, the sites
 and whether it has 2FA are plain columns, so Credentials lists them (`sites`, `has_totp`) without opening the vault.
 
 A login is never an environment variable, and a bot never holds its password or 2FA key: the turn's own commands
