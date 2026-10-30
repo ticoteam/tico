@@ -15,6 +15,7 @@ use tico_recorder_native::{
     engine::RecordingHandle,
     live::LiveSync,
     network::{self, Tico, Transcriber},
+    notices,
     settings::{self, AppLock, Settings},
     signin, speech,
     store::{self, Recording, Store, Summary},
@@ -662,7 +663,14 @@ impl Recorder {
     fn sync(&mut self) {
         self.last_sync = Instant::now();
         self.network_job("live", |tico, store, id| {
-            Ok(json!({"view":tico.sync_live(&store, &id)?}))
+            let view = tico.sync_live(&store, &id)?;
+            // Notices are a side note: the meeting still syncs when they can't be read.
+            if let (Some(live_id), Some(latest)) = (view["id"].as_str(), view["event_id"].as_u64())
+                && let Err(error) = tico.read_notices(live_id, latest)
+            {
+                eprintln!("Meeting notices unread: {error:#}");
+            }
+            Ok(json!({"view":view}))
         });
     }
     /// Asks the default Tico what speech it handles: when it is connected or changes, and every
@@ -1829,7 +1837,7 @@ impl Recorder {
     /// Everything the window shows. Parts the window already has (by hash) come back as null.
     pub fn view(&mut self, have: &Have) -> Value {
         self.viewed = self.ui_version;
-        let mut out = json!({"status": self.status_view()});
+        let mut out = json!({"status": self.status_view(), "live": self.live_view()});
         let parts: [(&str, &str, Value); 4] = [
             ("library", &have.library, self.library_view()),
             ("settings", &have.settings, self.settings_view()),
@@ -1845,6 +1853,27 @@ impl Recorder {
             };
         }
         out
+    }
+    /// The open meeting's notices about its bots (`notices`), newest last, named as in People.
+    pub fn live_view(&self) -> Value {
+        let live_id = self.live["id"].as_str().unwrap_or("");
+        let notices: Vec<Value> = if live_id.is_empty() || live_id != self.context.live_id {
+            vec![]
+        } else {
+            notices::notices(live_id)
+                .iter()
+                .map(|notice| {
+                    let name = self
+                        .roster
+                        .iter()
+                        .find(|row| row.0 == format!("bot:{}", notice.bot))
+                        .map_or(notice.bot.as_str(), |row| row.1.as_str());
+                    json!({"id":notice.id,"kind":notice.kind,"bot":name,
+                        "text":notice.text(name),"at":notice.at})
+                })
+                .collect()
+        };
+        json!({"notices": notices})
     }
     pub fn status_view(&self) -> Value {
         let recording = self.active.as_ref().map(|(id, handle)| {

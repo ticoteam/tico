@@ -7,6 +7,7 @@ pub mod engine;
 pub mod legacy;
 pub mod live;
 pub mod network;
+pub mod notices;
 pub mod qos;
 pub mod settings;
 pub mod signin;

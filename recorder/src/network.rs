@@ -393,6 +393,54 @@ impl Tico {
         response(request.bearer_auth(&self.token).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
+    /// The events a Tico event stream (SSE) has now: `(id, type, payload)` until its first
+    /// keep-alive, which follows what was already there. The stream is then closed.
+    pub(crate) fn events(&self, path: &str) -> Result<Vec<(u64, String, Value)>> {
+        ensure!(
+            path.starts_with('/') && !path.starts_with("//"),
+            "Invalid Tico endpoint"
+        );
+        let url = format!("{}{}", settings::safe_url(&self.destination.base_url)?, path);
+        let reply = self
+            .client
+            .get(url)
+            .bearer_auth(&self.token)
+            .header("Accept", "text/event-stream")
+            .send()
+            .with_context(|| format!("Tico request {path} failed"))?;
+        if !reply.status().is_success() {
+            return response(reply)
+                .map(|_| vec![])
+                .with_context(|| format!("Tico request {path} failed"));
+        }
+        let mut out = vec![];
+        let (mut id, mut kind, mut data) = (0, String::new(), String::new());
+        // Bounded: a few hundred events at most come before the keep-alive.
+        for line in std::io::BufRead::lines(std::io::BufReader::new(reply.take(4_000_000))) {
+            let line = line?;
+            if line.starts_with(':') {
+                break;
+            }
+            if line.is_empty() {
+                if !kind.is_empty() {
+                    let payload = serde_json::from_str(&data).unwrap_or(Value::Null);
+                    out.push((id, std::mem::take(&mut kind), payload));
+                }
+                data.clear();
+                continue;
+            }
+            match line.split_once(':').map(|(field, value)| (field, value.trim_start())) {
+                Some(("id", value)) => id = value.parse().unwrap_or(id),
+                Some(("event", value)) => kind = value.into(),
+                Some(("data", value)) => data.push_str(value),
+                _ => {}
+            }
+        }
+        if kind == "expired" || out.iter().any(|(_, kind, _)| kind == "expired") {
+            anyhow::bail!("Sign in to Tico again in Settings");
+        }
+        Ok(out)
+    }
     /// Meeting routes under `/api/v2`, the only API a runner hostname routes. A Tico from before
     /// they moved answers there as an old Tico; then the same request goes to the old `/api` path.
     pub fn call_meeting(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {

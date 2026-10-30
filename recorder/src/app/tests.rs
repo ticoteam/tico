@@ -653,3 +653,36 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
     assert_eq!(chat["replying"], json!(["Head of engineering"]));
     assert_eq!(chat["connected"], true);
 }
+
+#[test]
+fn the_open_meetings_bot_notices_show_with_the_bots_name() {
+    use tico_recorder_native::notices::{self, Notice};
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    assert_eq!(full_view(&mut app)["live"], json!({"notices": []}));
+    notices::remember(
+        "live-notices",
+        12,
+        vec![Notice {
+            id: "waiting:t1".into(),
+            kind: "waiting".into(),
+            bot: "falcon".into(),
+            turn_id: "t1".into(),
+            reason: String::new(),
+            detail: String::new(),
+            at: 1_700_000_000_000,
+        }],
+    );
+    app.context.live_id = "live-notices".into();
+    app.live = json!({"id": "live-notices"});
+    app.roster = vec![("bot:falcon".into(), "Falcon".into())];
+    assert_eq!(
+        full_view(&mut app)["live"]["notices"],
+        json!([{"id":"waiting:t1","kind":"waiting","bot":"Falcon",
+            "text":"Falcon is waiting for its computer","at":1_700_000_000_000_i64}])
+    );
+    // Another meeting open: not its notices.
+    app.context.live_id = "live-other".into();
+    assert_eq!(full_view(&mut app)["live"]["notices"], json!([]));
+}

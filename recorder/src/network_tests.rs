@@ -70,6 +70,11 @@ fn server(
             if let Some(reply) = reply {
                 // `{"status": 404}` alone stands for a route this Tico does not have; with an
                 // `error` it is Tico refusing the request.
+                // `{"sse": "<text>"}` is an event stream as Tico sends it.
+                if let Some(text) = reply["sse"].as_str() {
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",text.len()).unwrap();
+                    continue;
+                }
                 let failed = reply.as_object().is_some_and(|row| {
                     row.len() == 1 || (row.len() == 2 && row.contains_key("error"))
                 }) && reply["status"].as_u64().is_some_and(|code| code >= 400);
@@ -987,4 +992,30 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
             {"seq":2,"speaker":"Me","start_ms":5500,"end_ms":6050,"text":"still talking"},
         ])
     );
+}
+
+#[test]
+fn meeting_notices_are_read_from_new_events_only() {
+    let (tico, seen, worker) = server(vec![Some(json!({"sse": concat!(
+        "id: 41\nevent: meeting.chunk\ndata: {\"seq\":3,\"text\":\"hi\"}\n\n",
+        "id: 42\nevent: meeting.bot_turn_deferred\ndata: {\"turn_id\":\"t7\",\"bot\":\"falcon\",\"reason\":\"replying_in_meeting\"}\n\n",
+        ": keep-alive\n\n",
+        "id: 43\nevent: meeting.bot_turn_failed\ndata: {\"turn_id\":\"t8\",\"bot\":\"falcon\"}\n\n",
+    )}))]);
+    // First read of a meeting: only its recent events.
+    tico.read_notices("live-events", 240).unwrap();
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap()[0].0.starts_with("GET /api/v2/live-meetings/live-events/events?after=40 "),
+        "{}",
+        seen.lock().unwrap()[0].0
+    );
+    let shown = crate::notices::notices("live-events");
+    // What came after the keep-alive is the next read's.
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].text("Falcon"), "Falcon will answer after its current reply");
+    // Nothing new: nothing asked (this Tico is gone, so a request would fail).
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.read_notices("live-events", 42).unwrap();
 }
