@@ -548,10 +548,14 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if fid not in rows:
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
-            removed = not row or bool(row["archived"]) or not files.visible(c, who, row, cache)
+            hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
+            removed = not row or bool(row["archived"]) or hidden
             v = None if removed else c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                                                (fid, number)).fetchone()
-            view = {**a, "removed": removed or v is None,
+            # A file this reader may not open says nothing of itself: not its name, title, type or size. A message
+            # can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader of its task.
+            shown = {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} if hidden else a
+            view = {**shown, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
                 actor = who.actor

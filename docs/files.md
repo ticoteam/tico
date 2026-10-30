@@ -478,6 +478,15 @@ ask/answer messages, so their text remains readable by older Computers.
 See [Files, versions and questions](tasks.md#files-versions-and-questions) for the CLI, MCP
 and answer contracts.
 
+### Approved versions
+
+`hub file approved <path|FILE[@N]>` (MCP `hub_file_approved`, `GET /api/v2/file-approvals?file=&version=` or
+`?path=&digest=`) says whether a person approved that exact version in a
+[file review](tasks.md#reviewing-files). It prints `{approved, by, at, task, question}` and exits 0 when approved,
+1 when not, 2 on bad input. A path is the bot's own file, matched by the sha256 of its bytes now. Only a person's
+verdict counts, the newest on that version decides (Request changes after Approve means not approved), and a new
+version is never approved by an older one's review.
+
 Upload retries verify their idempotency receipt before writing bytes to durable storage.
 Multipart retries still parse and hash the incoming bytes to reject changed content, using
 short-lived private spools. Parsing, hashing and spool writes run in a worker thread so large

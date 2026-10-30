@@ -416,6 +416,20 @@ class QuestionChoice(Contract):
     recommended: StrictBool = False
 
 
+class ReviewFile(Contract):
+    """One file version a question puts under review (backend/file_reviews.py); no version means the current one."""
+    file: ID
+    version: Annotated[int, Field(strict=True, ge=1)] | None = None
+
+
+class QuestionSpend(Contract):
+    """Picking `label` also approves this spend for the asking bot, decided by the person who picks it."""
+    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
+    amount: Annotated[StrictStr, Field(min_length=1, max_length=40)]
+    what: Annotated[StrictStr, Field(min_length=1, max_length=200)]
+    account: Annotated[StrictStr, Field(min_length=1, max_length=80)] = "gateway"
+
+
 class TaskQuestion(Contract):
     """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
@@ -433,6 +447,11 @@ class TaskQuestion(Contract):
     # One open question per topic: a second question to the same person on this topic, while the first is open, is
     # folded into it (hubdb.open_question). Without one, an earlier question under the same parent task with no topic.
     topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
+    # File versions under review: shown on the card, judged by the answer (backend/file_reviews.py). With no options
+    # the options are Approve and Request changes; `pick` makes each file its own option, plus Request changes.
+    review: list[ReviewFile] = Field(default_factory=list, max_length=10)
+    pick: StrictBool = False
+    spend: QuestionSpend | None = None
 
     @model_validator(mode="after")
     def unique_labels(self):
@@ -441,6 +460,10 @@ class TaskQuestion(Contract):
             raise ValueError("Option labels must be unique")
         if self.options and not 2 <= len(self.options) <= 6:
             raise ValueError("A question has 2 to 6 options, or none for Yes / No")
+        if self.pick and (self.options or self.multi or not 2 <= len(self.review) <= 5):
+            raise ValueError("A pick reviews 2 to 5 files and makes its own options")
+        if self.review and self.multi:
+            raise ValueError("A review is one pick, not several")
         return self
 
 

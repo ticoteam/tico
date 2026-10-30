@@ -847,7 +847,19 @@ def task_ask(api, args):
                             "kind": {"type": "string", "enum": ["reversible", "send", "spend", "delete"],
                                      "description": "What that step is: reversible and internal, or a send, spending "
                                      "money or a delete"},
-                            "by": _s("ISO-8601 date-time with timezone: go ahead then instead of after the team's days")}}},
+                            "by": _s("ISO-8601 date-time with timezone: go ahead then instead of after the team's days")}},
+       "review": {"type": "array", "maxItems": 10, "items": _s("FILE or FILE@N, or a local path (published first)"),
+                  "description": "File versions they review, shown on the card: with no options, Approve / Request "
+                  "changes. The answer says what was judged of each exact version (`reviewed`); hub_file_approved "
+                  "checks one later"},
+       "pick": {"type": "boolean", "description": "Each reviewed file (2 to 5) is its own option, plus Request changes"},
+       "spend": {"type": "object", "additionalProperties": False, "required": ["label", "amount", "what"],
+                 "description": "Picking `label` also approves this spend: the answer's `spend_approval` is an approved "
+                 "spend approval you consume once", "properties": {
+                     "label": _s("The option that approves it", maxLength=60),
+                     "amount": _s("The amount, e.g. 12.50", maxLength=40),
+                     "what": _s("What it pays for", maxLength=200),
+                     "account": _s("The account it comes from (default gateway)", maxLength=80)}}},
       required=("question", "on"), writes=True)
 def task_question(api, args):
     options = [dict(o) for o in args.get("options") or []]
@@ -881,7 +893,39 @@ def task_question(api, args):
                    **({"by": args["by"]} if args.get("by") else {})}
     if default:
         body["if_no_answer"] = default
+    if args.get("review"):
+        body["review"] = [_review_ref(api, value, args, index) for index, value in enumerate(args["review"])]
+    if args.get("pick"):
+        body["pick"] = True
+    spend = args.get("spend")
+    if isinstance(spend, str):                       # the CLI's --spend "LABEL=AMOUNT:WHAT"
+        label, _, rest = spend.partition("=")
+        amount, _, what = rest.partition(":")
+        if not (label.strip() and amount.strip() and what.strip()):
+            raise ValueError('--spend is "LABEL=AMOUNT:WHAT", e.g. "Approve=12.50:render the final cut"')
+        spend = {"label": label.strip(), "amount": amount.strip(), "what": what.strip()}
+    if spend:
+        body["spend"] = {**spend, **({"account": args["spend_account"]} if args.get("spend_account") else {})}
     return api.post("task-questions", body, key=_key(args))
+
+
+FILE_REF = re.compile(r"[^/@\s]+(?:@[1-9][0-9]*)?")
+
+
+def _review_ref(api, value, args, index):
+    """{file, version} for one --review: FILE[@N] as given, or a path in this checkout published first (as
+    `hub file publish` does), so the version under review is the bytes on disk now."""
+    text = str(value).strip()
+    if FILE_REF.fullmatch(text) and not os.path.exists(text):
+        fid, _, number = text.partition("@")
+        return {"file": fid, **({"version": int(number)} if number else {})}
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("A path is read on the computer that runs you: use hub task question there, or give FILE@N")
+    made = files_publish_path(api, {"path": text, **({"task": args["parent"]} if args.get("parent") else {}),
+                                    "operation_id": _key(args, f":review:{index}")})
+    if made.get("refused"):
+        raise ValueError(made.get("detail") or f"{text} could not be published")
+    return {"file": made["file"]["id"], "version": made["file"]["version"]}
 
 
 # hub_task_update and hub_task_done: the note stays on the task and chat hears only the title and status (the API's
@@ -2449,6 +2493,31 @@ def files_search(api, args):
       {"id": _s("File id")}, required=("id",), writes=True)
 def files_delete(api, args):
     return _as_person(api).call("DELETE", f"files/{args['id']}", None, _key(args))
+
+
+@tool("hub_file_approved", "Whether a person approved this exact file version on a review question "
+      "(hub_task_question with review): `approved` true only when the newest person's answer covering that version, "
+      "with the same bytes, approved or picked it. A later Request changes undoes it; another version is never "
+      "approved by it. Also who answered, when, and on which task and question.",
+      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
+                    "(its bytes now)")}, required=("target",))
+def files_approved(api, args):
+    target = str(args["target"]).strip()
+    if FILE_REF.fullmatch(target) and not os.path.exists(target):
+        fid, _, number = target.partition("@")
+        return api.get("file-approvals", file=fid, version=int(number) if number else None)
+    if not hasattr(api, "post_multipart"):
+        raise APIError("validation", "A path is read on the computer that runs you: use hub file approved there", 422)
+    from clients import bot_files as BF
+    try:
+        path, relative = BF.local_file(BF.checkout_root(), target)
+    except BF.Refused as exc:
+        raise APIError("file_refused", str(exc), 422) from None
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    return api.get("file-approvals", path=relative, digest=digest.hexdigest())
 
 
 def files_publish_path(client, args):

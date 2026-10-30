@@ -526,6 +526,20 @@ In Decide, **Details** also includes a link to the task.
 See [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask) for when questions close.
 Approvals for spending or publishing keep their own card.
 
+#### Reviewing files
+
+`hub task question <person> "Is this cut ready?" --review cut.mp4` (repeatable, a path or `FILE[@N]`; MCP
+`hub_task_question` with `review`) asks about exact file versions. A path is published first. The card shows the files
+inline (pictures, video, audio, pages; four at most, the rest as chips) with **Approve** and **Request changes**, unless
+the bot gives its own options. `--pick` (2–5 files) makes one option per file, each under its media, plus **Request
+changes**. Request changes asks for a note. The person must be able to open each file.
+
+The answer records `reviewed: [{file, version, digest, verdict}]` (`approve`, `changes`, `passed` for the files not
+picked, `other`). `--spend "LABEL=AMOUNT:WHAT"` (`--spend-account`, default `gateway`) makes picking LABEL also
+approve that spend: the answer stores `spend_approval`, a `spend` approval the bot requested and the person decided,
+which the bot consumes once (`hub approval consume`). [`hub file approved`](files.md#approved-versions) reads the
+verdicts.
+
 Tico refuses a bot's question to a person, saying why and with an example, when:
 
 - it lists picks in its words, or is `--multi`, but gives no options;

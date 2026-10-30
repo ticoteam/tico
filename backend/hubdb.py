@@ -6819,7 +6819,8 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
     at = now()
-    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who")}
+    # A review's files and spend are the latest wording's: an ask without them drops the earlier ones.
+    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who", "review", "attachments", "spend")}
     # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
     # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
     questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]

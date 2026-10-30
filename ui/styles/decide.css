@@ -163,6 +163,19 @@
 .dc-actions .qc-btn,.qc-actions .qc-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:auto;min-height:52px;padding:6px 10px;white-space:normal;text-align:center}
 .qc-btn .qc-then{color:inherit;opacity:.8;font-size:var(--t-xs);line-height:var(--lh-tight)}
 .qc-fallback{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:400}
+/* a review's files (question-card.js): pictures large, two to a row, one alone the full width */
+.qc-review .vcards{margin:0}
+.qc-review .vcard[data-kind="image"],.qc-rpick .vcard[data-kind="image"]{--vcard-cap:min(45vh,420px);width:calc((100% - 10px) / 2)}
+.qc-review .vcard[data-kind="image"]:only-child,.qc-rpick .vcard[data-kind="image"]{width:100%}
+.qc-rpicks{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:10px}
+.qc-rpick{display:flex;flex-direction:column;gap:8px;min-width:0}
+.qc-rpick .vcards{margin:0}
+.qc-rpick .qc-btn,.qc-changes{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
+.qc-rpick .qc-btn:hover,.qc-changes:hover{border-color:var(--accent)}
+.qc-rpick .qc-btn b{color:var(--muted)}
+.qc-changes{width:100%}
+.qc-rchips{display:flex;flex-wrap:wrap;gap:6px}
+.qc-spend{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .qcard{display:flex;flex-direction:column;gap:10px}
 .qcard .dc-q{font-size:var(--t-lg)}
 .qc-head{font-size:var(--t-sm)}

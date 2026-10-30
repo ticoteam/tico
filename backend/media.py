@@ -652,10 +652,20 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
             except Problem as exc:
                 raise unreadable(person) from exc
+            # Files under review (backend/file_reviews.py): versions the person can open, and the options they make.
+            from . import file_reviews
+            review = attachments = None
+            picks, shown = options, asked
+            if body.review:
+                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+                picks = file_reviews.options(review, attachments, body.pick, body.options)
+                shown = {**asked, "options": [o.model_dump(include={"label", "description", "then", "recommended"})
+                                              for o in picks]}
+            spend = file_reviews.check_spend(body.spend, [o.label for o in picks])
             # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
-            H.require_plain_question(c, who.actor, person, [asked])
-            choices = []
-            for option, item, digest in zip(options, decoded, stored):
+            H.require_plain_question(c, who.actor, person, [shown])
+            choices, pad = [], [None] * len(picks)
+            for option, item, digest in zip(picks, (decoded + pad)[:len(picks)], (stored + pad)[:len(picks)]):
                 choice = {"label": option.label, **({"description": option.description} if option.description else {}),
                           **({"then": option.then} if option.then else {}),
                           **({"recommended": True} if option.recommended else {})}
@@ -674,6 +684,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
             if topic:
                 ask["topic"] = topic
+            if review:
+                ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
+                ask["attachments"] = attachments
+            if spend:
+                ask["spend"] = spend
             gate = None
             if found:
                 said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)

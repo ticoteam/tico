@@ -585,6 +585,11 @@ function decideAct(st, what, i, shown = st.shown) {
   if ((what === 'comment' || what === 'answer') && !note) { box?.focus(); return; }
   if (what === 'answer') { void decideTextAnswer(st, c, note); return; }
   if (what === 'ticked' && !decideTicked(st, c).size) return;
+  // Request changes on a review goes with the note that says what to change.
+  if (what === 'pick' && !note && qcardNeedsNote(c.it, c.q, qcardLabels(c.q, 'pick', i))) {
+    if (box) { box.placeholder = 'What should change?'; box.focus(); }
+    return;
+  }
   st.lockUntil = performance.now() + 350;
   const write = decideWrite(c, what, i, note);
   void decideCommit(st);                       // the previous action goes now
