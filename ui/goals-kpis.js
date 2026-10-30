@@ -1163,7 +1163,7 @@ function goalNeedsHtml(items) {
     if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
     // Where the Strategy Bot is on: the vision, written on Strategy, and the Why lines waiting on this
     // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
-    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the Vision on Strategy</span></span>${needTaskLink(it)}</li>`;
+    if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the summary on Strategy</span></span>${needTaskLink(it)}</li>`;
     if (it.kind === 'why') {
       const goals = it.goals || [];
       return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>

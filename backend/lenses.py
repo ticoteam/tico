@@ -583,8 +583,6 @@ def change_error(c, payload):
             return "a bet statement is one sentence"
         if item.get("wrong_if") and not _wrong_if_ok(c, item["wrong_if"]):
             return "a wrong-if is whole"
-        if not item.get("id") and item.get("status") == "active" and not (item.get("rules_out") and item.get("wrong_if")):
-            return "an active bet says what it rules out and what would show it wrong"
     return None
 
 
