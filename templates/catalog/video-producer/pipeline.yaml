@@ -1,0 +1,27 @@
+# The production stages of one video, in order. Each company edits this file: change a mover, a budget, or a stage.
+# software/pipeline.py reads it; `status`, `next` and `gate` follow it.
+#
+# mover says who moves a stage's files on:
+#   owner           the owner approves them on the Tico task (hub task question ... --review)
+#   person:<name>   that person approves them, by the name they have in Tico
+#   bot:<slug>      that bot approves them, by its slug
+#   self            this bot moves them itself, with no approval, while the project is within budget_usd
+# budget_usd (self stages only) is the most the self-moved stages of one project may spend, in USD, counted
+# from the cost_usd in each file's provenance sidecar. Over it, the owner is asked to approve more spend.
+stages:
+  - id: brief
+    mover: owner
+  - id: script
+    mover: owner
+  - id: storyboard
+    mover: owner
+  - id: shots
+    mover: self
+    budget_usd: 10
+  - id: cut
+    mover: self
+    budget_usd: 10
+  - id: final
+    mover: owner
+  - id: publish
+    mover: owner

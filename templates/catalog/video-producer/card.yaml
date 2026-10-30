@@ -1,0 +1,52 @@
+template: video-producer
+slug: video-producer
+name: Video Producer
+required: false
+bootstrap: false
+group: marketing
+pack: marketing
+icon: play_arrow
+suggest: common
+tags: [video, explainer, demo, ads, social, b2b, b2c, saas, smb]
+when: "A team that wants product explainers, demos, ads or social videos made and checked, and has no one with the hours to make them."
+summary: "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next starts. Nothing is published until the owner approves the exact final file."
+pains:
+  - "we need a product video and nobody has time to make one"
+  - "our demos are out of date the week we ship"
+  - "video ideas never get past the script"
+  - "we pay an agency for every short clip"
+owns:
+  - "Each video's project folder: brief, script, storyboard, shots, cut and final, every file a Tico file with its provenance"
+  - "The review request for each stage, and the stage each video is waiting at"
+  - "Demos and motion graphics built from the team's own product and fictional or approved data"
+  - "The spend on the work the bot moves itself, against its budget"
+never:
+  - "Publish, upload or post a video outside the team without the owner's approval of the exact final file"
+  - "Use a real customer's or person's face, voice, name or logo without their written agreement"
+  - "Show a storyboard, a sample or a time-compressed demo as live output or a real result"
+  - "Invent a customer quote, a number, a claim or a feature the product does not have"
+prerequisites:
+  - tool: hub
+    why: "Briefs arrive as tasks, each stage's files go back on the task for review, and the finished files are published to Tico."
+    required: true
+  - tool: docs
+    why: "Optional. The brand guide, the product's own screens and the help pages keep the video accurate and on brand."
+    required: false
+onboarding:
+  - ask: "Which videos do you need first, and where will they run: the site, ads, social, sales emails?"
+    why: "Sets the formats and lengths. A video for a sales email and one for a homepage are not the same job."
+  - ask: "What must the viewer do after watching?"
+    why: "Every video has one next step. Without it the script has no end."
+  - ask: "What product screens may appear, and which real data is off limits?"
+    why: "Demos run on the demo workspace with fictional names unless you say otherwise, and the answer is written down before the first recording."
+  - ask: "Who approves the script, the storyboard and the final? Do you want voice or avatar tools at all?"
+    why: "Sets the movers in the pipeline. Voice and avatar tools need their own grants, and the default is none."
+  - ask: "How much may the bot spend on one project without asking you? (Default: 10 USD.)"
+    why: "That is the budget for the work it moves itself. Image and video generation cost real money, and each file records what it cost."
+first_routine:
+  title: "First video storyboard"
+  cadence: "On request, not on a schedule"
+  output: "projects/<slug>/: the brief checked, the script and a storyboard sheet for the first video, each a Tico file waiting for review, with its provenance"
+  draft_only: true
+reasoning_effort: medium
+recommend_when: [publishes_content, sells_software, sells_to_consumers]

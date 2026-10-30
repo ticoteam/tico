@@ -1,6 +1,6 @@
 # Starter bots
 
-There are 98 role templates: 96 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+There are 99 role templates: 97 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
 Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
@@ -28,7 +28,7 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 8 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 13 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 14 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
@@ -88,6 +88,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `newspaper` | `pr` | PR Manager | A media list and coverage log, a weekly PR review, and per announcement a release, targeted pitches and a draft spokesperson briefing | niche | Public web |
 | `diversity_3` | `community` | Community Manager | A weekly community digest (response time, unanswered questions, champions, guideline flags, feedback routed) and draft sourced replies | niche | Public forum or community channels (read) |
 | `palette` | `brand` | Brand Manager | The brand book (voice, words, naming, visual rules), reviews of copy and assets against it, and a monthly consistency audit with three fixes | niche | Public web; an existing brand guide optional |
+| `play_arrow` | `video-producer` | Video Producer | One video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next; nothing published without the owner's yes on the exact file | common | Tico only; brand guide and product docs optional; voice and avatar tools need their own grants |
 | `filter_alt` | `marketing-ops` | Marketing Operations Manager | A tracking convention, tagged links for every campaign, lead handoff rules, and a weekly check of tagging, lead sources and handoff delay with fixes and owners | niche | Tico only; CRM (read) and analytics exports optional |
 
 ### Customer Support
