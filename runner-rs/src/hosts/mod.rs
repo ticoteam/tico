@@ -677,13 +677,14 @@ impl Host {
     /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
     pub fn reports_compaction(&self) -> bool {
         let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).compaction_events && matches!(self, Host::Claude(_))
+        crate::harness_tools::caps(runtime, harness).compaction_events && matches!(self, Host::Claude(_) | Host::Pi(_))
     }
 
     /// Whether the harness compacted `thread_id` since this was last asked.
     pub fn compacted(&self, thread_id: &str) -> bool {
         match self {
             Host::Claude(h) => h.compacted(thread_id),
+            Host::Pi(h) => h.compacted(thread_id),
             _ => false,
         }
     }
@@ -693,6 +694,7 @@ impl Host {
     pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
         match self {
             Host::Claude(h) => h.context_tokens(thread_id),
+            Host::Pi(h) => h.context_tokens(thread_id),
             _ => None,
         }
     }

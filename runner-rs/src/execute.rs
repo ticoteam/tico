@@ -2396,7 +2396,7 @@ impl Runner {
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<Value>,
         mut meter: Option<&mut Meter>,
     ) -> Result<(), String> {
-        if !crate::harness_tools::caps(runtime, harness).compaction {
+        if !crate::harness_tools::caps(runtime, harness).compaction || !h.can_compact() {
             return Err("this harness cannot compact a session".into());
         }
         let _ = self.state.append(aid, "diagnostic", &json!({"text": "Compacting the saved session before this turn (the last turn ran out of room)."}));
@@ -3753,22 +3753,27 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn a_harness_that_does_not_say_when_it_compacts_gets_the_whole_prompt_every_turn() {
-        // Pi: every resumed turn is told everything, as before.
+    async fn a_pi_turn_that_says_when_it_compacts_gets_short_lines_while_its_session_has_room() {
+        // Pi says when it compacts (compaction_events) and its last request was 191 tokens, far under 60% of Compact at:
+        // the first turn is told everything, each resumed turn after it the lines for what is unchanged.
         let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({})), ("m4", json!({}), json!({}))]).await;
         assert!(ran.sessions.iter().all(|s| *s == ran.sessions[0]), "{:?}", ran.sessions);
-        for p in &ran.prompts {
-            assert!(!p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI") && p.contains("Assigned task:"), "{p}");
+        assert!(!ran.prompts[0].contains(crate::prompt::STANDING_SEEN) && ran.prompts[0].contains("Use the hub CLI"), "{}", ran.prompts[0]);
+        for p in &ran.prompts[1..] {
+            assert!(p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI"), "{p}");
         }
     }
 
     #[tokio::test]
     async fn a_harness_that_cannot_compact_starts_a_new_session_when_asked_to() {
-        // Pi declares no compaction: the saved session is left, the new one is told what the room said since.
+        // Pi compacts by Compact at but has no /compact to run first (Host::compact refuses it): the saved session is left,
+        // the new one is told what the room said since.
         let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({"compact_first": true}))]).await;
         assert_ne!(ran.sessions[0], ran.sessions[1]);
         assert_eq!(session_of(&ran.completions[1]), ("new".to_string(), json!("compact_failed"), json!("this harness cannot compact a session")));
         assert!(ran.diagnostics[1].iter().any(|d| d.contains("could not be compacted")), "{:?}", ran.diagnostics[1]);
+        // Refused before anything is compacted: no "Compacting the saved session" line that the refusal would contradict.
+        assert!(!ran.diagnostics[1].iter().any(|d| d.contains("Compacting the saved session")), "{:?}", ran.diagnostics[1]);
         assert!(ran.prompts[1].contains("New session:") && ran.prompts[1].contains("could not be compacted"), "{}", ran.prompts[1]);
         assert!(ran.prompts[1].contains("Where this task stood") && ran.prompts[1].contains("[m3]: Release build 41 failed its smoke test."), "{}", ran.prompts[1]);
         assert!(!ran.prompts[1].contains("[m1]"), "only what came after the last turn: {}", ran.prompts[1]);

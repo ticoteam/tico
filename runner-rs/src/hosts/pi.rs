@@ -48,6 +48,12 @@ pub const GATEWAY_URL_ENV: &str = "TICOAI_GATEWAY_URL";
 /// The turn's own directory for pi's Gateway configuration, set with the relay (gateway_relay.rs `turn_dir`).
 pub const GATEWAY_DIR_ENV: &str = "TICOAI_GATEWAY_DIR";
 const GATEWAY_DEFAULT_URL: &str = "https://updates.tico.team/v1/gateway";
+/// The context window every Gateway model is told (`gateway_models_json_for`).
+const GATEWAY_CONTEXT_WINDOW: i64 = 200_000;
+/// pi's own `compaction.reserveTokens`, the least room it keeps, and the least a compaction point is given: Claude's
+/// autocompact floor (hosts/claude.rs AUTOCOMPACT_RANGE).
+const PI_RESERVE_DEFAULT: i64 = 16_384;
+const PI_COMPACT_FLOOR: i64 = 100_000;
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 
 /// The catalog ids, sorted (readiness `models`).
@@ -97,7 +103,7 @@ pub fn gateway_models_json_for(url: &str, model: Option<&str>, inputs: &Value) -
         .map(|(id, name)| (*id, *name))
         .chain(asked.map(|m| (m, m)))
         .map(|(id, name)| json!({"id": id, "name": name, "input": gateway_input_for(inputs, id), "reasoning": true,
-                                 "thinkingLevelMap": {"max": "xhigh"}, "contextWindow": 200000, "maxTokens": 32000}))
+                                 "thinkingLevelMap": {"max": "xhigh"}, "contextWindow": GATEWAY_CONTEXT_WINDOW, "maxTokens": 32000}))
         .collect();
     json!({"providers": {GATEWAY_PROVIDER: {
         "baseUrl": if url.is_empty() { GATEWAY_DEFAULT_URL } else { url },
@@ -113,12 +119,38 @@ pub fn gateway_models_json_for(url: &str, model: Option<&str>, inputs: &Value) -
 pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     let models = gateway_models_json_for(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default(), settings.model.as_deref(), &settings.gateway_inputs);
     let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
+    let settings_json = with_compaction(settings_json, Some(GATEWAY_CONTEXT_WINDOW), &settings.compact_at);
     write_agent_dir(settings, env, json!({"models.json": models, "settings.json": settings_json}))
 }
 
-/// The agent directory of a turn on another provider: its `mcp.json` only.
+/// The agent directory of a turn on another provider: its `mcp.json`, and a `settings.json` that says only what its
+/// model's compaction needs (`{}` where the model's window is not known, so a stale one is cleared).
 fn agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
-    write_agent_dir(settings, env, json!({}))
+    let window = openrouter_context_window(&model_for(settings.model.as_deref()));
+    write_agent_dir(settings, env, json!({"settings.json": with_compaction(json!({}), window, &settings.compact_at)}))
+}
+
+/// The context window of an OpenRouter model, where Tico knows it. None for every model for now (nothing in the runner
+/// or the catalog states one): such a turn keeps pi's own compaction.reserveTokens.
+fn openrouter_context_window(_model: &str) -> Option<i64> {
+    None
+}
+
+/// The room pi keeps below a model's `window` (its `compaction.reserveTokens`, pi compacting once a session passes
+/// `window - reserveTokens`) so that it compacts at `compact_at`, the bot's Compact at. Kept between pi's default and a
+/// compaction point of PI_COMPACT_FLOOR: a Compact at past the window is the window's own edge, not pi's default.
+pub fn reserve_tokens(window: i64, compact_at: &Value) -> i64 {
+    let ceil = (window - PI_COMPACT_FLOOR).max(PI_RESERVE_DEFAULT);
+    (window - super::compact_at(compact_at)).clamp(PI_RESERVE_DEFAULT, ceil)
+}
+
+/// `settings` (pi's settings.json) with the compaction `compact_at` needs for a model of `window` tokens; pi's own when
+/// the window is not known.
+fn with_compaction(mut settings: Value, window: Option<i64>, compact_at: &Value) -> Value {
+    if let Some(window) = window {
+        settings["compaction"] = json!({"reserveTokens": reserve_tokens(window, compact_at)});
+    }
+    settings
 }
 
 /// Writes `files` (name -> JSON) and the turn's `mcp.json` into the turn's agent directory; the directory's path, or None.
@@ -472,6 +504,9 @@ impl Wire for Pi {
                     // One assistant message ends once, so this is where its tokens are counted.
                     let (inp, out, total) = usage_tokens(&done["usage"]);
                     turn.emit("tokens", json!({"input": inp, "output": out, "total": total, "usage": usage_increment(&done["usage"])}));
+                    // Each message is one request, so the newest one's prompt and reply are the session's size.
+                    let usage = usage_increment(&done["usage"]);
+                    turn.context = Some(int_of(&usage["input"]) + int_of(&usage["output"]));
                 }
                 let text = assistant_text(done);
                 if !text.is_empty() {
@@ -494,6 +529,8 @@ impl Wire for Pi {
                 turn.error = if truthy(turn.extra.get("gateway")) { plain_error(&text) } else { text };
             }
             "agent_end" => turn.ended = true,
+            // pi compacted the session (threshold, overflow or /compact); an aborted or failed one has no result.
+            "compaction_end" if truthy(m.get("result")) => turn.compacted = true,
             kind @ ("tool_execution_start" | "tool_execution_end") => {
                 let name = m.get("toolName").filter(|v| truthy(Some(v))).cloned().unwrap_or(json!(""));
                 turn.emit("tool", json!({"name": name, "tool": name, "phase": kind}));
@@ -838,6 +875,106 @@ mod tests {
                 assert_eq!(model["input"], json!(["text"]), "{model}");
             }
         }
+    }
+
+    #[test]
+    fn compact_at_is_the_windows_room_for_pi_within_its_floor_and_default() {
+        // A 200,000-token window: Compact at 150,000 leaves pi 50,000 of room; a Compact at past the window is pi's default;
+        // one below the floor stops at the floor. A window of another size works the same way.
+        assert_eq!(reserve_tokens(200_000, &json!(150_000)), 50_000);
+        assert_eq!(reserve_tokens(200_000, &json!(250_000)), PI_RESERVE_DEFAULT);
+        assert_eq!(reserve_tokens(200_000, &json!(10)), 100_000);
+        assert_eq!(reserve_tokens(200_000, &Value::Null), PI_RESERVE_DEFAULT);
+        assert_eq!(reserve_tokens(1_000_000, &json!(600_000)), 400_000);
+        assert_eq!(reserve_tokens(100_000, &json!(50_000)), PI_RESERVE_DEFAULT);
+    }
+
+    #[test]
+    fn a_gateway_turn_compacts_at_compact_at_and_keeps_its_retry_and_shell_settings() {
+        let dir = std::env::temp_dir().join(format!("pi-compact-gw-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("tico-mid-1.0".into()), slug: "acme".into(), compact_at: json!(150_000), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture"), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway")] {
+            s.env.insert(k.into(), v.into());
+        }
+        let env = Pi::env(&s);
+        let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(agent.join("settings.json")).unwrap()).unwrap();
+        // The Gateway's window (200,000) less Compact at; the retry and the key-hiding shell prefix are still there.
+        assert_eq!(settings["compaction"]["reserveTokens"], 50_000);
+        assert_eq!(settings["retry"]["enabled"], false);
+        assert_eq!(settings["shellCommandPrefix"], "unset TICOAI_GATEWAY_KEY");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_openrouter_turn_keeps_pis_compaction_until_its_model_has_a_known_window() {
+        let dir = std::env::temp_dir().join(format!("pi-compact-or-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), compact_at: json!(150_000), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("OPENROUTER_API_KEY", "or-synthetic")] {
+            s.env.insert(k.into(), v.into());
+        }
+        let env = Pi::env(&s);
+        let agent = PathBuf::from(&env["PI_CODING_AGENT_DIR"]);
+        // No window is known for an OpenRouter model yet, so pi's own reserve stands and no Gateway setting is left over.
+        assert_eq!(std::fs::read_to_string(agent.join("settings.json")).unwrap().trim(), "{}");
+        // Where a window is known, the same mapping applies (a 1,000,000-token window and Compact at 600,000).
+        assert_eq!(with_compaction(json!({}), Some(1_000_000), &json!(600_000))["compaction"]["reserveTokens"], 400_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_compaction_with_a_result_marks_the_turn_and_one_that_failed_or_aborted_does_not() {
+        let mut turn = Turn::default();
+        Pi::on_event(&json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "willRetry": false,
+                             "result": {"summary": "Earlier work.", "tokensBefore": 180_000}}), &mut turn);
+        assert!(turn.compacted);
+        for end in [json!({"type": "compaction_end", "reason": "threshold", "aborted": true, "willRetry": false}),
+                    json!({"type": "compaction_end", "reason": "threshold", "aborted": false, "errorMessage": "Summary failed", "willRetry": false})] {
+            let mut turn = Turn::default();
+            Pi::on_event(&end, &mut turn);
+            assert!(!turn.compacted, "{end}");
+            assert!(turn.error.is_empty() && turn.out.is_empty(), "{end}");
+        }
+    }
+
+    #[test]
+    fn the_newest_requests_prompt_and_reply_are_the_sessions_context() {
+        let mut turn = Turn::default();
+        Pi::on_event(&json!({"type": "message_end", "message": {"role": "assistant", "provider": "openrouter", "stopReason": "stop", "content": [],
+                             "usage": {"input": 120, "output": 9, "cacheRead": 40, "cacheWrite": 0}}}), &mut turn);
+        assert_eq!(turn.context, Some(169));
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_compacts_the_session_is_recorded_for_its_thread_once() {
+        let dir = std::env::temp_dir().join(format!("fake-pi-compact-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = fake(&dir, "pi");
+        let fixture = dir.join("compact.jsonl");
+        std::fs::write(&fixture, [SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"compaction_start","reason":"threshold"}"#,
+                                  r#"{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false,"result":{"summary":"Earlier work.","tokensBefore":180000}}"#,
+                                  r#"{"type":"agent_end"}"#].join("\n")).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = PiHost::new("acme", vec![cmd], tx);
+        host.start();
+        let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", "or-synthetic".into()),
+                       ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string()), ("RC", "0".into())] {
+            s.env.insert(k.into(), v);
+        }
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hello", None).unwrap();
+        turn_events(&mut rx).await;
+        host.stop().await;
+        // The turn that compacted is told once, and a turn with no assistant message says nothing about the context.
+        assert!(host.compacted(&thread));
+        assert!(!host.compacted(&thread));
+        assert_eq!(host.context_tokens(&thread), None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
