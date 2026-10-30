@@ -642,3 +642,18 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
     assert_eq!(chat["replying"], json!(["Head of engineering"]));
     assert_eq!(chat["connected"], true);
 }
+
+#[test]
+fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    assert_eq!(app.update_hold(), None);
+    app.records.push(store::Summary {
+        live_state: "live".into(),
+        ..Default::default()
+    });
+    assert_eq!(app.update_hold(), Some("After the live meeting ends"));
+    app.records[0].live_state = "ended".into();
+    assert_eq!(app.update_hold(), None);
+}

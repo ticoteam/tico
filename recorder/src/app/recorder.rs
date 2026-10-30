@@ -1069,6 +1069,16 @@ impl Recorder {
     pub fn recording(&self) -> bool {
         self.active.is_some()
     }
+    /// Why an app update waits right now: a recording runs, or a live meeting is connected.
+    pub fn update_hold(&self) -> Option<&'static str> {
+        if self.active.is_some() {
+            Some("After this recording")
+        } else if self.records.iter().any(|record| record.live_state == "live") {
+            Some("After the live meeting ends")
+        } else {
+            None
+        }
+    }
     /// The clock and input levels of the recording in progress, sent to the window several
     /// times a second without rebuilding any view.
     pub fn levels(&self) -> Option<Value> {

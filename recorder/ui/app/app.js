@@ -124,6 +124,7 @@
         }
       }
       S.status = v.status;
+      window.ticoUpdate?.(v.status.update);
       // Profiling builds open the transcript of the test recording once.
       if (S.status.profile && S.status.recording && !S.ui.profiled) { S.ui.profiled = true; S.page = 'meeting'; S.ui.panel = 'transcript'; }
       const key = statusKey(v.status);

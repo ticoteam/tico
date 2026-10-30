@@ -1,17 +1,27 @@
-# Native Tico Recorder
+# Tico Recorder
 
 Rust desktop V1, macOS first. The window is Tauri 2 on the system WebView (WKWebView on macOS), with a plain HTML/CSS/JS page in `ui/app` and no Chromium, Electron, framework, or build step. `src/app` holds the Tauri commands and the `Recorder` controller the page polls. Capture, durable storage, transcription, and delivery run separately from the interface.
 
 ## Run
 
-Requires Rust 1.92 or newer. On macOS, meeting/system audio requires macOS 14.2 or newer and the system's audio-recording permission. Microphone recording requires microphone permission.
+Requires Rust 1.92 or newer and the Tauri CLI (`cargo install tauri-cli --version "^2" --locked`) for bundles. On macOS, meeting/system audio requires macOS 14.2 or newer and the system's audio-recording permission. Microphone recording requires microphone permission.
 
 ```sh
-cargo run --manifest-path native/Cargo.toml --features desktop --bin tico-recorder
-bash native/package-macos.sh
+cargo run --manifest-path recorder/Cargo.toml --features desktop --bin tico-recorder
+bash recorder/package-macos.sh
 ```
 
-The package is `recorder/dist/Tico Recorder Native.app`, ad-hoc signed for local testing. It is not notarized. It uses its own library, separate from the earlier recorder. `TICO_RECORDER_DATA_DIR` selects an isolated test library.
+`package-macos.sh` runs `cargo tauri build` and writes `recorder/target/release/bundle/macos/Tico Recorder.app`. It signs with your Apple Development identity when one is in the keychain (set `TICO_SIGN_IDENTITY` to choose another), so keychain "Always Allow" and microphone permission survive rebuilds; without one it signs ad hoc. It is not notarized and makes no updater archive. It uses its own library, separate from the earlier recorder. `TICO_RECORDER_DATA_DIR` selects an isolated test library.
+
+The bundle is described by `tauri.conf.json` (product name "Tico Recorder", identifier `team.tico.recorder.native`, icons, macOS 14.2 minimum, hardened runtime), `Info.plist` (the microphone and meeting-audio usage text and the `tico-recorder://` link scheme) and `entitlements.plist` (audio input and network client; the app is not sandboxed). The identifier and the data folder `~/Library/Application Support/Tico Recorder Native` stay as they are, so microphone permission, keychain entries and recordings carry over from the earlier build. The folder name is read in `src/settings.rs`.
+
+## Releases and updates
+
+- `.github/workflows/recorder.yml` builds a universal (Apple silicon and Intel) `Tico Recorder_<version>_universal.dmg`, the updater archive `Tico Recorder.app.tar.gz` with its `.sig`, and `Tico-Recorder.dmg`, a copy under a stable name for the download link. It uses the desktop app's signing and updater secrets (see `app.yml`). Notarization runs when the Apple ID secrets are set.
+- A version tag gives the recorder that version (it is written into `tauri.conf.json` at build time). `release.yml` builds the recorder only when `recorder/` changed since the previous release; otherwise the previous release's recorder files are carried forward. Either way they are attached to the GitHub release, and `recorder-latest.json` is uploaded last, so the updater never sees a manifest whose files are missing. A recorder failure leaves the server release in place.
+- Download: `https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`.
+- Updates: the app reads `recorder-latest.json` on launch and every six hours, downloads a newer build in the background, and installs it once no recording is running and no live meeting is connected. A small banner (`ui/app/update.js`) shows "Update ready · Restart", or "Updating after this recording" (or after the live meeting ends) while it waits. The Restart button does not override that wait. `update_check` and `update_install` are the commands behind it, and `status.update` in the view carries the state.
+- Pull requests that change `recorder/` run `cargo test --locked --features desktop` on macOS (`.github/workflows/pr-checks.yml`).
 
 ## Workflow
 
@@ -45,9 +55,9 @@ Configure the server's existing Tico gateway connection, plus `TICO_MEETING_QUES
 ## Validation
 
 ```sh
-cargo test --manifest-path native/Cargo.toml --features desktop
+cargo test --manifest-path recorder/Cargo.toml --features desktop
 # In the companion Tico checkout, with its test environment:
-TICO_NATIVE_CLI=/absolute/path/to/native/target/debug/tico-recorder-cli \
+TICO_NATIVE_CLI=/absolute/path/to/recorder/target/debug/tico-recorder-cli \
   .venv/bin/python -m pytest backend/tests/test_native_recorder.py -q
 ```
 
@@ -60,7 +70,7 @@ The 200-context test verifies circuit scheduling, first-layer priority, coverage
 `bench/meeting_bench.py` runs the CLI's `transcribe-meeting` (the app's chunking, real STT, echo removal and speaker labels) on four AMI meetings and scores word error rate per side and speaker-attributed WER. It is opt-in and paid (about $0.50 a run); see `bench/README.md`.
 
 ```sh
-TICO_RECORDER_STT_KEY=... uv run native/bench/meeting_bench.py --check
+TICO_RECORDER_STT_KEY=... uv run recorder/bench/meeting_bench.py --check
 ```
 
 ### Real transcription gate
@@ -68,9 +78,9 @@ TICO_RECORDER_STT_KEY=... uv run native/bench/meeting_bench.py --check
 Build the CLI, then run the generated-speech check on macOS:
 
 ```sh
-cargo build --manifest-path native/Cargo.toml --bin tico-recorder-cli
-python3 native/tests/real_transcription.py \
-  --cli native/target/debug/tico-recorder-cli \
+cargo build --manifest-path recorder/Cargo.toml --bin tico-recorder-cli
+python3 recorder/tests/real_transcription.py \
+  --cli recorder/target/debug/tico-recorder-cli \
   --output /absolute/private/validation-directory
 ```
 

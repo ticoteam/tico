@@ -2,6 +2,7 @@
 //! HTML/CSS/JS; it polls `view` and calls the commands below, each a thin wrapper over
 //! `Recorder`. Recording, transcription, live sync and drafts run on their own threads.
 mod recorder;
+mod update;
 #[cfg(test)]
 mod tests;
 
@@ -41,8 +42,23 @@ macro_rules! commands {
         )*
     };
 }
+/// The page's view, with `status.update` added: the update state lives outside the recorder.
+#[tauri::command(async)]
+fn view(
+    state: State<'_, Shared>,
+    updates: State<'_, update::Updates>,
+    have: Have,
+) -> Result<Value, String> {
+    let mut app = lock(&state);
+    app.bump();
+    let mut view = app.view(&have);
+    let blocked = app.update_hold();
+    drop(app);
+    view["status"]["update"] = updates.status(blocked);
+    Ok(view)
+}
+
 commands! {
-    view(have: Have) => |app| app.view(&have);
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
     close_meeting() => |app| app.close();
@@ -202,8 +218,11 @@ fn main() {
             }
         });
     }
+    let updates = update::Updates::default();
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(recorder.clone())
+        .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
             view,
             record,
@@ -245,10 +264,13 @@ fn main() {
             open_url,
             dismiss_notice,
             set_visible,
+            update::update_check,
+            update::update_install,
         ])
         .build(tauri::generate_context!())
         .expect("Start Tico Recorder");
     ticker(app.handle().clone(), &recorder);
+    update::start(app.handle().clone(), recorder.clone(), updates);
     app.run(|handle, event| match event {
         // `tico-recorder://connect?server=…` from Tico's Connect recorder button, also on a cold start.
         RunEvent::Opened { urls } => {

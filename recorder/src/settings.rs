@@ -67,6 +67,8 @@ pub fn root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
     {
+        // Kept from the earlier build (product name "Tico Recorder Native") so existing libraries and
+        // keychain entries still open after the rename to "Tico Recorder". Do not rename this folder.
         home.join("Library/Application Support/Tico Recorder Native")
     }
     #[cfg(target_os = "windows")]
