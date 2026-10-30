@@ -77,7 +77,9 @@ CREATE TRIGGER IF NOT EXISTS bot_file_versions_no_delete BEFORE DELETE ON bot_fi
 """
 
 # pinned / unpinned: a page put on or taken off a place (backend/cards.py), with the place in its detail.
-ACTIONS = ("created", "modified", "published", "promoted", "archived", "link_updated", "pinned", "unpinned", "deleted")
+# reviewed: a verdict on one version from an answer to a review question (backend/file_reviews.py), in its detail.
+ACTIONS = ("created", "modified", "published", "promoted", "archived", "link_updated", "pinned", "unpinned", "deleted",
+           "reviewed")
 LIST_MAX = 100
 
 
@@ -895,6 +897,28 @@ def install_files(app, store, auth, blobs, mutate):
         with store.read() as c:
             current_task(c)
             return version_review(c, fid, number, actor=privacy.actor(who))
+
+    @app.get("/api/v2/file-approvals")
+    def file_approved(request: Request, file: str = "", version: int | None = None, path: str = "", digest: str = "",
+                      by: str = "human"):
+        """Whether this exact file version is approved (`hub file approved`): by file id and version (the current one
+        without), or by a path in the bot's checkout and the SHA-256 of its bytes now; `by` whose verdicts count."""
+        from . import file_reviews
+        if version is not None and version < 1 or digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise Problem("validation", "version is 1 or more and digest is a SHA-256 in hex", 422)
+        with store.read() as c:
+            return file_reviews.approved(c, auth, request.state.identity, fid=file or None, version=version,
+                                         path=path.replace("\\", "/").strip("/") or None, digest=digest or None, by=by)
+
+    @app.post("/api/v2/file-reviews")
+    def file_review(request: Request, body: M.FileReview):
+        """A verdict given directly (`hub file review`): a bot reviewing another bot's file, or a person."""
+        from . import file_reviews
+        who = request.state.identity
+        path = (body.path or "").replace("\\", "/").strip("/") or None
+        return mutate(request, body, lambda c: file_reviews.review(
+            c, auth, who, fid=body.file, version=body.version, path=path, digest=body.digest, task=body.task,
+            verdict=body.verdict, note=body.note.strip()))
 
     @app.get("/api/v2/files/{fid}/activity")
     def activity(request: Request, fid: str):

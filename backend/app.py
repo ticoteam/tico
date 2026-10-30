@@ -3597,7 +3597,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None, same=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3759,7 +3759,8 @@ def create_app(settings=None):
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live,
-                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
+                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept),
+                            same=same)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         due = None
         if body.next_run and H.is_bot(owner):

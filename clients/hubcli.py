@@ -883,6 +883,19 @@ def parser():
     s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
     s.add_argument("id")
     s.set_defaults(fn="file delete")
+    s = files.add_parser("approved", help="exit 0 when a person approved this exact version on a review question, "
+                                          "1 when not, 2 on bad input")
+    s.add_argument("target", help="a path in this checkout (its bytes now), or FILE[@N] (the current version without @N)")
+    s.add_argument("--by", help="whose verdicts count: human (default), any, or bot:SLUG")
+    s.set_defaults(fn="file approved")
+    s = files.add_parser("review", help="approve or ask for changes on another bot's file version, on a task you read")
+    s.add_argument("target", help="FILE[@N] (the current version without @N), or a path in this checkout (its bytes now)")
+    verdict = s.add_mutually_exclusive_group(required=True)
+    verdict.add_argument("--approve", dest="verdict", action="store_const", const="approve")
+    verdict.add_argument("--changes", dest="verdict", action="store_const", const="changes")
+    s.add_argument("--task", required=True, help="the task the review is for")
+    s.add_argument("--note", help="what to change, or why it is approved")
+    s.set_defaults(fn="file review")
     page = sub.add_parser("page", help="pages: HTML a bot keeps up to date, with Tico's updated line").add_subparsers(dest="sub")
     s = page.add_parser("publish", help="publish an .html file from this checkout; again adds a version")
     s.add_argument("path")
@@ -1171,6 +1184,14 @@ def parser():
                    help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
                         "ahead on its own: a send, spending or a delete waits for an answer")
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
+    s.add_argument("--review", action="append", metavar="PATH|FILE[@N]",
+                   help="a file version for them to review, shown on the card: a path here (published first, as "
+                        "hub file publish does) or a file id; repeat. Without --option: Approve / Request changes")
+    s.add_argument("--pick", action="store_true", default=None,
+                   help="each --review file is its own option (2 to 5), plus Request changes")
+    s.add_argument("--spend", metavar="LABEL=AMOUNT:WHAT",
+                   help="picking LABEL also approves spending AMOUNT on WHAT: a spend approval you consume once")
+    s.add_argument("--spend-account", dest="spend_account", help="the account --spend comes from (default gateway)")
     s.set_defaults(fn="task question")
     s = task.add_parser("update", description="Move your task; to reopen, set doing or open; the requester closes. "
                         "Putting it back to open requires a note. Automatic starts wait 60 minutes unless it gets "

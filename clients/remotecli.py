@@ -1187,6 +1187,8 @@ def main(args, who=None):
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
+        if args.fn == "file approved":
+            return 0 if isinstance(result, dict) and result.get("approved") else 1
         if isinstance(result, dict) and result.get("readback"):    # what a relation write stored, direction and all
             for line in result["readback"]:
                 print("hub: stored: " + str(line), file=sys.stderr)
