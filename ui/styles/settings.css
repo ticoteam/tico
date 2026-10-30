@@ -796,7 +796,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .billing-days summary{display:flex;justify-content:space-between;padding:4px 0}
 .billing-days details>.billing-table,.billing-days [data-billing-hours]{margin-left:var(--s2)}
 .billing-hour-head{display:flex;justify-content:space-between;color:var(--muted);font-size:var(--t-xs);margin-top:var(--s1)}
-a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600}
 @media (max-width:640px){.billing-table td,.billing-table th{padding:4px 3px}.billing-balance{font-size:1.6rem}}
 
 .stopped-run-actions{position:sticky;bottom:-16px;padding:12px 0 4px;background:var(--surface);border-top:1px solid var(--line);margin-top:12px}

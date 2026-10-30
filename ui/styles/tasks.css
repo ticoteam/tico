@@ -54,6 +54,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 details .q{white-space:pre-wrap;font-size:var(--t-base);margin-top:6px;padding:8px 10px;background:var(--surface2);border-radius:6px;max-height:300px;overflow:auto}
 .toast.docs-archive-undo{pointer-events:auto;z-index:1000}
 .toast button,.toast a{pointer-events:auto}
+/* links and ghost buttons are ink, the toast is too: on it they take its own colour */
+.toast :is(a,button.linkish,button.ghost){color:inherit}.toast button.ghost{border-color:color-mix(in srgb,currentColor 40%,transparent)}
 .toast{position:fixed;right:20px;bottom:20px;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2);max-width:420px;pointer-events:none}
 
 form.task .task-private{display:flex;flex-direction:column;gap:3px}

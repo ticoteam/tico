@@ -63,6 +63,13 @@ function botPauseDraw() {
   if (retry) { retry.disabled = !!BOT.pauseBusy; retry.onclick = async () => { const view = BOT, action = view.pauseRetry; await botPauseLoad(); if (action && BOT === view) await botPauseChange(view, action); }; }
   if (focus && !host.contains(document.activeElement)) (button || retry)?.focus();
 }
+// The header's and the tree's Paused badges read the roster, which only catches up at its next poll. The pause state
+// (a fresh read or a finished control) is the authority, so the roster entry follows it as soon as it is known.
+function botPauseFollow(view) {
+  const emp = S.emps.find(x => x.name === view.slug), paused = view.pauseState?.state === 'paused', badge = $('#bot-paused');
+  if (emp && paused !== (emp.status === 'paused')) { emp.status = paused ? 'paused' : 'active'; renderTree(); }
+  if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
+}
 async function botPauseLoad() {
   const view = BOT;
   if (!view || view.pauseLoading || view.pauseBusy) return;
@@ -74,6 +81,7 @@ async function botPauseLoad() {
     view.pauseState = value;
     view.pauseLoadedAt = Date.now();
     if (!view.pauseRetry) view.pauseError = '';
+    botPauseFollow(view);
   } catch (error) {
     if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
   } finally {
@@ -95,11 +103,8 @@ async function botPauseChange(view, action) {
     if (BOT !== view) return;
     view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
       paused_by: null};
-    // The header's and the tree's Paused badges read the roster: follow the control now, not at the next poll.
-    const emp = S.emps.find(x => x.name === view.slug), badge = $('#bot-paused');
-    if (emp) { emp.status = action === 'pause' ? 'paused' : 'active'; renderTree(); }
-    if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
-    const name = emp?.display_name || view.slug;
+    botPauseFollow(view);
+    const name = S.emps.find(x => x.name === view.slug)?.display_name || view.slug;
     toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
       action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
   } catch (error) {

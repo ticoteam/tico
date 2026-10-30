@@ -38,14 +38,17 @@ input[type=file]:focus-visible{outline:var(--focus-ring);outline-offset:var(--fo
 :where(input[type=checkbox],input[type=radio]):disabled{cursor:not-allowed}
 input[type=checkbox]:focus-visible,input[type=radio]:focus-visible,input[type=range]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:5px}
-button.primary{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600;cursor:pointer}
+/* A link that says primary (Download, View task, Open billing) is the primary button: links are ink, so without its
+   own colours it would vanish on an ink surface like the update banner. */
+:is(button,a).primary{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600;cursor:pointer}
+a.primary{display:inline-block;text-decoration:none}
 button.ghost{background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;cursor:pointer;color:var(--ink)}
 /* the small size: 28px (regular is 32px), for a row's own actions and a toolbar's secondary ones */
 :is(button,a).primary.small,:is(button,a).ghost.small{padding-top:3px;padding-bottom:3px}
 /* a link that only says ghost (Open chat, Bot settings, Fix) is a ghost button; links with their own class keep their look */
 a[class="ghost"]{display:inline-block;background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;color:var(--ink);text-decoration:none}
 :is(button.ghost,a[class="ghost"]):hover:not(:disabled){background:var(--surface2);text-decoration:none}
-button.primary:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 88%,var(--ink))}
+:is(button,a).primary:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 88%,var(--ink));text-decoration:none}
 button:disabled{opacity:.5;cursor:default}
 /* Window controls: the ✕ that closes a dialog, panel or meeting window, and the icon buttons beside it (…, back, open in
    its own window). Quiet, borderless and one size, so they read as the window's own controls and never as an action on

@@ -144,6 +144,9 @@ async function staleReadAfterControl(browser, action) {
     assert.match(await strip.innerText(), /3 open tasks are waiting on it/);
     assert.equal(await strip.locator('a').getAttribute('href'), '#/bot/ops/tasks');
     assert.equal(await strip.locator('.bot-pause-record').innerText(), 'Paused');
+    // The roster still says active (its fixture never changes); the fresh read is the authority for the badges.
+    assert.equal(await page.locator('#bot-top #bot-paused .bot-paused-badge').innerText(), 'Paused', 'header follows a paused read');
+    assert.equal(await page.locator('#tree a[data-org="b:ops"] .bot-paused-badge').innerText(), 'Paused', 'tree follows a paused read');
     await page.setViewportSize({width: 375, height: 812});
     await page.waitForFunction(() => document.querySelector('#side').getBoundingClientRect().right <= 1);
     const box = await strip.boundingBox(), button = await strip.getByRole('button', {name: 'Unpause', exact: true}).boundingBox();
