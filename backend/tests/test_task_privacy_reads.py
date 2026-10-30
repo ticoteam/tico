@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from backend import sql as SQL, task_privacy, views
+from backend import read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
@@ -745,3 +745,45 @@ def test_bot_inbox_reads_a_fixed_number_of_statements_and_hides_private_messages
         shown = {m["id"] for m in inbox["messages"]}
         assert {f"note-{n}" for n in range(0, size, 2)} <= shown and not {f"note-{n}" for n in range(1, size, 2)} & shown
     assert counts[100] <= counts[10] + 5, counts
+
+
+def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(api):
+    # Tico Team's Needs you: `SELECT *, (rule) AS visible_here` stepped every card and ancestor again after prime_tasks
+    # had read them, each row the GIL given up and taken back (50 ms to 1.4 s on a busy server). The rule is now
+    # checked in one row; the primed rows must be what the one-row read gives, for every reader.
+    rows = [task(api), task(api, requester="human:ben", owner="bot:ops"), task(api, requester="bot:ops", owner="human:cara"),
+            task(api, requester="human:ben", owner="human:ben", title="Guest packet"),
+            task(api, private=False, requester="human:ana", owner="bot:ops", title="Company parent"),
+            task(api, private=False, requester="bot:ops", owner="bot:ops", title="Bot work")]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET guest='human:cara' WHERE id=?", (rows[3]["id"],))
+        c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (rows[1]["id"], rows[5]["id"]))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'parent','now')",
+                  (rows[1]["id"], rows[4]["id"]))
+    ids = [row["id"] for row in rows] + ["no-such-task"]
+    store, auth, people = api.app.state.store, api.app.state.auth, api.app.state.store.settings.test_identities
+    readers = [(people["ana-test"], None), (people["ben-test"], None), (people["ben-test"], {"ops"}),
+               (people["cara-test"], None), (Identity("bot:ops", "bot"), None)]
+    outcomes = set()
+    for who, unreadable in readers:
+        for read_first in (True, False):        # Needs you reads its chain first; a task list's ancestors are not read
+            with store.read_transaction() as c:
+                seen = []
+                c.set_trace_callback(seen.append)      # set first: setting it empties the snapshot's cache
+                visible = auth.task_sql(c, who, unreadable=unreadable)
+                if read_first:
+                    H.prime_tasks(c, ids)
+                before = len(seen)
+                readable = views._prime_person_origins(c, visible, ids)
+                statements = seen[before:]
+                one = views._VISIBLE_TASK_SQL % visible
+                for tid in ids:
+                    primed, row = read_cache.one(c, one, (tid,)), c.execute(one, (tid,)).fetchone()
+                    assert (primed is None) == (row is None), (who.actor, tid)
+                    assert row is None or list(dict(primed).items()) == list(dict(row).items())
+                assert readable == {tid for tid in ids if c.execute(one, (tid,)).fetchone()}
+                if read_first:
+                    assert statements and all(len(c.execute(sql).fetchall()) <= 1 for sql in statements), statements
+                c.set_trace_callback(None)
+            outcomes.add(frozenset(readable))
+    assert len(outcomes) >= 3                   # the readers see different tasks: the rule is exercised, not trivial

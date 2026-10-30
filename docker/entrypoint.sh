@@ -265,6 +265,9 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
   region="${TICO_BACKUP_REGION:-}"
   [ -n "$region" ] || [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || region=us-east-1
   {
+    # On a stop, Litestream's last sync of what the server wrote gets this long (its own default is 30s, which would
+    # outlast Docker's stop timeout and end in a SIGKILL that skips it).
+    echo "shutdown-sync-timeout: 5s"
     echo "snapshot:"
     echo "  interval: 24h"
     echo "  retention: 720h"
@@ -398,6 +401,70 @@ prepare() {  # everything `server` does before it starts serving: also what the 
   python -m backend.replication mark-environment "$DATA" "$TICO_ENVIRONMENT_ID"
 }
 
+# Runs the server ("$@") and, with backups on, Litestream and the attachment loop beside it, and stops them in the order
+# that keeps the backup whole. On SIGTERM (`docker stop`, a restart, an update) the server gets TICO_STOP_GRACE seconds
+# (1 by default) to finish what it is answering, and is then killed: its own shutdown waits on background work for far
+# longer than Docker's 10 s stop timeout, and a SIGKILL from Docker would take Litestream down with it, before its last
+# sync. Only once the server has exited is Litestream stopped, so its last sync covers every write (and is bounded by
+# shutdown-sync-timeout), and it leaves its local state current for the next start. A server or Litestream that exits
+# on its own ends the container (the other is stopped as on a stop), as `litestream replicate -exec` did.
+supervise() {
+  local backups=$1; shift
+  local grace=${TICO_STOP_GRACE:-1} stop=0 server='' litestream='' loop='' killer='' which='' rc=0 code=0
+  local server_done=0 litestream_done=0 requested=0
+  [[ $grace =~ ^[0-9]{1,3}(\.[0-9]{1,3})?$ ]] || die "TICO_STOP_GRACE is a number of seconds, like 1 or 2.5; got '$grace'"
+  stopping() {
+    [ "$stop" = 1 ] && return 0
+    stop=1
+    if [ -n "$server" ]; then
+      kill -TERM "$server" 2>/dev/null || true
+      ( sleep "$grace"; kill -KILL "$server" 2>/dev/null ) &
+      killer=$!
+    fi
+  }
+  # `wait` for a child, again after a signal (the trap) cuts it short; its exit status in rc.
+  reap() { while :; do wait "$1" && rc=0 || rc=$?; [ "$rc" -gt 128 ] && kill -0 "$1" 2>/dev/null || return 0; done; }
+  trap 'requested=1; stopping' TERM INT
+  if [ "$backups" = 1 ]; then
+    python -m backend.replication loop &
+    loop=$!
+    # Stale Litestream state beside the database is cleared first when the backup location is empty. It runs here, in
+    # the job that starts Litestream, so the server does not wait for it. exec makes the job Litestream itself: $! is its pid.
+    ( python -m backend.replication reset-stale-litestream "$LITESTREAM_CONFIG" "$TICO_DB" || true
+      exec litestream replicate -config "$LITESTREAM_CONFIG" ) &
+    litestream=$!
+  fi
+  "$@" &
+  server=$!
+  [ "$stop" = 0 ] || { stop=0; stopping; }   # a stop that came before the server did
+  while [ "$stop" = 0 ]; do
+    which=''
+    wait -n -p which "$server" ${litestream:+"$litestream"} && rc=0 || rc=$?
+    if [ "${which:-}" = "$server" ]; then server_done=1; code=$rc; break; fi
+    if [ -n "${which:-}" ]; then litestream_done=1; break; fi
+    if [ "$rc" = 127 ]; then server_done=1; code=1; break; fi   # nothing left to wait for
+  done                                        # (no pid: the trap ran, and the loop ends)
+  if [ "$server_done" = 0 ]; then
+    [ "$requested" = 1 ] || log "Litestream exited; stopping the server"
+    stopping
+    reap "$server"
+    code=$rc
+  fi
+  [ -z "$killer" ] || kill "$killer" 2>/dev/null || true
+  if [ -n "$litestream" ]; then
+    if [ "$litestream_done" = 0 ]; then
+      kill -TERM "$litestream" 2>/dev/null || true
+      reap "$litestream"
+    elif [ "$requested" = 0 ]; then
+      code=1
+    fi
+    kill -TERM "$loop" 2>/dev/null || true
+  fi
+  trap - TERM INT
+  if [ "$requested" = 1 ]; then code=0; fi        # a requested stop is a clean exit, however the server ended
+  exit "$code"
+}
+
 server() {
   prepare "$@"
   local serve=(python -m backend.server --host 0.0.0.0 --port 8765)
@@ -409,11 +476,9 @@ server() {
   warn_backups
   if [ "$TICO_BACKUP_MODE" != off ]; then
     log "backing up the database and attachments to ${TICO_BACKUP_URL:-the tico-backups volume ($BACKUPS)}"
-    python -m backend.replication loop &
-    # litestream supervises the server: it flushes the last changes on a stop, and if the server exits so does it.
-    exec litestream replicate -config "$LITESTREAM_CONFIG" -exec "${serve[*]}"
+    supervise 1 "${serve[@]}"
   fi
-  exec "${serve[@]}"
+  supervise 0 "${serve[@]}"
 }
 
 # The Slack gateway: the same image, its own process, so a Slack outage or restart never touches the

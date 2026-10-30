@@ -35,6 +35,12 @@ cannot reach the EC2 metadata service (a DOCKER-USER rule, first in its chain, t
 no company can use the host's AWS role. `update` snapshots the database before a new release first starts, and puts it
 back if that release does not come up.
 
+The router holds a request while its company's server is down for a moment (a restart, an update): a dial that fails
+is tried again every 250 ms for up to 30 s, and only then answered, with a plain 503 and Retry-After, never a 502.
+`sleep` stops a company's server and sends its hosts to the wake service instead (setup/cell_wake.py, systemd unit
+tico-cell-wake, which `init` installs): its first request starts the server with `wake` and is answered by it, and
+`wake` sends the hosts straight to the server again. A stopped company (`stop`) is answered 503 at once.
+
 Each company also has an updater, so its Update now, an update service key (the Release Manager's rollout) and Tico
 support's idle-time target work as on any install: `init` runs one host service (setup/cell_updater.py, systemd unit
 tico-cell-updater) that speaks docker/updater.py's contract to each company on that company's own default-network
@@ -147,6 +153,20 @@ UPDATER_PORT = 8090
 UPDATER_UNIT = "etc/systemd/system/tico-cell-updater.service"
 UPDATER_SERVICE = "tico-cell-updater.service"
 TOKEN_NAME = "updater-token"            # in <company>/control, the server's /control (docker/entrypoint.sh reads it)
+# The wake service (setup/cell_wake.py): the router sends a sleeping company's hosts here, naming the company in a
+# header the route itself sets (a visitor's own copy of it is replaced).
+WAKE_ADDRESS, WAKE_PORT = "127.0.0.1", 8082
+WAKE_HEADER = "X-Tico-Cell-Wake"
+WAKE_UNIT = "etc/systemd/system/tico-cell-wake.service"
+WAKE_SERVICE = "tico-cell-wake.service"
+# The hold: a dial to a server that is down (restarting, updating) is tried again, not answered with a 502. A request
+# with a body is retried with its body from Caddy 2.11 on (ROUTER_IMAGE is 2.11.4); 2.10 closed the body after the
+# first failed dial, so such a request got the 503. No request_buffers: in 2.10.2 it mixed up concurrent bodies.
+HOLD_FOR, HOLD_EVERY = "30s", "250ms"
+# A config reload (every add, remove, sleep and wake) leaves open WebSockets this long before closing them.
+STREAM_CLOSE_DELAY = "5m"
+HOLD_BODY = "Tico is starting. Try again in a few seconds."
+HEALTH_POLL = 0.15                      # seconds between /healthz probes while a server starts
 
 
 class CellError(Exception):
@@ -177,10 +197,11 @@ class System:
             return Result(124, "", f"{argv[0]}: timed out after {int(timeout)}s")
         return Result(p.returncode, p.stdout, p.stderr)
 
-    def http_status(self, host: str, path: str, timeout: float = 3) -> int:
-        """The router's answer for `host` (0 when it does not answer)."""
+    def http_status(self, host: str, path: str, timeout: float = 3, port: int = ROUTER_PORT) -> int:
+        """The router's answer for `host` (0 when it does not answer); with `port`, a company server's own answer on its
+        loopback port."""
         try:
-            c = http.client.HTTPConnection(ROUTER_ADDRESS, ROUTER_PORT, timeout=timeout)
+            c = http.client.HTTPConnection(ROUTER_ADDRESS, port, timeout=timeout)
             c.request("GET", path, headers={"Host": host})
             status = c.getresponse().status
             c.close()
@@ -410,10 +431,12 @@ def parser() -> Parser:
     a.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     cmd("list", "every company on this host")
     for name, help in (("status", "one company"), ("stop", "stop one company's server; its data stays"),
-                       ("start", "start it again; answers once /healthz answers")):
+                       ("start", "start it again; answers once /healthz answers"),
+                       ("sleep", "stop its server; its first request starts it again (the wake service)"),
+                       ("wake", "start a sleeping company's server; answers once /healthz answers")):
         c = cmd(name, help)
         c.add_argument("--company", required=True, metavar="SLUG")
-        if name == "start":
+        if name in ("start", "wake"):
             c.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT)
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
@@ -467,14 +490,37 @@ def networks(index: int) -> dict[str, str]:
 
 def router_config(companies: list[dict]) -> str:
     """The router's Caddyfile: each company's domain and aliases to its loopback port, anything else a 404. Plain HTTP on
-    loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used."""
-    lines = ["# Written by `python3 -m setup cell`; regenerated whenever a company is added or removed. Do not edit.",
+    loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used.
+
+    The hold: a dial that fails (the server is restarting or updating; nothing listens on its port) is tried again
+    every HOLD_EVERY for up to HOLD_FOR, so the request waits and gets its normal answer. Only a dial is retried for
+    every method (nothing reached the server); an error after the connection opened is retried for GET only, Caddy's
+    default, so a write is never sent twice. What still fails is answered with a plain 503 and Retry-After, never a 502.
+    The hold is only about reaching the server: a stream (SSE, a long answer) or a WebSocket, once open, has no time
+    limit here, as before; SSE and unknown-length answers are flushed as they come (Caddy's own rule), and a reload
+    leaves WebSockets open for STREAM_CLOSE_DELAY.
+
+    A sleeping company's hosts go to the wake service instead, with the company named in WAKE_HEADER by the route
+    itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once."""
+    lines = ["# Written by `python3 -m setup cell`; regenerated whenever a company is added, removed, stopped, started, "
+             "put to sleep or woken. Do not edit.",
              "{", "\tadmin localhost:2019", "\tauto_https off", "\tpersist_config off", f"\thttp_port {ROUTER_PORT}",
              f"\tdefault_bind {ROUTER_ADDRESS}", "}", ""]
+    held = [f"\t\tlb_try_duration {HOLD_FOR}", f"\t\tlb_try_interval {HOLD_EVERY}"]
+    errors = ["\thandle_errors {", "\t\theader Retry-After 5", f"\t\trespond \"{HOLD_BODY}\" 503", "\t}"]
     for c in sorted(companies, key=lambda c: c["domain"]):
         sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in hosts_of(c))
-        lines += [f"{sites} {{", f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
-                  "\t\theader_up X-Forwarded-Proto https", "\t}", "}", ""]
+        state = c.get("state")
+        if state == "stopped":
+            lines += [f"{sites} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
+        elif state == "sleeping":
+            lines += [f"{sites} {{", f"\treverse_proxy {WAKE_ADDRESS}:{WAKE_PORT} {{",
+                      f"\t\theader_up {WAKE_HEADER} {c['slug']}", "\t\theader_up X-Forwarded-Proto https", *held,
+                      "\t\tflush_interval -1", "\t}", *errors, "}", ""]
+        else:
+            lines += [f"{sites} {{", f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
+                      "\t\theader_up X-Forwarded-Proto https", *held, f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
+                      "\t}", *errors, "}", ""]
     lines += [f"http://:{ROUTER_PORT} {{", f"\trespond {ROUTER_HEALTH_PATH} \"ok\" 200",
               "\trespond \"No Tico company at this address.\" 404", "}"]
     return "\n".join(lines) + "\n"
@@ -564,6 +610,19 @@ def updater_unit(core: Path, python: str, root: Path) -> str:
         "[Install]", "WantedBy=multi-user.target"]) + "\n"
 
 
+def wake_unit(core: Path, python: str, root: Path) -> str:
+    """The wake service as a systemd service: it runs `wake` (Docker, the company's files and locks, the router's
+    reload), so it is root like the updater, and on loopback only. A stop waits a little for a start under way; one cut
+    short is finished by the next request's `wake` (Compose's up is idempotent)."""
+    return "\n".join([
+        "# Written by `python3 -m setup cell init`: starts a sleeping company on its first request (setup/cell_wake.py).",
+        "[Unit]", "Description=Tico cell: wake sleeping companies", "After=docker.service network-online.target",
+        "Wants=docker.service", "", "[Service]", "Type=simple", f"WorkingDirectory={core}",
+        f"ExecStart={python} -m setup.cell_wake --root {root}", "Restart=always", "RestartSec=1",
+        "KillMode=mixed", "TimeoutStopSec=60", "NoNewPrivileges=yes", "PrivateTmp=yes", "",
+        "[Install]", "WantedBy=multi-user.target"]) + "\n"
+
+
 def _installer_version() -> str:
     """The release this installer came with (HQ's bundle writes .tico-installer.json beside setup/)."""
     try:
@@ -580,6 +639,7 @@ class Cell:
         self.secrets: list[str] = []
         self.lock_wait = 900.0              # the cell updater waits for none: a held lock is another command at work
         self.taken = ""                     # the snapshot the last `update` took or kept, for the updater's /status
+        self.direct = False                 # health on the server's own port, not through the router (`wake`)
 
     # paths and records
     def dir(self, slug: str) -> Path:
@@ -670,6 +730,8 @@ class Cell:
         if c.get("state") == "removed":
             return "removed"
         row = ps.get(c["slug"])
+        if c.get("state") == "sleeping" and (not row or row["state"] != "running"):
+            return "sleeping"
         if not row:
             return "missing"
         if row["state"] != "running":
@@ -685,18 +747,24 @@ class Cell:
         return r.returncode == 0 and bool(rules) and rules[0] == IMDS_LINE
 
     def wait_healthy(self, c: dict, started: float, timeout: int) -> int:
-        """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router; the wait
+        """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router (with
+        `direct`, on the server's own loopback port: a sleeping company's route leads to the wake service); the wait
         itself is up to `timeout` seconds from now, so a slow image pull does not use it up."""
         deadline = self.system.monotonic() + max(timeout, 1)
         while True:
-            if self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200:
+            if self.direct:
+                status = self.system.http_status(c["domain"], contract.HEALTH_PATH, timeout=1, port=int(c["port"]))
+            else:
+                status = self.system.http_status(c["domain"], contract.HEALTH_PATH)
+            if status == 200:
                 return int((self.system.monotonic() - started) * 1000)
             if self.system.monotonic() > deadline:
                 logs = self.system.run(self.compose(c["slug"], "logs", "--no-color", "--tail", "15", "server"))
                 tail = " | ".join(line.strip() for line in (logs.stdout or "").splitlines()[-15:] if line.strip())
-                raise CellError("unhealthy", self.scrub(f"{c['domain']} did not answer {contract.HEALTH_PATH} through the "
-                                                        f"router within {timeout}s" + (f"; last log lines: {tail}" if tail else "")))
-            self.system.sleep(0.5)
+                where = f"on its port {c['port']}" if self.direct else "through the router"
+                raise CellError("unhealthy", self.scrub(f"{c['domain']} did not answer {contract.HEALTH_PATH} {where} "
+                                                        f"within {timeout}s" + (f"; last log lines: {tail}" if tail else "")))
+            self.system.sleep(HEALTH_POLL)
 
     def write_router(self) -> bool:
         """Regenerate the Caddyfile from every company not removed and reload the router. A config the router refuses
@@ -883,6 +951,8 @@ class Cell:
             changed.append("router")
         if self.updater_service():
             changed.append("updater")
+        if self.wake_service():
+            changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
         if cell != saved:
             _write_atomic(self.root / "cell.json", json.dumps(cell, indent=2, sort_keys=True) + "\n", 0o600)
@@ -910,13 +980,21 @@ class Cell:
         folder) restarts it without waiting (`--no-block`): its stop lets an update under way finish first. An unchanged
         one is only started if it is not running."""
         unit = updater_unit(Path(__file__).resolve().parent.parent, sys.executable, self.root)
-        if _write_atomic(self.host / UPDATER_UNIT, unit):
+        return self.host_service(UPDATER_UNIT, UPDATER_SERVICE, unit, "the cell updater")
+
+    def wake_service(self) -> bool:
+        """The wake service (setup/cell_wake.py), installed and run as the updater is."""
+        unit = wake_unit(Path(__file__).resolve().parent.parent, sys.executable, self.root)
+        return self.host_service(WAKE_UNIT, WAKE_SERVICE, unit, "the wake service")
+
+    def host_service(self, path: str, service: str, unit: str, what: str) -> bool:
+        if _write_atomic(self.host / path, unit):
             self.run(["systemctl", "daemon-reload"], "updater_failed", "systemctl daemon-reload")
-            self.run(["systemctl", "enable", UPDATER_SERVICE], "updater_failed", "enabling the cell updater")
-            self.run(["systemctl", "restart", "--no-block", UPDATER_SERVICE], "updater_failed", "starting the cell updater")
+            self.run(["systemctl", "enable", service], "updater_failed", f"enabling {what}")
+            self.run(["systemctl", "restart", "--no-block", service], "updater_failed", f"starting {what}")
             return True
-        if self.system.run(["systemctl", "is-active", "--quiet", UPDATER_SERVICE]).returncode:
-            self.run(["systemctl", "start", "--no-block", UPDATER_SERVICE], "updater_failed", "starting the cell updater")
+        if self.system.run(["systemctl", "is-active", "--quiet", service]).returncode:
+            self.run(["systemctl", "start", "--no-block", service], "updater_failed", f"starting {what}")
             return True
         return False
 
@@ -1252,7 +1330,9 @@ class Cell:
         c = self.company(args.company)
         ps = self.containers(c["slug"])
         state = self.state_of(c, ps)
-        healthy = state != "removed" and self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200
+        # A sleeping company is not probed: through the router, that would wake it.
+        healthy = state not in ("removed", "sleeping") and \
+            self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200
         return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "aliases": c.get("aliases", []),
                 "port": c["port"], "version": c["version"], "memory": c["memory"], "state": state, "healthy": healthy,
                 "container": ps.get(c["slug"], {"state": "", "health": ""})}
@@ -1265,14 +1345,23 @@ class Cell:
             raise CellError("not_found", f"{c['slug']} was removed; add it again first")
         return c
 
+    def routed(self) -> bool:
+        """The router's config again, after a record's state changed (under the company's lock; this takes the cell's)."""
+        with self.lock("cell"):
+            return self.write_router()
+
     def stop(self, args) -> dict:
+        """The server stopped, and its hosts answered 503 at once (no hold: nothing will come up)."""
         slug = check_slug(args.company)
         with self.lock("company-" + slug):
             c = self.live(slug)
             was = self.containers(slug).get(slug, {}).get("state")
             self.ensure_stopped(slug)
+            route = c.get("state") != "stopped"
             c["state"] = "stopped"
             self.save(c)
+            if route:
+                self.routed()
         return {"ok": True, "company": slug, "state": "stopped", "changed": was == "running"}
 
     def start(self, args) -> dict:
@@ -1281,17 +1370,80 @@ class Cell:
         with self.lock("company-" + slug):
             c = self.live(slug)
             before = self.containers(slug).get(slug, {})
+            route = c.get("state") != "running"     # stopped (503) or sleeping (the wake service): to the server now
             c["state"] = "running"
             self.save(c)
+            if route:
+                self.routed()               # the router holds requests until the server answers
             ready = self.launch(c, started, args.timeout)
         return self.answer(c, ready, before.get("state") != "running")
+
+    def sleep(self, args) -> dict:
+        """Stop the server and send its hosts to the wake service, whose first request starts it again (`wake`). The
+        route moves first: a request that comes while the server stops waits for this lock in the wake service, then
+        starts it again, which is what a request should do."""
+        slug = check_slug(args.company)
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            was = c.get("state")
+            if was == "sleeping" and self.containers(slug).get(slug, {}).get("state", "") in STOPPED:
+                return {"ok": True, "company": slug, "state": "sleeping", "changed": False}
+            c["state"] = "sleeping"
+            self.save(c)
+            try:
+                self.routed()
+                self.ensure_stopped(slug)
+            except CellError:
+                c["state"] = was
+                self.save(c)
+                with contextlib.suppress(CellError):
+                    self.routed()
+                raise
+        return {"ok": True, "company": slug, "state": "sleeping", "changed": True}
+
+    def wake(self, args) -> dict:
+        started = self.system.monotonic()
+        c, ready, changed = self.wake_company(check_slug(args.company), args.timeout, started)
+        return self.answer(c, ready, changed)
+
+    def wake_company(self, slug: str, timeout: int, started: float | None = None) -> tuple[dict, int, bool]:
+        """A sleeping company's server started under its lock, as `start` starts it (a pending update is finished or
+        rolled back there too), healthy on its own port, then marked running and routed straight to it. A running one
+        is only checked. A start that does not come up is stopped again, so the company sleeps and the next request
+        tries again; one rolled back to the release before an update is awake on that release (update_failed is raised
+        after the route, as `start` raises it). (record, ready_ms, changed)."""
+        started = self.system.monotonic() if started is None else started
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            state = c.get("state")
+            if state == "running":
+                return c, self.wait_healthy(c, started, timeout), False
+            if state != "sleeping":
+                raise CellError("not_sleeping", f"{slug} is {state}; `start` starts a stopped company")
+            self.direct = True
+            failed = None
+            try:
+                ready = self.launch(c, started, timeout)
+            except CellError as e:
+                if e.code != "update_failed":
+                    self.system.run(self.compose(slug, "stop", "server"))
+                    raise
+                failed, ready = e, int((self.system.monotonic() - started) * 1000)
+            finally:
+                self.direct = False
+            c["state"] = "running"
+            self.save(c)
+            self.routed()
+            if failed:
+                raise failed
+        return c, ready, True
 
     def update(self, args) -> dict:
         """Another release, with the database safe first. The image is pulled before anything changes (a release that
         cannot be pulled leaves the company as it was). Then the server is stopped (Docker must say so), its database
         copied to snapshots/, and only then do .env and company.json name the new release, with `pending` = the release
         before and the snapshot. A running company starts the new release at once; a stopped one stays stopped and
-        `start` (or `add`) starts it. Either way the first start is guarded by `launch`: no /healthz, and the old
+        `start` (or `add`) starts it, and a sleeping one sleeps on and its next request (`wake`) starts it. Either way the first start is guarded by `launch`: no /healthz, and the old
         release and database come back. `pending` is saved, so a command that dies half-way is still rolled back by the
         next start. A stop or snapshot that fails changes nothing and the old release is started again.
 
@@ -1309,7 +1461,7 @@ class Cell:
             env_text = _read(d / ".env")
             self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
             extra = self.extra_env(slug)
-            running = c.get("state") != "stopped"
+            running = c.get("state") not in ("stopped", "sleeping")     # one that is not stays as it is
             pending = c.get("pending")
             self.taken = (pending or {}).get("snapshot", "")
             if c["version"] == args.version:

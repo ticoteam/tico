@@ -48,7 +48,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
   [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
-- Advanced operations: [Cloud provisioning](install-advanced.md), [Many companies on one host](cell.md), [Sizing](sizing.md), [Observability](observability.md),
+- Advanced operations: [Cloud provisioning](install-advanced.md), [Many companies on one host](cell.md) and its [stats and debug tools](cell-stats.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),
   [Runner wire contract](runner-wire-contract.md), [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).

@@ -281,16 +281,28 @@ def answer_task(c, auth, who, task_id, body, wake):
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}
+    # Files under review (backend/file_reviews.py): the answer says what it judged of each exact version.
+    from . import file_reviews
+    review, spend = asked["refs"].get("review"), asked["refs"].get("spend")
+    labels = [] if body.dismiss else [label for picks in body.answers.values() for label in picks]
+    if review and not body.dismiss:
+        value["reviewed"] = file_reviews.verdicts(review, labels, body.other)
+        file_reviews.require_readable(c, auth, who, value["reviewed"])
     # Repeated deliveries with a new transport key still record only one identical choice.
-    for previous in H.review_answers(c, asked["id"], actor=privacy.actor(who)):
-        if all(previous.get(k) == value.get(k) for k in ("target", "answers", "other", "dismiss", "by")):
-            return {"answer": previous, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
+    previous = H.review_answers(c, asked["id"], actor=privacy.actor(who))
+    for answer in previous:
+        if all(answer.get(k) == value.get(k) for k in ("target", "answers", "other", "dismiss", "by")):
+            return {"answer": answer, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
                     "woke": False}
+    if spend and spend["label"] in labels:
+        value["spend_approval"] = file_reviews.spend_approval(c, who, asked, task_id, spend, previous)
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too
     msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
                          extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
+    if value.get("reviewed"):
+        file_reviews.record(c, who, task_id, asked["id"], msg["id"], value["reviewed"])
     still_wanted.act(c, who.actor, task_id, picked)
     return {"comment": {**msg, "answer": value}, "answer": value,
             "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),

@@ -1021,20 +1021,25 @@ _VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
-    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, read in one query
+    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, checked in one query
     per 500 with that same rule rather than one query per card and ancestor. Returns the ids the rule lets this
-    reader see, from the same read, so the caller needs no second check of them."""
+    reader see, so the caller needs no second check of them.
+
+    The check answers one row, the readable ids as JSON, and the rows are the snapshot's task rows (H.prime_tasks; Needs
+    you has read them all just before). Reading `SELECT *, (rule)` here stepped every row again, each step the GIL given
+    up and taken back: on a busy server that waits up to the 5 ms switch interval a row, and a 2 ms read took 50 ms to
+    1.4 s on Tico Team."""
     readable = set()
     for part in H.chunks(sorted({tid for tid in ids if tid})):
-        found = {}
-        for row in c.execute("SELECT *, (%s) AS visible_here FROM tasks WHERE id IN (%s)"
-                             % (visible_sql, ",".join("?" * len(part))), part):
-            row = dict(row)
-            if row.pop("visible_here"):
-                readable.add(row["id"])
-                found[row["id"]] = row
+        found = json.loads(c.execute("SELECT json_group_array(id) FROM tasks WHERE id IN (%s) AND (%s)"
+                                     % (",".join("?" * len(part)), visible_sql), part).fetchone()[0])
+        readable.update(found)
         if read_cache.cache(c) is not None:
-            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+            H.prime_tasks(c, found, with_tags=False)
+            # The row `SELECT * FROM tasks WHERE id=? AND (rule)` answers: the task's row as stored, or None.
+            rows = {tid: read_cache.one(c, H.TASK_SQL, (tid,)) for tid in found}
+            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql,
+                             {(tid,): dict(rows[tid]) if rows.get(tid) else None for tid in part})
     return readable
 
 
@@ -2686,7 +2691,7 @@ def install_views(app, store, auth, mutate, task_view):
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
-                        "items": [x for x in items if str(x["id"]) in positions]}
+                        "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
             out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
@@ -2694,7 +2699,16 @@ def install_views(app, store, auth, mutate, task_view):
                 out["bots"] = needs_bots(items, who.actor)
                 if restarted:
                     out["restart"] = True
+            needs_visuals(c, who, out["items"])
             return out
+
+    def needs_visuals(c, who, items):
+        """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
+        added after the list's version is taken: an address renewed on the hour is not a change to the list."""
+        asks = [x["ask"] for x in items if isinstance(x.get("ask"), dict) and (x["ask"].get("refs") or {}).get("attachments")]
+        if asks:
+            visuals.for_reader(app, auth.settings, c, who, asks)
+        return items
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):

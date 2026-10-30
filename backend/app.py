@@ -57,6 +57,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
+from .files import raw_media
 from clients import gateway as gateway_client
 from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
@@ -655,12 +656,14 @@ def create_app(settings=None):
                             and request.state.identity.role == "runner")
                 memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
                                  and request.state.identity.role == "runner")
-                streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
+                # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
+                media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
+                streamed = media_raw or bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
                 # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
                 recorder_audio = (request.url.path == "/api/v2/recorder/audio/transcriptions"
                                   and request.state.identity.role in ("human", "owner"))
-                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -1473,7 +1476,7 @@ def create_app(settings=None):
         """Everything a client needs to name this environment and reach its runner."""
         from .onboarding import config_view
         with store.read_transaction() as c:
-            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True}}
+            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True, "file_media_stream": True}}
 
     def updater_only(who, what):
         """The owner, or an `update` service key (backend/service_keys.py) held by a release bot on another install."""
@@ -1649,6 +1652,28 @@ def create_app(settings=None):
             if status == 404:
                 raise Problem("gateway_fetch_unavailable", "The Tico AI Gateway does not offer fetch yet", 503)
             raise Problem("gateway_fetch_failed", f"Fetch failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
+
+    @app.post("/api/v2/gateway/images")
+    def gateway_images(request: Request, body: M.GatewayImage):
+        """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
+        bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Images are off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.image(base, key, body.prompt, body.category, body.images, body.size,
+                                                    body.count, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_image_unavailable", "The Tico AI Gateway does not make images yet", 503)
+            raise Problem("gateway_image_failed", f"Image failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
         return answer
 
     @app.put("/api/v2/providers/gateway")
@@ -3575,7 +3600,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None, same=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3737,7 +3762,8 @@ def create_app(settings=None):
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live,
-                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
+                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept),
+                            same=same)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         due = None
         if body.next_run and H.is_bot(owner):

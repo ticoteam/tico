@@ -45,7 +45,8 @@
 }
 @keyframes ask-rise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
 
-.ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));
+.ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:41;   /* over a "things need you" sheet (settings.css) */
+  width:min(400px,calc(100vw - var(--rail-left) - 32px));
   height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
 .ask-panel[hidden]{display:none}

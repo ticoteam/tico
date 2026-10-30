@@ -5813,7 +5813,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False, routine=False):
+                quiet_notice=False, from_private=False, routine=False, same=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5929,7 +5929,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         dup = twins[0] if twins else None
     else:
         dup = _same_title(conn, scope + " ORDER BY created,id",
-                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
+                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title, keep=same)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -6076,10 +6076,12 @@ def title_key(title):
     return " ".join(str(title or "").split()).casefold()
 
 
-def _same_title(conn, sql, args, title):
-    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None."""
+def _same_title(conn, sql, args, title, keep=None):
+    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None. `keep(conn, task_id)`, when
+    given, also has to say it is the same work: a file review asks the same words about other versions."""
     key = title_key(title)
-    return next((r for r in _rows(conn.execute(sql, args)) if title_key(r["title"]) == key), None)
+    return next((r for r in _rows(conn.execute(sql, args))
+                 if title_key(r["title"]) == key and (keep is None or keep(conn, r["id"]))), None)
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
@@ -6819,7 +6821,8 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
     at = now()
-    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who")}
+    # A review's files and spend are the latest wording's: an ask without them drops the earlier ones.
+    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who", "review", "attachments", "spend")}
     # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
     # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
     questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]
@@ -9116,9 +9119,9 @@ def notices(conn, actor, at=None):
 TASK_SQL = "SELECT * FROM tasks WHERE id=?"
 
 
-def prime_tasks(conn, ids):
+def prime_tasks(conn, ids, with_tags=True):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
-    (a Needs you card reads its task, its ancestors and what they block, one at a time)."""
+    (a Needs you card reads its task, its ancestors and what they block, one at a time). `with_tags=False`: the rows only."""
     from .read_cache import cache, prime, prime_rows
     values = cache(conn)
     if values is None:
@@ -9130,7 +9133,7 @@ def prime_tasks(conn, ids):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
-    for part in chunks(sorted(tid for tid in wanted if (TASK_TAGS_SQL % "?", (tid,)) not in values)):
+    for part in chunks(sorted(tid for tid in wanted if with_tags and (TASK_TAGS_SQL % "?", (tid,)) not in values)):
         marks = ",".join("?" * len(part))
         tags = {tid: [] for tid in part}
         for row in conn.execute(TASK_TAGS_SQL % marks, part):

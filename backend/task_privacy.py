@@ -1038,16 +1038,23 @@ def guard_write(c, who, path, auth):
 def tag_readable(c, who, row):
     snapshot(c)
     linked = {r[0] for r in c.execute("SELECT task_id FROM task_tags WHERE tag_id=?", (row["id"],))}
-    attached = [H._json(event[0], {}) or {} for event in
-                c.execute("SELECT detail_json FROM events INDEXED BY events_tag_attach WHERE target=? AND action='tag.attach'",
-                          (row["id"],))]
-    return _tag_readable(c, who, row, linked, attached)
+    return _tag_readable(c, who, row, linked, tag_attaches(c, [row["id"]]).get(row["id"], ()))
 
 
 # Attach events of a batch of tags. The index is named because the general target/action index fetches every event
-# row from a table of millions; this one holds the attach events alone, covering their detail.
-TAG_ATTACHES_SQL = ("SELECT target,detail_json FROM events INDEXED BY events_tag_attach WHERE target IN ({marks}) "
-                    "AND action='tag.attach'")
+# row from a table of millions; this one holds the attach events alone, covering their detail. Read as one row of
+# JSON, as status_tasks is: a busy tag list is thousands of attach rows, each step a GIL hand-off (41 ms on TIDY).
+TAG_ATTACHES_SQL = ("SELECT json_group_array(json_array(target,detail_json)) FROM events INDEXED BY events_tag_attach "
+                    "WHERE target IN ({marks}) AND action='tag.attach'")
+
+
+def tag_attaches(c, tags):
+    """{tag: [attach detail, ...]} for up to H.chunks' size of tags."""
+    out = {}
+    packed = c.execute(TAG_ATTACHES_SQL.format(marks=",".join("?" * len(tags))), tags).fetchone()[0]
+    for tag, detail in json.loads(packed or "[]"):
+        out.setdefault(tag, []).append(H._json(detail, {}) or {})
+    return out
 
 
 def tags_readable(c, who, rows):
@@ -1060,8 +1067,7 @@ def tags_readable(c, who, rows):
         marks = ",".join("?" * len(part))
         for tag, tid in c.execute(f"SELECT tag_id,task_id FROM task_tags WHERE tag_id IN ({marks})", part):
             linked.setdefault(tag, set()).add(tid)
-        for tag, detail in c.execute(TAG_ATTACHES_SQL.format(marks=marks), part):
-            attached.setdefault(tag, []).append(H._json(detail, {}) or {})
+        attached.update(tag_attaches(c, part))
     prime_references(c, [detail for found in attached.values() for detail in found] + rows)
     _task_rows(c, set().union(*linked.values()))
     return [row for row in rows if _tag_readable(c, who, row, linked.get(row["id"], set()), attached.get(row["id"], ()))]
@@ -1143,6 +1149,17 @@ def status_tasks_sql(match):
             f"AND (+owner{match} OR +requester{match})")
 
 
+def status_tasks(c, match, args):
+    """`status_tasks_sql`'s rows as dicts of STATUS_TASK_COLUMNS, read as one row of JSON. The rows are a thousand on a
+    busy team (most of them its private tasks), and each row stepped is the GIL given up and taken back: with other
+    requests running Python each take back waits up to the 5 ms switch interval, so a 2 ms read took 100 ms to 1 s on
+    Tico Team. One row is one wait."""
+    names = STATUS_TASK_COLUMNS.split(",")
+    packed = c.execute(f"SELECT json_group_array(json_array({STATUS_TASK_COLUMNS})) FROM ({status_tasks_sql(match)})",
+                       args).fetchone()[0]
+    return [dict(zip(names, values)) for values in json.loads(packed)]
+
+
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
     {slug: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
@@ -1151,8 +1168,7 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(status_tasks_sql(marks), actors * 4):
-            t = dict(t)
+        for t in status_tasks(c, marks, actors * 4):
             for party in {t["owner"], t["requester"]}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
@@ -1175,8 +1191,7 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         return row
     row = dict(row)
     tid = row.get("task_id")
-    tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        status_tasks_sql("=?"), ("bot:" + row["bot"],) * 4)]
+    tasks = tasks if tasks is not None else status_tasks(c, "=?", ("bot:" + row["bot"],) * 4)
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = _task(c, tid)

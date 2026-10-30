@@ -497,7 +497,8 @@ class Ask(Contract):
 
 def used_today(c, actor, at=None, action="judge.call"):
     day = (at or H.now())[:10]
-    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action=? AND ts>=?",
+    # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?",
                      (actor, action, day + "T00:00:00")).fetchone()[0]
 
 

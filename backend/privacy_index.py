@@ -346,7 +346,8 @@ class ReadIndex:
             rows = defaultdict(set)
             for tag, tid in self.c.execute("SELECT tag_id,task_id FROM task_tags"):
                 rows[tag].add(tid)
-            for target, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action='tag.attach'"):
+            for target, detail in self.c.execute("SELECT target,detail_json FROM events INDEXED BY events_tag_attach "
+                                                 "WHERE action='tag.attach'"):
                 data = H._json(detail, {}) or {}
                 # Tag history contains explicit task references, not arbitrary prose.
                 rows[target].update(v for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "") if self.known_task(v))

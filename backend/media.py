@@ -634,6 +634,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             guest = readable_by(c, person, private, parent)
             if guest:
                 H.task_reach(c, who.actor, parent, person)
+            # Files under review (backend/file_reviews.py): versions the person can open, and the options they make.
+            from . import file_reviews
+            review = attachments = None
+            if body.review:
+                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
             topic = H.question_topic(body.topic)
             # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
             found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
@@ -644,7 +649,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 made = task_create(c, who, M.TaskCreate(
                     title=title, body=body.body or question, owner=who.actor, private=body.private,
                     relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
-                    review_prs=snapshots)
+                    review_prs=snapshots, same=file_reviews.same_versions(review) if review else None)
                 tid = made["task"]["id"]
             # The person must be able to read the task by every rule a read checks, or the question would reach
             # them (Slack, mail) while the task stays hidden from them.
@@ -652,10 +657,16 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
             except Problem as exc:
                 raise unreadable(person) from exc
+            picks, shown = options, asked
+            if review:
+                picks = file_reviews.options(review, attachments, body.pick, body.options)
+                shown = {**asked, "options": [o.model_dump(include={"label", "description", "then", "recommended"})
+                                              for o in picks]}
+            spend = file_reviews.check_spend(body.spend, [o.label for o in picks])
             # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
-            H.require_plain_question(c, who.actor, person, [asked])
-            choices = []
-            for option, item, digest in zip(options, decoded, stored):
+            H.require_plain_question(c, who.actor, person, [shown])
+            choices, pad = [], [None] * len(picks)
+            for option, item, digest in zip(picks, (decoded + pad)[:len(picks)], (stored + pad)[:len(picks)]):
                 choice = {"label": option.label, **({"description": option.description} if option.description else {}),
                           **({"then": option.then} if option.then else {}),
                           **({"recommended": True} if option.recommended else {})}
@@ -674,6 +685,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
             if topic:
                 ask["topic"] = topic
+            if review:
+                ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
+                ask["attachments"] = attachments
+            if spend:
+                ask["spend"] = spend
             gate = None
             if found:
                 said = H.fold_question(c, who.actor, found, question, ask, title=body.title, body=body.body)
