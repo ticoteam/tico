@@ -161,6 +161,25 @@ grep -q '^  - service: chrome$' "$f"
 SH
 }
 
+profile_facts() {  # the bot's Chrome profile as the restart left it: its exit and restore prefs, its cookies' names
+  docker exec -i -e BOT="$BOT" "$RUNNER" python3 -I - <<'PY' 2>&1 | sed 's/^/    /'
+import glob, os, re, sqlite3
+p = os.path.join("/home/runner/browsers", os.environ["BOT"], "profile", "Default")
+try:
+    text = open(os.path.join(p, "Preferences")).read()
+    print("prefs:", " ".join(re.findall(r'"(?:restore_on_startup|exit_type|exited_cleanly)":(?:"[A-Za-z]*"|[0-9a-z]+)', text)) or "none of them")
+except OSError as e:
+    print("prefs:", e)
+print("files:", " ".join(sorted(os.listdir(p))) if os.path.isdir(p) else "no Default folder")
+for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
+    try:
+        c = sqlite3.connect("file:%s?mode=ro&immutable=1" % db, uri=True)
+        print("cookies:", db[len(p):], c.execute("SELECT group_concat(host_key || ' ' || name || ' persistent=' || is_persistent, '; ') FROM cookies").fetchone()[0])
+    except sqlite3.Error as e:
+        print("cookies:", db[len(p):], e)
+PY
+}
+
 chrome_diagnose() {  # what the computer says about the bot's Chrome when it did not answer (no values: none exist yet)
   say "diagnosis: runner log lines about the browser"
   docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|xvfb|display|devtools' | tail -n 25 | sed 's/^/    /'

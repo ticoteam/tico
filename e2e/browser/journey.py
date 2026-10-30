@@ -210,11 +210,13 @@ def cmd_save_card(args):
 
 
 def find_reconnect(node, host):
+    """The open site card for `host` in a Needs you read: an item (a task) carries it as `reconnect`, whose `fix` names
+    the host; folded items sit inside another item. {id, task, key} or None."""
     if isinstance(node, dict):
-        # A site card names its host as its label; its fix carries the host too. Needs you lists the card under its task.
-        fix = node.get("fix") if isinstance(node.get("fix"), dict) else {}
-        if node.get("id") and node.get("service") == "site" and host in (node.get("label"), fix.get("host")):
-            return node
+        card = node.get("reconnect")
+        if (isinstance(card, dict) and card.get("service") == "site" and card.get("status", "open") == "open"
+                and (card.get("fix") or {}).get("host", card.get("label")) == host):
+            return {"id": card.get("id") or "", "task": node.get("id", ""), "key": card.get("key", "")}
         for value in node.values():
             found = find_reconnect(value, host)
             if found:
@@ -229,7 +231,7 @@ def find_reconnect(node, host):
 
 def cmd_reconnect_id(args):
     card = find_reconnect(install("GET", "/api/v2/needs-you"), args.host)
-    print(json.dumps({"id": card.get("id", ""), "task": card.get("task", ""), "key": card.get("key", "")}) if card else "")
+    print(json.dumps(card) if card else "")
 
 
 IMPORT_NAMES = ("Journey import one", "Journey import two")

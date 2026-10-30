@@ -444,8 +444,10 @@ async fn start(command: Command, config: config::Config) -> i32 {
         if runner::drains_on_stop() {
             // SIGTERM: finish the running turns (Runner::shut_down); a second SIGTERM or a SIGINT stops at once.
             tokio::select! { _ = term.recv() => stopper.shut_down(), _ = int.recv() => {} }
+            browser::close_idle();
         }
         tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
+        browser::close_idle();
         stopper.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         stopper.events.wake.notify_one();
     });

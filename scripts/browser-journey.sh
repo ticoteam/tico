@@ -59,7 +59,11 @@ step_login2fa() { browser_phase login-2fa; }
 step_restart() {
   docker restart "$RUNNER" >/dev/null || return 1
   retry 180 runner_online || { say "the runner did not come back after the restart"; return 1; }
-  browser_phase restart-check
+  browser_phase restart-check && return 0
+  say "diagnosis: the profile after the restart, and the runner's browser lines around it"
+  profile_facts
+  docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|shut|stopp|signal' | tail -n 20 | sed 's/^/    /'
+  return 1
 }
 
 step_expire_bot() { expire_sessions; }

@@ -84,28 +84,6 @@ for cr in creds:
 PY
 }
 
-# Diagnostics, read only: the cookies the bot's Chrome profile holds on disk for the practice host (names and expiry).
-profile_cookies() {  # a label
-  say "profile cookies ($1):"
-  docker exec -i "$RUNNER" python3 -I - "/home/runner/browsers/$BOT/profile" <<'PY' 2>&1 | sed 's/^/    /' || say "profile cookies: could not be read"
-import os, shutil, sqlite3, sys, tempfile
-src = os.path.join(sys.argv[1], "Default", "Cookies")
-if not os.path.exists(src):
-    print("no Cookies file at " + src)
-    sys.exit(0)
-tmp = tempfile.mkdtemp()
-shutil.copy(src, os.path.join(tmp, "Cookies"))
-for extra in ("-journal", "-wal"):
-    if os.path.exists(src + extra):
-        shutil.copy(src + extra, os.path.join(tmp, "Cookies" + extra))
-c = sqlite3.connect(os.path.join(tmp, "Cookies"))
-rows = c.execute("SELECT host_key, name, expires_utc, is_persistent FROM cookies WHERE host_key LIKE '%practice.test%'").fetchall()
-print(f"{len(rows)} cookie(s) for the practice host on disk")
-for host, name, expires, persistent in rows:
-    print(f"{host} {name} expires_utc={expires} persistent={persistent}")
-PY
-}
-
 # Scenario 1: the owner rents a phone (TICO approves the quote, the owner accepts it), and the rental is an SMS inbox.
 sms_inbox() { japi GET /api/v2/inbound/inboxes | pick 'sys.exit(0 if any(i.get("kind") == "sms" for i in d["inboxes"]) else 1)'; }
 
@@ -148,7 +126,8 @@ sc_peers() {
 # Scenario 5: Chrome is killed by its exact PID; the runner starts it again with the same profile.
 sc_crash() {  # the round, for the log
   local pid
-  profile_cookies "before the kill, round ${1:-1}"
+  say "profile before the kill, round ${1:-1}:"
+  profile_facts
   pid="$(chrome_pid)" || { say "no Chrome for $BOT is running under its profile lock"; return 1; }
   docker exec "$RUNNER" sh -c "kill -KILL $pid" || { say "Chrome $pid could not be killed"; return 1; }
   sleep 2
@@ -165,7 +144,8 @@ sc_after_crash() {
     sc_crash "$round" || return 1
     browser_phase after-crash || {
       failed=1
-      profile_cookies "after the restart, round $round"
+      say "profile after the restart, round $round:"
+      profile_facts
       say "runner log about the browser, round $round:"
       docker logs "$RUNNER" 2>&1 | grep -iE 'browser|chrome|profile|session|restore|crash' | tail -n 40 | sed 's/^/    /'
     }
