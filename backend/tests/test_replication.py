@@ -486,3 +486,78 @@ def test_the_backup_status_lists_only_the_newest_level(tmp_path):
     (tmp_path / "0000/new.ltx").write_text("x")
     os.utime(tmp_path / "0000/new.ltx", (50, 50))
     assert local.newest(replication.DB_LEVELS) == 50
+
+
+class Listing:
+    """Stands in for `litestream ltx`: what it prints, or how it fails."""
+    def __init__(self, stdout="[]", returncode=0, error=None):
+        self.stdout, self.returncode, self.error, self.calls = stdout, returncode, error, []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.error is not None:
+            raise self.error
+        return subprocess.CompletedProcess(args, self.returncode, self.stdout, "")
+
+
+def stale_litestream_state(tmp_path):
+    """A database with the WAL and Litestream's local state beside it, as an earlier run leaves them."""
+    data = tmp_path / "data"
+    data.mkdir()
+    db = data / "hub.sqlite"
+    db.write_bytes(b"database")
+    (data / "hub.sqlite-wal").write_bytes(b"wal")
+    state = data / ".hub.sqlite-litestream"
+    (state / "ltx" / "0").mkdir(parents=True)
+    (state / "ltx" / "0" / "0000000000000003-0000000000000003.ltx").write_bytes(b"ltx")
+    return db, state
+
+
+def assert_database_untouched(db):
+    assert db.read_bytes() == b"database" and (db.parent / "hub.sqlite-wal").read_bytes() == b"wal"
+
+
+def test_an_empty_replica_clears_the_stale_state_and_nothing_else(tmp_path, monkeypatch, capsys):
+    db, state = stale_litestream_state(tmp_path)
+    listing = Listing("[]")
+    monkeypatch.setattr(replication.subprocess, "run", listing)
+    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert not state.exists()
+    assert_database_untouched(db)
+    assert capsys.readouterr().out.strip() == "tico: the backup location is empty; removed Litestream's stale local state (.hub.sqlite-litestream)"
+    (args, kwargs), = listing.calls
+    assert args[:2] == ["litestream", "ltx"] and args[args.index("-config") + 1] == "litestream.yml" and args[-1] == str(db)
+    assert 0 < kwargs["timeout"] <= 120
+
+
+def test_a_replica_with_any_file_at_any_level_keeps_the_state(tmp_path, monkeypatch, capsys):
+    db, state = stale_litestream_state(tmp_path)
+    monkeypatch.setattr(replication.subprocess, "run", Listing('[{"level": 9, "min_txid": "0000000000000001", "max_txid": "0000000000000004"}]'))
+    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert state.is_dir() and (state / "ltx" / "0").is_dir()
+    assert_database_untouched(db)
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("listing", [
+    Listing(error=subprocess.TimeoutExpired("litestream", 60)),
+    Listing(returncode=1, stdout=""),
+    Listing(error=FileNotFoundError("litestream")),
+    Listing(stdout="not json"),
+], ids=["timeout", "error", "missing-binary", "garbled"])
+def test_an_unreadable_replica_changes_nothing_and_says_the_check_was_skipped(tmp_path, monkeypatch, capsys, listing):
+    db, state = stale_litestream_state(tmp_path)
+    monkeypatch.setattr(replication.subprocess, "run", listing)
+    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert state.is_dir()
+    assert_database_untouched(db)
+    assert capsys.readouterr().out.strip() == "tico: could not read the backup location; skipped the check for stale Litestream state"
+
+
+def test_without_local_state_the_replica_is_not_even_asked(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "hub.sqlite"
+    db.write_bytes(b"database")
+    listing = Listing()
+    monkeypatch.setattr(replication.subprocess, "run", listing)
+    assert replication.main(["reset-stale-litestream", "litestream.yml", str(db)]) == 0
+    assert listing.calls == [] and capsys.readouterr().out == "" and db.read_bytes() == b"database"

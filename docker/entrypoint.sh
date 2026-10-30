@@ -428,7 +428,10 @@ supervise() {
   if [ "$backups" = 1 ]; then
     python -m backend.replication loop &
     loop=$!
-    litestream replicate -config "$LITESTREAM_CONFIG" &
+    # Stale Litestream state beside the database is cleared first when the backup location is empty. It runs here, in
+    # the job that starts Litestream, so the server does not wait for it. exec makes the job Litestream itself: $! is its pid.
+    ( python -m backend.replication reset-stale-litestream "$LITESTREAM_CONFIG" "$TICO_DB" || true
+      exec litestream replicate -config "$LITESTREAM_CONFIG" ) &
     litestream=$!
   fi
   "$@" &

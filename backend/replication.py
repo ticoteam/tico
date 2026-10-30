@@ -20,6 +20,8 @@ sessions themselves are in the database), so a new one costs nobody their sessio
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -36,6 +38,8 @@ OFF_WARNING = "Backups are off (TICO_BACKUP=off). Losing the data volume loses e
 # cheap however many attachments there are.
 DB_LEVELS = tuple(prefix + str(level).rjust(width, "0") for prefix, width in (("", 4), ("ltx/", 1)) for level in (0, 1, 2, 3, 9))
 FILES_PREFIX = "files"
+# An unreachable bucket makes Litestream retry for minutes; a listing that long is treated as unreadable.
+LISTING_TIMEOUT = 60
 # The environment marker: a small file OUTSIDE the database that says "this is an existing company, with this id".
 # One in the data volume, one beside the replica. A start with an empty volume reads them before it may begin a
 # new company, so an unreachable backup can never turn into a blank company replicating over the real one.
@@ -467,6 +471,45 @@ def write_status(mirror, path, credential_key=None, key_files=None):
     os.replace(temporary, path)
 
 
+def litestream_state_dir(db):
+    """Where Litestream 0.5 keeps its local copy of what it has shipped: `.<name>-litestream` beside the database."""
+    db = Path(db)
+    return db.parent / ("." + db.name + "-litestream")
+
+
+def replica_file_count(config, db, binary="litestream", timeout=LISTING_TIMEOUT):
+    """How many LTX files the replica holds at any level (snapshots included), or None when it cannot be read: a failed
+    or timed-out listing, or output that is not a list. An empty replica lists as []."""
+    try:
+        result = subprocess.run([binary, "ltx", "-level", "all", "-json", "-config", config, db],
+                                capture_output=True, text=True, timeout=timeout, check=False)
+        listed = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    return len(listed) if isinstance(listed, list) else None
+
+
+def reset_stale_litestream(config, db, binary="litestream"):
+    """Removes Litestream's local state for `db` when the replica holds no files at all (a new or moved backup location
+    while the state is from an earlier run): Litestream then starts the replica from the database itself, not from a
+    local copy the replica no longer matches. Nothing else is touched. Litestream's auto-recover is not used: after it,
+    local TXIDs restart below a populated replica's position and new writes are never uploaded. Returns the line to
+    print, or None when there is nothing to say."""
+    state = litestream_state_dir(db)
+    if not state.is_dir() or state.is_symlink():
+        return None
+    count = replica_file_count(config, db, binary)
+    if count is None:
+        return "tico: could not read the backup location; skipped the check for stale Litestream state"
+    if count:
+        return None
+    try:
+        shutil.rmtree(state)
+    except OSError as exc:
+        return "tico: the backup location is empty but Litestream's stale local state could not be removed: " + str(exc)[:200]
+    return "tico: the backup location is empty; removed Litestream's stale local state (" + state.name + ")"
+
+
 def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None):
     env = os.environ if env is None else env
     if no_mirror(env):
@@ -530,8 +573,12 @@ def main(argv=None):
             return 1
     elif command == "mark-environment":    # DIR ID
         write_markers(argv[1], argv[2], None if no_mirror(env) else mirror_from_env(env))
+    elif command == "reset-stale-litestream":    # CONFIG DB: run before `litestream replicate`
+        message = reset_stale_litestream(argv[1], argv[2])
+        if message:
+            print(message, flush=True)
     else:
-        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID", file=sys.stderr)
+        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID|reset-stale-litestream CONFIG DB", file=sys.stderr)
         return 2
     return 0
 
