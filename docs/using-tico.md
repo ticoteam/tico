@@ -244,7 +244,8 @@ themselves, up to 20 a turn; the rest wait for the next turn.
 
 Defaults: plain Send is Steer for a chat message and a comment on a task a bot owns, as before (when the bot is idle
 that is the same as Queue). A comment on a task a bot filed for a
-person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
+person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). On an engineering
+ticket, a comment that @mentions no bot on it is a Defer with no deadline, whoever owns the ticket. A deferred comment or
 task has a 24-hour deadline unless you pick one; a deferred chat message or deferred message has none. Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 

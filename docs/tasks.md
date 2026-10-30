@@ -822,7 +822,9 @@ deferred on a task with no bot on it. On a task a bot filed and a person owns, a
 it is a **Defer** with a 24-hour deadline, reaching the bot that asked on its next turn on the task, or in a day at the
 latest. A comment that @mentions a bot on the task (`@ops`, or its name) is a **Queue**; one from the person the task
 waits on is a Steer. A comment from someone not on the task (not its owner, requester or a mover) is a Defer with no deadline,
-so a reader never spends a bot's turns on a task that is not theirs. A person @mentioned in a
+so a reader never spends a bot's turns on a task that is not theirs. On an engineering ticket (a Dev tickets task) none
+of that applies: a person's comment is a Queue only when it @mentions a bot on the ticket, and otherwise a Defer with no
+deadline, whoever filed it, owns it or waits on it. A ticket's comments are a conversation among the people on it. A person @mentioned in a
 comment (by id, the part of their email before the @, full name, or first name when no one else
 shares it) gets the comment as a question, which puts the task in their Needs you; when the
 comment also wakes the bot, or names several people, each person gets their own copy of the question.

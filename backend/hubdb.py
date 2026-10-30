@@ -5381,6 +5381,9 @@ def comment_way(conn, actor, row, text, *, mover=False):
       that isn't theirs;
     - no bot on the task: steer (it reaches a person, who has no turns);
     - the task waits on them: steer, they are answering it;
+    - an engineering ticket: queue when the comment @names a bot on the ticket, else defer with no deadline, whoever
+      filed, owns or waits on it. A ticket's comments are a conversation among the people on it, and a bot that
+      answers every one talks over them;
     - a task a bot filed for a person (its requester or origin a bot, its owner not): defer 24h, unless the comment
       @names a bot on the task: queue. Such a comment is most often a progress note, not a question for the bot;
     - a task a bot owns: steer, the person is directing its work."""
@@ -5388,6 +5391,9 @@ def comment_way(conn, actor, row, text, *, mover=False):
         return ("steer", None) if not TS.snoozed(row) else ("defer", "never")
     if not (mover or task_participant(conn, actor, row)):
         return "defer", "never"
+    from .review_gate import engineering
+    if engineering(conn, row):
+        return ("queue", None) if names_a_bot(conn, text, row) else ("defer", "never")
     origin = task_origin(conn, row)
     if not any(is_bot(a) for a in (row["owner"], row["requester"], origin)):
         return "steer", None

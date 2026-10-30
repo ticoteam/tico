@@ -156,6 +156,28 @@ def test_on_a_task_a_bot_filed_a_comment_defers_a_day_and_an_at_mention_queues(a
     assert chosen["woke"] is False and chosen["sent_as"] == {"delivery": "defer", "until": None}
 
 
+def test_on_a_ticket_a_comment_wakes_a_bot_only_when_it_names_the_bot(api):
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [
+            {"name": "In Progress", "status": "doing"}, {"name": "Done", "status": "done"}])
+    token = bot_token(api, "ops")
+    filed = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x", "type": typ["id"],
+                                "step": "In Progress"}, token=token)
+    built = post(api, "tasks", {"owner": "bot:ops", "title": "Fix the sign-out check", "body": "x",
+                                "type": typ["id"], "step": "In Progress"})
+    # Its owner and a mover on a ticket a bot filed, and the requester of a ticket a bot owns: no wake, no deadline.
+    for task, who in ((filed, "ben-test"), (filed, "ana-test"), (built, "ana-test")):
+        said = post(api, f"tasks/{task['id']}/comments", {"text": "Testing it on staging for a day."}, token=who)
+        assert said["woke"] is False and said["sent_as"] == {"delivery": "defer", "until": None}
+        assert rows(api, item=said["comment"]["id"])[0]["due"] is None
+    named = post(api, f"tasks/{filed['id']}/comments", {"text": "@ops which app is still open?"}, token="ben-test")
+    assert named["woke"] is True and named["sent_as"]["delivery"] == "queue"
+    assert post(api, f"tasks/{built['id']}/comments", {"text": "@ops is it ready?"})["woke"] is True
+    # A way named still wins.
+    steered = post(api, f"tasks/{built['id']}/comments", {"text": "Use the new copy.", "delivery": "steer"})
+    assert steered["woke"] is True and steered["sent_as"]["delivery"] == "steer"
+
+
 def test_a_new_task_takes_queue_or_defer_but_not_steer(api):
     setup(api)
     r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "steer"},
