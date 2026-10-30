@@ -1143,6 +1143,17 @@ def status_tasks_sql(match):
             f"AND (+owner{match} OR +requester{match})")
 
 
+def status_tasks(c, match, args):
+    """`status_tasks_sql`'s rows as dicts of STATUS_TASK_COLUMNS, read as one row of JSON. The rows are a thousand on a
+    busy team (most of them its private tasks), and each row stepped is the GIL given up and taken back: with other
+    requests running Python each take back waits up to the 5 ms switch interval, so a 2 ms read took 100 ms to 1 s on
+    Tico Team. One row is one wait."""
+    names = STATUS_TASK_COLUMNS.split(",")
+    packed = c.execute(f"SELECT json_group_array(json_array({STATUS_TASK_COLUMNS})) FROM ({status_tasks_sql(match)})",
+                       args).fetchone()[0]
+    return [dict(zip(names, values)) for values in json.loads(packed)]
+
+
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
     {slug: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
@@ -1151,8 +1162,7 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(status_tasks_sql(marks), actors * 4):
-            t = dict(t)
+        for t in status_tasks(c, marks, actors * 4):
             for party in {t["owner"], t["requester"]}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
@@ -1175,8 +1185,7 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         return row
     row = dict(row)
     tid = row.get("task_id")
-    tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        status_tasks_sql("=?"), ("bot:" + row["bot"],) * 4)]
+    tasks = tasks if tasks is not None else status_tasks(c, "=?", ("bot:" + row["bot"],) * 4)
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = _task(c, tid)
