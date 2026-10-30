@@ -13,7 +13,7 @@ import pytest
 
 from backend import cloud_access, cloud_machines as CM, placement
 from backend.store import H
-from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_cloud_access import signals
 
 SIZES = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04,
@@ -843,3 +843,106 @@ def test_the_client_speaks_the_contract(monkeypatch):
     with pytest.raises(CM.Refused) as refused:
         hq.stop("m3")
     assert refused.value.code == "key_refused"
+
+
+# ----------------------------------------------------------------------------- the stop's fence against the claim
+def leased(cloud, rid):
+    with cloud.store.read() as c:
+        return [r["bot"] for r in c.execute("SELECT bot FROM attempts WHERE runner_id=? AND state IN "
+                                            "('leased','running')", (rid,))]
+
+
+def claim_on(cloud, computer, bot):
+    """A claim through the real route, as the machine's runner does it."""
+    return post(cloud.api, "jobs/claim", {"bot": bot, "start_places": True}, token=computer["token"])
+
+
+def going_idle(cloud, key, computer, bots):
+    """The machine's runner ready for its bots, nothing queued, and the clock at its idle stop: `decide` says stop."""
+    ready(cloud.api, computer, bots)
+    idle(cloud)
+    cloud.manager.synced = None
+    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.at[0] = cloud.row(key)["active_at"] + 300
+    cloud.hq.calls.clear()
+
+
+def test_a_claim_after_the_stop_is_reserved_gets_nothing_from_any_member_until_it_starts_again(cloud, monkeypatch):
+    """The reviewer's probe, stop first: decide idle, reserve, then a member's claim (the real route) before HQ's
+    answer. The claim is refused with a pause, so no turn is leased when the stop goes out; after the stop, HQ's
+    stopped keeps refusing it; once started again its runner takes the work."""
+    rid = shared_enrolled(cloud, "ops", "finance")
+    # The same code again is the same runner (a boot that lost the answer): here, its token.
+    computer = post(cloud.api, "runners/enroll", {"code": next(c[3] for c in cloud.hq.calls if c[0] == "create"),
+                                                  "label": "boat-vm", "platform": "linux"})
+    assert computer["runner_id"] == rid
+    going_idle(cloud, CM.SHARED, computer, ["ops", "finance"])
+    answers, stop = [], cloud.hq.stop
+
+    def stopping(machine_id):
+        work(cloud, "finance")                                  # new work, and its runner asks for it at once
+        answers.append(claim_on(cloud, computer, "finance"))
+        assert leased(cloud, rid) == []                         # nothing is out when HQ is told to stop
+        return stop(machine_id)
+    monkeypatch.setattr(cloud.hq, "stop", stopping)
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"] and len(answers) == 1
+    assert answers[0]["attempt"] is None and "stopping" in answers[0]["paused"]
+    assert cloud.row(CM.SHARED)["state"] == "stopped" and cloud.row(CM.SHARED)["stop_until"] is None
+    assert claim_on(cloud, computer, "finance")["attempt"] is None      # stopped: still nothing
+    monkeypatch.setattr(cloud.hq, "stop", stop)
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"]                          # finance's new work wakes it
+    assert claim_on(cloud, computer, "finance")["attempt"]["bot"] == "finance"
+
+
+def test_a_claim_between_decide_and_the_stop_wins_and_no_stop_is_sent(cloud, monkeypatch):
+    """The reviewer's probe, claim first: decide idle on its snapshot, then work is queued and leased through the real
+    claim before the stop is reserved. The reservation sees the turn out and sends nothing; the machine is kept."""
+    computer = enrolled(cloud)
+    going_idle(cloud, "ops", computer, ["ops"])
+    decide, raced = CM.decide, []
+
+    def racing(current, found, at, idle_s):
+        action = decide(current, found, at, idle_s)
+        if action[0] == "stop" and not raced:                   # between the snapshot's decide and the stop
+            raced.append(True)
+            work(cloud)
+            raced.append(claim_on(cloud, computer, "ops"))
+        return action
+    monkeypatch.setattr(CM, "decide", racing)
+    cloud.tick()
+    assert raced[1]["attempt"]["bot"] == "ops" and leased(cloud, computer["runner_id"]) == ["ops"]
+    assert "stop" not in cloud.hq.actions() and cloud.row()["stop_until"] is None
+    monkeypatch.setattr(CM, "decide", decide)
+    assert "stop" not in cloud.tick(600)                        # a turn out never stops it
+
+
+def test_a_reservation_whose_server_died_lapses_and_its_work_goes_out(cloud):
+    computer = enrolled(cloud)
+    going_idle(cloud, "ops", computer, ["ops"])
+    with cloud.store.transaction() as c:                        # reserved, then the process died before HQ was asked
+        assert CM.reserve(c, cloud.store.settings, "ops", "stop", cloud.row()["machine_id"], cloud.at[0])
+    work(cloud)
+    assert claim_on(cloud, computer, "ops")["attempt"] is None
+    cloud.at[0] += CM.STOP_HOLD
+    assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
+    # The next look keeps it on for that turn rather than stopping it under the turn.
+    assert "stop" not in cloud.tick(600)
+
+
+def test_hq_refusing_the_stop_lets_the_claim_go_on_at_once_and_backs_off(cloud):
+    computer = enrolled(cloud)
+    going_idle(cloud, "ops", computer, ["ops"])
+    cloud.hq.fail["stop"] = CM.Refused("unreachable")
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"] and cloud.row()["stop_until"] is None
+    assert cloud.row()["failures"] == 1 and cloud.row()["next_try"] == cloud.at[0] + CM.BACKOFF
+    work(cloud)
+    assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
+
+
+def test_a_computer_that_is_no_cloud_machine_is_never_held(api):  # noqa: F811
+    computer = runner(api)
+    with api.app.state.store.read() as c:
+        assert CM.held(c, computer["runner_id"]) == ""
