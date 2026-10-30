@@ -46,8 +46,8 @@
   --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
   /* control heights: small and regular (a phone's are 40px, forms.css) */
   --ctl-sm:28px;--ctl:32px;
-  /* the Ask button's footprint on a computer (ask.css): 16px off the bottom, 44px tall, 16px clear above it */
-  --fab-room:76px;
+  /* the Ask pill's footprint on a computer (ask.css): 16px off the bottom, 40px tall, 20px clear above it; how wide it is */
+  --fab-room:76px;--ask-pill:104px;
   /* a fold's chevron (chevron_right) turns a quarter to open */
   --chev-open:rotate(90deg);
 }
@@ -74,7 +74,7 @@
   --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);
   /* The Liquid Dot (liquid-dot.css): Tico, the assistant, and nothing else. A flat jade with a slight tonal fall, and
-     the soft shadow under it. The Ask button's face it sits on. */
+     the soft shadow under it. The Ask pill's face it sits on. */
   --dot:#56a578;--dot-hi:#5fb083;--dot-lo:#4d966c;--dot-shadow:rgba(0,0,0,.55);--ask-face:var(--g1);
   --sans:"Inter","Inter Fallback",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */

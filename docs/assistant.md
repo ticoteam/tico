@@ -1,8 +1,8 @@
 # The Assistant
 
 Every human has one private chat with the team's assistant (the `coo` bot; you may have renamed it): a personal
-bot that knows how Tico is laid out and does things in it on your behalf. **Ask** opens it from any page: the round
-button at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the **Ask** tab in the
+bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: the
+pill at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the same pill in the
 middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. **Show chat** in the panel opens it
 as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a

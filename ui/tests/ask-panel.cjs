@@ -1,6 +1,7 @@
-// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the button at the bottom left (or ⌘J)
-// opens a panel that names the page it sees and sends it with the message; on a phone the Ask tab opens a sheet and
-// closes it again. The + loops in Tico support or the Tico team (Support, ui/support.js); an open request's messages
+// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" pill at the bottom left
+// (or ⌘J) opens a panel that names the page it sees and sends it with the message; on a phone the same pill in the tab
+// bar opens a sheet and closes it again. Its dot flies into the panel to the newest Tico turn, on to a newer one, and
+// back. The + loops in Tico support or the Tico team (Support, ui/support.js); an open request's messages
 // flow into the chat as green bubbles, its name shows only them (the box then writes to support), and its × takes it
 // out. A Confirm card BotOps left in its own chat and a bot's question come at the end as cards, answered here. No
 // BotOps or Assistant rows in the rail. Fixtures only.
@@ -85,9 +86,15 @@ async function open(browser, viewport, state) {
     await fab.click();
     await panel.waitFor();
     assert.equal(await fab.getAttribute('aria-expanded'), 'true');
-    // One live dot: the panel's own while it is open; the button's holds still.
-    const dots = () => page.evaluate(() => [...document.querySelectorAll('#ask-fab .ldot, #ask-panel .ldot')].map(d => d.dataset.state));
-    assert.deepEqual(await dots(), ['still', 'idle']);
+    // The pill's dot flies into the panel, to the newest Tico turn, and lands there: the one live dot while it is open
+    // (the pill's and the panel's own hold still).
+    const dots = () => page.evaluate(() => ['#ask-fab [data-ask-dot]', '#ask-panel [data-ask-dot]', '#ask-panel .ask-turn-dot']
+      .map(s => document.querySelector(s)?.dataset.state || ''));
+    const landed = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
+    await page.waitForFunction(() => document.querySelector('.ldot-fly'));
+    await landed();
+    assert.equal(await panel.locator('.conv-run[data-message="a2"] .ask-turn-dot').count(), 1);
+    assert.deepEqual(await dots(), ['still', 'still', 'idle']);
     const box = panel.locator('.ask-form .p-text');
     await box.waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('#ask-panel .p-text'));
@@ -135,6 +142,9 @@ async function open(browser, viewport, state) {
     await box.fill('The board will not load');
     await box.press('Enter');
     await panel.getByRole('link', {name: 'Loop in Tico support'}).waitFor();
+    await landed();
+    assert.equal(await thread.locator('.conv-run[data-message]').last().locator('.ask-turn-dot').count(), 1, 'the newest Tico turn took the dot');
+    assert.equal(await panel.locator('.ask-turn-dot').count(), 1);
     assert.equal(state.sent[0].text, 'The board will not load');
     assert.equal(state.sent[0].page.path, '#/tasks');
     await panel.getByRole('link', {name: 'Loop in Tico support'}).click();
@@ -152,7 +162,8 @@ async function open(browser, viewport, state) {
     await box.focus();
     await page.keyboard.press('Escape');
     await panel.waitFor({state: 'hidden'});
-    assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the button carries the live dot');
+    await landed();
+    assert.deepEqual(await dots(), ['idle', 'still', 'still'], 'closed: the dot is back on the pill');
     await page.keyboard.press('Control+j');
     await panel.waitFor();
     // Show chat opens the Assistant page, where the button is not needed.
@@ -166,21 +177,25 @@ async function open(browser, viewport, state) {
     state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: []};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
-    // The Ask tab has no word: the dot, a close mark while open, and its name says which.
-    const glyph = async () => (await tab.locator('.mobile-nav-icon').isVisible()) ? tab.locator('.mobile-nav-icon').innerText()
-      : (await tab.locator('.ldot').isVisible()) ? 'dot' : '';
-    assert.equal(await tab.locator('.mobile-nav-label').count(), 0);
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'dot']);
+    // The Ask tab is the pill too, words and all: the dot, or a close mark in its place while the sheet is open.
+    const glyph = async () => {
+      await page.waitForFunction(() => !document.querySelector('.ldot-fly')
+        && !document.querySelector('#mobile-ask').getAnimations({subtree: true}).some(a => a instanceof CSSTransition));
+      return tab.evaluate(el => { const on = x => getComputedStyle(x).opacity === '1', x = el.querySelector('.ask-x');
+        return on(el.querySelector('.ask-glyph .ldot')) ? 'dot' : on(x) ? x.textContent : ''; });
+    };
+    assert.equal(await tab.locator('.ask-label').isVisible(), true, 'not icon-only');
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
     await tab.click();
     await page.locator('#ask-panel').waitFor();
     await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a sheet above the tab bar (${JSON.stringify([sheet, bar])})`);
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close', 'close']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
-    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Ask', 'dot']);
+    assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
     assert.deepEqual(errors, []);
     await page.close();
   } finally {

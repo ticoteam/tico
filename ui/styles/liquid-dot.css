@@ -39,3 +39,6 @@
 @keyframes ld-shadow-hop{0%,50%,100%{transform:scaleX(1);opacity:1}7%{transform:scaleX(1.1)}18%{transform:scaleX(.55);opacity:.4}29%{transform:scaleX(1.15);opacity:1}}
 /* Reduced motion: the dot holds still; whoever shows it says the state in a word (ldotWord). */
 @media (prefers-reduced-motion:reduce){.ldot .body,.ldot .shadow{animation:none!important}.ldot[data-state="listening"]{transform:none}}
+/* Moving (ldotFly): a copy flies on top of everything, by transform alone, while the dot it lands on waits unseen. */
+.ldot.ldot-fly{position:fixed;left:0;top:0;z-index:70;margin:0;transform-origin:0 0;will-change:transform}
+.ldot.ldot-away{opacity:0}

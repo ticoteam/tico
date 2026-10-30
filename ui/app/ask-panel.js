@@ -3,8 +3,8 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant, to the helpers behind it (BotOps, the Strategy Bot, the
-// Librarian), and to Tico support. On a computer a round button at the bottom left of the page (or ⌘J) opens a panel
-// above it; on a phone the Ask tab opens it as a sheet over the page, and the tab closes it again. It is the same conversation as the Assistant
+// Librarian), and to Tico support. On a computer the "Ask Tico" pill at the bottom left of the page (or ⌘J) opens a
+// panel above it; on a phone the same pill in the tab bar opens it as a sheet over the page, and closes it again. It is the same conversation as the Assistant
 // page (#/assistant, "Show chat"): GET /v2/assistant reads it and POST /v2/assistant/messages sends with the page the
 // person is on (`page`), so the turn knows what "this" means. Like the Updates chat it keeps its own small state, never
 // the bot pages' (chat.js V2C), and drops the Assistant page's cached copy when it sends.
@@ -37,13 +37,11 @@ function askSync() {
   fab.hidden = away;
   panel.hidden = !open;
   document.body.classList.toggle('ask-open', open);
-  fab.setAttribute('aria-expanded', String(open));
-  fab.setAttribute('aria-label', open ? 'Close ' + name : name);
   fab.title = name + ' (⌘J)';
-  // The phone's tab has no word under it: the dot, or a close mark while the sheet is open (ask.css, by aria-expanded).
-  if (tab) {
-    tab.setAttribute('aria-expanded', String(open));
-    tab.setAttribute('aria-label', open ? 'Close' : 'Ask');
+  // The pill says "Ask Tico", on a phone too; while the panel is open a close mark holds the dot's place (ask.css).
+  for (const el of [fab, tab].filter(Boolean)) {
+    el.setAttribute('aria-expanded', String(open));
+    if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
   }
   askDot();
   panel.setAttribute('aria-label', name);
@@ -55,21 +53,43 @@ function askSync() {
   sees.title = 'Sees ' + page.title;
   askMembers();
 }
-// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the button's (or the phone's tab) while the
-// panel is closed, the panel's own while it is open; the other holds still. With reduced motion the dot is still and the
-// closed button says the state in a word; the open panel says it in the thread already ("Thinking…", the reply itself).
+// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the pill's (or the phone's) while the panel
+// is closed; while it is open, the newest Tico turn's (askTurn), else the panel's own beside its name; the rest hold
+// still. With reduced motion the dot is still and the closed pill says the state in a word; the open panel says it in
+// the thread already ("Thinking…", the reply itself).
 function askDot() {
-  const state = ASK?.dotState || 'idle', open = !$('#ask-panel')?.hidden;
+  const state = ASK?.dotState || 'idle', open = !$('#ask-panel')?.hidden, turn = ASK?.turn?.isConnected ? ASK.turn : null;
   document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
-  ldotSet($('#ask-panel [data-ask-dot]'), open ? state : 'still');
+  ldotSet($('#ask-panel [data-ask-dot]'), open && !turn ? state : 'still');
+  ldotSet(turn, open ? state : 'still');
   const word = $('#ask-fab [data-ask-word]');
   if (word) { word.textContent = open ? '' : ldotWord(state); word.hidden = !word.textContent; }
 }
+// Where the dot is now: the open panel's live dot, else the pill's (whichever pill shows).
+function askLiveDot() {
+  if ($('#ask-panel')?.hidden === false) return ASK?.turn?.isConnected ? ASK.turn : $('#ask-panel [data-ask-dot]');
+  return [...document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
+}
+// The newest Tico turn in the thread takes the dot, next to its name (or its "Thinking…"); `replies` are the ids of
+// the Assistant's own messages, so a bot's card or Tico support never does. Returns that turn's key.
+function askTurn(chat, thread, replies) {
+  const turns = [...thread.querySelectorAll(':scope > [data-ask-live], :scope > p[role="status"], :scope > .conv-run[data-message]')]
+    .filter(el => !el.matches('.conv-run') || (replies.has(el.dataset.message) && el.querySelector('.bubble .who')));
+  const last = turns.at(-1), spot = last && (last.matches('p') ? last : last.querySelector('.bubble .who'));
+  if (!spot) { chat.turn?.remove(); return ''; }
+  if (!chat.turn) chat.turn = Object.assign(document.createElement('template'), {innerHTML: ldotHTML({size: 20, cls: 'ask-turn-dot'})}).content.firstChild;
+  spot.prepend(chat.turn);
+  return last.matches('[data-ask-live]') ? 'live' : last.matches('p') ? 'status' : last.dataset.message;
+}
+// Open: the pill's dot flies into the panel (to the newest turn once the thread is drawn); close: back to the pill.
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
+  const from = askLiveDot()?.getBoundingClientRect();
   ASK.open = open;
   askMenu(false);
   askSync();
+  ASK.flyFrom = open && !ASK.drawn ? from : null;
+  if (!ASK.flyFrom) ldotFly(askLiveDot(), from);
   if (open && !ASK.mounted) { ASK.mounted = true; void askLoad(ASK); }
   else if (open) void ASK.refresh?.();       // cards answered or confirmed elsewhere meanwhile
   // A phone keeps its keyboard down until the person taps the box.
@@ -238,12 +258,22 @@ async function askLoad(chat) {
     // A reply from support seen here is read, as in Support itself.
     const seen = ticket?.unread && chat.open && !$('#ask-panel').hidden && document.hasFocus() ? ticket.id + ':' + (ticket.messages || []).length : '';
     if (seen && seen !== readFor) { readFor = seen; void window.supportRead?.(ticket.id); }
-    if (html === rendered) return;
-    stickScroll(thread).update(() => {
-      thread.innerHTML = html;
-      if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
-    }, {fresh: !!rendered});
-    rendered = html;
+    if (html !== rendered) {
+      // A newer Tico turn takes the dot from the older one: it flies there, from inside the thread's view.
+      const box = thread.getBoundingClientRect(), was = chat.turn?.isConnected ? chat.turn.getBoundingClientRect() : null, wasKey = chat.turnKey;
+      const from = was && {left: was.left, width: was.width, top: Math.min(Math.max(was.top, box.top), box.bottom - was.height)};
+      stickScroll(thread).update(() => {
+        thread.innerHTML = html;
+        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
+        chat.turnKey = askTurn(chat, thread, new Set(messages.filter(isReply).map(m => m.id)));
+      }, {fresh: !!rendered});
+      rendered = html;
+      askDot();
+      if (chat.turnKey && wasKey && chat.turnKey !== wasKey) ldotFly(chat.turn, from);
+    }
+    // The first drawing after the panel opened: the pill's dot lands where the dot now is.
+    chat.drawn = true;
+    if (chat.flyFrom && chat.open) { ldotFly(askLiveDot(), chat.flyFrom); chat.flyFrom = null; }
   };
   chat.draw = draw;
   // The whole chat again, with the Confirm cards waiting in other chats.

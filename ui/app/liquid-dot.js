@@ -28,3 +28,33 @@ function ldotSet(el, state) {
   const next = ldotState(state, Number(el.dataset.size) || 24);
   if (el.dataset.state !== next) el.dataset.state = next;
 }
+// The dot hardly ever just vanishes: when it moves (a button into a panel and back, an older turn to the newest), a
+// copy flies from where it was (`from`, a rect) to `el`, following `el` if that moves meanwhile, while `el` itself
+// waits unseen. Transform and opacity only, over every clip (a copy on top of the page); none with reduced motion.
+const LDOT_FLY_MS = 420;
+const ldotCalm = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+function ldotFly(el, from, {ms = LDOT_FLY_MS, lift = 14} = {}) {
+  el?._ldotLand?.();
+  if (!el?.isConnected || !from?.width || ldotCalm() || typeof requestAnimationFrame !== 'function') return false;
+  const to = el.getBoundingClientRect();
+  if (!to.width || Math.hypot(from.left - to.left, from.top - to.top) < 2) return false;
+  const ghost = el.cloneNode(true);
+  ghost.classList.add('ldot-fly');
+  ghost.style.width = `${to.width}px`;
+  document.body.append(ghost);
+  el.classList.add('ldot-away');
+  const start = performance.now(), ease = t => 1 - (1 - t) ** 3;
+  let frame = 0;
+  const land = () => { cancelAnimationFrame(frame); ghost.remove(); el.classList.remove('ldot-away'); delete el._ldotLand; };
+  const step = now => {
+    const r = el.getBoundingClientRect();
+    if (!el.isConnected || !r.width) return land();
+    const t = Math.min(1, (now - start) / ms), k = ease(t);
+    const x = from.left + (r.left - from.left) * k, y = from.top + (r.top - from.top) * k - Math.sin(Math.PI * t) * lift;
+    ghost.style.transform = `translate(${x}px,${y}px) scale(${(from.width + (r.width - from.width) * k) / to.width})`;
+    if (t < 1) frame = requestAnimationFrame(step); else land();
+  };
+  el._ldotLand = land;
+  step(start);
+  return true;
+}
