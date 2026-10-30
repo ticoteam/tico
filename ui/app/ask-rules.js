@@ -76,12 +76,23 @@ const askShared = body => String(body || '').startsWith(ASK_SHARE_HEAD);
 
 // Peeks: one line beside the dot about something already waiting on the person (a bot's question, an ask), so Tico
 // speaks up without nagging. One at a time; none while the panel is open, while typing or in the first few seconds;
-// one dismissed stays dismissed; an item peeks at most once a day.
+// one dismissed stays dismissed; an item peeks at most once a day. `askPeekFresh`: the items that may peek now.
 const ASK_PEEK_WAIT_MS = 3000;
 const ASK_PEEK_DAY_MS = 24 * 3600 * 1000;
-function askPeekPick(items, {now = Date.now(), loadedAt = 0, typing = false, open = false, dismissed = [], shown = {}} = {}) {
-  if (open || typing || now - loadedAt < ASK_PEEK_WAIT_MS) return null;
-  return (items || []).find(it => it?.id && !dismissed.includes(it.id) && !(now - (Number(shown[it.id]) || 0) < ASK_PEEK_DAY_MS)) || null;
+function askPeekFresh(items, {now = Date.now(), loadedAt = 0, typing = false, open = false, dismissed = [], shown = {}} = {}) {
+  if (open || typing || now - loadedAt < ASK_PEEK_WAIT_MS) return [];
+  return (items || []).filter(it => it?.id && !dismissed.includes(it.id) && !(now - (Number(shown[it.id]) || 0) < ASK_PEEK_DAY_MS));
+}
+const askPeekPick = (items, opts) => askPeekFresh(items, opts)[0] || null;
+// What a peek says, and the items it speaks for: Tico talking, six words at most, about the fresh items of the first
+// one's kind (bots' questions, or Confirm cards: `confirm` true). Never who asked, never the question's own words.
+function askPeekLine(fresh) {
+  const first = (fresh || [])[0];
+  if (!first) return {text: '', ids: []};
+  const same = fresh.filter(it => !!it.confirm === !!first.confirm), n = same.length;
+  const text = first.confirm ? (n > 1 ? `${n} things need your OK` : 'Need your OK on something')
+    : n > 1 ? `${n} questions are waiting on you` : 'Got a quick question for you';
+  return {text, ids: same.map(it => it.id)};
 }
 // What the peek store keeps: the last 50 dismissed ids, and when each item last peeked (a day's worth is enough).
 function askPeekTidy({dismissed = [], shown = {}} = {}, now = Date.now()) {

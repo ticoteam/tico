@@ -3,8 +3,8 @@
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
 // - Each idle variant swapped in by hand: no layout and no paint.
-// - With the CPU slowed 4x, opening Ask (the dot flies in), a reply (it flies to the new turn) and closing (it flies
-//   back): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
+// - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
+//   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
 // - A hidden tab: every dot paused and no idle timer left, and none set while hidden.
 // DOT_PERF_OUT=<file> writes the numbers (the PR body quotes them).
@@ -154,8 +154,8 @@ const round = v => Math.round(v * 10) / 10;
       reply: async () => {
         const box = page.locator('#ask-panel .ask-form .p-text');
         await box.fill('Thanks'); await box.press('Enter');
-        await page.locator('#ask-panel .conv-run[data-message="b1"] .ask-turn-dot').waitFor(); await settle();
-        // open: one dot, flying or still; the newest turn holds the live one
+        await page.locator('#ask-panel .conv-run[data-message="b1"]').waitFor(); await settle();
+        // open: one dot, flying or still; the header's is the live one
         const live = await dotAnimations(page);
         assert.ok(live.dots <= 1, `open: ${live.dots} moving dots`);
         assert.ok(live.props.every(p => DOT_ANIMATED.has(p)), `open: the dot animates ${live.props}`);
