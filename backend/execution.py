@@ -868,8 +868,10 @@ def prime_readable_held(c, who, auth, bots):
     if not todo:
         return
     found = _readable_held_for(c, who, auth, todo)
+    chosen = _tico_chosen_for(c, who, todo)
     for bot in todo:
         values[_held_key(who, actor, bot)] = found[bot]
+        values[("tico_chosen", actor, bot)] = chosen[bot]
 
 
 def _readable_held_for(c, who, auth, bots):
@@ -924,14 +926,28 @@ def _readable_held_for(c, who, auth, bots):
 
 def tico_chosen(c, who, bot):
     """How many of the bot's runs saved for later that `who` may read wait only for Tico's own choice to apply (an
-    update cut behind live work in its lane, auto_reconcile): nobody's to review, so no line counts them."""
-    actor = privacy.actor(who)
-    rows = list(c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
-                          "WHERE j.bot=? AND j.state='uncertain' AND r.actor=?", (bot, H.KEEPER)))
+    update cut behind live work in its lane, auto_reconcile): nobody's to review, so no line counts them. Read for
+    every bot at once by prime_readable_held, so a status page pays no statement per bot for it."""
+    from . import read_cache
+    values, key = read_cache.cache(c), ("tico_chosen", privacy.actor(who), bot)
+    if values is not None and key in values:
+        return values[key]
+    return _tico_chosen_for(c, who, [bot])[bot]
+
+
+def _tico_chosen_for(c, who, bots):
+    actor, out = privacy.actor(who), dict.fromkeys(bots, 0)
+    rows = []
+    for part in H.chunks(list(bots)):
+        rows.extend(c.execute("SELECT m.*,j.attempt_id,j.bot AS held_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
+                              "JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
+                              f"WHERE j.bot IN ({','.join('?' * len(part))}) AND j.state='uncertain' AND r.actor=?",
+                              (*part, H.KEEPER)))
     shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)} if rows else set()
-    return sum(1 for r in rows if r["id"] in shown
-               and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"])))
+    for r in rows:
+        if r["id"] in shown and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"])):
+            out[r["held_bot"]] += 1
+    return out
 
 
 def held_runs(c, who, auth, bot, limit=3):
