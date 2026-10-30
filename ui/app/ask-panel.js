@@ -44,14 +44,20 @@ function askPage() {
 }
 // The Assistant page is this chat already, and setup has no room for it.
 const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.contains('in-setup');
+// Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
+// attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
+// (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
+// (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet).
+const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
+const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 function askSync() {
   const fab = $('#ask-fab'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!fab || !panel) return;
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
-  fab.hidden = away;
-  panel.hidden = !open;
+  askSet(fab, 'hidden', away);
+  if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
-  fab.title = name + ' (⌘J)';
+  askSet(fab, 'title', name + ' (⌘J)');
   askPill(open);
   // While the panel is open a close mark holds the phone tab's dot place (ask.css).
   for (const el of [fab, tab].filter(Boolean)) {
@@ -61,13 +67,13 @@ function askSync() {
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
   askPeek();
-  panel.setAttribute('aria-label', name);
-  panel.querySelector('#ask-title').textContent = name;
+  if (panel.getAttribute('aria-label') !== name) panel.setAttribute('aria-label', name);
+  askSet(panel.querySelector('#ask-title'), 'textContent', name);
   if (!open) return;
   const page = askPage(), sees = panel.querySelector('[data-ask-sees]');
-  sees.hidden = !page.title;
-  sees.querySelector('[data-ask-sees-name]').textContent = page.title;
-  sees.title = 'Sees ' + page.title;
+  askSet(sees, 'hidden', !page.title);
+  askSet(sees.querySelector('[data-ask-sees-name]'), 'textContent', page.title);
+  askSet(sees, 'title', 'Sees ' + page.title);
   askPeople();
 }
 // The pill scales away as the panel opens (its dot is flying into the panel) and pops back as it closes. Web
@@ -90,18 +96,17 @@ function askPill(open) {
 }
 // The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the pill's (or the phone tab's) while the
 // panel is closed, the panel's own beside its name while it is open (Tico's turns carry none); the rest hold still.
-// With reduced motion the dot is still and the closed pill says the state in a word; the open panel says it in the
-// thread already ("Thinking…", the reply itself).
+// With reduced motion the dot is still and the closed pill says the state in a word (shown while it has one, ask.css);
+// the open panel says it in the thread already ("Thinking…", the reply itself).
 function askDot() {
-  const state = ASK?.dotState || 'idle', open = !$('#ask-panel')?.hidden;
+  const state = ASK?.dotState || 'idle', open = askShown();
   document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
   ldotSet($('#ask-panel [data-ask-dot]'), open ? state : 'still');
-  const word = $('#ask-fab [data-ask-word]');
-  if (word) { word.textContent = open ? '' : ldotWord(state); word.hidden = !word.textContent; }
+  askSet($('#ask-fab [data-ask-word]'), 'textContent', open ? '' : ldotWord(state));
 }
 // Where the dot is now: the open panel's, else the pill's (whichever pill shows).
 const askPillDot = () => [...document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
-const askLiveDot = () => $('#ask-panel')?.hidden === false ? $('#ask-panel [data-ask-dot]') : askPillDot();
+const askLiveDot = () => askShown() ? $('#ask-panel [data-ask-dot]') : askPillDot();
 // Where `el` rests once the panel has finished sliding in: its box less the panel's translate right now (read in the
 // same style pass as the box, so a slide just begun, or one reversed mid-close, cancels out).
 function askSettled(el) {
@@ -116,6 +121,7 @@ function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
   document.querySelectorAll('[data-ask-dot]').forEach(d => d._ldotFly?.cancel());   // a flight the other way lands at once
   const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askPillDot()?.getBoundingClientRect();
+  const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
   ASK.open = open;
   askSync();
   const to = askLiveDot();
@@ -124,7 +130,7 @@ function askToggle(open = !ASK?.open, focus = true) {
   else if (open) void ASK.refresh?.();       // cards answered or confirmed elsewhere meanwhile
   // A phone keeps its keyboard down until the person taps the box.
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
-  else if (!open && focus && $('#ask-panel')?.contains(document.activeElement)) (askPhone() ? $('#mobile-ask') : $('#ask-fab'))?.focus();
+  else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-fab'))?.focus();
 }
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
 function askDraft(text) {
@@ -154,7 +160,7 @@ function askPeople() {
   const panel = $('#ask-panel');
   if (!panel || !ASK) return;
   const sup = askSupport(), people = panel.querySelector('[data-ask-people]'), loop = panel.querySelector('[data-ask-loop]');
-  loop.hidden = !sup.available || !ASK.live || sup.on;          // in: the chip's × is the way out
+  askSet(loop, 'hidden', !sup.available || !ASK.live || sup.on);   // in: the chip's × is the way out
   if (!sup.available && ASK.supId === undefined) return;     // support's requests not read yet
   const id = sup.on ? sup.ticket.id : '', was = ASK.supId;
   const box = ASK.composer && pq(ASK.composer, '.p-text');
@@ -163,7 +169,7 @@ function askPeople() {
     box.setAttribute('aria-label', box.placeholder);
   }
   if (id === (people.dataset.ticket || '') && was !== undefined) return;
-  const shows = !panel.hidden && !!ASK.drawn && was !== undefined, chip = people.querySelector('.ask-sup-chip');
+  const shows = askShown() && !!ASK.drawn && was !== undefined, chip = people.querySelector('.ask-sup-chip');
   if (!id && chip && shows) askChipOut(chip);
   people.dataset.ticket = id;
   people.innerHTML = id ? ASK_CHIP : '';
@@ -343,11 +349,11 @@ function askPeek() {
   const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
     .concat((ASK?.pending || []).map(a => ({id: 'confirm:' + a.id, confirm: true})));
   const store = askPeekStore(), cur = el.dataset.item;
-  if (open || away) { el.hidden = true; delete el.dataset.item; return; }
+  if (open || away) { askSet(el, 'hidden', true); delete el.dataset.item; return; }
   if (cur && !el.hidden && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) return;
   const {text, ids} = askPeekLine(askPeekFresh(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown}));
   if (!text) {
-    el.hidden = true; delete el.dataset.item;
+    askSet(el, 'hidden', true); delete el.dataset.item;
     if (now - ASK_LOADED < ASK_PEEK_WAIT_MS) ASK_PEEK_TIMER = setTimeout(askPeek, ASK_PEEK_WAIT_MS - (now - ASK_LOADED) + 50);
     return;
   }
@@ -380,7 +386,7 @@ $('#ask-peek')?.addEventListener('click', ev => {
 async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
-  const fail = text => { if (!current()) return; error.textContent = text || ''; error.hidden = !text; };
+  const fail = text => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
   let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
   chat.stop = stopStream;
@@ -422,7 +428,7 @@ async function askLoad(chat) {
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
     // A reply from support seen here is read, as in Support itself.
-    const seen = ticket?.unread && chat.open && !$('#ask-panel').hidden && document.hasFocus() ? ticket.id + ':' + (ticket.messages || []).length : '';
+    const seen = ticket?.unread && chat.open && askShown() && document.hasFocus() ? ticket.id + ':' + (ticket.messages || []).length : '';
     if (seen && seen !== readFor) { readFor = seen; void window.supportRead?.(ticket.id); }
     if (html !== rendered) {
       stickScroll(thread).update(() => {

@@ -25,16 +25,15 @@
 @media (min-width:761px){:where(#task-peek[open]){animation:m-from-right var(--dur) var(--ease)}}
 
 /* ---- Ask (ui/app/ask-panel.js): the panel rises 8px as it fades in and sinks back as it fades out; on a phone the
-   sheet comes up from the bottom. The panel keeps its box while it leaves (display waits for the fade), but takes no
-   press: what is under it is pressable at once. */
+   sheet comes up from the bottom. It always has its box (ask.css): opening draws it at once, and closing stops drawing
+   it (visibility, content-visibility) only once the fade is done; it takes no press from the start of the close. */
 @media (prefers-reduced-motion:no-preference){
-  .ask-panel{transition:opacity var(--dur-fast) var(--ease),translate var(--dur-fast) var(--ease),display var(--dur-fast) allow-discrete}
-  .ask-panel[hidden]{opacity:0;translate:0 8px;pointer-events:none}
-  @starting-style{.ask-panel:not([hidden]){opacity:0;translate:0 8px}}
+  .ask-panel{transition-property:opacity,translate,visibility,content-visibility;transition-duration:var(--dur-fast),var(--dur-fast),0s,0s;
+    transition-timing-function:var(--ease);transition-behavior:normal,normal,normal,allow-discrete}
+  .ask-panel:not(.ask-shown){opacity:0;translate:0 8px;transition-delay:0s,0s,var(--dur-fast),var(--dur-fast)}
   @media (max-width:760px){
-    .ask-panel{transition-duration:var(--dur)}
-    .ask-panel[hidden]{translate:0 48px}
-    @starting-style{.ask-panel:not([hidden]){translate:0 48px}}
+    .ask-panel{transition-duration:var(--dur),var(--dur),0s,0s}
+    .ask-panel:not(.ask-shown){translate:0 48px;transition-delay:0s,0s,var(--dur),var(--dur)}
   }
 }
 /* The Assistant replying moves Ask's dot (liquid-dot.css states, set by ui/app/ask-panel.js askDot). */

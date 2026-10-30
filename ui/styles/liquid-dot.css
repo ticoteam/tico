@@ -49,6 +49,9 @@
 @keyframes ld-shadow-talk{0%,100%{transform:scaleX(1)}28%{transform:scaleX(1.1)}52%{transform:scaleX(.9);opacity:.8}}
 /* Reduced motion: the dot holds still; whoever shows it says the state in a word (ldotWord). */
 @media (prefers-reduced-motion:reduce){.ldot,.ldot .body,.ldot .shadow{animation:none!important}}
-/* Moving (ldotFly): a copy flies on top of everything, by transform alone, while the dot it lands on waits unseen. */
-.ldot.ldot-fly{position:fixed;z-index:70;margin:0;will-change:transform}
+/* Moving (ldotFly): a copy flies on top of everything, by transform alone, while the dot it lands on waits unseen. The
+   copies stay in one fixed layer, made once, and show only while they fly: a flight adds nothing to the page. */
+.ldot-layer{position:fixed;inset:0;z-index:70;pointer-events:none;contain:size layout style}
+.ldot.ldot-ghost{position:absolute;margin:0;display:none}
+.ldot.ldot-ghost.ldot-fly{display:inline-block;will-change:transform}
 .ldot.ldot-away{opacity:0}

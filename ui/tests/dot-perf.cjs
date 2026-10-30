@@ -6,6 +6,8 @@
 // - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
 //   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
+// - Opening and closing Ask, by the pill, ⌘J and Escape, flights included: no `hidden` attribute changes anywhere and no
+//   child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once and reused.
 // - A hidden tab: every dot paused and no idle timer left, and none set while hidden.
 // DOT_PERF_OUT=<file> writes the numbers (the PR body quotes them).
 const {chromium} = require('playwright');
@@ -174,6 +176,26 @@ const round = v => Math.round(v * 10) / 10;
       assert.ok(r.max <= budget.max, `${name}: frame max ${r.max} ms (budget ${budget.max})`);
       assert.ok(r.longTask <= budget.long, `${name}: a ${r.longTask} ms long task (budget ${budget.long})`);
     }
+
+    // ---- Opening and closing (the pill, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
+    // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.js askSync).
+    await page.evaluate(() => {
+      const seen = window.__askMut = [], name = n => n.id || String(n.className || n.nodeName);
+      new MutationObserver(list => list.forEach(r => {
+        if (r.type === 'attributes') seen.push('hidden on ' + name(r.target));
+        else if (r.target === document.body) seen.push('<body> child ' + [...r.addedNodes].map(n => '+' + name(n)).concat([...r.removedNodes].map(n => '-' + name(n))).join(' '));
+      })).observe(document, {subtree: true, childList: true, attributes: true, attributeFilter: ['hidden']});
+    });
+    const shut = async () => { await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); };
+    for (let i = 0; i < 2; i++) {
+      await page.locator('#ask-fab').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+      await page.keyboard.press('Escape'); await shut();
+      await page.keyboard.press('Control+j'); await page.locator('#ask-panel .p-text:focus').waitFor(); await settle();
+      await page.keyboard.press('Control+j'); await shut();
+    }
+    out.toggleMutations = await page.evaluate(() => window.__askMut);
+    assert.deepEqual(out.toggleMutations, [], 'Ask opening and closing changed `hidden` or <body>');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.ldot-layer .ldot').length), 1, 'one flying copy, reused');
 
     // ---- A hidden tab: everything pauses and no idle timer runs, or is set, until it shows again.
     const hidden = await page.evaluate(async () => {
