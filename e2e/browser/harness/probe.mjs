@@ -115,13 +115,16 @@ async function openCdp() {
 
 // The practice tab's value check, read in the page: whether a field holds text, never the text itself.
 async function fieldFilled(cdp, name) {
+  // The bot's Chrome may hold several tabs on the practice host (earlier rows leave theirs open); the fill may have
+  // typed into any of them, so the field counts as filled when one page holds it.
   const {result: {targetInfos}} = await cdp.send('Target.getTargets');
-  const target = targetInfos.find(info => info.type === 'page' && info.url.includes(host));
-  if (!target) return false;
-  const {result: {sessionId}} = await cdp.send('Target.attachToTarget', {targetId: target.targetId, flatten: true});
-  const {result} = await cdp.send('Runtime.evaluate', {
-    expression: `!!(document.querySelector('input[name=${name}]') || {}).value`, returnByValue: true}, sessionId);
-  return result?.result?.value === true;
+  for (const target of targetInfos.filter(info => info.type === 'page' && info.url.includes(host))) {
+    const {result: {sessionId}} = await cdp.send('Target.attachToTarget', {targetId: target.targetId, flatten: true});
+    const {result} = await cdp.send('Runtime.evaluate', {
+      expression: `!!(document.querySelector('input[name=${name}]') || {}).value`, returnByValue: true}, sessionId);
+    if (result?.result?.value === true) return true;
+  }
+  return false;
 }
 
 async function main() {
