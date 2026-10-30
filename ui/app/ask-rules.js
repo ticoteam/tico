@@ -10,7 +10,7 @@
 function askSupportState({enabled = true, open = [], hidden = []} = {}) {
   if (enabled === false) return {available: false, on: false, ticket: null, held: null};
   const shown = open.filter(t => t && !hidden.includes(t.id));
-  return {available: true, on: !!shown.length, ticket: shown[0] || null, held: shown.length ? null : open.find(t => t && hidden.includes(t.id)) || null};
+  return {available: true, shown: shown.map(t => t.id), on: !!shown.length, ticket: shown[0] || null, held: shown.length ? null : open.find(t => t && hidden.includes(t.id)) || null};
 }
 // What flipping the switch does: take the request out (drop), bring a request taken out back (show), or, with no
 // open request, start one in Support, where the person sees what goes with it before it is sent (file).
@@ -22,12 +22,12 @@ function askSupportFlip(state) {
 }
 // The switch is the consent: its label says support will see the chat, so turning it on shares it. The chat's recent
 // turns, scrubbed, go to the request it brings back (show) or to a new request sent at once (file); turning it off
-// only takes the request out of the chat (drop), and nothing more from this chat goes to it. `io` does the work:
+// takes every shown request out of the chat (drop), and nothing more from this chat goes to support. `io` does the work:
 // {share() -> the text to send, file(text) -> the new request, reply(id, text), hide(id), show(id)}. The request is
 // shown only once what it shares has gone, so a failure leaves the switch off.
 async function askSupportSwitch(state, io) {
   const act = askSupportFlip(state);
-  if (act.do === 'drop') io.hide(act.id);
+  if (act.do === 'drop') for (const id of state.shown || [act.id]) io.hide(id);
   else if (act.do === 'show') { await io.reply(act.id, io.share()); io.show(act.id); }
   else if (act.do === 'file') act.id = (await io.file(io.share()))?.id || '';
   return act;
