@@ -54,7 +54,7 @@
 .au-tbl-t th.au-tt{width:15%}
 .au-tbl-t th.au-to{width:64px}
 .au-tbl-t th.au-cl{width:78px}
-.au-tbl-t th.au-cx{width:64px}
+.au-tbl-t th.au-cx{width:96px}
 .au-tbl-t th.au-cs{width:104px;padding-right:0}
 .au-tbl-t th.au-n{width:58px}
 .au-tbl-t th.au-cc{width:74px}
@@ -85,6 +85,10 @@
 .au-to>span{display:inline-flex;align-items:center;gap:6px;max-width:100%;color:var(--g7)}
 .au-to>span>span{overflow:hidden;text-overflow:ellipsis}
 .au-lr{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+/* a due date's Next: the due day over when its task opens */
+.au-nx{display:flex;flex-direction:column;line-height:1.25;font-size:var(--t-xs)}
+.au-nx>*{overflow:hidden;text-overflow:ellipsis}
+.au-nx-d{color:var(--ink);font-size:var(--t-sm)}
 .au-spark{display:block}
 .au-bad{color:var(--fail)}
 .au-grp td{padding:6px 10px;background:var(--surface);font-size:var(--t-sm);font-weight:600;cursor:pointer}
@@ -206,6 +210,9 @@ button.au-chip:hover{background:var(--surface2)}
 .au-menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
 .au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+/* + New's trigger choices, under the button */
+.au-newbox{position:relative}
+.au-newm{top:calc(100% + 4px);right:0;min-width:220px}
 
 /* the side: the open editor */
 .au-side{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line)}
@@ -229,6 +236,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-rbh select{width:auto}
 .au-ir{display:flex;align-items:center;gap:6px;min-width:0}
 .au-ir>:is(input,select){flex:1;min-width:0}
+.au-days>input{flex:0 0 80px}
 .au-cond-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.7fr) minmax(0,1fr) 62px auto;gap:6px;align-items:center}
 /* the minimum confidence reads as a percent once filled in */
 .au-pct{position:relative;display:block;min-width:0}

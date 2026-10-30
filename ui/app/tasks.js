@@ -263,12 +263,12 @@ function parseServerTime(value) {
 }
 // A task's due date is one of two things. For a bot's task it is when the bot looks again (the scheduler wakes it
 // then: a parked task), shown as a muted "Wakes Oct 2". For a person's open task it is a deadline: amber within two
-// days, red once passed.
+// days, red once passed. A task a due-date routine opened (`occurrence` set) is that day's deadline whoever owns it.
 function taskDueInfo(t) {
   if (!t?.due || taskFinished(t)) return null;
   const at = parseServerTime(t.due); if (!at) return null;
   const day = new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-  if (actorSlug(t.owner)) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
+  if (actorSlug(t.owner) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
   const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(at) - start(Date.now())) / 864e5);
