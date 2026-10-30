@@ -219,8 +219,11 @@ fn main() {
         });
     }
     let updates = update::Updates::default();
+    let window_focus = updates.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Focus decides when a downloaded update may install unattended (see update.rs).
+        .on_window_event(move |_window, event| window_focus.window_event(event))
         .manage(recorder.clone())
         .manage(updates.clone())
         .invoke_handler(tauri::generate_handler![
@@ -286,7 +289,10 @@ fn main() {
         }
         // Stop flushes the last audio buffer before the process ends.
         RunEvent::Exit => {
-            lock(&handle.state::<Shared>()).shutdown();
+            let recorder = handle.state::<Shared>();
+            lock(&recorder).shutdown();
+            // A downloaded update installs now, so the next launch is the new build. No restart.
+            update::on_quit(handle, &recorder, &handle.state::<update::Updates>());
         }
         _ => {}
     });

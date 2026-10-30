@@ -1075,6 +1075,13 @@ impl Recorder {
             Some("After this recording")
         } else if self.records.iter().any(|record| record.live_state == "live") {
             Some("After the live meeting ends")
+        } else if self
+            .records
+            .iter()
+            .any(|record| record.deliveries.iter().any(|entry| entry.status == "sending"))
+        {
+            // A request to Tico is in flight; the outbox keeps unsent items and resumes them after a restart.
+            Some("While a meeting is being sent")
         } else {
             None
         }

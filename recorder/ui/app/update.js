@@ -20,18 +20,20 @@
       document.body.append(banner);
     }
     banner.replaceChildren();
-    if (update?.state !== 'ready') {
+    if (update?.state !== 'ready' && update?.state !== 'installed') {
       banner.hidden = true;
       return;
     }
     banner.hidden = false;
     const text = document.createElement('span');
+    const installed = update.state === 'installed';
     if (update.blocked) {
-      text.textContent = `Updating ${update.blocked.charAt(0).toLowerCase()}${update.blocked.slice(1)}`;
+      // The build waits for this to end; nothing is restarted.
+      text.textContent = `${installed ? 'Update installed' : 'Update ready'}. ${update.blocked}.`;
       banner.append(text);
       return;
     }
-    text.textContent = 'Update ready · ';
+    text.textContent = installed ? 'Update installed · ' : 'Update ready · ';
     const restart = document.createElement('button');
     restart.type = 'button';
     restart.className = 'update-restart';
