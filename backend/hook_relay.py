@@ -9,7 +9,8 @@ The trigger's own address keeps working in parallel.
 Notices from Tico Team ride the same queue (backend/tico_notices.py): HQ keeps a system relay for the built-in trigger
 `_tico`, so a Gateway key alone is enough to receive them. The loop then pulls every minute instead of every 15
 seconds. That relay is recorded only from HQ's list of relays (`system: true`, asked at most hourly, and at once when a
-delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked.
+delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked. Physical
+mail (backend/postal_mail.py) arrives on the same system relay with the trigger `_mail`, under the same rule.
 
 The pull follows the mail loop (backend/inbound.py): `wait=0`, a cursor kept here, an ack after the work is committed,
 off the scheduler thread. Every outcome of `receive` (accepted, duplicate, refused, rate_limited, not_found) is
@@ -44,6 +45,7 @@ from clients.gateway import user_agent
 from . import gateway_connection as GC
 from . import hubdb as H
 from . import outbound_tls
+from . import postal_mail
 from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
@@ -370,6 +372,18 @@ class HookRelay:
         headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
         headers = {str(k): str(v) for k, v in headers.items()}
         trigger_id, relay_id = str(item.get("trigger_id") or ""), str(item.get("relay_id") or "")
+        kick = False
+        if trigger_id == postal_mail.TRIGGER:
+            # A letter (backend/postal_mail.py) rides the system relay too and is only kept here: the download and the
+            # model calls run in the mail drain, never inside this transaction.
+            with self.store.transaction() as c:
+                if tico_notices.accepts(c, relay_id):
+                    kick = postal_mail.arrived(c, body, str(item.get("delivery_id") or ""))
+                save(c, cursor=seq)
+            mail = getattr(self.app.state, "postal_mail", None)
+            if kick and mail:
+                mail.kick()
+            return True
         with self.store.transaction() as c:
             # Only a trigger that has this live relay here is fed: HQ's word alone never reaches another trigger. The
             # one built-in exception is `_tico`, fed only from the system relay HQ's list named (`learn_notice_relay`).
@@ -399,9 +413,9 @@ class HookRelay:
         return H.human_actor(pid) if pid else None
 
     def unknown_system_relay(self, items):
-        """Whether a delivery in this page names `_tico` through a relay not recorded here."""
+        """Whether a delivery in this page names `_tico` or `_mail` through a relay not recorded here."""
         wanted = {str(i.get("relay_id") or "") for i in items
-                  if isinstance(i, dict) and i.get("trigger_id") == tico_notices.ID}
+                  if isinstance(i, dict) and i.get("trigger_id") in (tico_notices.ID, postal_mail.TRIGGER)}
         if not wanted:
             return False
         with self.store.read() as c:

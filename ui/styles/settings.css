@@ -863,3 +863,39 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
 .bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
 .settings-confirm{max-width:min(440px,calc(100vw - 32px))}
+/* Settings > Mail (ui/app/settings-mail.js) */
+.pm-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.pm-table td,.pm-table th{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.pm-table th{color:var(--muted);font-weight:500}
+.pm-table tbody tr:last-child td{border-bottom:0}
+.pm-address,.pm-from{min-width:0;overflow-wrap:anywhere}
+.pm-from>*{display:block}.pm-from>*+*{margin-top:2px}
+#settings-mail-addresses>header{align-items:center}#settings-mail-addresses>header .row{margin-left:auto}
+.pm-status{white-space:nowrap}.pm-status .ghost{margin-left:6px;padding:2px 10px}
+.pm-agent-label{display:none}
+.pm-kinds{display:grid;gap:8px}
+.pm-kind{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px!important;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.pm-kind:has(input:checked){border-color:var(--accent)}
+.pm-kind-name{font-weight:600}
+.pm-kind-price{color:var(--ink)}
+.pm-kind-line{grid-column:2/-1;font-size:var(--t-sm);color:var(--muted)}
+.pm-scan{margin:-8px 0 0;padding:0 2px;font-size:var(--t-sm)}
+.pm-dialog .task-rule-form>label:not(.pm-kind){display:grid;gap:4px}
+.pm-dialog input[name=company_name],.pm-dialog select{width:100%}
+.pm-intake{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;flex-wrap:wrap}
+.pm-intake select{width:auto!important;min-width:0;max-width:min(100%,420px)}
+@media (max-width:640px){
+  .pm-table thead{display:none}
+  .pm-table tbody tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .pm-table tbody tr:last-child{border-bottom:0}
+  .pm-table td{padding:0;border:0}
+  .pm-table .pm-place{font-weight:600}
+  .pm-table .pm-status{grid-column:3;grid-row:1;text-align:right}
+  .pm-table .pm-address,.pm-table .pm-agent{grid-column:1/-1;color:var(--muted)}
+  .pm-table .pm-agent:empty,.pm-table td:has(>.pm-none:only-child){display:none}
+  .pm-agent-label{display:inline}
+  .pm-letters .pm-date{grid-column:1;grid-row:1;color:var(--muted)}
+  .pm-letters .pm-kind-cell{grid-column:2;grid-row:1}
+  .pm-letters .pm-from{grid-column:1/-1}
+  .pm-letters .pm-where{grid-column:1/-1}
+}

@@ -736,6 +736,13 @@ def parser():
             item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
 
 
+    mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
+    item = mail.add_parser('list'); item.set_defaults(fn='mail list')
+    item.add_argument('--status', choices=('new','filed','archived','failed'))
+    item.add_argument('--kind', choices=('legal','government_tax','bill','check','financial','junk','other'))
+    item.add_argument('--after'); item.add_argument('--limit', type=int)
+    item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
+
     meeting = sub.add_parser("meeting",
                              help="search meetings, read transcripts, import a transcript from another tool").add_subparsers(dest="sub")
     granola = meeting.add_parser("granola", help="your Granola account; connect in Meetings in your browser").add_subparsers(dest="granola_action")

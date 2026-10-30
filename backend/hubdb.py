@@ -94,6 +94,7 @@ from backend.hook_relay_schema import SCHEMA as HOOK_RELAY_SCHEMA
 from backend.webhooks_schema import SCHEMA as WEBHOOKS_SCHEMA
 from backend.sleep_idle_schema import SCHEMA as SLEEP_IDLE_SCHEMA
 from backend.tico_notices_schema import SCHEMA as TICO_NOTICES_SCHEMA
+from backend.postal_mail_schema import SCHEMA as POSTAL_MAIL_SCHEMA
 from backend.webhooks_v2_schema import SCHEMA as WEBHOOKS_V2_SCHEMA
 from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
 from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
@@ -888,7 +889,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA,
               TASK_CAPS_SCHEMA, TASK_CAP_LOG_SCHEMA, TASK_LINK_ACTIVITY_SCHEMA,
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
-              LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA]
+              LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
+              POSTAL_MAIL_SCHEMA]
 
 
 class Refused(Exception):
