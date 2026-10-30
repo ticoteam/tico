@@ -159,8 +159,9 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-order-menu button:disabled{color:var(--muted);background:none;cursor:default}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;padding:5px 6px 5px var(--tree-lead);color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+.tree .dept-label{flex:1;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */
+/* a team's label starts where the TEAM header's does (.section-toggle's 10px), not at the rows' --tree-lead */
 .tree a.dept-label{text-decoration:none}
 .tree a.dept-label:hover,.tree a.dept-label.cur{color:var(--ink);text-decoration:none}
 .noderow{display:flex;align-items:center}

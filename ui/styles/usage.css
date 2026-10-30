@@ -116,7 +116,7 @@ span.use-limit{display:block}
   .use-lim-cell{flex:1 1 0;min-width:0}
   .use-lim-cell:empty{display:none}
   .use-lim-h{display:block;font-size:var(--t-xs);color:var(--muted)}
-  .use-money{height:36px;padding:0 6px;gap:1px}
+  .use-money{height:40px;padding:0 6px;gap:1px}
   .use-money input{font-size:16px}
   .use-lim-add{flex:1 1 100%}
   .use-check{margin-left:0}

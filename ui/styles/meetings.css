@@ -361,7 +361,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-settings-modal .row{flex-wrap:wrap;margin-top:20px;gap:8px}
 .nav-badge.meet-pending-badge{background:var(--surface2);color:var(--muted)}
 @media(max-width:760px){
-  .meet-review-tabs button{padding:6px 8px;font-size:var(--t-base);min-height:36px}
+  .meet-review-tabs button{padding:6px 8px;font-size:var(--t-base);min-height:40px}
   .meet-review-bar{gap:10px}
   .mg-line .mg-count{display:none}
   #main:has(.meet-review-bar){padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
@@ -419,7 +419,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-join{margin:12px 0}.live-finalized{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:var(--t-base)}
 .live-status{min-height:1.5em;margin-top:8px;color:var(--muted);font-size:var(--t-sm)}
 @media(max-width:760px){
-  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:7px 9px;font-size:var(--t-sm)}
+  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:9px;font-size:var(--t-sm)}
   .live-layout{grid-template-columns:1fr}.live-list{max-height:220px}
   .live-connect{align-items:stretch;flex-direction:column}.live-connect input{max-width:none}
   .live-card{padding:12px}.live-card-head{flex-direction:column}.live-controls{justify-content:flex-start}

@@ -113,7 +113,7 @@ a.dash-big:hover strong{text-decoration:underline}
   .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
   .dash-error{margin:0 16px 8px}
   .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .dash-more{width:36px;height:36px}
+  .dash-more{width:40px;height:40px}
   .dash-grip{width:32px;height:32px}
   .overview-tabs{padding:10px 12px}
 }

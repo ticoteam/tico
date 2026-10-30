@@ -94,7 +94,7 @@
 .upd-node{display:flex;flex-direction:column;gap:10px;--tree-up:10px}
 .upd-kids{margin-left:auto;padding:0 6px 0 10px;gap:0}
 .upd-kids .nav-icon{transition:transform var(--dur-fast) var(--ease)}
-.upd-kids[aria-expanded=true] .nav-icon{transform:rotate(180deg)}
+.upd-kids[aria-expanded=true] .nav-icon{transform:var(--chev-open)}
 .upd-kids .upd-dot{position:absolute;top:5px;right:3px;margin:0}
 .upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:calc(var(--upd-cx) + var(--upd-in))}
 .upd-sub>.upd-node{position:relative;--tree-x:calc(-1 * var(--upd-in))}

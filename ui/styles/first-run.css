@@ -277,7 +277,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
   .ss{grid-template-columns:minmax(0,1fr);gap:16px}
   .ss-side{position:static}
   .ss-bet-actions{margin-left:0}
-  .ss-bet-actions .strat-mini{min-height:36px;padding:4px 12px}
+  .ss-bet-actions .strat-mini{min-height:40px;padding:4px 12px}
   .ss-found-row{grid-template-columns:minmax(0,1fr) auto}
   .ss-found-row .strat-bet-k{grid-column:1/-1}
 }

@@ -110,8 +110,8 @@
 .rdo-tab[aria-expanded="false"] .rdo-cx{transform:none}
 .rdo-g:not(.folded)>.rdo-tab .rdo-n{display:none}
 @media (max-width:760px){
-  .rdo-bar{height:36px;margin-bottom:4px}
-  .rdo-bar button{min-width:36px;height:36px}
+  .rdo-bar{height:40px;margin-bottom:4px}
+  .rdo-bar button{min-width:40px;height:40px}
   .rdo-pct{display:none}
 }
 @media (prefers-reduced-motion:reduce){.rdo-cv,.rdo-card,.rdo-cx{transition:none}.rdo-card:hover{transform:none}}

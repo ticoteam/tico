@@ -209,7 +209,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.deepEqual(await boss.locator('.upd-actions .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
         ['Reply', 'Mark unread', 'Archive', 'Show 8 reports'], `${label}: comment, unread, archive, then the count`);
       assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
-      assert.equal(await toggle.locator('.nav-icon').textContent(), 'expand_more');
+      assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
       const [row, main] = [await boss.locator('.upd-actions').boundingBox(), await toggle.boundingBox()];
       assert.ok(Math.abs(row.x + row.width - (main.x + main.width)) < 1 && main.x > row.x + row.width / 2, `${label}: the count sits at the right end of the row`);
       const words = async () => p.locator('#upd-feed').evaluate(f => [...f.querySelectorAll('*')].filter(e => !e.closest('.nav-icon') && e.childNodes.length)

@@ -1,7 +1,8 @@
 /* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
    (ui/market-page.js), the page's contents rail and reading column, the bets, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
-.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+/* one height on every tab, with or without a button in it: a control (--ctl), the 8px under it and the rule */
+.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:calc(var(--ctl) + 9px);margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
 .strat-head h1{margin:0;font-size:var(--t-lg);line-height:var(--lh-tight)}
 .strat-head .spacer{flex:1}
 /* On Market the page has no padding of its own: the heading brings the same gutters, so switching tabs never moves it. */

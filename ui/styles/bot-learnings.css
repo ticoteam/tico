@@ -44,5 +44,5 @@
   .learn-switch button{padding:6px 10px;min-height:32px}
   .learn-head .tmodal-x{min-width:44px;min-height:44px}
   .learn-body{padding:4px 16px calc(16px + env(safe-area-inset-bottom))}
-  .bot-learn{width:36px;height:36px}
+  .bot-learn{width:40px;height:40px}
 }

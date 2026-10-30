@@ -534,7 +534,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .transition-dialog{width:min(580px,92vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .transition-body{padding:16px 18px 18px}.transition-progress{margin:12px 0;padding:10px;border-radius:7px;background:var(--bg)}
 .transition-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-@media (max-width:760px){.tlabels form.inline input,.tlinks form.inline input{min-height:36px}.tree .ub{display:none}.settings-toolbar{align-items:flex-start}.machine-enroll{align-items:stretch}.machine-enroll>select,.machine-enroll>input,.machine-enroll>button{width:100%}.settings-role-guide dl{grid-template-columns:1fr}.bot-editor-grid{grid-template-columns:minmax(0,1fr)}.bot-editor-wide{grid-column:auto}}
+@media (max-width:760px){.tlabels form.inline input,.tlinks form.inline input{min-height:40px}.tree .ub{display:none}.settings-toolbar{align-items:flex-start}.machine-enroll{align-items:stretch}.machine-enroll>select,.machine-enroll>input,.machine-enroll>button{width:100%}.settings-role-guide dl{grid-template-columns:1fr}.bot-editor-grid{grid-template-columns:minmax(0,1fr)}.bot-editor-wide{grid-column:auto}}
 /* Settings header: Dark, Light or System for this browser (ui/theme.js) */
 .theme-seg{display:inline-flex;flex:none;background:var(--surface2);border-radius:999px;padding:3px}
 .theme-seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer}

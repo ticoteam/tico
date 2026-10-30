@@ -60,7 +60,7 @@
   .chat-goal{margin-bottom:6px}
   .cg-bar{padding:6px 8px 6px 10px;gap:8px}
   .cg-actions{padding-left:36px}
-  .cg-actions button{height:36px}
+  .cg-actions button{height:40px}
   #chat-composer .p-goal{grid-column:-3;grid-row:1;width:36px;height:36px;padding:0;justify-content:center}
   .slash-row{min-height:44px}
 }

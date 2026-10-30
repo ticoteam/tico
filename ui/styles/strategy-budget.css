@@ -72,5 +72,5 @@ button.bt-main{cursor:pointer}
   .bt-top .ghost{height:40px}
   .bt-panel{margin:auto 0 0;width:100vw;height:fit-content;max-height:88dvh;border-radius:16px 16px 0 0}
   .bt-panel .tmodal-body{max-height:none;overflow:auto}
-  .bt-win .bd-money input,.bt-cap input{font-size:16px;height:36px}
+  .bt-win .bd-money input,.bt-cap input{font-size:16px;height:40px}
 }
