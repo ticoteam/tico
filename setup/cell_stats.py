@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import concurrent.futures as cf
+import errno
 import getpass
 import gzip
 import http.client
@@ -35,6 +36,7 @@ import re
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -103,10 +105,11 @@ def _long_run(m: re.Match) -> str:
 
 _SCRUB = [
     # A whole header value: a cookie or authorization line keeps nothing after its name.
-    (re.compile(r"(?i)\b((?:set-)?cookie|authorization)([\"']?\s*[=:]\s*)[^\r\n]*"), r"\1\2[redacted]"),
+    # Keys and values may sit in JSON a log line carries as a string: quotes then come escaped, once (\") or more (\\\").
+    (re.compile(r"(?i)\b((?:set-)?cookie|authorization)((?:\\*[\"'])?\s*[=:]\s*)[^\r\n]*"), r"\1\2[redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "Bearer [redacted]"),
-    (re.compile(r"(?i)\b([\w-]*(?:key|token|secret|password|passwd|session))([\"']?\s*[=:]\s*)"
-                r"(?:\"[^\"]*\"|'[^']*'|[^\s,;&\"'})\]]+)"), r"\1\2[redacted]"),
+    (re.compile(r"(?i)\b([\w-]*(?:key|token|secret|password|passwd|session))((?:\\*[\"'])?\s*[=:]\s*)"
+                r"(?:\\*\"[^\"]*\"|\\*'[^']*'|[^\s,;&\"'})\]]+)"), r"\1\2[redacted]"),
     (re.compile(r"\b(?:tch|tcs|tgi)_[A-Za-z0-9_-]{8,}"), "[redacted]"),
     (re.compile(r"\btico_[A-Za-z0-9_-]{16,}"), "[redacted]"),
     (re.compile(r"\bsk[-_][A-Za-z0-9_-]{12,}"), "[redacted]"),
@@ -130,6 +133,97 @@ def scrub(text) -> str:
     for pattern, repl in _SCRUB:
         text = pattern.sub(repl, text)
     return text
+
+
+# --- reading what a company controls ----------------------------------------------------------------------------
+# This runs as root over folders a company's server writes (its data volume, its container's root through /proc). A
+# symlink planted there, as the file itself or as any folder on the way, could point at /etc/shadow, at this host's
+# stats key or at another company's data. So those reads start from a folder the host made (the company's folder under
+# the cell root, or /proc/<pid>/root as the kernel resolves it), walk down one name at a time without following any
+# symlink, and take only a regular file of a bounded size. A path string is never handed to open() below that root.
+
+FILE_CAP = 64 * 1024 * 1024     # the largest company-written file read (a flight file rotates at 10 MB)
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)   # NONBLOCK: a FIFO can't hang us
+
+
+class Unsafe(OSError):
+    """Not a regular file reached without a symlink, or too big."""
+
+
+def _parts(rel: str | Path) -> list[str]:
+    rel = str(rel)
+    parts = [x for x in rel.split("/") if x not in ("", ".")]
+    if rel.startswith("/") or not parts or ".." in parts:
+        raise Unsafe(f"not a plain relative path: {rel!r}")
+    return parts
+
+
+def open_dir(root: str | Path, rel: str | Path = "") -> int:
+    """A file descriptor for the folder root/rel, every name below root opened with O_NOFOLLOW; the caller closes it."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        for name in _parts(rel) if str(rel).strip("/.") else []:
+            nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def safe_open(root: str | Path, rel: str | Path, cap: int | None = FILE_CAP):
+    """The regular file root/rel opened for binary reading, with no symlink followed below root (Unsafe otherwise, or
+    when it is bigger than `cap`; FileNotFoundError when it is not there). The one way this module opens a file a
+    company could have planted."""
+    parts = _parts(rel)
+    fd = open_dir(root, "/".join(parts[:-1]))
+    try:
+        leaf = os.open(parts[-1], _FILE_FLAGS, dir_fd=fd)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Unsafe(f"{rel} is a symlink") from e
+        raise
+    finally:
+        os.close(fd)
+    try:
+        st = os.fstat(leaf)
+        if not stat.S_ISREG(st.st_mode):
+            raise Unsafe(f"{rel} is not a regular file")
+        if cap is not None and st.st_size > cap:
+            raise Unsafe(f"{rel} is bigger than {cap} bytes")
+        os.set_blocking(leaf, True)
+        return os.fdopen(leaf, "rb")
+    except BaseException:
+        os.close(leaf)
+        raise
+
+
+def safe_read(root: str | Path, rel: str | Path, limit: int, offset: int = 0, cap: int | None = FILE_CAP) -> bytes:
+    with safe_open(root, rel, cap) as f:
+        f.seek(offset)
+        return f.read(limit)
+
+
+def safe_stat(root: str | Path, rel: str | Path) -> os.stat_result:
+    """os.stat of a regular file reached as safe_open reaches it (any size)."""
+    with safe_open(root, rel, None) as f:
+        return os.fstat(f.fileno())
+
+
+def safe_listdir(root: str | Path, rel: str | Path) -> list[str]:
+    fd = open_dir(root, rel)
+    try:
+        return os.listdir(fd)
+    finally:
+        os.close(fd)
+
+
+def flight_opener(root: str | Path, rel: str | Path):
+    """For flight_file.records/summary: each file of the flight folder root/rel opened through safe_open."""
+    base = "/".join(_parts(rel))
+    return lambda name: safe_open(root, f"{base}/{name}")
 
 
 # --- the box: every call outside this process (the tests replace it) ---------------------------------------------
@@ -537,10 +631,29 @@ def _ro(db: Path, timeout: float = 1.0) -> sqlite3.Connection:
     return c
 
 
-def db_slow(db: Path, now: float) -> dict:
+DB = "data/hub.sqlite"      # under the company's folder
+
+
+def safe_db(root: Path) -> Path | None:
+    """The company's database path, when it and the -wal/-shm/-journal files beside it (which SQLite opens too, the -shm
+    read-write) are regular files with no symlink on the way; None otherwise, and its numbers are skipped."""
+    try:
+        safe_stat(root, DB)
+        for side in ("-wal", "-shm", "-journal"):
+            try:
+                safe_stat(root, DB + side)
+            except FileNotFoundError:
+                pass
+    except OSError:
+        return None
+    return root / DB
+
+
+def db_slow(root: Path, now: float) -> dict:
     """At most every 15 minutes: free pages and the top SQL shapes of the last two hours (flight_sql), read-only."""
     out = {"at": now, "freelist_pct": None, "sql_top": None}
-    if not db.exists():
+    db = safe_db(root)
+    if db is None:
         return out
     try:
         c = _ro(db)
@@ -563,43 +676,54 @@ def db_slow(db: Path, now: float) -> dict:
     return out
 
 
-def files_mb(folder: Path, limit: int = 200_000) -> float | None:
-    if not folder.is_dir():
+def files_mb(root: Path, rel: str, limit: int = 200_000) -> float | None:
+    """The bytes of regular files under root/rel, in MB; every folder is opened with open_dir, so no symlink is
+    followed, and entries are stat'ed without following."""
+    try:
+        os.close(open_dir(root, rel))
+    except OSError:
         return None
-    total, seen, stack = 0, 0, [folder]
+    total, seen, stack = 0, 0, [rel]
     while stack and seen < limit:
+        here = stack.pop()
         try:
-            with os.scandir(stack.pop()) as it:
+            fd = open_dir(root, here)
+        except OSError:
+            continue
+        try:
+            with os.scandir(fd) as it:
                 for e in it:
                     seen += 1
                     try:
                         if e.is_dir(follow_symlinks=False):
-                            stack.append(Path(e.path))
+                            stack.append(f"{here}/{e.name}")
                         elif e.is_file(follow_symlinks=False):
                             total += e.stat(follow_symlinks=False).st_size
                     except OSError:
                         continue
         except OSError:
-            continue
+            pass
+        finally:
+            os.close(fd)
     return round(total / 1e6, 1)
 
 
-def _size_mb(p: Path) -> float | None:
+def _size_mb(root: Path, rel: str) -> float | None:
     try:
-        return round(p.stat().st_size / 1e6, 1)
+        return round(safe_stat(root, rel).st_size / 1e6, 1)
     except OSError:
         return None
 
 
-def db_block(box: Box, data: Path, slug: str, cache: dict, now: float) -> dict:
-    db = data / "hub.sqlite"
+def db_block(box: Box, root: Path, slug: str, cache: dict, now: float) -> dict:
     slow = cache.setdefault("db", {}).get(slug)
     if _stale(slow, now):
-        slow = cache["db"][slug] = db_slow(db, now)
+        slow = cache["db"][slug] = db_slow(root, now)
     blobs = cache.setdefault("files", {}).get(slug)
     if _stale(blobs, now):
-        blobs = cache["files"][slug] = {"at": now, "mb": files_mb(data / "blobs")}
-    return {"size_mb": _size_mb(db), "wal_mb": _size_mb(data / "hub.sqlite-wal") or (0.0 if db.exists() else None),
+        blobs = cache["files"][slug] = {"at": now, "mb": files_mb(root, "data/blobs")}
+    size = _size_mb(root, DB)
+    return {"size_mb": size, "wal_mb": _size_mb(root, DB + "-wal") or (0.0 if size is not None else None),
             "freelist_pct": slow.get("freelist_pct"), "files_mb": blobs.get("mb")}, slow.get("sql_top")
 
 
@@ -609,7 +733,7 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     if not pid:
         return None
     try:
-        saved = json.loads(box.read(f"proc/{int(pid)}/root/{STATUS_FILE}", 65536))
+        saved = json.loads(safe_read(box.path(f"proc/{int(pid)}/root"), STATUS_FILE, 65536, cap=65536))
     except (OSError, ValueError):
         return None
     at = parse_iso(saved.get("last_replicated_at")) if isinstance(saved, dict) else None
@@ -618,10 +742,22 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     return {"age_s": max(0, int(now - at)), "detail": "litestream"}
 
 
-def flight_block(folder: Path, now: float, sql_top) -> dict | None:
-    if not folder.is_dir():
+FLIGHT = "data/flight"      # under the company's folder
+
+
+def flight_summary(root: Path, since_s: float, now: float, **kw) -> dict | None:
+    """flight_file.summary of the company's flight folder, every file opened through safe_open; None without one."""
+    try:
+        os.close(open_dir(root, FLIGHT))
+    except OSError:
         return None
-    s = flight_file().summary(folder, WINDOW_S, now=now, stall_limit=3, stack_frames=1)
+    return flight_file().summary(root / FLIGHT, since_s, now=now, opener=flight_opener(root, FLIGHT), **kw)
+
+
+def flight_block(root: Path, now: float, sql_top) -> dict | None:
+    s = flight_summary(root, WINDOW_S, now, stall_limit=3, stack_frames=1)
+    if s is None:
+        return None
     minutes = s["minutes"]
     last = minutes[-1] if minutes else {}
     req = s.get("requests") or {}
@@ -653,11 +789,10 @@ def log_lines(box: Box, log_path: str | None, since: float, name: str, running: 
     text = None
     if log_path:
         try:
-            p = box.path(log_path)
-            size = p.stat().st_size
-            with open(p, "rb") as f:
-                f.seek(max(0, size - 256 * 1024))
-                text = f.read().decode("utf-8", "replace")
+            p = Path(log_path)                      # <docker root>/containers/<id>/<id>-json.log
+            with safe_open(box.path(p.parent.parent), f"{p.parent.name}/{p.name}", None) as f:
+                f.seek(max(0, os.fstat(f.fileno()).st_size - 256 * 1024))
+                text = f.read(256 * 1024).decode("utf-8", "replace")
         except OSError:
             text = ""
     elif not running:
@@ -730,8 +865,9 @@ class View:
         return [r for r in self.ps if r["_labels"].get("com.docker.compose.project") == proj
                 or r["_labels"].get(cell.LABEL) == slug]
 
-    def data(self, slug: str) -> Path:
-        return self.cell.dir(slug) / "data"
+    def root(self, slug: str) -> Path:
+        """The company's folder: made by the host, so the walk into what the company writes (data/) starts here."""
+        return self.cell.dir(slug)
 
     def container(self, slug: str, role: str = "server") -> dict | None:
         return next((r for r in self.containers_of(slug)
@@ -761,8 +897,8 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
             slug = c["slug"]
             names = sorted(str(r.get("Names", "")).lstrip("/") for r in view.containers_of(slug))
             rows = [inspected[n] for n in names if n in inspected]
-            data = view.data(slug)
-            db, sql_top = db_block(box, data, slug, cache, now)
+            root = view.root(slug)
+            db, sql_top = db_block(box, root, slug, cache, now)
             server = next((i for i in rows if (i.get("labels") or {}).get("com.docker.compose.service") == "server"), None)
             pid = ((server or {}).get("state") or {}).get("Pid") if server else None
             errors = []
@@ -772,7 +908,7 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
                                         ((i.get("state") or {}).get("Status")) == "running")
             errors.sort(key=lambda e: e["at"] or "")
             try:
-                flight = flight_block(data / "flight", now, sql_top)
+                flight = flight_block(root, now, sql_top)
             except Exception as e:  # noqa: BLE001  a bad flight file must not cost the rest of the snapshot
                 flight = {"window_s": WINDOW_S, "error": scrub(f"{type(e).__name__}: {e}")[:200]}
             return {"slug": slug, "version": c.get("version"), "state": view.cell.state_of(c, states),
@@ -972,20 +1108,19 @@ def t_logs(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
 
 
 def t_flight(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    folder = view.data(a["company"]) / "flight"
-    if not folder.is_dir():
+    s = flight_summary(view.root(a["company"]), a["minutes"] * 60, box.time())
+    if s is None:
         return False, f"no flight folder for {a['company']} (is the flight recorder on?)"
-    s = flight_file().summary(folder, a["minutes"] * 60, now=box.time())
     return True, json.dumps(s, indent=1, default=str)
 
 
 def t_db(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    data = view.data(a["company"])
-    db = data / "hub.sqlite"
-    if not db.exists():
-        return False, f"no database for {a['company']}"
+    root = view.root(a["company"])
+    db = safe_db(root)
+    if db is None:
+        return False, f"no database for {a['company']} (or not a plain file)"
     deadline = box.monotonic() + min(timeout, 60)
-    out = {"size_mb": _size_mb(db), "wal_mb": _size_mb(data / "hub.sqlite-wal")}
+    out = {"size_mb": _size_mb(root, DB), "wal_mb": _size_mb(root, DB + "-wal")}
     c = _ro(db, timeout=5)
     c.set_progress_handler(lambda: 1 if box.monotonic() > deadline else 0, 20000)
     try:
@@ -1019,7 +1154,7 @@ def server_pid(box: Box, view: View, slug: str) -> tuple[int | None, str]:
     if not init:
         return None, f"{slug}'s server is not running"
     try:
-        inner = int((view.data(slug) / "flight" / flight_file().PID).read_text()[:32].strip())
+        inner = int(safe_read(view.root(slug), f"{FLIGHT}/{flight_file().PID}", 32, cap=4096).decode().strip())
     except (OSError, ValueError):
         return None, "no flight/server.pid (is the flight recorder on?)"
     proc = box.path("proc")
@@ -1049,18 +1184,20 @@ def t_stacks(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     pid, why = server_pid(box, view, a["company"])
     if not pid:
         return False, why
-    path = view.data(a["company"]) / "flight" / flight_file().STACKS
+    root, rel = view.root(a["company"]), f"{FLIGHT}/{flight_file().STACKS}"
     try:
-        before = path.stat().st_size
-    except OSError:
+        before = safe_stat(root, rel).st_size
+    except FileNotFoundError:
         before = 0
+    except OSError as e:
+        return False, f"stacks.txt is not readable: {e}"
     box.kill(pid, signal.SIGUSR1)
     deadline = box.monotonic() + min(timeout, 5)
     size = before
     while box.monotonic() < deadline:
         box.sleep(0.2)
         try:
-            size = path.stat().st_size
+            size = safe_stat(root, rel).st_size
         except OSError:
             continue
         if size > before:
@@ -1068,15 +1205,16 @@ def t_stacks(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
             break
     if size <= before:
         return False, "the server wrote no stacks (is the flight recorder on?)"
-    with open(path, "rb") as f:
-        f.seek(before if size >= before else 0)
-        return True, f.read(MAX_OUTPUT).decode("utf-8", "replace")
+    try:
+        return True, safe_read(root, rel, MAX_OUTPUT, before if size >= before else 0).decode("utf-8", "replace")
+    except OSError as e:
+        return False, f"stacks.txt is not readable: {e}"
 
 
-def tracing(folder: Path, now: float) -> bool:
+def tracing(root: Path, now: float) -> bool:
     """Whether tracemalloc is on: the newest memory record since the server's last start says `started`."""
     state = False
-    for r in flight_file().records(folder, now - 86400):
+    for r in flight_file().records(root / FLIGHT, now - 86400, flight_opener(root, FLIGHT)):
         if r.get("kind") == "start":
             state = False
         elif r.get("kind") == "memory":
@@ -1085,8 +1223,8 @@ def tracing(folder: Path, now: float) -> bool:
 
 
 def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    folder = view.data(a["company"]) / "flight"
-    on = tracing(folder, box.time())
+    root = view.root(a["company"])
+    on = tracing(root, box.time())
     if a["action"] == "start" and on:
         return False, "tracemalloc is already on; send dump"
     if a["action"] == "dump" and not on:
@@ -1094,17 +1232,25 @@ def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, 
     pid, why = server_pid(box, view, a["company"])
     if not pid:
         return False, why
-    before = {p.name for p in folder.glob("memory-*.txt")}
+    def dumps() -> set[str]:
+        try:
+            return {n for n in safe_listdir(root, FLIGHT) if n.startswith("memory-") and n.endswith(".txt")}
+        except OSError:
+            return set()
+    before = dumps()
     box.kill(pid, signal.SIGUSR2)
     if a["action"] == "start":
         return True, f"tracemalloc started in {a['company']}'s server; send dump to get the top 50 allocation sites"
     deadline = box.monotonic() + min(timeout, 20)
     while box.monotonic() < deadline:
         box.sleep(0.5)
-        new = sorted(p for p in folder.glob("memory-*.txt") if p.name not in before)
+        new = sorted(dumps() - before)
         if new:
             box.sleep(0.2)
-            return True, new[-1].read_text(errors="replace")[:MAX_OUTPUT]
+            try:
+                return True, safe_read(root, f"{FLIGHT}/{new[-1]}", MAX_OUTPUT).decode("utf-8", "replace")
+            except OSError as e:
+                return False, f"{new[-1]} is not readable: {e}"
     return False, "the server wrote no memory file in time"
 
 
@@ -1154,7 +1300,7 @@ def check_hq(url: str) -> str | None:
 
 def _headers(cfg: dict, gz: bool) -> dict:
     h = {"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json",
-         "User-Agent": f"tico-cell-stats/{own_version() or 'dev'}"}
+         "User-Agent": "tico-cell-stats"}     # the snapshot carries collector_version
     if gz:
         h["Content-Encoding"] = "gzip"
     return h

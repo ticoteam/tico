@@ -431,6 +431,18 @@ SECRETS = [
     ("cloudflared token eyJhIjoiYWJjIn0", "eyJhIjoiYWJjIn0"),
     ("LITESTREAM_SECRET_ACCESS_KEY=bk/" + "x" * 37, "x" * 37),
     ("tunnel " + "MjAyNi0xMC0zMFQxMjowMDowMFo" + "Ab3" * 4, "MjAyNi0x"),
+    # JSON carried inside a string: the quotes come escaped once, or twice when that string was escaped again.
+    (r'{\"token\": \"abc123def456\"}', "abc123def456"),
+    (r'\"password\":\"hunter2x\"', "hunter2x"),
+    (r'{\"password\": \"correct horse\"}', "horse"),
+    (r'{\\\"api_key\\\": \\\"zz99yy88\\\"}', "zz99yy88"),
+    (r'\\\"client_secret\\\":\\\"two words\\\"', "words"),
+    (r'key=\"value123\"', "value123"),
+    (r'secret=\\\"v4lue x\\\"', "v4lue"),
+    (r"\'session\': \'s3ss10n x\'", "s3ss10n"),
+    (r'{\"authorization\": \"Basic dXNlcjpwYXNz\"}', "dXNlcjpwYXNz"),
+    (r'\\\"Cookie\\\": \\\"sid=feedface\\\"', "feedface"),
+    (r'{"log": "{\"refresh_token\":\"rt abc 123\",\"ok\":1}"}', "rt abc"),
 ]
 
 KEPT = [
@@ -610,6 +622,111 @@ def test_tracemalloc_start_then_dump(box):
     box.on_kill = lambda pid, sig: (data / "memory-20261030T120000Z.txt").write_text("traced 1 bytes\n  100 1 x.py:1\n")
     r = cs.run_tool(box, "tracemalloc", {"company": "boatyard", "action": "dump"})
     assert r["ok"] and "traced 1 bytes" in r["output"]
+
+
+# --- what a company controls: no symlink is followed out of it -------------------------------------------------------
+
+LEAK = "LEAKED-" + KEY
+
+
+def outside(box):
+    """Files a company should never get read for it: here, next to this host's own stats key."""
+    o = box.path("etc/tico-cell")
+    (o / "flight").mkdir(parents=True)
+    (o / "blobs").mkdir()
+    (o / "stats.json").write_text(json.dumps({"key": KEY}))
+    write_flight(o / "flight", busy_minute(NOW - 120) + [{"ts": NOW - 60, "kind": "slow", "route": "GET /" + LEAK}])
+    (o / "flight" / "stacks.txt").write_text(LEAK + "\n")
+    (o / "flight" / "server.pid").write_text("57")
+    (o / "flight" / "memory-20261030T120000Z.txt").write_text(LEAK + "\n")
+    (o / "blobs" / "big").write_bytes(b"x" * 3_000_000)
+    make_db(o)
+    (o / "tico-backup-status.json").write_text(json.dumps({"last_replicated_at": "2026-10-30T11:59:51Z", "k": LEAK}))
+    (o / "log").write_text(json.dumps({"log": f"ERROR {LEAK}\n", "time": "2026-10-30T11:59:59Z"}) + "\n")
+    return o
+
+
+def plant(box, how):
+    """Swap boatyard's files for symlinks out of the company: each file itself ("leaf"), or a folder on the way."""
+    import shutil
+    o = outside(box)
+    data = box.cell_root / "companies" / "boatyard" / "data"
+    tmp = box.path("proc/4100/root/tmp")
+    _, ins, _ = box.containers["tico-boatyard-server-1"]
+    log = box.path(ins["log"])
+    if how == "leaf":
+        for name in ("flight.ndjson", "stacks.txt", "server.pid", "memory-20261030T120000Z.txt"):
+            (data / "flight" / name).unlink(missing_ok=True)
+            os.symlink(o / "flight" / name, data / "flight" / name)
+        for side in ("", "-wal", "-shm"):
+            (data / f"hub.sqlite{side}").unlink(missing_ok=True)
+        os.symlink(o / "hub.sqlite", data / "hub.sqlite")
+        shutil.rmtree(data / "blobs")
+        os.symlink(o / "blobs", data / "blobs")
+        (tmp / "tico-backup-status.json").unlink()
+        os.symlink(o / "tico-backup-status.json", tmp / "tico-backup-status.json")
+        log.unlink()
+        os.symlink(o / "log", log)
+    else:
+        shutil.rmtree(data)
+        os.symlink(o, data)                  # data/ itself: flight/, hub.sqlite and blobs/ all lie outside
+        shutil.rmtree(tmp)
+        os.symlink(o, tmp)                   # /tmp in the server's root
+        shutil.move(str(log), str(o / log.name))
+        shutil.rmtree(log.parent)
+        os.symlink(o, log.parent)            # the container's log folder
+    return o
+
+
+@pytest.mark.parametrize("how", ["leaf", "parent"])
+def test_symlinks_out_of_a_company_are_never_followed(box, how):
+    plant(box, how)
+    fake_process(box, 4100, 1)
+    fake_process(box, 4150, 57)
+    snap = cs.collect(box, {})
+    b = next(c for c in snap["companies"] if c["slug"] == "boatyard")
+    assert LEAK not in json.dumps(snap) and KEY not in json.dumps(snap)
+    assert b["db"] == {"size_mb": None, "wal_mb": None, "freelist_pct": None, "files_mb": None}
+    assert b["backup"] is None and b["errors"] == []
+    assert b["flight"] is None if how == "parent" else b["flight"]["requests"]["count"] == 0
+    for tool, args in [("flight", {"minutes": 60}), ("db", {}), ("stacks", {}), ("tracemalloc", {"action": "dump"})]:
+        r = cs.run_tool(box, tool, {"company": "boatyard", **args})
+        assert LEAK not in r["output"] and KEY not in r["output"], (tool, r)
+        assert r["ok"] is (tool == "flight" and how == "leaf"), (tool, r)
+    assert box.kills == []                   # server.pid was outside too: nothing signalled
+
+
+def test_stacks_written_through_a_symlink_are_not_read(box):
+    o = plant(box, "leaf")
+    flight = box.cell_root / "companies" / "boatyard" / "data" / "flight"
+    (flight / "server.pid").unlink()
+    (flight / "server.pid").write_text("57")
+    fake_process(box, 4100, 1)
+    fake_process(box, 4150, 57)
+    box.on_kill = lambda pid, sig: (o / "flight" / "stacks.txt").write_text(LEAK * 2)
+    r = cs.run_tool(box, "stacks", {"company": "boatyard"})
+    assert r["ok"] is False and LEAK not in r["output"] and "not readable" in r["output"]
+
+
+def test_safe_open_takes_only_a_small_regular_file_below_its_root(tmp_path):
+    root = tmp_path / "root"
+    (root / "d").mkdir(parents=True)
+    (root / "d" / "f").write_text("ok")
+    (tmp_path / "secret").write_text(LEAK)
+    os.symlink(tmp_path / "secret", root / "d" / "leaf")
+    os.symlink(tmp_path, root / "up")
+    os.mkfifo(root / "d" / "fifo")           # opening a FIFO to read would wait for a writer forever
+    assert cs.safe_read(root, "d/f", 10) == b"ok"
+    for rel in ("d/leaf", "up/secret", "d/fifo", "../secret", "/etc/passwd", "d/../../secret"):
+        with pytest.raises(OSError):
+            cs.safe_read(root, rel, 100)
+    with pytest.raises(cs.Unsafe):
+        cs.safe_read(root, "d/f", 10, cap=1)
+    with pytest.raises(FileNotFoundError):
+        cs.safe_stat(root, "d/missing")
+    with pytest.raises(OSError):
+        cs.safe_listdir(root, "up")
+    assert cs.files_mb(root, "up") is None
 
 
 def test_long_output_is_cut_with_a_note(box, monkeypatch):

@@ -317,11 +317,24 @@ def memory_toggle(folder, writer=None, top=50):
 
 # ---------------------------------------------------------------------------- reading the files
 
+def _names():
+    return [f"{NAME}.{i}" for i in range(KEEP + 5, 0, -1)] + [NAME]
+
+
 def files(folder):
     """The files, oldest first."""
     folder = Path(folder)
-    out = [folder / f"{NAME}.{i}" for i in range(KEEP + 5, 0, -1)] + [folder / NAME]
-    return [p for p in out if p.exists()]
+    return [p for p in (folder / n for n in _names()) if p.exists()]
+
+
+def _opener(folder, opener):
+    """`opener(name)` gives a binary file for one name in the folder (OSError when it is not there). The default opens
+    by path; the cell stats collector, which runs as root over a folder a company controls, passes one that follows no
+    symlink and opens only regular files."""
+    if opener is not None:
+        return opener
+    folder = Path(folder)
+    return lambda name: open(folder / name, "rb")
 
 
 # A file this big is not read from its start for a short window: `records` finds where the window begins by a binary
@@ -361,13 +374,14 @@ def _start(f, size, since):
     return lo
 
 
-def records(folder, since=0.0):
-    for path in files(folder):
+def records(folder, since=0.0, opener=None):
+    opener = _opener(folder, opener)
+    for name in _names():
         try:
-            st = path.stat()
-            if st.st_mtime < since:
-                continue
-            with open(path, "rb") as f:
+            with opener(name) as f:
+                st = os.fstat(f.fileno())
+                if st.st_mtime < since:
+                    continue
                 start = _start(f, st.st_size, since) if since and st.st_size > TAIL_FROM else 0
                 f.seek(start)
                 if start:
@@ -420,13 +434,14 @@ def quantiles(buckets, qs=(0.5, 0.95, 0.99)):
     return [round(v, 1) for v in out]
 
 
-def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
-    """What the files say about the last `since_s` seconds."""
+def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12, opener=None):
+    """What the files say about the last `since_s` seconds (`opener` as in `records`)."""
+    opener = _opener(folder, opener)
     now = now or time.time()
     since = now - since_s
     routes, slow, stalls, ends, minutes, starts, memory, holds = {}, [], [], {}, [], [], [], []
     drops, buckets, errors = 0, [], 0
-    for r in records(folder, since):
+    for r in records(folder, since, opener):
         kind = r.get("kind")
         if kind == "routes":
             for x in r.get("routes") or []:
@@ -486,9 +501,9 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
     folder = Path(folder)
     dump = None
     try:
-        st = (folder / STACKS).stat()
-        if st.st_mtime >= since and st.st_size:
-            with open(folder / STACKS, "rb") as f:
+        with opener(STACKS) as f:
+            st = os.fstat(f.fileno())
+            if st.st_mtime >= since and st.st_size:
                 f.seek(max(0, st.st_size - 16384))
                 dump = {"ts": round(st.st_mtime), "text": f.read().decode("utf-8", "replace").splitlines()[-120:]}
     except OSError:

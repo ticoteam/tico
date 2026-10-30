@@ -70,13 +70,21 @@ to `?` and `N` by the server), stall classes, and scrubbed log lines and debug o
 Never sent: a row of company data, a file from the data folder, a container's environment, a mount outside `/srv` and
 `/var/lib/docker` (the `containers` tool shows those as hidden), the stats key, or any secret the scrubber recognises.
 
+The collector runs as root, but a company's server writes its data folder and its container's `/tmp`, so it could
+plant a symlink to `/etc/shadow`, to this host's stats key or to another company's files. Every read of what a company
+controls (the flight files and `stacks.txt`, `server.pid`, the memory dumps, the backup status through
+`/proc/<pid>/root`, the database and WAL sizes, the attachment total, the container log) starts from a folder the
+host made and walks down one name at a time with `O_NOFOLLOW`, then takes only a regular file of a bounded size. A
+symlink anywhere on the way, a FIFO or an oversized file is skipped: the number is left out, nothing is read. SQLite
+opens the database only after the database and its `-wal`, `-shm` and `-journal` files pass the same check.
+
 The scrubber runs on every free-text string that leaves the host: error lines, SQL shapes, route names and every debug
 output. It replaces these with `[redacted]`:
 
 - whole `Cookie`, `Set-Cookie` and `Authorization` values
 - `Bearer …`
-- `key`/`token`/`secret`/`password`/`passwd`/`session` `=` or `:` values, also in JSON and with a prefix such as
-  `api_key`
+- `key`/`token`/`secret`/`password`/`passwd`/`session` `=` or `:` values, also in JSON, in JSON carried inside a
+  string (`\"token\": \"…\"`, escaped once or more) and with a prefix such as `api_key`
 - the key prefixes `tch_`, `tcs_`, `tgi_`, `tico_`, `sk-`, `sk_`, `ghp_`, `gho_`, `github_pat_`, `xox[abpr]-`, `AKIA`
   and `ASIA`
 - `eyJ…` JWTs
