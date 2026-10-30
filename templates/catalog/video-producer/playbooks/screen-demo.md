@@ -4,7 +4,8 @@ For showing the product working. Recorded in demo mode, with fictional data, nev
 
 1. Use the demo workspace only: fictional names, and any number on screen marked as sample. Do not log in to a live
    customer account, and do not use real customer data, even blurred. A live product tour needs the owner's yes on
-   the task first.
+   the task first. Recording your own company's Tico is allowed when the project task asks for it: add `--as-bot`, which
+   shows only what this bot may see. A customer's account still never.
 2. Write the steps in `projects/<slug>/shots/shots.json`: a list of `goto`, `click`, `type`, `wait`, `scroll`, `zoom`,
    `highlight` and `pause` steps, each with a line on what the viewer should see.
 3. Record: `node software/video/record.mjs projects/<slug>/shots/shots.json --out projects/<slug>/shots/demo.mp4

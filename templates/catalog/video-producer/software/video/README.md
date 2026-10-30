@@ -50,12 +50,17 @@ See `examples/motion-css.html` (path 2) and `examples/motion-timeline.html` (pat
 ## record.mjs
 
 ```sh
-node record.mjs shots.json --out out.mp4 [--size 1920x1080] [--headed | --headless] [--keep-webm]
+node record.mjs shots.json --out out.mp4 [--size 1920x1080] [--headed | --headless] [--keep-webm] [--as-bot]
 ```
 
 Headed is used on Linux when `DISPLAY` is set, unless `--headless` is given. The lead-in before the first
 `goto` finishes is trimmed. A cursor (arrow) is drawn in every page of the session. It glides to each
 target before a click or typing, and shows a ripple on press.
+
+`--as-bot` records your company's Tico as this bot, with this bot's rights, and only during a bot turn (it needs
+`HUB_API_URL` and `HUB_TOKEN` from the runner; `tico-file:<path>` works too). The bot token is sent only to the Tico
+server, never to other sites. With `--as-bot`, a `goto` url starting with `/` opens that page on your Tico, for example
+`"/tasks"` goes to `https://hub.tico.team/tasks`. Without it, `/` paths are files as before.
 
 ### shots.json
 
@@ -166,7 +171,8 @@ sh examples/run-all.sh   # writes examples/media/ (git-ignored): renders, record
 ## Tests
 
 ```sh
-node --test test/edit.test.mjs test/shots.test.mjs
+node --test test/*.test.mjs
 ```
 
-The tests cover the cut-list-to-filtergraph build, SRT parsing, `shots.json` validation and the shipped examples.
+The tests cover the cut-list-to-filtergraph build, SRT parsing, `shots.json` validation, the shipped examples and the
+`--as-bot` token and URL rules.
