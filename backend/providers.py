@@ -154,6 +154,8 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     # old lineup (retired: it keeps working at its old price, nothing new may pick it). Any other id of the lineup
     # (an auto id, an older version, one that arrived with HQ's catalog) is found through `MODEL_BY_ID`.
     *gateway_tiers.listed_rows(),
+    # The meeting model (live-meeting replies): picked in Settings, never a bot's model (`meeting`, see provider_models).
+    *gateway_tiers.meeting_rows(),
     # An external agent brings its own model; the profile's config decides, and the heartbeat
     # reports what it is. This row exists so the bot can be created and shown like any other.
     {"id": "hermes-profile", "label": "profile's own model", "runtime": "hermes", "provider": "",
@@ -335,9 +337,11 @@ def serves(provider, row):
                 or (named.get("catch_all") and named["runtime"] == row["runtime"] and not gateway))
 
 
-def provider_models(provider, *, current=True):
+def provider_models(provider, *, current=True, meeting=False):
+    """The catalog models a provider serves. A bot's picks leave out the meeting models unless `meeting` asks for them."""
     return [row for row in MODEL_CATALOG
-            if serves(provider, row) and not (current and row.get("deprecated"))]
+            if serves(provider, row) and not (current and row.get("deprecated"))
+            and bool(row.get("meeting")) == meeting]
 
 
 def recommended(provider):

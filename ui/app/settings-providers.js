@@ -5,13 +5,15 @@
 // ----------------------------------------------------------------- Models
 // Which model vendors this team uses and the default model (backend/providers.py). One form
 // serves the first-run step and Settings; the server derives the runtime from the model.
-function providersModels(view, models, enabled) {
+function providersModels(view, models, enabled, meeting = false) {
   const labels = Object.fromEntries((view.providers || []).map(row => [row.id, row.label]));
   const gateway = providersGatewayIds(view);
   // The saved default stays offered after its model retires, so a save about something else never moves it.
   const saved = view.default?.model || '';
   // The Gateway's tiers are 60 rows; the company default offers General at each level, and a bot's own Model picker the rest.
-  const general = model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
+  // The meeting models (Settings' Meeting model select) are only the meeting ones; a default or a bot's pick never is.
+  const general = meeting ? model => !!model.meeting
+    : model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
   return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider) && general(model))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
@@ -72,6 +74,7 @@ function providersFillModels(root, view, models, keep) {
   const enabled = [...[...root.querySelectorAll('[data-provider]:checked')].map(input => input.value), ...gateway];
   const select = root.querySelector('[data-provider-model]');
   const options = providersModels(view, models, enabled);
+  const meetingOptions = providersModels(view, models, enabled, true);
   const wanted = options.some(row => row.id === keep) ? keep
     : (options.find(row => row.recommended) || options[0] || {}).id || '';
   select.innerHTML = options.length ? options.map(row =>
@@ -82,7 +85,7 @@ function providersFillModels(root, view, models, keep) {
     // Live-meeting replies: the bot's own model, or one of the models above; the saved one stays selected.
     const keepMeeting = meeting.options.length ? meeting.value : (view.meeting_model || '');
     meeting.dataset.saved = view.meeting_model || '';
-    meeting.innerHTML = `<option value="">Bot's own model</option>` + options.map(row =>
+    meeting.innerHTML = `<option value="">Bot's own model</option>` + meetingOptions.map(row =>
       `<option value="${esc(row.id)}" ${row.id === keepMeeting ? 'selected' : ''}>${esc(row.label)}</option>`).join('');
   }
 }

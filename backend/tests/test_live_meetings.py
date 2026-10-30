@@ -594,8 +594,8 @@ def test_a_held_notice_does_not_make_an_idle_bot_miss_its_meeting_turn(live):
 
 
 # A live meeting's reply runs on the company's meeting model (or its own, set at connect) at low effort; other turns and a
-# company with the Gateway off keep the bot's own model. `tico-general-low-1.0` stands in for the meeting model.
-MEETING = "tico-general-low-1.0"
+# company with the Gateway off keep the bot's own model.
+MEETING = "tico-meeting-1.0"
 
 
 def gateway_on(api, monkeypatch):
@@ -668,7 +668,26 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
                   "created,updated,started_at,visibility,client,meeting_model) "
                   "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
-        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "") is own
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") is own
+        event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-fallback' AND type='meeting.model'").fetchone()
+        payload = json.loads(event[0])
+        assert payload["fallback"] == "bot_model" and payload["turn_id"] == "t-1"
+        assert "not installed" in payload["reason"]
+
+
+def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
+                  (H.now(), H.now(), H.now()))
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") is own
+        payload = json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-gone' "
+                                       "AND type='meeting.model'").fetchone()[0])
+        assert "not in the model catalog" in payload["reason"]
 
 
 def test_live_meetings_are_not_limited_by_the_daily_decision_budget_but_the_monthly_cap_still_stops_them(live, monkeypatch):

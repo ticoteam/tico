@@ -59,6 +59,13 @@ FAST_ROWS = {
     "high": {"model": "Claude Opus 5.5 (fast mode)", "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
 }
 
+# The meeting tier (HQ's `tico-meeting`, pinned `tico-meeting-1.0`): a chat tier with no department, level or fast. It is
+# the reply model of the live-meeting bot (Inception Mercury 3, text only, 1M context), chosen in Settings, not a bot's.
+MEETING_TIER = "tico-meeting"
+MEETING_NAME = "Meeting"
+MEETING_ROW = {"model": "Inception Mercury 3", "price": (0.30, 0.03, 1.05), "long": None, "inputs": ("text",),
+               "context": 1_000_000, "max_output": 128_000, "released": "2026-10-29"}
+
 DECISIONS = (
     {"id": "tico-decide-low", "level": "low", "name": "Decide · Low", "model": "Jev 1.13", "price": (0.06, 0.006, 0.0),
      "types": ["noul", "choice", "score"],
@@ -151,6 +158,10 @@ def _snapshot():
                 models.append({"id": ident, "department": department, "level": level, "fast": fast,
                                "name": name_of(department, level, fast), "current": FIRST_VERSION,
                                "versions": [_version(row, f"{ident}-{FIRST_VERSION}", FIRST_VERSION)]})
+    meeting = _version(MEETING_ROW, f"{MEETING_TIER}-{FIRST_VERSION}", FIRST_VERSION, MEETING_ROW["released"])
+    meeting.update(context=MEETING_ROW["context"], max_output=MEETING_ROW["max_output"])
+    models.append({"id": MEETING_TIER, "department": None, "level": None, "fast": False, "name": MEETING_NAME,
+                   "current": FIRST_VERSION, "versions": [meeting]})
     decisions = [{"id": row["id"], "level": row["level"], "name": row["name"], "current": FIRST_VERSION,
                   "types": row["types"], "when": row["when"],
                   "versions": [{"version": FIRST_VERSION, "id": f"{row['id']}-{FIRST_VERSION}", "model": row["model"],
@@ -239,7 +250,8 @@ def _current(row, versions):
 def validate(doc):
     """The catalog in `doc` (HQ's answer, parsed) with every malformed entry left out, or None when `doc` is not a
     schema 1 catalog or holds no usable tier. A tier needs a department and a level, an id that is its department,
-    level and fast flag, and at least one version whose id follows from it and whose price is numbers."""
+    level and fast flag, and at least one version whose id follows from it and whose price is numbers. The meeting tier
+    (`tico-meeting`) has no department, level or fast; it is kept beside the department tiers, else the release's copy."""
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
         return None
     departments = [{"id": row["id"], "name": _text(row.get("name"), row["id"].title()),
@@ -249,21 +261,36 @@ def validate(doc):
     levels = [{"id": row["id"], "name": _text(row.get("name"), row["id"].title())}
               for row in doc.get("levels") or [] if isinstance(row, dict) and row.get("id") in LEVEL_IDS]
     known = {row["id"] for row in departments}
-    models = []
+    models, meeting = [], None
     for row in doc.get("models") or []:
-        if not isinstance(row, dict) or row.get("department") not in known or row.get("level") not in LEVEL_IDS \
-                or not isinstance(row.get("fast"), bool) \
-                or row.get("id") != tier_id(row["department"], row["level"], row["fast"]):
+        if not isinstance(row, dict):
+            continue
+        if row.get("id") == MEETING_TIER:
+            # The meeting tier's own shape: no department, no level, not fast. Anything else is a malformed row.
+            if row.get("department") is not None or row.get("level") is not None or row.get("fast") is not False:
+                continue
+            department, level, fast = None, None, False
+            name = _text(row.get("name"), MEETING_NAME)
+        elif row.get("department") in known and row.get("level") in LEVEL_IDS and isinstance(row.get("fast"), bool) \
+                and row.get("id") == tier_id(row["department"], row["level"], row["fast"]):
+            department, level, fast = row["department"], row["level"], row["fast"]
+            name = _text(row.get("name"), name_of(department, level, fast))
+        else:
             continue
         versions = _clean_versions(row["id"], row.get("versions"))
         if versions:
-            models.append({"id": row["id"], "department": row["department"], "level": row["level"],
-                           "fast": row["fast"], "name": _text(row.get("name"),
-                                                              name_of(row["department"], row["level"], row["fast"])),
-                           "current": _current(row, versions),
-                           "versions": sorted(versions, key=lambda v: _version_key(v["version"]))})
+            item = {"id": row["id"], "department": department, "level": level, "fast": fast, "name": name,
+                    "current": _current(row, versions), "versions": sorted(versions, key=lambda v: _version_key(v["version"]))}
+            if department is None:
+                meeting = item
+            else:
+                models.append(item)
     if not models:
         return None
+    if meeting is None:
+        # HQ's catalog without the meeting tier (an older HQ, or before its change lands): the release's copy stands.
+        meeting = next(row for row in SNAPSHOT["models"] if row["id"] == MEETING_TIER)
+    models.append(meeting)
     decisions = []
     for row in doc.get("decisions") or []:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str) \
@@ -416,7 +443,7 @@ def resolve(model, cat=None):
             "model": version["model"], "version": version["version"], "auto": entry["auto"],
             "price": version["price"], "long_prompt": version.get("long_prompt"),
             "inputs": list(version.get("inputs") or ["text"]),
-            "department": tier.get("department", ""), "level": tier["level"], "fast": bool(tier.get("fast")),
+            "department": tier.get("department") or "", "level": tier["level"], "fast": bool(tier.get("fast")),
             "old": False, "current": tier["current"]}
 
 
@@ -442,6 +469,8 @@ def row_for(model):
     if not found:
         return None
     efforts, default = efforts_of(found["level"])
+    if found["tier"] == MEETING_TIER:
+        efforts, default = ("low", "high", "max"), "low"       # the meeting tier's catalog effort (HQ: default low)
     row = {"id": found["id"], "label": found["name"], "runtime": "pi", "provider": "tico",
            "description": (found["model"] + " underneath") if found["model"] else "",
            "efforts": efforts, "default_effort": default}
@@ -461,12 +490,22 @@ def listed_rows():
     Medium the one a bot gets when nobody chose, and the old lineup after them (retired, not offered)."""
     rows = []
     for tier in SNAPSHOT["models"]:
+        if tier["id"] == MEETING_TIER:
+            continue                         # the meeting tier is not a bot's pick: meeting_rows
         row = row_for(f"{tier['id']}-{tier['current']}")
         if tier["id"] == tier_id(DEFAULT_DEPARTMENT, DEFAULT_LEVEL):
             row["recommended"] = True
         rows.append(row)
     rows += [row_for(old) for old in OLD]
     return rows
+
+
+def meeting_rows():
+    """The meeting model rows (`tico-meeting-1.0`) for Settings' Meeting model choice: flagged `meeting`, never a bot's pick."""
+    tier = next(row for row in SNAPSHOT["models"] if row["id"] == MEETING_TIER)
+    row = row_for(f"{MEETING_TIER}-{tier['current']}")
+    row["meeting"] = True
+    return [row]
 
 
 # ----------------------------------------------------------------------------- a bot's pick
@@ -522,7 +561,7 @@ def view(cat=None):
             "tiers": {row["id"]: {"name": row["name"], "department": row.get("department", ""), "level": row["level"],
                                   "fast": bool(row.get("fast")), "current": row["current"], "versions": [
                 {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"]}
-                for v in reversed(row["versions"])]} for row in cat["models"]}}
+                for v in reversed(row["versions"])]} for row in cat["models"] if row.get("department")}}
 
 
 def lineup(query="", cat=None):
@@ -539,7 +578,8 @@ def lineup(query="", cat=None):
     for row in cat["models"]:
         now = next(v for v in row["versions"] if v["version"] == row["current"])
         when = LEVEL_WHEN.get(row["level"], "") + (" Faster, and may cost more." if row["fast"] else "")
-        if keep(row["name"], now["model"], row["department"], names.get(row["department"], ""), when):
+        department = row["department"] or ""
+        if keep(row["name"], now["model"], department, names.get(department, ""), when):
             models.append({"id": row["id"], "pinned": now["id"], "name": row["name"], "model": now["model"],
                            "version": now["version"], "price": now["price"], "when": when})
     decisions = [{"id": row["id"], "name": row["name"], "when": row["when"], "types": row["types"],

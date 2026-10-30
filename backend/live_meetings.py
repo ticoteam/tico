@@ -341,25 +341,34 @@ def _turn_prompt(c, rid, turn_id, slug):
             "Scoped meeting context JSON follows:\n" + payload)
 
 
-def turn_config(c, settings, config, bot, rid, runner_id, job_id=None):
+def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None):
     """The bot's config for one live-meeting reply: the meeting's model (its own, else the company's meeting model) at
-    low effort, on that model's harness and runtime, as a task model is applied. Any other turn, a meeting that sets
-    none, and a model that cannot run on the bot's computer keep the bot's own config."""
+    low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
+    no model keep the bot's own config. A set model that cannot be used (not in the catalog, its provider off, not
+    installed or not signed in on the bot's computer) keeps the bot's own config and says why on the meeting."""
     if not rid:
         return config
     row = c.execute("SELECT meeting_model FROM live_meetings WHERE id=?", (rid,)).fetchone()
     if not row:
         return config
     model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
-    spec = providers.MODEL_BY_ID.get(model or "")
+    if not model:
+        return config
+    why, choice = "", None
+    spec = providers.MODEL_BY_ID.get(model)
     if not spec:
-        return config
-    effort = "low" if "low" in (spec.get("efforts") or ()) else None
-    try:
-        choice = {**task_models.choice_of(spec["id"], effort), "compact_at": None}
-    except providers.ProviderError:
-        return config
-    if task_models.why_not(c, settings, bot, choice, runner_id, job_id):
+        why = f"{model} is not in the model catalog"
+    else:
+        effort = "low" if "low" in (spec.get("efforts") or ()) else None
+        try:
+            choice = {**task_models.choice_of(spec["id"], effort), "compact_at": None}
+        except providers.ProviderError as exc:
+            why = exc.detail
+    if choice and not why:
+        why = task_models.why_not(c, settings, bot, choice, runner_id, job_id)
+    if why:
+        _event(c, rid, "meeting.model", {"model": model, "bot": bot, "turn_id": turn_id, "fallback": "bot_model",
+                                         "reason": why})
         return config
     return task_models.apply({k: v for k, v in config.items() if k != task_models.KEY}, choice)
 
