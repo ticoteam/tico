@@ -8,8 +8,9 @@
 const PM_STATES = [['DE', 'Delaware'], ['CA', 'California'], ['TX', 'Texas'], ['FL', 'Florida'], ['NV', 'Nevada']];
 const PM_KINDS = {shared: 'Shared', private: 'Private'};
 const PM_KIND_LINES = {shared: 'Mailing address and registered agent', private: 'Own suite number and registered agent'};
-// Tico's prices (the plan's catalogue); Tico Gateway's `prices`, when it sends them, win.
+// Tico's prices (the plan's catalogue); Tico Gateway's `prices`, when it sends them, win. A scan covers 10 pages.
 const PM_PRICES = {shared: '$10/mo', private: 'from $25/mo'};
+const PM_SCAN = {scan: 1, page_over_10: 0.25};
 const PM_ADDRESS_STATUS = {pending_1583: ['waiting', 'Waiting for Form 1583'], active: ['ok', 'Active'], closed: ['', 'Closed']};
 const PM_LETTER_KINDS = {legal: 'Legal', government_tax: 'Government or tax', bill: 'Bill', check: 'Check', financial: 'Financial',
   junk: 'Junk', other: 'Other'};
@@ -20,13 +21,18 @@ const pmStateName = code => (PM_STATES.find(([c]) => c === code) || [code, code]
 const PM_NONE = '<span class="muted pm-none">—</span>';
 const pmPill = ([tone, label]) => `<span class="pill${tone ? ' ' + tone : ''}">${esc(label)}</span>`;
 const pmDay = iso => iso ? new Date(iso).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '';
+const pmNum = v => { const n = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null; };
+const pmDollars = n => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
 function pmPrice(kind) {
-  const v = PM.prices?.[kind];
+  const v = PM.prices?.[kind], n = pmNum(v);
   // Tico Gateway sends dollars a month; a plain label passes through as it is.
-  const n = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
-  if (typeof n === 'number' && Number.isFinite(n) && n > 0) return `$${Number.isInteger(n) ? n : n.toFixed(2)}/mo`;
-  return typeof n === 'string' && n.trim() ? n : PM_PRICES[kind];
+  if (n) return `${pmDollars(n)}/mo`;
+  return typeof v === 'string' && v.trim() ? v : PM_PRICES[kind];
 }
+// Per letter, in dollars, from Tico Gateway when it sends them.
+const pmScanLine = () => `Scans ${pmDollars(pmNum(PM.prices?.scan) || PM_SCAN.scan)} each, `
+  + `${pmDollars(pmNum(PM.prices?.page_over_10) || PM_SCAN.page_over_10)} a page after 10`;
 
 async function renderSettingsMail() {
   const el = $('#set-mail'); if (!el) return;
@@ -84,6 +90,7 @@ function pmOrderDialog() {
       <input type="radio" name="kind" value="${k}"${k === 'shared' ? ' checked' : ''}>
       <span class="pm-kind-name">${esc(PM_KINDS[k])}</span><span class="pm-kind-price tnum" data-pm-price>${esc(pmPrice(k))}</span>
       <span class="pm-kind-line">${esc(PM_KIND_LINES[k])}</span></label>`).join('')}</div>
+    <p class="muted pm-scan tnum" data-pm-scan>${esc(pmScanLine())}</p>
     <label>Company name<input name="company_name" type="text" maxlength="200" required autocomplete="organization" value="${esc(name)}"></label>`,
     '<button class="primary" type="submit" data-pm-submit>Order</button>');
   dialog.classList.add('pm-dialog');

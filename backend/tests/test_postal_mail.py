@@ -178,7 +178,7 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
             assert (row["status"], row["task_id"], row["kind"]) == ("archived", None, "junk") and row["blob_id"]
         else:
             assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == owner, (ident, row)
-    assert got["204"]["kind"] == "check" and task(api, got["204"]["task_id"])["title"].startswith("Approve depositing a check")
+    assert got["204"]["kind"] == "check" and task(api, got["204"]["task_id"])["title"].startswith("Check received: ")
     assert got["208"]["kind"] == "legal"
     assert all("wire money" not in json.dumps(state["letter"]["summary"]) for state in api.app.state.postal_mail.engine.calls)
     # Without a Finance bot a bill goes to the owner.
@@ -204,6 +204,7 @@ def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
         row = got[ident]
         made = task(api, row["task_id"])
         assert (row["kind"], row["status"], made["owner"]) == ("check", "filed", "human:ana"), ident
+        assert made["title"].startswith("Check received: ") and "Tico doesn't deposit checks." in made["body"], ident
         get(api, "postal/items/" + row["id"], "ben-test", expected=404)          # private: not even an admin
     assert get(api, "postal/items/" + got["401"]["id"])["item"]["contains_checks"] is True
 
@@ -309,8 +310,8 @@ def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
     listed = get(api, "postal/addresses")
     assert listed["addresses"][0]["state"] == "DE" and listed["orders"][0]["order_id"] == "mo_0"
     assert "prices" not in listed
-    mail.prices = {"shared": 10, "private": 25}
-    assert get(api, "postal/addresses")["prices"] == {"shared": 10, "private": 25}
+    mail.prices = {"shared": 10, "private": 25, "scan": 1.0, "page_over_10": 0.25}
+    assert get(api, "postal/addresses")["prices"] == {"shared": 10, "private": 25, "scan": 1.0, "page_over_10": 0.25}
     post(api, "postal/orders", {"kind": "lease", "state": "CA", "company_name": "Acme Inc"}, key="order-0", expected=422)
     post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, "cara-test", expected=403)
     made = post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, key="order-1")

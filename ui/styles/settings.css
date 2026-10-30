@@ -870,6 +870,7 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .pm-kind-name{font-weight:600}
 .pm-kind-price{color:var(--ink)}
 .pm-kind-line{grid-column:2/-1;font-size:var(--t-sm);color:var(--muted)}
+.pm-scan{margin:-8px 0 0;padding:0 2px;font-size:var(--t-sm)}
 .pm-dialog .task-rule-form>label:not(.pm-kind){display:grid;gap:4px}
 .pm-dialog input[name=company_name],.pm-dialog select{width:100%}
 .pm-intake{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;flex-wrap:wrap}

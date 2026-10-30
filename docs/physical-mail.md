@@ -11,6 +11,9 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 - **A Tico Gateway address.** Tico HQ keeps the mailbox (a shared or private mailing address, with a registered agent,
   in a state). Each new letter arrives on the same Gateway queue as webhooks and Tico Team notices, so a Gateway key is
   all a server needs. The scan is fetched from Tico Gateway.
+
+  Prices: shared $10 a month per recipient, private from $25 a month; scans $1 a letter for up to 10 pages, then
+  $0.25 a page. Tico doesn't deposit checks: ask Tico support to forward one, or deposit it yourself.
 - **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
   address: `PUT /api/v2/postal/intake` with `{"inbox_id": "..."}`, or `null` to stop. Have your mail provider send
   its scans there. Each PDF or image attached to a message in that inbox becomes a letter; other attachments and other
@@ -31,7 +34,7 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 | Government or tax | The Finance bot, or the owner when there is none |
 | Bill | The Finance bot, or the owner |
 | Financial (statements, bank notices) | The Finance bot, or the owner |
-| Check (flagged by the mailbox provider, or seen by the reader) | The owner, private: depositing it needs their approval |
+| Check (flagged by the mailbox provider, or seen by the reader) | The owner, private. Tico doesn't deposit checks |
 | Junk | Archived: no task; the scan is still kept |
 | Other, or not sure | The Assistant, or the owner |
 | Could not be read | The owner, private |
@@ -61,8 +64,8 @@ second task.
 ## Settings > Mail
 
 Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
-Pending; Get an address (owner or admin: state, kind and price); Bring your own (the intake inbox); Recent letters,
-with Retry on a failed one for an owner or admin.
+Pending; Get an address (owner or admin: state, kind, monthly and scan prices); Bring your own (the intake
+inbox); Recent letters, with Retry on a failed one for an owner or admin.
 
 ## API, CLI and MCP
 

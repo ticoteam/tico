@@ -1,8 +1,9 @@
 // Settings > Mail (ui/app/settings-mail.js) against a fake server. Guards: addresses list state, kind, the full
 // address only once active, registered agent and Form 1583 status, with open orders as Pending; Get an address shows
-// shared and private, each with its price (Tico Gateway's `prices` win) and line, and sends the order once with an
-// Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the company's email inboxes, and a
-// failed save goes back to the last saved inbox; a failed letter is retried by an owner, and its task is a link. A member reads only.
+// shared and private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own),
+// and sends the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from
+// the company's email inboxes, and a failed save goes back to the last saved inbox; a failed letter is retried by an
+// owner, and its task is a link. A member reads only.
 // Without Tico Gateway the addresses card says so and offers no order. No sideways scroll on a phone.
 // TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
@@ -26,7 +27,7 @@ function server() {
     ],
     orders: [{order_id: 'mo_1', kind: 'shared', state: 'NV', company_name: 'Acme Inc', status: 'open', created_at: AGO(30)},
       {order_id: 'mo_0', kind: 'shared', state: 'DE', company_name: 'Acme Inc', status: 'fulfilled', assignment_id: 'as_1', created_at: AGO(9100)}],
-    prices: {shared: 12, private: '25'},
+    prices: {shared: 12, private: '25', scan: 1.5, page_over_10: '0.3'},
     intakeFail: false,
     intake: null,
     inboxes: [{inbox_id: 'ib_mail', kind: 'email', name: 'Mail', address: 'mail@acme.example'},
@@ -150,6 +151,7 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       assert.equal(await rowText(kind('shared')), 'Shared $12/mo Mailing address and registered agent', "Tico Gateway's price wins");
       assert.equal(await kind('private').locator('[data-pm-price]').innerText(), '$25/mo', 'a price sent as text reads the same');
       assert.equal(await dialog.locator('[data-pm-kind]').count(), 2, 'shared and private only');
+      assert.equal(await dialog.locator('[data-pm-scan]').innerText(), 'Scans $1.50 each, $0.30 a page after 10', "Tico Gateway's scan price wins");
       assert.equal(await dialog.locator('[name=company_name]').inputValue(), 'Acme Inc');
       await dialog.locator('[name=state]').selectOption('CA');
       await kind('private').locator('input').check();
@@ -194,8 +196,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await page.close();
     }
     {
-      // Phone: nothing sideways, the dialog fits. Every price here is Tico Gateway's, in dollars.
-      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {shared: 10, private: 25}}));
+      // Phone: nothing sideways, the dialog fits. Tico Gateway sends no prices, so Tico's own show.
+      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {}}));
       const pane = page.locator('#settings-mail');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-letter="pm_2"]').waitFor();
@@ -206,7 +208,8 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       assert.ok(await dialog.evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the order form fits');
-      assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', '$25/mo']);
+      assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', 'from $25/mo']);
+      assert.equal(await dialog.locator('[data-pm-scan]').innerText(), 'Scans $1 each, $0.25 a page after 10');
       if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-phone.png')});
       assert.deepEqual(errors, []);
       await page.close();
