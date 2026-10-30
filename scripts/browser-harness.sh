@@ -104,7 +104,10 @@ else:
 json.dump({"name": name, "harness": harness, "model": model, "turn": bool(int(ran)), "why": why,
            "expect_devtools": expect == "devtools", "real_cli": real}, open(path, "w"))
 PY
-  if [ "$ran" = 1 ]; then say "$name: probe finished"; else say "$name: not run: $why"; fi
+  if [ "$ran" = 1 ]; then say "$name: probe finished"; else
+    say "$name: not run: $why"
+    docker logs --tail 400 "$RUNNER" 2>&1 | grep -i "error\|fail\|refus\|timed\|panic\|warn" | tail -6 | cut -c1-240 | sed 's/^/    runner: /'
+  fi
   return 0
 }
 
@@ -148,13 +151,13 @@ step_practice_account() {
 # are stand-ins; the harness checks the bot can run, not that a provider answers.
 step_api_keys() {
   local env value
-  for env in XAI_API_KEY OPENROUTER_API_KEY; do
+  for env in XAI_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY META_API_KEY; do
     value="journey-fake-$(printf '%s' "$env" | tr '[:upper:]_' '[:lower:]-')-0123456789"
     python3 -c 'import json,sys; sys.stdout.write(json.dumps({"env": sys.argv[1], "for_bot": sys.argv[2], "value": sys.argv[3], "name": sys.argv[1], "kind": "api_key"}))' \
       "$env" "$BOT" "$value" > "$WORK/body.json"
     send POST /api/v2/credential-set "$(cat "$WORK/body.json")" >/dev/null || { say "$env could not be stored for $BOT"; return 1; }
   done
-  verdict "credentials: the bot holds the xAI and OpenRouter keys its harnesses need" 0
+  verdict "credentials: the bot holds the keys its harnesses need (xAI, OpenRouter, Gemini, Meta)" 0
 }
 
 # The bot opens a login card on codex; the person saves the password and the 2FA secret on it.
@@ -235,12 +238,23 @@ run_step "runner image: which real CLIs it ships" main step_real_clis
 run_step "enroll: runner online with the stand-in CLIs; every provider the harnesses need enabled" main step_enroll_harness
 run_step "bot: active on the computer with the chrome tool" "runner online" step_bot_harness
 run_step "practice: the bot's account signed up, two-step sign-in on" "bot" step_practice_account
-run_step "keys: the bot is granted the xAI and OpenRouter keys" "bot" step_api_keys
+run_step "keys: the bot is granted the keys its harnesses need" "bot" step_api_keys
 run_step "login: the bot opens a card; the person saves a password and a 2FA secret" "account, chrome tool" step_login
 run_step "status: the run's endpoint answers and Chrome runs" "login" step_status
 run_step "rows: one turn per harness, each through its own CLI" main rows
 run_step "collect: the runs' dumps, results and logs" main collect
 run_step "secrets: scanned across every file the runs wrote" main scan_secrets
+
+# Why a fill is refused: the bot's grants (names and revocations only, never a value) and the server's login reads.
+grant_trail() {
+  echo "grant trail (credential_grants for the bot, with revocations; no values):"
+  grep -a "INSERT INTO \"credential_grants\"" "$WORK/db.sql" | grep -a "bot:$BOT" | cut -c1-260 | sed 's/^/  /'
+  echo "login reads by the computer (runner-login-credentials):"
+  grep -a "runner-login-credentials" "$WORK/server.log" | tail -8 | cut -c1-200 | sed 's/^/  /'
+  echo "the runner's fill lines:"
+  grep -a -i "browser fill\|fill:\|not_granted\|login" "$WORK/runner.log" | tail -8 | cut -c1-200 | sed 's/^/  /'
+}
+grant_trail
 
 if [ -n "$BLOCKED" ]; then say "stopped: $BLOCKED"; fi
 echo ""

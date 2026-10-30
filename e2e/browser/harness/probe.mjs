@@ -171,9 +171,13 @@ async function main() {
       !dt.init.error && need.every(name => dt.names.includes(name)), need.filter(name => !dt.names.includes(name)).join(', ') || dt.names.length);
     const pages = await dt.call('list_pages');
     check('list_pages sees the bot\'s Chrome tabs', !pages.error && !pages.isError && pages.text.length > 0, pages.text.slice(0, 160));
-    const nav = await dt.call('navigate_page', {type: 'url', url: practice + '/login'});
+    // list_pages numbers each tab ("1: https://..."); the page tools take that number as pageId.
+    const numbered = /(?:^|\n)\s*(\d+):/.exec(pages.text || '');
+    const pageId = numbered ? Number(numbered[1]) : null;
+    check('list_pages numbers the tabs (pageId for the page tools)', pageId !== null, (pages.text || '').slice(0, 160));
+    const nav = await dt.call('navigate_page', {pageId, type: 'url', url: practice + '/login'});
     check('navigate_page opens the practice login page', !nav.error && !nav.isError, nav.text.slice(0, 160) || nav.error?.message);
-    const snap = await dt.call('take_snapshot');
+    const snap = await dt.call('take_snapshot', {pageId});
     check('take_snapshot reads the practice login page', /Log in/.test(snap.text) && /[Pp]assword/.test(snap.text), snap.text.slice(0, 160) || snap.error?.message);
     dt.close();
   }
