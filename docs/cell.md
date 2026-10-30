@@ -198,11 +198,14 @@ moment or asleep.
   address with its updater token ([Updates](#updates)), body `{"wake_at": "2026-10-30T18:00:00Z" | null, "reason":
   "idle"}`. The answer is `202 {"state": "sleeping", "wake_at"}` at once, and the sleep itself runs a second later, so
   the answer gets back before the server stops. `409 {"error": "busy"}` means an update or another cell command holds
-  the company, and nothing changes. A `wake_at` that is not an ISO-8601 UTC time, or is more than 31 days out, is
+  the company, and nothing changes. An update accepted in that second cancels the sleep (the server asks again later);
+  one that comes once the server is stopping gets a 409. A later sleep request in that second replaces the earlier
+  one. A `wake_at` that is not an ISO-8601 UTC time, or is more than 31 days out, is
   `422 {"error": "bad_wake_at"}`. `sleep --wake-at` does the same from the command line. The record keeps the time, and
   the wake service starts the company once that time is within a minute, checking every 20 s; a start that fails is
-  logged and tried again at a later check, not at once. Starting, waking or stopping the company clears the time, and
-  a sleep without one clears a time an earlier sleep set.
+  logged and tried again at a later check, not at once. Each timed start checks the time again under the company's
+  lock, so a time staff moved or cleared meanwhile starts nothing; a request always wakes the company. Starting,
+  waking or stopping the company clears the time, and a sleep without one clears a time an earlier sleep set.
 - **Sleep policy.** A company's record can carry `sleep_minutes`: idle minutes before it sleeps, 0 to 1440, where 0 means
   never sleeps and no value means no policy. Staff set it with `set-sleep --minutes N` (`--minutes default` removes
   it) or `add --sleep-minutes N`; a re-run of `add` without the flag keeps the saved value. The company's updater

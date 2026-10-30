@@ -1708,6 +1708,86 @@ def test_a_sleep_while_an_update_runs_or_staff_hold_the_company_is_busy(ready):
     assert ask(svc, path="/sleep", body={"wake_at": None})[0] == 202 and record(ready)["state"] == "sleeping"
 
 
+def held_sleep(svc):
+    """The service with each sleep's work held before its lead ends: (release, the sleep threads started so far)."""
+    import threading
+    lead, real = threading.Event(), svc.sleep_work
+    svc.sleep_work = lambda slug, mine: (lead.wait(10), real(slug, mine))
+    return lead, lambda: [w for w in list(svc.workers) if w.name.startswith("sleep-")]
+
+
+def test_an_update_admitted_during_a_sleeps_lead_cancels_the_sleep(ready):
+    import threading
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    lead, sleepers = held_sleep(svc)
+    checked, real = threading.Event(), ready.system.release_published
+    ready.system.release_published = lambda tag: checked.wait(10) and real(tag)     # the update held at its check
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+    held = sleepers()
+    assert svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')[0] == 202 and svc.sleeps == {}
+    lead.set()                                                  # the sleep's lead ends while the update is under way
+    for worker in held:
+        worker.join(10)
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+    assert status(svc)["state"] == "pulling" and svc.sleeps == {}
+    checked.set()
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert status(svc)["state"] == "healthy" and record(ready)["version"] == "v1.3.0"
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+def test_an_update_while_a_sleep_stops_the_server_is_refused_until_it_is_done(ready):
+    import threading
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    stopping, go, real = threading.Event(), threading.Event(), ready.system.run
+
+    def run(argv, **kw):
+        if "--project-name" in argv and "stop" in argv:
+            stopping.set()
+            go.wait(10)
+        return real(argv, **kw)
+    ready.system.run = run
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}')[0] == 202
+    assert stopping.wait(10)                                    # committed: the server is stopping
+    code, body = svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')
+    assert code == 409 and "going to sleep" in body["message"] and status(svc)["state"] == "idle"
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (409, {"error": "busy"})
+    go.set()
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and svc.sleeps == {}
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"   # the reservation is gone: updated, still asleep
+    assert record(ready)["version"] == "v1.3.0" and record(ready)["state"] == "sleeping"
+
+
+def test_a_later_sleep_replaces_a_pending_one_and_its_wake_at_wins(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    lead, sleepers = held_sleep(svc)
+    first, second = utc_in(86400), utc_in(2 * 86400)
+    assert svc.post("boatyard", 0, "/sleep", json.dumps({"wake_at": first}).encode())[0] == 202
+    assert svc.post("boatyard", 0, "/sleep", json.dumps({"wake_at": second}).encode())[0] == 202
+    held = sleepers()
+    lead.set()
+    for worker in held:
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == second and svc.sleeps == {}
+    assert sum(1 for c in ready.system.calls if "--project-name" in c and "stop" in c) == 1
+
+
+def test_a_sleep_that_fails_releases_its_reservation(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    ready.system.fail["stop server"] = Result(1, "", "cannot stop")
+    assert ask(svc, path="/sleep", body={"wake_at": None})[0] == 202
+    assert record(ready)["state"] == "running" and svc.sleeps == {}
+    ready.system.fail.clear()
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"
+
+
 def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
     import http.client
     ready(*add_args(ready))

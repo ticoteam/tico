@@ -1451,12 +1451,17 @@ class Cell:
         c, ready, changed = self.wake_company(check_slug(args.company), args.timeout, started)
         return self.answer(c, ready, changed)
 
-    def wake_company(self, slug: str, timeout: int, started: float | None = None) -> tuple[dict, int, bool]:
+    def wake_company(self, slug: str, timeout: int, started: float | None = None,
+                     due=None) -> tuple[dict, int, bool]:
         """A sleeping company's server started under its lock, as `start` starts it (a pending update is finished or
         rolled back there too), healthy on its own port, then marked running and routed straight to it. A running one
         is only checked. A start that does not come up is stopped again, so the company sleeps and the next request
         tries again; one rolled back to the release before an update is awake on that release (update_failed is raised
-        after the route, as `start` raises it). (record, ready_ms, changed)."""
+        after the route, as `start` raises it). (record, ready_ms, changed).
+
+        `due` is a timed wake's own test, `due(record) -> bool`, made under the lock on the record as it is now: a
+        sweep read the record without the lock, and staff may have moved or cleared the time since (`sleep
+        --wake-at`). False: CellError not_due and nothing is started. A request's wake passes none: it always wakes."""
         started = self.system.monotonic() if started is None else started
         with self.lock("company-" + slug):
             c = self.live(slug)
@@ -1465,6 +1470,8 @@ class Cell:
                 return c, self.wait_healthy(c, started, timeout), False
             if state != "sleeping":
                 raise CellError("not_sleeping", f"{slug} is {state}; `start` starts a stopped company")
+            if due is not None and not due(c):
+                raise CellError("not_due", f"{slug}'s timed wake was moved or cleared; it sleeps on")
             self.direct = True
             failed = None
             try:
@@ -1688,6 +1695,15 @@ def wake_at_text(value) -> str | None:
     if when.timestamp() - time.time() > WAKE_AT_DAYS * 86400:
         raise bad
     return when.strftime(WAKE_AT_FORMAT)
+
+
+def wake_at_time(c: dict) -> float | None:
+    """The record's timed wake as a Unix time, or None when it has none. ValueError for one not in WAKE_AT_FORMAT."""
+    if not c.get("wake_at"):
+        return None
+    if not isinstance(c["wake_at"], str):
+        raise ValueError("wake_at is not a string")
+    return datetime.datetime.strptime(c["wake_at"], WAKE_AT_FORMAT).replace(tzinfo=datetime.timezone.utc).timestamp()
 
 
 def _set_wake_at(c: dict, wake_at: str | None) -> None:

@@ -11,7 +11,8 @@ GET  /sleep                            {"minutes": N | null}: the company's slee
 POST /sleep {"wake_at": "2026-10-30T18:00:00Z" | null, "reason": "idle"}   put the company to sleep (`cell sleep`), with
                                        a timed wake at wake_at when given: 202 {"state": "sleeping", "wake_at"} and the
                                        work a second later, so the answer gets back before the server stops; 409
-                                       {"error": "busy"} while an update runs or another cell command holds the company;
+                                       {"error": "busy"} while an update runs, a sleep is under way, or another cell
+                                       command holds the company; an update accepted before the work starts cancels it;
                                        422 {"error": "bad_wake_at"} for a time that is not ISO-8601 UTC or is more than
                                        31 days out (and {"error": "bad_body"} for a body that is not a JSON object).
                                        The body is at most MAX_BODY bytes; a key other than wake_at is ignored.
@@ -26,6 +27,13 @@ does not come up. A release is refused (state failed, nothing changed) unless it
 downloads, as the sidecar's bundle check needs); older than the company runs is refused as the sidecar refuses it.
 POST /sleep's work is setup/cell.py's own `sleep` for that company, with its wake_at recorded (a timed wake, which
 the wake service runs: setup/cell_wake.py).
+
+Sleep and update, one at a time. An update does its publication check, core install and pull outside the company's
+lock, so the lock alone cannot keep a sleep from stopping the server under it. A sleep is therefore reserved for its
+company under the same `guard` that admits updates (`sleeps`): pending through its lead, committed once its work
+begins. An update admitted while the sleep is pending cancels it (the server asks to sleep again later, on the new
+release); one that comes once it is committed is a 409, as a sleep that comes while an update runs is. The work
+commits only when its own reservation is still there, so an update admitted during the lead always wins.
 
 A company's compose.yaml is the core's own file (`update` rewrites it from there), and a later release may need
 settings or mounts an older core's file does not pass. So a release newer than this host's core runs with that
@@ -217,6 +225,7 @@ class Service:
         self.status: dict[str, dict] = {}
         self.errors: dict[str, collections.deque] = {}
         self.workers: set[threading.Thread] = set()
+        self.sleeps: dict[str, dict] = {}       # slug -> the sleep reserved for it (under `guard`): {"wake_at", "committed"}
         self.listeners: dict[str, Listener] = {}
         self.published: set[str] = set()
         self.stopping = threading.Event()
@@ -331,6 +340,11 @@ class Service:
             s = self.state(slug)
             if s["state"] in UNDER_WAY:
                 return 409, {"error": "an update is already running", **s}
+            if (self.sleeps.get(slug) or {}).get("committed"):     # the server is stopping: update it when it wakes
+                return 409, {"error": "an update is already running", **s,
+                             "message": "This company is going to sleep; try again when it wakes."}
+            if self.sleeps.pop(slug, None):     # a pending sleep gives way: its work finds no reservation and stops
+                log(f"{slug}: sleep cancelled by an update to {version}")
             before = dict(s)
             s.update(state="pulling", to=version, message="", snapshot="", restored=False, **{"from": running})
         try:                            # staff's `cell update` (or add, stop...) holds the company: not now
@@ -354,7 +368,9 @@ class Service:
     def sleep(self, slug: str, index: int, body: bytes) -> tuple[int, dict]:
         """POST /sleep: the company's `cell sleep`, with its timed wake. The answer is 202 as accepted, and the work
         runs in a thread after `lead` seconds, so the server gets its answer before its own container stops. Refused
-        (409 busy) while an update runs for the company or another cell command holds its lock, as /update refuses."""
+        (409 busy) while an update runs for the company, its sleep is committed, or another cell command holds its
+        lock, as /update refuses. Accepted, it is the company's reserved sleep (`sleeps`): one still pending is
+        replaced, so the latest wake_at wins and the earlier work finds itself replaced and stops."""
         try:
             asked = json.loads(body or b"{}")
         except ValueError:
@@ -368,34 +384,52 @@ class Service:
         if self.company(slug, index) is None:
             return 404, {"error": "not found"}
         with self.guard:
-            if self.state(slug)["state"] in UNDER_WAY:
+            if self.busy(slug):
                 return 409, {"error": "busy"}
         try:                            # the same probe /update makes: staff's command holds the company, not now
             with self.make_cell().lock("company-" + slug, timeout=0):
                 pass
         except C.CellError:
             return 409, {"error": "busy"}
-        worker = threading.Thread(target=self.sleep_work, args=(slug, wake_at), name="sleep-" + slug, daemon=True)
-        with self.guard:
+        mine = {"wake_at": wake_at, "committed": False}
+        worker = threading.Thread(target=self.sleep_work, args=(slug, mine), name="sleep-" + slug, daemon=True)
+        with self.guard:                # again: an update may have been admitted during the probe
+            if self.busy(slug):
+                return 409, {"error": "busy"}
+            self.sleeps[slug] = mine
             self.workers.add(worker)
         worker.start()
         return 202, {"state": "sleeping", "wake_at": wake_at}
 
-    def sleep_work(self, slug: str, wake_at: str | None) -> None:
-        """`cell sleep` for the company, in this thread. A lock taken since the request is refused here, not queued (as
-        `work` does); a failure is logged, since the answer was already 202 and nothing else reports it."""
-        time.sleep(self.lead)
+    def busy(self, slug: str) -> bool:
+        """An update under way for the company, or its sleep committed (under `guard`)."""
+        return self.state(slug)["state"] in UNDER_WAY or bool((self.sleeps.get(slug) or {}).get("committed"))
+
+    def sleep_work(self, slug: str, mine: dict) -> None:
+        """`cell sleep` for the company, in this thread, after the lead. It commits under `guard` only while `mine` is
+        still the company's reserved sleep: an update admitted meanwhile took it away (or a later sleep replaced it),
+        and then nothing is stopped. Committed, an update is refused until the reservation is released here, however
+        the sleep ends. A lock taken since the request is refused, not queued (as `work` does); a failure is logged,
+        since the answer was already 202 and nothing else reports it."""
         cell = self.make_cell()
         cell.lock_wait = 0
         try:
-            cell.sleep(argparse.Namespace(company=slug, wake_at=wake_at))
-            log(f"{slug}: asleep" + (f" until {wake_at}" if wake_at else ""))
+            time.sleep(self.lead)
+            with self.guard:
+                if self.sleeps.get(slug) is not mine:
+                    log(f"{slug}: sleep not run: an update or a later sleep came first")
+                    return
+                mine["committed"] = True
+            cell.sleep(argparse.Namespace(company=slug, wake_at=mine["wake_at"]))
+            log(f"{slug}: asleep" + (f" until {mine['wake_at']}" if mine["wake_at"] else ""))
         except C.CellError as e:
             log(f"{slug}: sleep refused: {e.code}: {cell.scrub(e.detail)[:300]}")
         except Exception as e:  # noqa: BLE001  logged, rather than a dead thread saying nothing
             log(f"{slug}: sleep failed: {cell.scrub(f'{type(e).__name__}: {e}')[:300]}")
         finally:
             with self.guard:
+                if self.sleeps.get(slug) is mine:
+                    del self.sleeps[slug]
                 self.workers.discard(threading.current_thread())
 
     # --- the update -------------------------------------------------------------------------------------------
