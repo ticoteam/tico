@@ -270,6 +270,7 @@ def litestream_config(tmp_path, monkeypatch, sync_interval=None):
 def test_litestream_syncs_every_minute_unless_the_install_sets_an_interval(tmp_path, monkeypatch):
     config = litestream_config(tmp_path, monkeypatch)
     assert config["dbs"][0]["replica"]["sync-interval"] == "1m"
+    assert config["dbs"][0]["replica"]["auto-recover"] is True
     assert config["dbs"][0]["monitor-interval"] == "1s" and config["dbs"][0]["checkpoint-interval"] == "1m"
     assert config["snapshot"] == {"interval": "24h", "retention": "720h"}
 

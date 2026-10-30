@@ -278,6 +278,10 @@ backup_configuration() {  # writes $LITESTREAM_CONFIG; returns 1 when backups ar
     [ -z "${TICO_BACKUP_ENDPOINT:-}" ] || echo "      endpoint: $TICO_BACKUP_ENDPOINT"
     [ -z "$region" ] || echo "      region: $region"
     echo "      sync-interval: $sync"
+    # Litestream's local state can fall out of step with the replica (an empty or moved replica, missing local files).
+    # Without this it retries the same missing file forever and nothing is backed up. The reset only drops Litestream's
+    # own local files and uploads a fresh snapshot; the database is untouched.
+    echo "      auto-recover: true"
   } > "$LITESTREAM_CONFIG"
 }
 
