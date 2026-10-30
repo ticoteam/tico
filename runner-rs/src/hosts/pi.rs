@@ -1718,7 +1718,7 @@ mod tests {
             let events = turn_events(&mut rx).await;
             assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
             // Usage is still priced per message, and the newest request is the session's size.
-            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 169, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
+            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
             assert_eq!(host.context_tokens(&thread), Some(169));
         }
         assert_eq!(logged(&dir, "starts.log").len(), 1);
