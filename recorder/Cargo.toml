@@ -12,6 +12,9 @@ description = "Native Tico meeting recorder: platform capture, durable audio, tr
 default = []
 # The desktop app: Tauri 2 on the system WebView, with the UI in ui/app.
 desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-updater", "diarize"]
+# The command-line tool (benches, replays, live-speech tests). Kept out of the app bundle: the universal
+# Mac build merges only the window binary, and the app never runs this one.
+cli = []
 # Local speaker labels for meeting audio (onnxruntime and two ONNX models, fetched at build time).
 diarize = ["dep:pyannote-local"]
 
@@ -61,7 +64,8 @@ tempfile = "3"
 
 [[bin]]
 name = "tico-recorder-cli"
-path = "src/main.rs"
+path = "src/cli/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "tico-recorder"

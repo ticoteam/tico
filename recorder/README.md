@@ -21,7 +21,7 @@ The bundle is described by `tauri.conf.json` (product name "Tico Recorder", iden
 - A version tag gives the recorder that version (it is written into `tauri.conf.json` at build time). `release.yml` builds the recorder only when `recorder/` changed since the previous release; otherwise the previous release's recorder files are carried forward. Either way they are attached to the GitHub release, and `recorder-latest.json` is uploaded last, so the updater never sees a manifest whose files are missing. A recorder failure leaves the server release in place.
 - Download: `https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`.
 - Updates: the app reads `recorder-latest.json` on launch and every six hours, downloads a newer build in the background, and installs it once no recording is running and no live meeting is connected. A small banner (`ui/app/update.js`) shows "Update ready · Restart", or "Updating after this recording" (or after the live meeting ends) while it waits. The Restart button does not override that wait. `update_check` and `update_install` are the commands behind it, and `status.update` in the view carries the state.
-- Pull requests that change `recorder/` run `cargo test --locked --features desktop` on macOS (`.github/workflows/pr-checks.yml`).
+- Pull requests that change `recorder/` run `cargo test --locked --features desktop,cli` on macOS (`.github/workflows/pr-checks.yml`).
 
 ## Workflow
 
@@ -55,7 +55,7 @@ Configure the server's existing Tico gateway connection, plus `TICO_MEETING_QUES
 ## Validation
 
 ```sh
-cargo test --manifest-path recorder/Cargo.toml --features desktop
+cargo test --manifest-path recorder/Cargo.toml --features desktop,cli
 # In the companion Tico checkout, with its test environment:
 TICO_NATIVE_CLI=/absolute/path/to/recorder/target/debug/tico-recorder-cli \
   .venv/bin/python -m pytest backend/tests/test_native_recorder.py -q
@@ -78,7 +78,7 @@ TICO_RECORDER_STT_KEY=... uv run recorder/bench/meeting_bench.py --check
 Build the CLI, then run the generated-speech check on macOS:
 
 ```sh
-cargo build --manifest-path recorder/Cargo.toml --bin tico-recorder-cli
+cargo build --manifest-path recorder/Cargo.toml --features cli --bin tico-recorder-cli
 python3 recorder/tests/real_transcription.py \
   --cli recorder/target/debug/tico-recorder-cli \
   --output /absolute/private/validation-directory

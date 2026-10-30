@@ -140,7 +140,7 @@ def main():
     if not os.environ.get("TICO_RECORDER_STT_KEY"):
         sys.exit("Set TICO_RECORDER_STT_KEY (an OpenRouter key). Nothing ran.")
     if not a.cli.exists():
-        subprocess.run(["cargo", "build", "--release", "--features", "diarize", "--bin", "tico-recorder-cli"],
+        subprocess.run(["cargo", "build", "--release", "--features", "cli,diarize", "--bin", "tico-recorder-cli"],
                        cwd=HERE.parent, check=True)
     known = {m: (who, s, e) for m, who, s, e in MEETINGS}
     rows = []
