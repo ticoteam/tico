@@ -13,7 +13,7 @@
 .bt-r+.bt-r{border-top:1px solid var(--line)}
 .bt-fold{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;padding:0;border:0;background:none;color:var(--muted);cursor:pointer}
 span.bt-fold{cursor:default}
-.bt-fold .nav-icon{font-size:18px;width:18px;height:18px;transition:transform var(--dur-fast) var(--ease)}
+.bt-fold .nav-icon{font-size:18px;width:18px;height:18px}
 .bt-fold[aria-expanded="true"] .nav-icon{transform:var(--chev-open)}
 button.bt-fold:hover{color:var(--ink)}
 .bt-main{position:relative;flex:1;min-width:0;display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 12px 6px 0;border:0;background:none;color:var(--ink);font:inherit;text-align:left}

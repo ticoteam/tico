@@ -95,7 +95,7 @@ async function pageNotes() {
 // Review stays personal until approval; counts are quiet and never enter Needs you.
 function meetPendingBadge(count) {
   for (const el of document.querySelectorAll('[data-meet-pending]')) {
-    el.textContent = count > 99 ? '99+' : String(count || ''); el.hidden = !count;
+    el.hidden = !count; countSet(el, count > 99 ? '99+' : String(count || ''));   // a new number ticks in (ui/app/motion.js)
     el.setAttribute('aria-label', `${count} pending meetings`);
   }
 }

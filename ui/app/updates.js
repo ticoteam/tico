@@ -181,7 +181,8 @@ function updOrder(state, fresh) {
 }
 function updBadge(n) {
   S.updUnread = n;
-  for (const el of document.querySelectorAll('[data-upd-badge]')) { el.textContent = n > 99 ? '99+' : String(n || ''); el.hidden = !n; }
+  // A new number ticks in (countSet, ui/app/motion.js).
+  for (const el of document.querySelectorAll('[data-upd-badge]')) { el.hidden = !n; countSet(el, n > 99 ? '99+' : String(n || '')); }
   // In the tree the badge also counts direct reports' updates from other days: the button follows it both ways.
   const allRead = $('#upd-allread');
   if (allRead && UPD && updIsTree(UPD)) allRead.hidden = !(n > 0) && !(UPD.list || []).some(u => !u.read && !u.quiet);
@@ -505,7 +506,7 @@ function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
   updSaveDrafts();
   const data = state.data;
-  if (!data) { feed.innerHTML = '<div class="upd-skel"></div><div class="upd-skel"></div><div class="upd-skel"></div>'; return; }
+  if (!data) { feed.innerHTML = '<div class="skel-block upd-skel"></div>'.repeat(3); return; }
   // Every load draws the feed again (a visit paints the kept copy, then the server's answer): only cards that changed
   // are replaced (patchHTML), so an unchanged answer moves nothing.
   if (data.tree && updIsTree(state)) {

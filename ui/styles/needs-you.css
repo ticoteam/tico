@@ -11,7 +11,7 @@
 .req-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:var(--lh-tight)}
 .req-from{font-weight:600}
 .req-meta{color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
-.req-arrow{color:var(--muted);font-size:20px;line-height:var(--lh-none);text-align:right;transition:transform var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.req-arrow{color:var(--muted);font-size:20px;line-height:var(--lh-none);text-align:right}
 .req>summary:hover .req-arrow{color:var(--ink)}
 .req[open] .req-arrow{transform:var(--chev-open)}
 .req-body{padding:12px 8px 16px 42px}

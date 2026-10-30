@@ -32,8 +32,8 @@
 .ob-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:12px}
 .ob-tile{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;gap:18px;min-height:112px;
   padding:16px;border:1.5px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);text-align:left;font:inherit;cursor:pointer;
-  transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease),transform var(--dur) var(--ease)}
-.ob-tile:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--dc) 50%,var(--line));box-shadow:0 10px 22px -16px color-mix(in srgb,var(--dc) 70%,transparent)}
+  transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease),translate var(--dur-fast) var(--ease)}
+.ob-tile:hover{border-color:color-mix(in srgb,var(--dc) 50%,var(--line));box-shadow:0 10px 22px -16px color-mix(in srgb,var(--dc) 70%,transparent)}
 .ob-tile-icon{width:42px;height:42px;border-radius:12px;font-size:24px;background:color-mix(in srgb,var(--dc) 13%,var(--surface));color:var(--dci);transition:background-color var(--dur) var(--ease),color var(--dur) var(--ease)}
 .ob-tile-name{font-size:var(--t-lg);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
 .ob-tile-check{position:absolute;top:12px;right:12px;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line);font-size:var(--t-lg);color:transparent;transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),color var(--dur) var(--ease)}
@@ -116,7 +116,7 @@
 .ob-bot.sk .sk-l{display:grid;gap:8px;flex:1;padding-top:3px}
 .ob-bot.sk .sk-l i{display:block;height:10px;border-radius:5px}
 .ob-bot.sk .sk-l i:first-child{width:45%;height:12px}.ob-bot.sk .sk-l i:nth-child(2){width:90%}.ob-bot.sk .sk-l i:nth-child(3){width:70%}
-.ob-bot.sk .sk-i,.ob-bot.sk .sk-l i{background:linear-gradient(90deg,var(--surface2) 25%,color-mix(in srgb,var(--surface2) 35%,var(--surface)) 50%,var(--surface2) 75%);background-size:200% 100%;animation:obShimmer 1.1s linear infinite}
+/* their shimmer: skeleton.css */
 
 /* the chart */
 .ob-chart{padding:16px 16px 20px;border:1px solid var(--line);border-radius:16px;max-height:calc(100vh - 40px);overflow:auto;
@@ -189,12 +189,10 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
 .oc-ph>.oc-bnode{border-style:dashed;background:transparent;box-shadow:none}
 .oc-ph .sk-i{flex:none;width:24px;height:24px;border-radius:50%}
 .oc-ph .sk-l{flex:1;max-width:120px;height:10px;border-radius:5px}
-.oc-ph .sk-i,.oc-ph .sk-l{background:linear-gradient(90deg,var(--surface2) 25%,color-mix(in srgb,var(--surface2) 35%,var(--surface)) 50%,var(--surface2) 75%);background-size:200% 100%;animation:obShimmer 1.1s linear infinite}
 @keyframes ocPop{from{opacity:0;transform:translateY(-6px) scale(.92)}to{opacity:1;transform:none}}
 @keyframes ocGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 @keyframes obRise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @keyframes obPing{from{transform:scale(1);opacity:.75}to{transform:scale(2.8);opacity:0}}
-@keyframes obShimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.ob *,.ob *::before,.ob *::after{animation:none!important;transition:none!important}}
 @container obhost (max-width:1000px){.ob{grid-template-columns:minmax(0,1fr) 280px;gap:16px}.ob-card{padding:22px}}
 /* narrow (a phone): the chart folds into a strip above the card */
