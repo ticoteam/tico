@@ -1,15 +1,20 @@
 """The "Before a due date" trigger (backend/automation_due.py, backend/automations.py): one run per due day however often
 the scheduler passes, a missed day caught up, an overdue occurrence never holding back the next, month-end and leap
-days, the zone the run starts in, and the due day and occurrence refs on the task it opens."""
+days, the zone the run starts in, the due and occurrence marker on the task it opens, pauses that hold a day without
+losing it, a failed day run again, and the idle wake at the run's start."""
+import json
 from datetime import date, datetime, timezone
 
 import pytest
 import time_machine
 
+from backend import ask_deadlines, sleep_idle
 from backend import automation_due as D
-from backend import automations
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_automation_runs import make, sql
+from backend import automation_engine as E
+from backend import automations, cloud_access, hubdb
+from backend.tests.automation_fakes import Services
+from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_automation_runs import FIND, make, sql
 
 OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}
 
@@ -25,6 +30,13 @@ def runs_of(api, aid):
 
 def tick(api, at):
     automations.tick(api.app.state.store, at)
+
+
+def drain(api):
+    api.app.state.store.automations.drain()
+
+
+LLM = {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft the payroll note", "out": "reply"}
 
 
 # ------------------------------------------------------------------------------------------- the dates (pure)
@@ -52,6 +64,11 @@ def test_the_next_day_from_a_cursor_skips_days_already_passed():
     assert D.first_on_or_after(date(2030, 1, 31), "monthly", date(2030, 2, 28)) == date(2030, 2, 28)
     assert D.first_on_or_after(date(2030, 3, 1), "weekly", date(2030, 1, 1)) == date(2030, 3, 1)
     assert D.next_after(date(2030, 1, 7), "weekly", date(2030, 1, 7)) == date(2030, 1, 14)
+
+
+def test_a_task_is_due_at_the_last_second_of_its_day_in_the_zone():
+    assert D.due_end(date(2030, 3, 1), "America/New_York") == "2030-03-01T23:59:59-05:00"
+    assert D.due_end(date(2030, 3, 1), "UTC") == "2030-03-01T23:59:59+00:00"
 
 
 def test_the_run_starts_at_midnight_in_the_zone_the_lead_time_before_the_due_day():
@@ -86,19 +103,31 @@ def test_a_missed_day_catches_up_on_the_next_pass_and_the_next_occurrence_waits_
 def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
     aid = due(api, {"first_due": "2030-01-31", "repeats": "monthly", "open_days": 0, "tz": "UTC"})
     tick(api, datetime(2030, 1, 31, 0, 0, 5, tzinfo=timezone.utc))
+    drain(api)
     first = sql(api, "SELECT id, status FROM tasks WHERE title='Payroll' ORDER BY created")
     assert len(first) == 1 and first[0]["status"] == "open"          # never closed: it is overdue by February
     tick(api, datetime(2030, 2, 28, 0, 0, 5, tzinfo=timezone.utc))   # the clamped February day still runs
+    drain(api)
     assert runs_of(api, aid) == ["due:2030-01-31", "due:2030-02-28"]
     assert all(run["status"] == "ok" for run in get(api, f"automations/{aid}/runs")["runs"])
+    open_tasks = sql(api, "SELECT id, due, occurrence FROM tasks WHERE title='Payroll' AND status='open' ORDER BY due")
+    assert [row["occurrence"] for row in open_tasks] == [f"{aid}:2030-01-31", f"{aid}:2030-02-28"]
+    # The day after January's due day, the bot-handed sweep leaves January's task open: it is that day's deadline.
+    for row in open_tasks[:1]:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET requester='bot:ops', created='2030-01-01T00:00:00.000000Z' WHERE id=?", (row["id"],))
+    with api.app.state.store.read() as c:
+        handed = [t["id"] for t in ask_deadlines.handed_to_people(c, "2030-02-01T00:00:00.000000Z",
+                                                                  "2030-02-01T00:00:00.000000Z")]
+    assert open_tasks[0]["id"] not in handed
 
 
-def test_the_task_is_due_on_the_due_day_and_its_refs_name_the_occurrence_and_rule(api):
+def test_the_task_is_due_at_the_end_of_its_day_and_its_refs_name_the_occurrence_and_rule(api):
     aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC",
                     "rule_due_id": "rdd_7"})
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
-    task = sql(api, "SELECT due FROM tasks WHERE title='Payroll'")
-    assert [row["due"] for row in task] == ["2030-03-01"]
+    task = sql(api, "SELECT due, occurrence FROM tasks WHERE title='Payroll'")
+    assert [(row["due"], row["occurrence"]) for row in task] == [("2030-03-01T23:59:59+00:00", f"{aid}:2030-03-01")]
     refs = sql(api, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.automation')=?", (aid,))
     assert any('"due_on": "2030-03-01"' in ref["refs_json"] and '"rule_due_id": "rdd_7"' in ref["refs_json"]
                for ref in refs)
@@ -161,3 +190,91 @@ def test_a_bad_due_trigger_is_refused_on_save(api, trigger):
     body = post(api, "automations", {"name": "Bad", "owner": "person:ana", "trigger": trigger,
                                      "steps": [OPEN]}, expected=422)
     assert "trigger" in str(body)
+
+
+# ------------------------------------------------------------------------------------------- holds and retries
+@pytest.mark.parametrize("target, reason", [
+    ((cloud_access, "routines_paused"), "the company is out of credit"),
+    ((automations, "_bot_away"), "its bot is paused"),
+])
+def test_a_paused_routine_holds_its_days_and_catches_up_after_the_pause(api, monkeypatch, target, reason):
+    aid = due(api, {"first_due": "2030-01-07", "repeats": "weekly", "open_days": 0, "tz": "UTC"})
+    monkeypatch.setattr(*target, lambda *args: reason)
+    tick(api, datetime(2030, 1, 14, 0, 30, tzinfo=timezone.utc))
+    tick(api, datetime(2030, 1, 14, 0, 40, tzinfo=timezone.utc))
+    assert runs_of(api, aid) == [] and get(api, f"automations/{aid}")["next_due"] == "2030-01-07"
+    events = sql(api, "SELECT detail_json FROM events WHERE action='automation.deferred' AND target=?", (aid,))
+    assert [json.loads(row["detail_json"]) for row in events] == [{"due_on": "2030-01-07", "reason": reason}]
+    monkeypatch.undo()
+    tick(api, datetime(2030, 1, 14, 0, 50, tzinfo=timezone.utc))
+    assert runs_of(api, aid) == ["due:2030-01-07", "due:2030-01-14"]
+
+
+def test_a_find_routine_waits_for_its_unfinished_run_and_loses_no_day(api):
+    aid = due(api, {"first_due": "2030-01-07", "repeats": "weekly", "open_days": 0, "tz": "UTC"}, steps=[FIND, OPEN])
+    tick(api, datetime(2030, 1, 14, 0, 30, tzinfo=timezone.utc))      # Jan 7 is queued and not yet drained
+    assert runs_of(api, aid) == ["due:2030-01-07"]
+    assert get(api, f"automations/{aid}")["next_due"] == "2030-01-14"
+    drain(api)
+    tick(api, datetime(2030, 1, 14, 0, 40, tzinfo=timezone.utc))
+    assert runs_of(api, aid) == ["due:2030-01-07", "due:2030-01-14"]
+    assert get(api, f"automations/{aid}")["next_due"] == "2030-01-21"
+
+
+def test_a_failed_day_is_run_again_hourly_until_it_makes_its_one_task(api, monkeypatch):
+    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"})
+    real = hubdb.task_create
+
+    def broken(*args, **kwargs):
+        raise ValueError("the office is closed")
+
+    monkeypatch.setattr(hubdb, "task_create", broken)
+    with time_machine.travel(datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc), tick=False):
+        tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+        drain(api)
+    assert [run["status"] for run in get(api, f"automations/{aid}/runs")["runs"]] == ["failed"]
+    assert get(api, f"automations/{aid}")["next_due"] == "2030-03-01"       # the day is owed again, not used up
+    monkeypatch.setattr(hubdb, "task_create", real)
+    with time_machine.travel(datetime(2030, 2, 15, 0, 30, tzinfo=timezone.utc), tick=False):
+        tick(api, datetime(2030, 2, 15, 0, 30, tzinfo=timezone.utc))
+        drain(api)
+    assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1          # not retried within the hour
+    with time_machine.travel(datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc), tick=False):
+        tick(api, datetime(2030, 2, 15, 1, 10, tzinfo=timezone.utc))
+        drain(api)
+    statuses = sorted(run["status"] for run in get(api, f"automations/{aid}/runs")["runs"])
+    assert statuses == ["failed", "ok"]
+    tasks = sql(api, "SELECT due, occurrence FROM tasks WHERE title='Payroll'")
+    assert [(row["due"], row["occurrence"]) for row in tasks] == [("2030-03-01T23:59:59+00:00", f"{aid}:2030-03-01")]
+
+
+def test_the_idle_wake_for_a_due_routine_is_its_run_time_not_its_due_day(api):
+    due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "America/New_York"})
+    with api.app.state.store.read() as c:
+        times = sleep_idle.routine_times(c, datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp())
+    assert datetime(2030, 2, 15, 5, tzinfo=timezone.utc).timestamp() in times     # 00:00 EST, 14 days before
+    assert datetime(2030, 3, 1, tzinfo=timezone.utc).timestamp() not in times
+
+
+def test_a_due_routine_bot_turn_is_that_occurrences_task(api):
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"},
+              steps=[LLM], owner="bot:ops")
+    tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
+    drain(api)
+    tasks = sql(api, "SELECT due, occurrence, owner FROM tasks WHERE occurrence=?", (f"{aid}:2030-03-01",))
+    assert [(row["due"], row["owner"]) for row in tasks] == [("2030-03-01T23:59:59+00:00", "bot:ops")]
+
+
+def test_decide_on_a_due_run_is_given_the_occurrence_fields():
+    services = Services()
+    services.fields["due-review@1"] = ["due_on", "rule_due_id"]
+    flow = {"name": "Review", "owner": "person:ana", "steps": [
+        {"id": "d", "type": "decide", "set": "due-review@1", "out": "d1"}],
+        "trigger": {"type": "due", "first_due": "2030-03-01", "repeats": "once"}}
+    values = {"due": {"due_on": "2030-03-01", "first_due": "2030-03-01", "repeats": "once", "open_days": 14,
+                      "tz": "UTC", "rule_due_id": "rdd_7", "run_at": "2030-02-15T00:00:00.000000Z"}}
+    E.execute(flow, values, services)
+    assert services.judged[0]["values"] == {"due_on": "2030-03-01", "rule_due_id": "rdd_7"}

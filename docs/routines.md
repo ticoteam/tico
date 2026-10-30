@@ -42,10 +42,16 @@ payroll run, a renewal or a board report gets its task in time:
   is due Feb 28 or 29, then Mar 31).
 - `open_days` (default 14) is how many days before the due day the run starts, at 00:00 in `tz` (default the company's
   zone).
-- A `create_task` step opens its task due on that day (its `due` argument overrides it). The task's notice carries the
-  occurrence as `due_on`, and `rule_due_id` when one is set.
+- A task a run opens (a `create_task` step, or a bot turn) is due at the end of its due day in `tz` (its `due` argument
+  overrides it), and it carries the occurrence: `tasks.occurrence` is `<automation id>:<due day>`, and the task's
+  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date, and the asks
+  sweep never expires it.
 - Each occurrence runs once, however often the scheduler passes. A missed day (the server was down) catches up on the
   next pass. An overdue occurrence stays open and never holds back the next one.
+- While the company's routines are paused (out of credit or locked) or the routine's bot is not active, its days wait
+  and nothing is dropped: they run in order after the pause, and one `automation.deferred` event records why.
+- A find step runs one at a time, so a day waits while the run before it is unfinished. A day whose run failed is run
+  again at most hourly, until it makes its task.
 - The Automations list shows the next due day (`next_due`) and when its run starts (`next_run`). Changing the trigger
   restarts the count from the next due day on; a rename or cap change does not.
 

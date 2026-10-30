@@ -40699,6 +40699,13 @@
               "type": "string"
             }
           },
+          "occurrence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."
+          },
           "owner_name": {
             "type": "string",
             "description": "Display name of owner (`owner` stays the actor id)"

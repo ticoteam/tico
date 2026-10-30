@@ -958,7 +958,7 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
     if not manual and _absorbed(c, row):
         return None
     if str(ref).startswith("due:") and c.execute(
-            "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
             (row["id"], str(ref)[:200])).fetchone():
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
@@ -1490,7 +1490,8 @@ class HubServices:
             if cap is not None and _spent(c, self.row["id"], self.run_id) + float(ctx.get("cost") or 0) >= float(cap):
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
-                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"))
+                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"),
+                                   occurrence=ctx["values"].get("due"))
             if found and found["action"] == "warn":
                 from . import screening
                 screening.note(c, found, "webhook", started["ref"], bot=bot)
@@ -1595,6 +1596,7 @@ class Hub:
                 status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
                 _cancel_mail(c, rid, state)
+                _due_failed(c, run)
             _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued", "held"))
             waits = [t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"]
             if status == "waiting":
@@ -1792,24 +1794,67 @@ def _cursor(day):
     return day.isoformat() if day else ""
 
 
+DUE_RETRY = timedelta(hours=1)    # a due day whose run failed is run again no sooner than this after the failure
+
+
 def _due_pass(c, row, at):
     """A routine's due days whose run time has come: one run each, keyed by its due day (`queue` refuses a second),
-    then the cursor moves on. The cursor is written in the same transaction, so a repeated or concurrent pass runs
-    nothing new, and a missed day catches up on the next pass. Each occurrence is independent of the one before."""
+    then the cursor moves on. A day waits, and the cursor stays on it, while the routine is paused (access, or its
+    bot not active: a `automation.deferred` event, once per reason and day), while a find runs one at a time and
+    another run is unfinished, and while a failed run is not yet due its hourly retry. A failed day is put back by
+    `_due_failed`. Nothing is dropped by a pause: the catch-up runs them in order after it. Each occurrence is
+    independent of the one before."""
     flow = flow_of(row)
     trigger = flow["trigger"]
     day = _due_day(row["next_due"]) if row["next_due"] is not None else D.start(trigger, at)
     zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
     passed = 0
     while day and passed < D.MAX_CATCH_UP and D.fire_at(day, open_days, zone) <= at:
-        fire(c, "due", {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"],
-                                "repeats": trigger["repeats"], "open_days": open_days, "tz": zone,
-                                "rule_due_id": trigger.get("rule_due_id"),
-                                "run_at": _iso(D.fire_at(day, open_days, zone))}},
-             f"due:{day.isoformat()}", only=row["id"])
+        ref = f"due:{day.isoformat()}"
+        if why := cloud_access.routines_paused(c) or _bot_away(c, row):
+            _deferred(c, row, day, why)
+            break
+        last = c.execute("SELECT status, finished FROM automation_runs WHERE automation_id=? AND trigger_ref=? "
+                         "ORDER BY started DESC LIMIT 1", (row["id"], ref)).fetchone()
+        if not last or last["status"] == "failed":     # done otherwise: an ok, unfinished or skipped run stands
+            if last and (last["finished"] or "") > _iso(at - DUE_RETRY):
+                break
+            if _finds(flow["steps"]) and c.execute(
+                    "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting','held') "
+                    "LIMIT 1", (row["id"],)).fetchone():
+                break
+            fire(c, "due", {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"],
+                                    "repeats": trigger["repeats"], "open_days": open_days, "tz": zone,
+                                    "rule_due_id": trigger.get("rule_due_id"),
+                                    "run_at": _iso(D.fire_at(day, open_days, zone))}},
+                 ref, only=row["id"])
         day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
         passed += 1
     c.execute("UPDATE automations SET next_due=? WHERE id=?", (_cursor(day), row["id"]))
+
+
+def _deferred(c, row, day, why):
+    """A due day a pause holds: one `automation.deferred` event per reason and day, not one per pass."""
+    last = c.execute("SELECT detail_json FROM events WHERE action='automation.deferred' AND target=? "
+                     "ORDER BY rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    detail = {"due_on": day.isoformat(), "reason": why}
+    if last and json.loads(last[0] or "{}") == detail:
+        return
+    H.event(c, H.KEEPER, "automation.deferred", row["id"], detail)
+
+
+def _due_failed(c, run):
+    """A due day's run failed: the cursor goes back to that day (if it is past it), so `_due_pass` runs the day again
+    once its retry is due. A failed run has no other effect on the routine's days."""
+    ref = str(run.get("trigger_ref") or "")
+    if not ref.startswith("due:"):
+        return
+    try:
+        day = date.fromisoformat(ref[4:]).isoformat()
+    except ValueError:
+        return
+    c.execute("UPDATE automations SET next_due=? WHERE id=? AND (next_due='' OR next_due>?)",
+              (day, run["automation_id"], day))
 
 
 def _fail(c, rid, state, now, why):

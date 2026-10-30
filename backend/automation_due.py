@@ -51,6 +51,11 @@ def fire_at(due, open_days, zone):
     return datetime.combine(start, time.min, tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
 
 
+def due_end(due, zone):
+    """The last second of the due day in `zone`, as an offset timestamp: the due a task of that day carries."""
+    return datetime.combine(due, time(23, 59, 59), tzinfo=ZoneInfo(zone)).isoformat()
+
+
 def zone_of(trigger):
     """The trigger's zone, or the company's (updates.ZONE) for one saved without it."""
     if trigger.get("tz"):

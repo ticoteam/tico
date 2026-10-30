@@ -1314,6 +1314,8 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL")
     # When a run that carried a next-run task without doing it picks it up again (backend/quiet_work.py).
     add_column(conn, "tasks", "resume_json", "TEXT")
+    # The due-date routine occurrence a task is for, "<automation_id>:<due_on>" (backend/automation_actions.py).
+    add_column(conn, "tasks", "occurrence", "TEXT")
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
@@ -5834,8 +5836,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
     (backend/blocker_asks.py) wakes when that ask is done.
     `routine` is an automation's own run (a routine's, before the move): a Monitor or Reviewer takes it as its own work.
-    `occurrence` is a due-date routine's due day: each day's task is its own, so an open one with the same title (an
-    overdue day's) does not count as a duplicate of it.
+    `occurrence` is the marker of a due-date routine's occurrence, "<automation_id>:<due_on>": each day's task is its
+    own, so an open one with the same title (an overdue day's) does not count as a duplicate of it, and it is stored
+    on the task (`tasks.occurrence`) for the sweeps and the app.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5969,13 +5972,14 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
            "status": "open", "due": due, "conversation_id": conv["id"],
            "created": ts, "updated": ts, "done_at": None, "closed_at": None, "closed_by": None,
            "note": "", "lane": lane, "rank": _queue_end(conn, target, top),
-           "goal_id": goal_id or None, "next_run": 1 if next_run else 0, "number": number, "private": int(private)}
+           "goal_id": goal_id or None, "next_run": 1 if next_run else 0, "number": number, "private": int(private),
+           "occurrence": occurrence or None}
     conn.execute("INSERT INTO tasks (id, title, body, requester, owner, due, "
                  "conversation_id, created, updated, done_at, closed_at, closed_by, note, lane, rank, "
-                 "goal_id, next_run, number, private) VALUES "
+                 "goal_id, next_run, number, private, occurrence) VALUES "
                  "(:id, :title, :body, :requester, :owner, :due, "
                  ":conversation_id, :created, :updated, :done_at, :closed_at, :closed_by, :note, "
-                 ":lane, :rank, :goal_id, :next_run, :number, :private)", row)
+                 ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence)", row)
     _building(conn, row["id"])     # its first status and step are part of task.created, not changes (_task_changed)
     if parent:
         # Filed under its parent as it is made: _task_parent above checked the parent.

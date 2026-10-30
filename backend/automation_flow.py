@@ -455,7 +455,7 @@ def render_prompt(text, values, cap=MAX_TEXT):
 
 # ---------------------------------------------------------------------------------------------------- Decide's state
 # The trigger's object a Decide step judges, first found wins: a find's item, then the trigger's own object.
-OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule")
+OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule", "due")
 SNIPPET_CHARS = 400     # as the mail connector's brief listing (connectors/mail/judge.py)
 
 

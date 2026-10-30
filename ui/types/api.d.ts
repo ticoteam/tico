@@ -2960,6 +2960,7 @@ export type Task = {
   labels: Array<string>;
   lane: string;
   number?: number | null;
+  occurrence?: string | null;
   open_asks?: number;
   owner: string;
   owner_name?: string;

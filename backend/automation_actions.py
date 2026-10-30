@@ -202,16 +202,26 @@ def _create_task(c, auto, run_id, args, values):
                                         ("human:" + owner) if owner else actor)
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
-    # A due-date run's task is due on its due day unless the step says otherwise, and its refs name that occurrence.
-    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
-    due = str(args.get("due") or occurrence.get("due_on") or "") or None
-    refs = {"automation": auto["id"], **_chain_refs(auto)}
-    if occurrence.get("due_on"):
-        refs.update(due_on=occurrence["due_on"], **({"rule_due_id": str(occurrence["rule_due_id"])}
-                                                   if occurrence.get("rule_due_id") else {}))
+    due, marker, refs = _occurrence(auto, args, values)
     row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
-                        deduplicate=False, wake_refs=refs, occurrence=occurrence.get("due_on"))
+                        deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker)
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
+
+
+def _occurrence(auto, args, values):
+    """A task a run opens: its due, the occurrence marker and the refs that name it. A due-date run's task is due at
+    the end of its due day in the trigger's zone unless the step says otherwise (the step's `due` wins), and the
+    marker is "<automation_id>:<due_on>" (`tasks.occurrence`), so the task stays that day's deadline. Other runs get
+    no marker: (None, None, {automation})."""
+    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
+    if not occurrence.get("due_on"):
+        return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
+    from . import automation_due as D
+    from datetime import date
+    end = D.due_end(date.fromisoformat(occurrence["due_on"]), occurrence.get("tz") or "UTC")
+    refs = {"automation": auto["id"], "due_on": occurrence["due_on"],
+            **({"rule_due_id": str(occurrence["rule_due_id"])} if occurrence.get("rule_due_id") else {})}
+    return (str(args.get("due") or "") or end), f"{auto['id']}:{occurrence['due_on']}", refs
 
 
 def _on_task(name):
@@ -382,7 +392,8 @@ ACTIONS = {"archive": _mail_or_slack("archive"), "leave_for_you": _mail_or_slack
 
 
 # ---------------------------------------------------------------------------------------------------- turns
-def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None):
+def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None,
+               occurrence=None):
     """A turn for this run alone: a new task for the named bot, filed by the automation's owner the way a routine
     files its run (backend/routines.py `open_task`), so it runs in that task's own room and never in a person's chat,
     an Assistant room or another task's session. `assistant:<person>` is the person's Assistant (its room is made on
@@ -407,9 +418,11 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
             raise ValueError(f"No bot {bot}" if not found else f"{bot} is {found['state']}")
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
-    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False, routine=True,
-                         trigger="other", trigger_source="automation:" + auto["id"],
-                         wake_refs={"automation": auto["id"], "automation_run": run_id, "automation_step": step_id,
+    # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
+    due, marker, occ_refs = _occurrence(auto, {}, {"due": occurrence} if occurrence else {})
+    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
+                         routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
+                         wake_refs={**occ_refs, "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})
     if run_model:
         # The step's model is the task's own (checked when the automation was saved, so kept as it is here).
