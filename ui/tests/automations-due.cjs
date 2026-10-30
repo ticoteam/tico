@@ -6,15 +6,18 @@
 // Phone, then desktop. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
 // open editor, dark and light.
 const assert = require('node:assert/strict');
-const {run, open, go, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs');
+const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs');
 
 const HUB_NOW = new Date('2026-10-20T09:00:00Z');   // evals/factory/world.py START, where the hub's clock stays
 const BOT = 'builder-claude';
 
+// Screenshots in both themes, with animations stopped (a loading dot never finishes).
 async function themed(page, name) {
+  const dir = process.env.TICO_UI_SHOTS;
+  if (!dir) return;
   for (const theme of ['dark', 'light']) {
     await page.evaluate(v => window.ticoTheme.set(v), theme);
-    await shot(page, `${name}-${theme}`);
+    await page.screenshot({path: require('node:path').join(dir, `${name}-${theme}.png`), animations: 'disabled'});
   }
   await page.evaluate(() => window.ticoTheme.set('dark'));
 }
@@ -25,7 +28,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
 
   // + New offers the triggers; Before a due date makes the routine and opens it.
   await page.locator('.au-new').click();
-  assert.deepEqual(await page.locator('.au-newm [data-new]').allInnerTexts(),
+  assert.deepEqual(await page.locator('.au-newm [data-new]').evaluateAll(els => els.map(x => x.lastChild.textContent)),
     ['On a schedule', 'When something happens', 'Before a due date']);
   await page.locator('.au-newm [data-new="due"]').click();
   await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});

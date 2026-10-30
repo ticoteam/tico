@@ -206,10 +206,10 @@ button.au-chip:hover{background:var(--surface2)}
 .au-dots{display:none}
 
 /* menus: "+" step types and ⋯ */
-.au-menu{position:absolute;z-index:30;min-width:180px;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.au-menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
-.au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-menu,.au-newm{position:absolute;z-index:30;min-width:180px;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.au-menu button,.au-newm button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.au-menu button:hover:not(:disabled),.au-menu button:focus-visible,.au-newm button:hover,.au-newm button:focus-visible{background:var(--surface2)}
+.au-menu .nav-icon,.au-newm .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 /* + New's trigger choices, under the button */
 .au-newbox{position:relative}
 .au-newm{top:calc(100% + 4px);right:0;min-width:220px}
@@ -326,8 +326,8 @@ button.au-chip:hover{background:var(--surface2)}
   .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
   .au-ln:not(.au-ln-end){height:32px}
   .au-add-end{height:40px;padding:0 16px 0 14px}
-  .au-menu{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
-  .au-menu button{min-height:44px}
+  .au-menu,.au-newm{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
+  .au-menu button,.au-newm button{min-height:44px}
   /* an editor: a sheet over the flow */
   .au.ed-open .au-side{display:flex;position:fixed;z-index:41;left:0;right:0;bottom:0;height:auto;max-height:88dvh;border-radius:14px 14px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.4)}
   .au.ed-open .au-ed{height:auto;max-height:88dvh}
