@@ -31,28 +31,54 @@ fn normal(word: &str) -> String {
         .collect()
 }
 
-/// Utterances in time order: runs of words from one chunk and speaker without a long pause.
-pub fn utterances(record: &Recording) -> Vec<Line> {
-    let mut heard: Vec<(u64, String)> = record
-        .chunks
-        .iter()
-        .filter(|chunk| chunk.channel != "me")
-        .flat_map(|chunk| chunk.words.iter())
-        .map(|word| (word.start_ms, normal(&word.text)))
-        .filter(|(_, word)| !word.is_empty())
-        .collect();
-    heard.sort();
-    let echo = |chunk: &Chunk, start: u64, text: &str| {
+/// Meeting-audio words by start time, to find speaker echo on the microphone.
+struct Heard(Vec<(u64, String)>);
+impl Heard {
+    fn of<'a>(words: impl Iterator<Item = &'a Word>) -> Self {
+        let mut heard: Vec<(u64, String)> = words
+            .map(|word| (word.start_ms, normal(&word.text)))
+            .filter(|(_, word)| !word.is_empty())
+            .collect();
+        heard.sort();
+        Self(heard)
+    }
+    fn chunks(record: &Recording) -> Self {
+        Self::of(
+            record
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.channel != "me")
+                .flat_map(|chunk| chunk.words.iter()),
+        )
+    }
+    /// Whether a microphone word at `start` repeats meeting audio within a second.
+    fn echo(&self, start: u64, text: &str) -> bool {
         let word = normal(text);
-        if chunk.channel != "me" || word.is_empty() {
+        if word.is_empty() {
             return false;
         }
-        let first = heard.partition_point(|(at, _)| *at + ECHO_MS < start);
-        heard[first..]
+        let first = self.0.partition_point(|(at, _)| *at + ECHO_MS < start);
+        self.0[first..]
             .iter()
             .take_while(|(at, _)| *at <= start + ECHO_MS)
             .any(|(_, other)| *other == word)
-    };
+    }
+}
+
+/// Streamed microphone words without the ones that repeat streamed meeting audio.
+pub fn without_echo(me: &[Word], them: &[Word]) -> Vec<Word> {
+    let heard = Heard::of(them.iter());
+    me.iter()
+        .filter(|word| !heard.echo(word.start_ms, &word.text))
+        .cloned()
+        .collect()
+}
+
+/// Utterances in time order: runs of words from one chunk and speaker without a long pause.
+pub fn utterances(record: &Recording) -> Vec<Line> {
+    let heard = Heard::chunks(record);
+    let echo =
+        |chunk: &Chunk, start: u64, text: &str| chunk.channel == "me" && heard.echo(start, text);
     let mut out = vec![];
     for chunk in &record.chunks {
         if chunk.text.trim().is_empty() {
@@ -162,7 +188,7 @@ pub struct LiveTurn {
 }
 
 /// Where a channel's finished chunks already hold the transcript of record.
-fn covered(record: &Recording, channel: &str, at_ms: u64) -> bool {
+pub fn covered(record: &Recording, channel: &str, at_ms: u64) -> bool {
     record.chunks.iter().any(|chunk| {
         chunk.channel == channel
             && ["done", "silence"].contains(&chunk.status.as_str())
@@ -267,6 +293,36 @@ pub fn chunk_texts(record: &Recording) -> BTreeMap<String, String> {
             text.push(' ');
         }
         text.push_str(&utterance.text);
+    }
+    out
+}
+
+/// Each chunk's words without echo, as `chunk_texts` has them. `speaker` is kept only where
+/// diarization named a meeting-audio voice. A chunk without word timings is one word spanning it.
+pub fn chunk_words(record: &Recording) -> BTreeMap<String, Vec<Word>> {
+    let heard = Heard::chunks(record);
+    let mut out = BTreeMap::new();
+    for chunk in record.chunks.iter().filter(|chunk| !chunk.text.trim().is_empty()) {
+        let me = chunk.channel == "me";
+        let words = if chunk.words.is_empty() {
+            vec![Word {
+                start_ms: chunk.start_ms,
+                end_ms: chunk.end_ms,
+                text: chunk.text.trim().into(),
+                ..Default::default()
+            }]
+        } else {
+            chunk
+                .words
+                .iter()
+                .filter(|word| !(me && heard.echo(word.start_ms, &word.text)))
+                .map(|word| Word {
+                    speaker: if me { String::new() } else { word.speaker.clone() },
+                    ..word.clone()
+                })
+                .collect()
+        };
+        out.insert(chunk.id.clone(), words);
     }
     out
 }

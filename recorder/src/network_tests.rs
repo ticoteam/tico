@@ -68,11 +68,17 @@ fn server(
                 key,
             ));
             if let Some(reply) = reply {
-                // `{"status": 404}` alone stands for a route this Tico does not have.
-                let missing = reply.as_object().is_some_and(|row| row.len() == 1)
-                    && reply["status"].as_u64().is_some_and(|code| code >= 400);
-                let status = if missing { format!("{} Not Found", reply["status"]) } else { "200 OK".into() };
-                let body = if missing { b"{}".to_vec() } else { serde_json::to_vec(&reply).unwrap() };
+                // `{"status": 404}` alone stands for a route this Tico does not have; with an
+                // `error` it is Tico refusing the request.
+                let failed = reply.as_object().is_some_and(|row| {
+                    row.len() == 1 || (row.len() == 2 && row.contains_key("error"))
+                }) && reply["status"].as_u64().is_some_and(|code| code >= 400);
+                let status = if failed { format!("{} Refused", reply["status"]) } else { "200 OK".into() };
+                let body = match (failed, reply.get("error")) {
+                    (true, Some(error)) => serde_json::to_vec(&json!({"error":error})).unwrap(),
+                    (true, None) => b"{}".to_vec(),
+                    _ => serde_json::to_vec(&reply).unwrap(),
+                };
                 write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
                 stream.write_all(&body).unwrap();
             }
@@ -540,7 +546,7 @@ fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
     assert!(!crate::assist::quote_supported(&typed, &record));
 }
 #[test]
-fn streamed_text_never_reaches_tico() {
+fn once_a_recording_is_transcribed_its_streamed_text_never_reaches_tico() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let shared = transcript(&store, "Shared live");
@@ -725,4 +731,260 @@ fn your_tico_streams_over_its_own_address() {
     let own = crate::stream::Plan::from_settings(&config).unwrap();
     assert_eq!(own.url, crate::stream::DEFAULT_URL);
     assert!(own.tico.is_none());
+}
+
+fn word(start_ms: u64, end_ms: u64, text: &str, speaker: &str) -> Word {
+    Word {
+        start_ms,
+        end_ms,
+        text: text.into(),
+        speaker: speaker.into(),
+        turn: String::new(),
+    }
+}
+#[test]
+fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
+    use crate::live::{Span, assign, corrected, streamed_turns};
+    let span = |seq, start_ms, end_ms| Span {
+        seq,
+        channel: "me".into(),
+        start_ms,
+        end_ms,
+    };
+    let spans = [span(1, 1000, 2000), span(3, 4000, 5000)];
+    let words = [
+        word(500, 700, "early", ""),
+        word(1800, 2400, "edge", ""),
+        word(3000, 3600, "between", ""),
+        word(2900, 3100, "tie", ""),
+        word(4200, 4400, "inside", ""),
+        word(9000, 9100, "late", ""),
+    ];
+    let assigned = assign(&spans, &words);
+    let texts: Vec<Vec<&str>> = assigned
+        .iter()
+        .map(|words| words.iter().map(|word| word.text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        texts,
+        [vec!["early", "edge", "tie"], vec!["between", "inside", "late"]]
+    );
+    assert!(assign(&[], &words).is_empty());
+    // Words in time order; the voice diarization named most, else the speaker it had.
+    let named = vec![
+        word(3000, 3200, "world", "Dana"),
+        word(1000, 1200, "Hello", "Dana"),
+        word(2000, 2200, "there", "Lee"),
+    ];
+    assert_eq!(
+        corrected(named, "S1"),
+        ("Dana".into(), "Hello there world".into())
+    );
+    assert_eq!(
+        corrected(vec![word(0, 1, "Hi", "")], "S1"),
+        ("S1".into(), "Hi".into())
+    );
+    // Streamed microphone words that repeat streamed meeting audio are echo.
+    assert!(
+        crate::transcript::without_echo(&[word(1000, 1200, "Hello", "")], &[word(1100, 1300, "hello,", "S1")])
+            .is_empty()
+    );
+    // A turn the finished transcript has no words for is emptied.
+    assert_eq!(corrected(vec![], "S1"), ("S1".into(), String::new()));
+    // Streamed turns end where the speaker changes or speech pauses.
+    let me = streamed_turns(
+        "me",
+        &[word(0, 250, "so", "S1"), word(300, 550, "yes", ""), word(2600, 2800, "right", "")],
+    );
+    assert_eq!(
+        me.iter().map(|turn| (turn.speaker.as_str(), turn.text.as_str(), turn.start_ms, turn.end_ms)).collect::<Vec<_>>(),
+        [("Me", "so yes", 0, 550), ("Me", "right", 2600, 2800)]
+    );
+    let them = streamed_turns(
+        "them",
+        &[word(0, 250, "hi", "S1"), word(300, 550, "all", "S1"), word(600, 800, "hey", "S2"), word(900, 950, "ok", "")],
+    );
+    assert_eq!(
+        them.iter().map(|turn| (turn.speaker.as_str(), turn.text.as_str())).collect::<Vec<_>>(),
+        [("S1", "hi all"), ("S2", "hey"), ("Meeting audio", "ok")]
+    );
+}
+
+/// A recording in progress, shared live with the synthetic Tico.
+fn live_recording(store: &Store, title: &str) -> Recording {
+    let record = store.create(title).unwrap();
+    store.state(&record.id, "recording").unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    record
+}
+/// Finishes a microphone chunk with these words, as Scribe returns them.
+fn finished_chunk(store: &Store, id: &str, start: u64, end: u64, words: Vec<Word>) {
+    store
+        .save_audio(id, crate::audio::Channel::Microphone, start, end, &vec![0.2; 16000], 16000)
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    let text = words.iter().map(|word| word.text.as_str()).collect::<Vec<_>>().join(" ");
+    store
+        .transcription_words(&claimed, &text, words, "", json!({"fixture":true}))
+        .unwrap();
+}
+#[test]
+fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_corrects_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Streamed live");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    // Both channels' finals go at once, in time order, with the service's speaker label.
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[1,2]}))]);
+    result.unwrap();
+    assert!(requests[0].0.starts_with("POST /api/v2/live-meetings/live-fixture/chunks "));
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"helo there"},
+            {"seq":2,"speaker":"S1","start_ms":1200,"end_ms":1750,"text":"hi all"},
+        ])
+    );
+    // Only new finals go next time; seq stays contiguous.
+    streamed(&store, id, "me", 3_000, "and fiends", "");
+    streamed(&store, id, "them", 2_500, "yes", "S2");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[3,4]}))]);
+    result.unwrap();
+    let chunks = &requests[0].1["chunks"];
+    assert_eq!((chunks[0]["seq"].clone(), chunks[0]["text"].clone()), (json!(3), json!("yes")));
+    assert_eq!((chunks[1]["seq"].clone(), chunks[1]["text"].clone()), (json!(4), json!("and fiends")));
+    assert_eq!(chunks.as_array().unwrap().len(), 2);
+    // A final that arrives after a later one starts no earlier than it (Tico refuses that);
+    // a streamed word the finished transcript won't have still goes now.
+    streamed(&store, id, "them", 2_800, "late", "S2");
+    streamed(&store, id, "me", 6_000, "uh", "");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[5,6]}))]);
+    result.unwrap();
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":5,"speaker":"S2","start_ms":3000,"end_ms":3050,"text":"late"},
+            {"seq":6,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":"uh"},
+        ])
+    );
+    // The finished chunk corrects the microphone's streamed turns instead of repeating them;
+    // its words past the last streamed turn are the only new text.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8_000,
+        vec![
+            word(1000, 1250, "Hello", ""),
+            word(1300, 1550, "there", ""),
+            word(3000, 3250, "and", ""),
+            word(3300, 3550, "friends", ""),
+            word(7000, 7300, "bye", ""),
+        ],
+    );
+    // The first correction's reply is lost: the retry repeats its key and body.
+    let (result, first) = pass(vec![Some(json!({"accepted":[7]})), None]);
+    assert!(result.is_err());
+    assert_eq!(
+        first[0].1["chunks"],
+        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":8000,"text":"bye"}])
+    );
+    let (result, requests) = pass(vec![
+        Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
+        Some(json!({"id":"live-fixture","seq":4,"revision":2,"replayed":false,"event_id":10})),
+        Some(json!({"status":422,"error":{"code":"validation","message":"Transcript text is required"}})),
+    ]);
+    result.unwrap();
+    assert_eq!(first[1], requests[0], "the retry is the same request");
+    let corrections: Vec<(String, Value)> = requests
+        .iter()
+        .map(|(line, body, _)| (line.split(' ').nth(1).unwrap().to_owned(), body.clone()))
+        .collect();
+    assert_eq!(
+        corrections,
+        [
+            ("/api/v2/live-meetings/live-fixture/chunks/1/corrections".into(),
+             json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})),
+            ("/api/v2/live-meetings/live-fixture/chunks/4/corrections".into(),
+             json!({"revision":2,"speaker":"Me","start_ms":3000,"end_ms":3550,"text":"and friends"})),
+            // No finished words: emptied (Tico refuses empty text for now, and keeps "uh").
+            ("/api/v2/live-meetings/live-fixture/chunks/6/corrections".into(),
+             json!({"revision":2,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":""})),
+        ]
+    );
+    assert!(requests[0].2.contains(":live:1:r2:"), "{}", requests[0].2);
+    // Every finished word reached the microphone's turns once: corrected, or new past them.
+    let mut shared: Vec<String> = corrections
+        .iter()
+        .map(|(_, body)| body["text"].as_str().unwrap().to_owned())
+        .collect();
+    shared.insert(2, first[0].1["chunks"][0]["text"].as_str().unwrap().to_owned());
+    assert_eq!(shared.join(" ").split_whitespace().collect::<Vec<_>>().join(" "), "Hello there and friends bye");
+    // Nothing changed: nothing is sent (this Tico is gone, so any request would fail).
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.push_live(&store, id).unwrap();
+    // The recording's own transcript is the finished chunk, untouched.
+    let kept = store.get(id).unwrap();
+    assert_eq!(kept.chunks[0].text, "Hello there and friends bye");
+    assert_eq!(store.live_words(id).unwrap()["me"].len(), 5);
+}
+
+#[test]
+fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_nothing_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Chunks only");
+    let id = record.id.as_str();
+    finished_chunk(&store, id, 0, 5_000, vec![word(400, 700, "Morning", ""), word(800, 1000, "all", "")]);
+    let (tico, seen, worker) = server(vec![
+        // Paused in Tico: the turn waits, and the meeting is read to see so.
+        Some(json!({"status":409,"error":{"code":"meeting_state","message":"A paused meeting cannot accept new transcript text"}})),
+        Some(json!({"id":"live-fixture","state":"paused"})),
+    ]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "paused");
+    assert_eq!(
+        seen.lock().unwrap()[0].1["chunks"],
+        json!([{"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"}])
+    );
+    // While paused nothing new goes, even with streamed words.
+    streamed(&store, id, "me", 5_500, "still talking", "");
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.push_live(&store, id).unwrap();
+    // Resumed in Tico: the waiting turn goes again, then the streamed one.
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","state":"live"})),
+    ]);
+    // A paused meeting is only read back.
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(seen.lock().unwrap()[0].0.starts_with("GET /api/v2/live-meetings/live-fixture "));
+    assert_eq!(store.context(id).unwrap().live_state, "live");
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"},
+            {"seq":2,"speaker":"Me","start_ms":5500,"end_ms":6050,"text":"still talking"},
+        ])
+    );
 }

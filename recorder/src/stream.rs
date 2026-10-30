@@ -5,7 +5,8 @@
 //! is full, streamed audio is dropped and recorded audio is untouched. Final results are saved
 //! in `live_words`, so a crash keeps them; the changing partial text lives in memory only.
 //! The chunked transcript stays the record: finished chunks replace streamed text for their
-//! time range (`transcript::live_turns`), and nothing streamed is sent to Tico.
+//! time range (`transcript::live_turns`). A live meeting gets each final at once, and the
+//! finished chunks then correct it there (`live`).
 use crate::{
     settings::{self, Destination, Settings},
     speech,

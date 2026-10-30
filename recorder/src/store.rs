@@ -229,7 +229,17 @@ impl Store {
           acknowledged INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(recording_id,destination_id,seq),UNIQUE(recording_id,destination_id,chunk_id));
           CREATE TABLE IF NOT EXISTS live_words(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
           channel TEXT NOT NULL,start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,words TEXT NOT NULL);
-          CREATE INDEX IF NOT EXISTS live_words_range ON live_words(recording_id,channel,start_ms);")?;
+          CREATE INDEX IF NOT EXISTS live_words_range ON live_words(recording_id,channel,start_ms);
+          CREATE TABLE IF NOT EXISTS live_spans(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          destination_id TEXT NOT NULL,seq INTEGER NOT NULL,channel TEXT NOT NULL,start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,
+          PRIMARY KEY(recording_id,destination_id,seq));
+          CREATE TABLE IF NOT EXISTS live_sources(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          destination_id TEXT NOT NULL,chunk_id TEXT NOT NULL,channel TEXT NOT NULL,end_ms INTEGER NOT NULL,overflow_ms INTEGER NOT NULL,
+          PRIMARY KEY(recording_id,destination_id,chunk_id));
+          CREATE TABLE IF NOT EXISTS live_corrections(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          destination_id TEXT NOT NULL,seq INTEGER NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,
+          state INTEGER NOT NULL DEFAULT 0);
+          CREATE INDEX IF NOT EXISTS live_corrections_seq ON live_corrections(recording_id,destination_id,seq);")?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -835,8 +845,9 @@ impl Store {
         Ok(())
     }
     /// Saves one final result of the live stream. It replaces the streamed words that start
-    /// within `[from_ms, to_ms]` on this channel, then adds `words`. Streamed words stay on this
-    /// computer: they show live text and early drafts and are never sent to Tico.
+    /// within `[from_ms, to_ms]` on this channel, then adds `words`. Streamed words show live
+    /// text and early drafts, and reach a live meeting at once; the recording's own transcript is
+    /// always the finished chunks.
     pub fn replace_live_words(
         &self,
         id: &str,
