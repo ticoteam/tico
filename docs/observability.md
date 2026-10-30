@@ -292,7 +292,8 @@ scripts/tico -e ENV server flight summary --since 2h   # a local install
 ```
 
 The summary shows server starts, stalls with their class and stacks, the slowest routes (count, total, p95, max, SQL time,
-lock wait, average and largest answer), slow requests, per-minute CPU, memory, loop lag, lock wait and hold, and drops;
+lock wait, average and largest answer), slow requests, per-minute CPU, memory, loop lag, lock wait and hold, and drops,
+and request percentiles across all routes (estimated from each route's per-minute p50, p95 and max);
 `--json` prints the same as JSON. The support bundle carries the last 24 hours of it (routes, slow requests, the latest
 stalls with stacks, hourly peaks), through the same allowlist and redactor as the rest of the bundle.
 

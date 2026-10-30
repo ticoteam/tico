@@ -324,12 +324,54 @@ def files(folder):
     return [p for p in out if p.exists()]
 
 
+# A file this big is not read from its start for a short window: `records` finds where the window begins by a binary
+# search on line timestamps. Lines go in about in time order (a minute's rows carry the minute's start, written once it
+# ends), so the search backs off TAIL_SLACK seconds before `since`.
+TAIL_FROM = 1024 * 1024
+TAIL_SLACK = 300
+
+
+def _ts_after(f, offset):
+    """The timestamp of the first whole line after `offset`, or None (end of file, or no readable line soon after)."""
+    f.seek(offset)
+    if offset:
+        f.readline()
+    for _ in range(8):
+        line = f.readline()
+        if not line:
+            return None
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("ts"), (int, float)):
+            return r["ts"]
+    return None
+
+
+def _start(f, size, since):
+    target, lo, hi = since - TAIL_SLACK, 0, size
+    while hi - lo > 65536:
+        mid = (lo + hi) // 2
+        ts = _ts_after(f, mid)
+        if ts is not None and ts < target:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 def records(folder, since=0.0):
     for path in files(folder):
         try:
-            if path.stat().st_mtime < since:
+            st = path.stat()
+            if st.st_mtime < since:
                 continue
-            with open(path, encoding="utf-8", errors="replace") as f:
+            with open(path, "rb") as f:
+                start = _start(f, st.st_size, since) if since and st.st_size > TAIL_FROM else 0
+                f.seek(start)
+                if start:
+                    f.readline()                    # the line the search landed inside
                 for line in f:
                     try:
                         r = json.loads(line)
@@ -341,16 +383,55 @@ def records(folder, since=0.0):
             continue
 
 
+def quantiles(buckets, qs=(0.5, 0.95, 0.99)):
+    """Request percentiles across many (count, p50, p95, max) rows, one per route and minute: each row is taken as half
+    its requests spread evenly up to its p50, 45% from there to its p95 and the rest up to its max. An estimate (the
+    rows keep no histogram), exact when there is one row. `qs` ascending; None for each when there are no requests."""
+    events, total = [], 0
+    for n, p50, p95, top in buckets:
+        if not n:
+            continue
+        total += n
+        p50 = max(p50 or 0, 0)
+        p95 = max(p95 or 0, p50)
+        top = max(top or 0, p95)
+        for a, b, share in ((0, p50, .5), (p50, p95, .45), (p95, top, .05)):
+            w = n * share
+            if b > a:
+                events += [(a, w / (b - a), 0.0), (b, -w / (b - a), 0.0)]
+            else:
+                events.append((a, 0.0, w))
+    if not total:
+        return [None for _ in qs]
+    events.sort()
+    out, cum, slope, x0, i = [], 0.0, 0.0, 0.0, 0
+    for x, ds, mass in events:
+        seg = slope * (x - x0)
+        while i < len(qs) and seg > 0 and cum + seg >= qs[i] * total:
+            out.append(x0 + (qs[i] * total - cum) / slope)
+            i += 1
+        cum += seg + mass
+        x0 = x
+        while i < len(qs) and cum >= qs[i] * total - 1e-9:
+            out.append(x)
+            i += 1
+        slope += ds
+    out += [x0] * (len(qs) - i)
+    return [round(v, 1) for v in out]
+
+
 def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
     """What the files say about the last `since_s` seconds."""
     now = now or time.time()
     since = now - since_s
     routes, slow, stalls, ends, minutes, starts, memory, holds = {}, [], [], {}, [], [], [], []
-    drops = 0
+    drops, buckets, errors = 0, [], 0
     for r in records(folder, since):
         kind = r.get("kind")
         if kind == "routes":
             for x in r.get("routes") or []:
+                buckets.append((x.get("n") or 0, x.get("p50"), x.get("p95"), x.get("max_ms")))
+                errors += x.get("errors") or 0
                 m = routes.setdefault(x.get("route"), {"route": x.get("route"), "n": 0, "errors": 0, "total_ms": 0.0,
                                                         "max_ms": 0.0, "p95": 0.0, "bytes": 0, "bytes_max": 0,
                                                         "sql_ms": 0.0, "wait_ms": 0.0})
@@ -422,8 +503,11 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12):
             "long_holds": sorted(holds, key=lambda x: -(x.get("hold_s") or 0))[:15],
             "stalls": out_stalls, "stalls_total": len(stalls),
             "minutes": [{k: m.get(k) for k in ("ts", "cpu", "rss", "lag_max", "requests", "wait_max", "wait_ms",
-                                                "hold_max", "locked", "dropped", "db_failed", "db_pending")}
+                                                "hold_max", "locked", "dropped", "db_failed", "db_pending", "sql_ms",
+                                                "queries", "threads")}
                         for m in minutes],
+            "requests": dict(zip(("p50", "p95", "p99"), quantiles(buckets), strict=True),
+                             count=sum(b[0] for b in buckets), errors=errors),
             "peaks": {"cpu": peak("cpu"), "rss": peak("rss"), "lag_max": peak("lag_max"), "wait_max": peak("wait_max"),
                       "hold_max": peak("hold_max")},
             "lock_waits": {"minutes": len(waits), "wait_ms": round(sum(m.get("wait_ms") or 0 for m in minutes)),
