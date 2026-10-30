@@ -93,6 +93,13 @@ def test_only_a_hosted_server_asks_and_nothing_happens_until_support_sets_a_targ
     assert hosted.updater.started == []
 
 
+def test_a_cloud_company_never_asks_hq(hosted, monkeypatch):
+    """Tico updates a cloud company from outside (`setup cell update`); it has no updater for a target to go through."""
+    monkeypatch.setenv("TICO_UPDATES", "tico")
+    hosted.hq.target = TARGET
+    assert hosted.tick(T0) == "" and hosted.hq.bodies == [] and hosted.updater.started == []
+
+
 def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(api, hosted, monkeypatch):  # noqa: F811
     hosted.hq.target = TARGET
     execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())   # a bot turn runs

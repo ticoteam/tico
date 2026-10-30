@@ -1,40 +1,134 @@
-/* ui/styles/automations.css — Automations (redesign, ui/app/automations*.js): the list, the flow, the editor, runs and
-   the BotOps chat. A computer shows list | flow | editor-or-bot; a phone shows one screen at a time
-   (#au-root[data-screen]: list, detail, bot) and the editor as a sheet.
+/* ui/styles/automations.css — Automations (redesign, ui/app/automations*.js): the filters, the list and its Runs tab,
+   the flow, the editor and runs. A computer shows filters | list-or-flow, and the editor beside them while one is
+   open; a phone shows one screen at a time (#au-root[data-screen]: list, detail), its filters behind a button and the
+   editor as a sheet.
    The cascade runs in the order index.html links these files; keep rules in order. */
 #main.au-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .au{display:flex;flex-direction:column;height:100%;min-height:0}
-.au-ph{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
-.au-ph h1{margin:0;font-size:var(--t-lg);font-weight:650}
+/* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
+.au-ph{display:flex;align-items:center;gap:12px;padding:8px 28px;min-height:48px}
+.au-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .au-sp{flex:1}
 .au-sp-phone{display:none}
 .au-pad{padding:14px}
 .au-vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.au-body{flex:1;min-height:0;display:grid;grid-template-columns:304px minmax(0,1fr) var(--rail-right,340px)}
+.au-body{flex:1;min-height:0;display:grid;grid-template-columns:216px minmax(0,1fr)}
+.au.ed-open .au-body{grid-template-columns:216px minmax(0,1fr) var(--rail-right,340px)}
+.au:not(.ed-open) .au-side{display:none}
 .au [hidden]{display:none!important}
 
-/* the list */
-.au-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
+/* the range: 5m, 1h, 24h, 7d */
+.au-range button{padding:3px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer}
+.au-range button[aria-pressed="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* the filters */
+.au-rail{display:flex;flex-direction:column;min-height:0;overflow-y:auto;border-right:1px solid var(--line)}
 .au-s{padding:12px}
-.au-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 16px}
-.au-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
-.au-row{display:flex;align-items:center;gap:8px;padding-right:8px;border:1px solid transparent;border-radius:7px;min-height:32px}
-.au-row:hover{background:var(--surface)}
-.au-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.au-row a{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:6px 8px;color:var(--ink);text-decoration:none}
-.au-row .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-facets{display:grid;align-content:start;gap:14px;padding:0 8px 16px}
+.au-fg{display:grid;align-content:start;gap:1px}
+.au-fg .au-lb{padding:0 6px 4px}
+.au-fb{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 6px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.au-fb:hover{background:var(--surface2)}
+.au-fb[aria-pressed="true"]{background:var(--surface2);color:var(--ink)}
+.au-fb[aria-pressed="true"] .nav-icon{color:var(--accent)}
+.au-fb .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-fb .au-dot{margin:0 5px}
+.au-ft{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-fn{margin-left:auto;color:var(--muted);font-size:var(--t-xs);font-weight:400;font-variant-numeric:tabular-nums}
+
+/* the list: every automation, or every run (the Runs tab) */
+.au-ov{display:flex;flex-direction:column;flex:1;min-height:0}
+.au[data-screen="detail"] .au-ov,.au:not([data-screen="detail"]) :is(.au-crumb,.au-hd,.au-pane){display:none}
+.au-ctl{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:8px 16px;border-bottom:1px solid var(--line)}
+.au-tabs{display:flex;gap:2px}
+.au-tabs button{padding:4px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-weight:600;cursor:pointer}
+.au-tabs button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
+.au-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
+.au-sel select{width:auto;height:28px;padding:0 6px;font-size:var(--t-sm)}
+.au-ctl .au-fbtn{display:none}
+.au-tbl{flex:1;min-height:0;overflow:auto;container-type:inline-size}
+/* fixed columns: long names and triggers end in "…" so the counts on the right always show */
+.au-tbl-t{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--t-base)}
+.au-tbl-t th{position:sticky;top:0;z-index:1;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;white-space:nowrap;font-size:var(--t-label);font-weight:600}
+.au-tbl-t td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;overflow:hidden;text-overflow:ellipsis}
+.au-tbl-t th.au-tt{width:15%}
+.au-tbl-t th.au-to{width:64px}
+.au-tbl-t th.au-cl{width:78px}
+.au-tbl-t th.au-cx{width:64px}
+.au-tbl-t th.au-cs{width:104px;padding-right:0}
+.au-tbl-t th.au-n{width:58px}
+.au-tbl-t th.au-cc{width:74px}
+.au-tbl-t th.au-cw{width:84px}
+.au-tbl-t th.au-cst{width:92px}
+.au-tbl-t th.au-why{width:24%}
+.au-tbl-t th.au-out{width:20%}
+/* a narrow table beside the editor folds Next (and a run's Steps and Time) to nothing, then Cost; folded, not removed, so a
+   group row's colspan still matches the columns. A phone keeps them all and scrolls sideways instead. */
+@media (min-width:761px){
+  @container (max-width:1000px){
+    .au-tbl-t th.au-cx{width:0}
+    .au-tbl-t .au-cx{padding:0;font-size:0}
+  }
+  @container (max-width:760px){
+    .au-tbl-t th.au-cc{width:0}
+    .au-tbl-t .au-cc{padding:0;font-size:0}
+  }
+}
+.au-row,.au-arow{cursor:pointer}
+.au-row:hover td,.au-arow:hover td{background:var(--surface2)}
+.au-tn>div{display:flex;align-items:center;gap:8px;min-width:0}
+.au-tn a{display:flex;align-items:center;gap:8px;min-width:0;color:var(--ink);text-decoration:none;font-weight:500}
+.au-tn .nav-icon{font-size:17px;width:18px;height:18px;flex:none;color:var(--muted)}
 .au-nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-row.off .au-nm{color:var(--muted)}
+.au-tt{color:var(--muted)}
+.au-to>span{display:inline-flex;align-items:center;gap:6px;max-width:100%;color:var(--g7)}
+.au-to>span>span{overflow:hidden;text-overflow:ellipsis}
+.au-lr{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+.au-spark{display:block}
+.au-bad{color:var(--fail)}
+.au-grp td{padding:6px 10px;background:var(--surface);font-size:var(--t-sm);font-weight:600;cursor:pointer}
+.au-grp td>*{vertical-align:middle}
+.au-grp td>.nav-icon{font-size:17px;width:18px;height:18px;margin-right:6px;color:var(--muted)}
+.au-grp .au-chev{transition:transform var(--dur-fast) var(--ease)}
+.au-grp.closed .au-chev{transform:rotate(-90deg)}
+.au-grp .au-fn{margin-left:8px}
+.au-why{color:var(--g7)}
+.au-out{color:var(--muted)}
+.au-out.au-bad{color:var(--fail)}
+.au-chart{padding:12px 16px 6px;border-bottom:1px solid var(--line)}
+.au-chart svg{display:block}
+.au-chart-h{display:flex;align-items:center;gap:14px;margin-bottom:6px;color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.au-key{display:inline-flex;align-items:center;gap:5px}
+.au-key i{display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--g5)}
+.au-key i.fail{background:var(--fail)}
+.au-ticks{display:flex;justify-content:space-between;padding-top:3px;color:var(--muted);font-size:var(--t-2xs);font-variant-numeric:tabular-nums}
 .au-sw{flex:none}
+
+/* an open automation: back to the list, and what a built-in is */
+.au-crumb{padding:8px 16px 0}
+.au-crumb:empty{display:none}
+.au-up{display:inline-flex;align-items:center;gap:2px;padding:2px 6px 2px 0;border-radius:6px;color:var(--muted);font-size:var(--t-sm);text-decoration:none}
+.au-up:hover{color:var(--ink)}
+.au-up .nav-icon{font-size:18px;width:18px;height:18px}
+.au-lock{display:inline-flex;align-items:center;gap:5px;margin:0;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.au-lock .nav-icon{font-size:15px;width:15px;height:15px}
+.au-warn{display:flex;align-items:flex-start;gap:5px;margin:2px 0 0;color:var(--fail);font-size:var(--t-sm)}
+.au-warn .nav-icon{font-size:15px;width:15px;height:15px;flex:none}
+.au-about{display:grid;gap:6px;margin-bottom:14px;color:var(--muted);font-size:var(--t-base)}
+.au-about p{margin:0}
 
 /* the header */
 .au-c{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0}
 /* a narrow pane puts the spend limit and Flow/Runs on a second row, as a phone does, so the name stays whole */
 @media (min-width:761px){.au-c{container-type:inline-size}}
 @container (max-width:640px){.au-c .au-hd{flex-wrap:wrap}.au-c .au-hd2{order:10;flex-basis:100%}.au-hd2 .au-sp-phone{display:block;flex:1}}
-.au-hd{display:flex;align-items:center;flex-wrap:nowrap;gap:8px 10px;padding:10px 20px;min-height:53px;border-bottom:1px solid var(--line)}
+.au-hd{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 28px;min-height:53px;border-bottom:1px solid var(--line)}
+/* a long name keeps its line and the controls wrap after it; why a built-in has no switch goes on a line of its own */
+.au-hd>.au-lock,.au-hd>.au-warn,.au-hd>.au-hold{order:20;flex-basis:100%}
+.au-hold{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;color:var(--muted);font-size:var(--t-sm)}
 .au-hd:empty{border:0;padding:0;min-height:0}
-.au-name{margin:0;font-size:var(--t-lg);font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-name{margin:0;font-size:var(--t-lg);font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:var(--track-tight)}
 .au-own{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
 .au-hd>*:not(.au-name,.au-own){flex-shrink:0}
 .au-hd>.au-name{min-width:6em}
@@ -45,17 +139,16 @@ button.au-chip:hover{background:var(--surface2)}
 .au-chip .nav-icon{font-size:15px;width:15px;height:15px;color:var(--muted)}
 .au-ver{color:var(--muted)}
 .au-help{position:relative;flex:none;width:18px;height:18px;padding:0;border:1px solid var(--line);border-radius:50%;background:none;color:var(--muted);font-size:var(--t-xs);line-height:16px;cursor:pointer}
-.au-help:hover::after,.au-help.on::after{content:attr(data-help);position:absolute;top:calc(100% + 6px);right:-8px;width:200px;padding:6px 9px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);line-height:1.4;text-align:left;white-space:normal;z-index:20;pointer-events:none}
+.au-help:hover::after,.au-help.on::after{content:attr(data-help);position:absolute;top:calc(100% + 6px);right:-8px;width:200px;padding:6px 9px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);line-height:var(--lh);text-align:left;white-space:normal;z-index:20;pointer-events:none}
 .au-seg{display:inline-flex;background:var(--surface2);border-radius:8px;padding:2px}
 .au-seg a{padding:3px 12px;border-radius:6px;color:var(--muted);font-weight:600;font-size:var(--t-sm);text-decoration:none}
 .au-seg a[aria-selected="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .au-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border:0;border-radius:7px;background:none;color:var(--muted);cursor:pointer;text-decoration:none}
 .au-icon:hover{background:var(--surface2);color:var(--ink)}
 .au-icon .nav-icon{font-size:20px;width:20px;height:20px}
-.au-back,.au-botbtn{display:none}
 
 /* the flow */
-.au-pane{flex:1;min-height:0;overflow:auto;padding:16px 20px 48px}
+.au-pane{flex:1;min-height:0;overflow:auto;padding:16px 28px 48px}
 .au-track{max-width:620px}
 .au-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer}
 .au-card:hover{border-color:var(--g4)}
@@ -66,7 +159,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-cr{display:flex;align-items:center;gap:8px;min-height:22px}
 .au-cr>.nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 .au-ct{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.au-tag{flex:none;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:600 var(--t-2xs)/16px var(--mono);letter-spacing:.04em;text-transform:uppercase}
+.au-tag{flex:none;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:600 var(--t-2xs)/16px var(--mono);letter-spacing:var(--track-caps);text-transform:uppercase}
 .au-tag.acc{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .au-chips{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
 .au-c1{padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--bg);font-size:var(--t-sm);line-height:18px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
@@ -76,8 +169,19 @@ button.au-chip:hover{background:var(--surface2)}
 .au-pr{margin-top:6px;color:var(--muted);font-size:var(--t-base);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .au-ln{position:relative;display:flex;justify-content:center;align-items:center;height:24px}
 .au-ln::before{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:1px solid var(--line)}
-.au-add{position:relative;width:20px;height:20px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--bg);color:var(--muted);font-size:14px;line-height:17px;cursor:pointer}
-.au-add:hover{color:var(--accent);border-color:var(--accent)}
+/* the "+" between steps: small, its hit area 36px wide; the gap it sits in lights it up, as does focus */
+.au-add{position:relative;width:20px;height:20px;padding:0;border:1px solid var(--g4);border-radius:50%;background:var(--bg);color:var(--muted);font-size:14px;line-height:17px;cursor:pointer;transition:transform var(--dur-fast,.12s) var(--ease,ease-out)}
+.au-add::after{content:"";position:absolute;inset:-8px}
+.au-ln:hover .au-add,.au-add:hover,.au-add:focus-visible{color:var(--accent);border-color:var(--accent);transform:scale(1.2)}
+.au-add:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+/* the end of a list: a line down to an Add step button */
+.au-ln-end{height:auto;padding-top:16px}
+.au-ln-end::before{bottom:auto;height:16px}
+.au-add-end{display:inline-flex;align-items:center;gap:6px;width:auto;height:32px;padding:0 12px 0 10px;border:1px dashed var(--g4);border-radius:8px;font:inherit;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-none);white-space:nowrap}
+.au-add-end span{font-size:16px;font-weight:400}
+.au-add-end::after{content:none}
+.au-ln:hover .au-add-end,.au-add-end:hover,.au-add-end:focus-visible{border-style:solid;transform:none;background:var(--surface)}
+@media (hover:none){.au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}.au-ln:not(.au-ln-end){height:32px}}
 .au-paths{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(120px,1fr);gap:8px;margin-top:10px;overflow-x:auto;padding-bottom:4px}
 .au-pth{min-width:0;padding:8px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--surface) 55%,var(--bg))}
 .au-pth.fb{border-style:dashed}
@@ -91,7 +195,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-pth .au-card{padding:7px 9px}
 .au-pth .au-cr{flex-wrap:wrap;row-gap:4px}
 .au-pth .au-cr>.au-sw{margin-left:auto}
-.au-pth .au-ct{order:3;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3}
+.au-pth .au-ct{order:3;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:var(--lh-tight)}
 .au-pth .au-pr{font-size:var(--t-sm)}
 .au-pth input.au-sw{width:26px;height:16px;border-radius:8px}
 .au-pth input.au-sw::before{width:12px;height:12px}
@@ -104,20 +208,20 @@ button.au-chip:hover{background:var(--surface2)}
 .au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
 .au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 
-/* the side: an editor, else the BotOps chat */
+/* the side: the open editor */
 .au-side{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line)}
 .au-scrim{display:none}
 .au-grab{display:none}
 .au-ed{display:flex;flex-direction:column;min-height:0;height:100%}
 .au-edh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
-.au-edh h3{margin:0;font-size:var(--t-md)}
+.au-edh h3{margin:0;font-size:var(--t-md);letter-spacing:var(--track-snug)}
 .au-x{flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .au-x:hover{background:var(--surface2);color:var(--ink)}
 .au-edb{flex:1;min-height:0;overflow-y:auto;display:grid;align-content:start;gap:14px;padding:14px 16px}
 .au-edf{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
 .au-del{color:var(--fail)}
 .au-f{display:grid;gap:6px;min-width:0}
-.au-lb{color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.au-lb{color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .au-f textarea{min-height:150px}
 .au-rb{display:grid;gap:6px;padding:8px;border:1px solid var(--line);border-radius:8px}
 .au-rb.focus{border-color:var(--accent)}
@@ -145,46 +249,22 @@ button.au-chip:hover{background:var(--surface2)}
 .au-vr .muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-vr>:not(.muted){flex:none}
 
-/* the BotOps chat */
-.au-botp{display:flex;flex-direction:column;min-height:0;height:100%}
-.au-bh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
-.au-bh h2{margin:0;font-size:var(--t-md);font-weight:600}
-.au-bav{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:var(--ok-bg);color:var(--accent);font-size:16px}
-.au-bm{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;padding:12px}
-.au-msgs{margin-top:auto;overflow-wrap:anywhere}
-/* the app's chat look, as Goals: the name once, inside the bubble */
-.au-msgs .conv-run.chat{border:0;padding:6px 0}
-.au-msgs .conv-run-head{display:none}
-.au-msgs .bubble{margin:0}
-.au-msgs .bubble.you{border:0}
-.au-msgs .bubble.bot.reply{background:transparent;border-radius:0}
-.au-berr{margin:0 12px}
-.au-bf{display:flex;align-items:center;gap:12px;padding:6px 12px 12px}
-.au-bf>.ask{flex:1 1 auto;min-width:0}
-.au-bf .au-blank{flex:none;color:var(--muted);text-decoration:none;font-size:var(--t-sm)}
-.au-bf .au-blank:hover{color:var(--ink)}
-.au-bf .au-blank[hidden]{display:none}
-/* the composer: one line, send inside it on the right (the shared pill without the question-card box) */
-.au-bf .ask{display:flex;flex-direction:column;gap:0;margin:0;padding:0;border:0;background:transparent}
-.au-bf .p-pill{flex-wrap:nowrap;align-items:flex-end;min-height:42px;padding:3px 3px 3px 14px;border-radius:21px}
-.au-bf .ask textarea{order:0;flex:1 1 auto;min-width:0;height:34px;max-height:120px;padding:6px 0}
-.au-bf .ask .p-send-icon{width:36px;height:36px;border-width:2px}
-.au-bf :is(.p-chips,.p-why,.p-slow,.p-hint):empty{display:none}
+/* a bot's proposed change, above the versions */
 .au-prop{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .au-prop-t{display:flex;align-items:center;gap:8px}
 .au-prop-x{margin:4px 0 8px;font-size:var(--t-base)}
 .au-prop-b{display:flex;align-items:center;gap:10px}
 .au-prop-b .linkish{color:var(--muted);text-decoration:none}
-.au-diff{margin:0 0 8px;padding:8px;border-radius:6px;background:var(--surface2);font:var(--t-sm)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.au-diff{margin:0 0 8px;padding:8px;border-radius:6px;background:var(--surface2);font:var(--t-sm)/var(--lh) var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .au-diff .add{color:var(--ok)}
 .au-diff .del{color:var(--fail)}
 
 /* runs */
 .au-runs{width:100%;border-collapse:collapse;font-size:var(--t-base)}
-.au-runs th{padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-label);font-weight:500;letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left}
+.au-runs th{padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;font-size:var(--t-label);font-weight:600}
 .au-runs td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .au-rr{cursor:pointer}
-.au-rr:hover{background:var(--surface)}
+.au-rr:hover{background:var(--surface2)}
 .au-rt{white-space:nowrap;color:var(--muted)}
 .au-rt .nav-icon{font-size:16px;width:16px;height:16px;vertical-align:-3px;margin-right:2px}
 .au-ro{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -199,25 +279,30 @@ button.au-chip:hover{background:var(--surface2)}
 .au-sl>span:nth-child(2){flex:1;min-width:0}
 .au-more{display:flex;justify-content:center;padding:12px}
 
-@media (max-width:1099px) and (min-width:761px){.au-body{grid-template-columns:232px minmax(0,1fr) 300px}}
+@media (max-width:1099px) and (min-width:761px){.au-body{grid-template-columns:184px minmax(0,1fr)}.au.ed-open .au-body{grid-template-columns:184px minmax(0,1fr) 300px}}
 
 /* a phone: one screen at a time, the editor a sheet from the bottom, the paths a swipe with dots */
 @media (max-width:760px){
   #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .au{height:auto;min-height:0}
-  .au-ph{padding:12px;border:0}
+  .au-ph{padding:12px}
+  .au-ph{flex-wrap:wrap}
   .au-body{display:block}
-  .au-list,.au-c,.au-side{display:none;border:0}
+  .au-rail,.au-c,.au-side{display:none;border:0}
   .au:not([data-screen="list"]) .au-ph{display:none}
-  .au[data-screen="list"] .au-list{display:flex}
-  .au[data-screen="detail"] .au-c{display:flex}
+  .au[data-screen="list"].filters-open .au-rail{display:flex;overflow:visible;border-bottom:1px solid var(--line)}
+  .au[data-screen="list"] .au-c,.au[data-screen="detail"] .au-c{display:flex}
   .au-s{padding:0 12px 8px}
-  .au-scroll{padding:0 12px 12px;overflow:visible}
-  .au-row{min-height:44px}
-  .au-row a{font-size:var(--t-md)}
+  .au-facets{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));padding:0 12px 12px}
+  .au-fb{min-height:36px}
+  .au-ctl .au-fbtn{display:inline-flex}
+  .au-ctl{padding:8px 12px}
+  .au-ctl .au-sp,.au-sel{display:none}
+  /* the table scrolls sideways in its own box; the page scrolls down */
+  .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
+  .au-tbl-t{min-width:820px}
+  .au-crumb{padding:8px 12px 0}
   .au-hd{padding:8px 12px;border:0;flex-wrap:wrap}
-  .au-back,.au-botbtn{display:inline-flex}
-  .au-back{margin-left:-6px}
   .au-own,.au-hd>.au-sp{display:none}
   .au-name{flex:1 1 0}
   .au-hd2{order:10;flex-basis:100%}
@@ -231,15 +316,11 @@ button.au-chip:hover{background:var(--surface2)}
   .au-dots button{position:relative;width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
   .au-dots button::before{content:"";position:absolute;top:8px;left:7px;width:7px;height:7px;border-radius:4px;background:var(--g4)}
   .au-dots button[aria-selected="true"]::before{left:3px;width:16px;background:var(--accent)}
-  .au-add{width:28px;height:28px;line-height:25px}
-  .au-ln{height:30px}
+  .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
+  .au-ln:not(.au-ln-end){height:32px}
+  .au-add-end{height:40px;padding:0 16px 0 14px}
   .au-menu{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
   .au-menu button{min-height:44px}
-  /* the bot: its own screen above the tab bar */
-  .au[data-screen="bot"] .au-side{display:flex;height:calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom))}
-  .au-bh{border:0;padding:8px 12px}
-  .au-bf .ask textarea{font-size:16px}
-  .au-bf .p-pill{border-radius:21px;padding:3px 3px 3px 14px}
   /* an editor: a sheet over the flow */
   .au.ed-open .au-side{display:flex;position:fixed;z-index:41;left:0;right:0;bottom:0;height:auto;max-height:88dvh;border-radius:14px 14px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.4)}
   .au.ed-open .au-ed{height:auto;max-height:88dvh}
@@ -254,4 +335,4 @@ button.au-chip:hover{background:var(--surface2)}
   .au-runs td{padding:10px 6px}
   .au-rx td{padding:2px 6px 10px 22px}
 }
-.au-mono textarea{font-family:var(--mono,ui-monospace,monospace);font-size:12.5px}
+.au-mono textarea{font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}

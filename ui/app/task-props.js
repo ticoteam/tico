@@ -252,7 +252,7 @@ function taskPropsBind(d, task, change) {
         propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: async it => {
           if (it.value === task.step_id) return;
           const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-          if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+          if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
           void save('status', body);
         }});
         return;
@@ -264,7 +264,7 @@ function taskPropsBind(d, task, change) {
       propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: async it => {
         if (it.value === (task.step_id || '')) return;
         const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-        if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+        if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
         void save('step', body);
       }});
     } else if (key === 'type') {

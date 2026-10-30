@@ -339,7 +339,7 @@ def test_slow_reprobe_heals_without_restart_and_downloads_follow(tmp_path, monke
         return False
     monkeypatch.setattr(stop, 'wait', wait)
     storage.storage_loop(store, stop)
-    assert waits == [1800]
+    assert waits == [30]
     assert [kind for kind, options in calls if 'config' in options] == ['backup', 'role', 'backup', 'role']
     assert not storage._write_failed and not write_health(store)['error']
     assert downloads.s3 is storage.s3 is clients['role']
@@ -509,3 +509,98 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
     assert storage.check_write(store) is True
     assert storage._sources.selected == 'role'
     assert 'upload_id' not in write_health(store) and not write_health(store)['error']
+
+
+def locked_transactions(store, failures):
+    """The store's first `failures` write transactions fail the way a write gate that waited too long does."""
+    import sqlite3
+    transaction, calls = store.transaction, []
+    def flaky():
+        calls.append(1)
+        if len(calls) <= failures:
+            raise sqlite3.OperationalError('database is locked')
+        return transaction()
+    store.transaction = flaky
+    return calls
+
+
+def test_busy_database_is_not_an_s3_failure_and_never_ends_the_storage_loop(tmp_path, credential_clients):
+    import threading
+    clients, _ = credential_clients
+    clients['role'].writable = True
+    storage, store = storage_store(tmp_path)
+    locked_transactions(store, 2)
+    assert storage.check_write(store) is True
+    assert not storage._write_failed and not storage._write_error
+    # The unrecorded probe upload is still aborted by the same check, so none is left in the bucket.
+    assert [operation for operation, _ in clients['role'].calls] == ['create', 'abort']
+    assert storage.put(b'attachment')
+
+    storage, store = storage_store(tmp_path / 'loop')
+    locked_transactions(store, 2)
+    stop = threading.Event()
+    stop.wait = lambda interval: pytest.fail('a healthy storage loop does not wait to retry')
+    storage.storage_loop(store, stop)
+    assert not storage._write_failed and storage.put(b'attachment')
+
+
+def test_non_s3_errors_are_not_worded_as_s3():
+    import sqlite3
+    from botocore.exceptions import ClientError, EndpointConnectionError
+    from backend import blob_s3
+    detail = blob_s3.write_error(sqlite3.OperationalError('database is locked'), 'acme-files', cleanup=True)
+    assert 'S3 storage' not in detail and 'OperationalError' in detail
+    assert blob_s3.write_error(EndpointConnectionError(endpoint_url='https://s3.example.com'), 'acme-files').startswith('S3 storage')
+    denied = ClientError({'Error': {'Code': 'AccessDenied'}}, 'PutObject')
+    assert blob_s3.write_error(denied, 'acme-files') == "S3 storage can't write: AccessDenied on acme-files (s3:PutObject)"
+
+
+def test_refused_upload_starts_one_recheck_and_heals(tmp_path, credential_clients):
+    import threading
+    from backend.store import Problem
+    clients, _ = credential_clients
+    storage, store = storage_store(tmp_path)
+    assert storage.check_write(store) is False and storage._write_failed
+    storage._store, storage._loop = store, threading.Event()
+    # Within a minute of the last check, a refusal starts nothing.
+    with pytest.raises(Problem):
+        storage.put(b'attachment')
+    assert not storage._healing
+    storage._checked -= 120
+    source = clients['role']
+    source.writable = True
+    entered, release = threading.Event(), threading.Event()
+    create = source.create_multipart_upload
+    def blocked(**options):
+        entered.set()
+        assert release.wait(10)
+        return create(**options)
+    source.create_multipart_upload = blocked
+    before = len(source.calls)
+    for _ in range(3):
+        with pytest.raises(Problem, match='retry without discarding'):
+            storage.put(b'attachment')
+    assert entered.wait(10)
+    release.set()
+    assert storage._probe_task[0].wait(10)
+    # Three refusals while one check runs start one check, not three.
+    assert [operation for operation, _ in source.calls[before:]] == ['create', 'abort']
+    assert not storage._write_failed and storage.put(b'attachment')
+
+
+def test_storage_loop_backs_off_and_survives_errors(tmp_path, credential_clients, caplog):
+    import threading
+    storage, store = storage_store(tmp_path)
+    copy_local, passes = storage.copy_local, []
+    def flaky(store, stop):
+        passes.append(1)
+        if len(passes) == 1:
+            raise RuntimeError('pass failed')
+        copy_local(store, stop)
+    storage.copy_local = flaky
+    stop, waits = threading.Event(), []
+    stop.wait = lambda interval: waits.append(interval) or len(waits) == 8
+    storage.storage_loop(store, stop)
+    assert waits == [30, 60, 120, 240, 480, 960, 1800, 1800]
+    assert storage._write_failed and len(passes) == 8
+    assert 'pass failed' in caplog.text

@@ -4,7 +4,7 @@ sweep from the week's delta, the page monitors' changes, accepted listening item
 The briefing is a market page (`market/briefings/<week>`) and a row here that also lists its items, each tagged with the
 market entities it touches. The server works out which bets those entities touch: an active bet of the published
 strategy whose `cites`, or whose thesis wrong-if `market_id`, is one of them. It emits `market.briefing` with the
-touched bets, so the CEO Bot's routine on that event looks only at them; with none touched, it has nothing to do.
+touched bets, so the Strategy Bot's routine on that event looks only at them; with none touched, it has nothing to do.
 One row per ISO week: posting the same week again replaces it and keeps `created`. A briefing an automation posted
 (`post_update` to market, backend/automation_actions.py) carries `source: {automation, run, task}`; a post by hand
 clears it. `cadence` says how Market labels it: `daily` when an automation posted it on a schedule that runs on more

@@ -27,6 +27,8 @@ async function saved(page, writes, n) {
     // A phone: Filter, Decide, LLM, then Versions, each in a sheet.
     {
       const {page, errors, writes} = await flow(browser, PHONE);
+      const end = await page.locator('.au-add-end').first().boundingBox(), plus = await page.locator('[data-add="root|1"]').boundingBox();
+      assert.ok(end.height >= 40 && plus.width >= 28, 'thumb-sized "+" and Add step');
       await page.locator('.au-card[data-open="f1"]').click();
       await page.waitForSelector('#au-root.ed-open .au-ed:not([hidden])');
       const sheet = await page.locator('.au-side').boundingBox();
@@ -107,10 +109,9 @@ async function saved(page, writes, n) {
       await page.waitForSelector('.au-ed:not([hidden]) [data-b="step.prompt"]');
       assert.ok((await page.locator('.au-side').boundingBox()).x > 1000, 'the editor sits on the right');
       assert.equal(await page.locator('.au-scrim').isVisible(), false);
-      assert.equal(await page.locator('.au-botp').isVisible(), false, 'the editor takes the bot’s place');
       await shot(page, 'desktop-edit-llm');
       await page.locator('.au-ed [data-op="close"]').click();
-      assert.equal(await page.locator('.au-botp').isVisible(), true);
+      assert.equal(await page.locator('.au-side').isVisible(), false, 'closed, the flow takes the width');
 
       // Opened and saved untouched, the spend editor keeps the limit (it once drew blank and saved none).
       await page.locator('[data-spend]').click();
@@ -137,6 +138,10 @@ async function saved(page, writes, n) {
       assert.equal(await page.locator('.au-menu [data-ty="filter"]').count(), 1);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.au-menu').isVisible(), false);
+      // Between steps a small "+"; the end of each list a labelled Add step.
+      assert.equal(await page.locator('[data-add="root|0"]').getAttribute('aria-label'), 'Add step');
+      assert.equal(await page.locator('.au-add-end[data-add="p1:0|2"]').textContent(), '+Add step');
+      assert.equal(await page.locator('.au-add-end[data-add^="root|"]').count(), 0, 'Paths end the root list');
       await page.locator('[data-add="p1:0|2"]').click();
       assert.equal(await page.locator('.au-menu [data-ty="paths"]').count(), 1);
       await shot(page, 'desktop-add-menu');

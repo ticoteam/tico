@@ -2,6 +2,8 @@
 server runs (harness.Org) and makes one piece of state a browser test starts from, through the API a teammate calls.
 Seeds run in the order given. A seed returns False when it skipped itself because the route it needs is not built yet;
 otherwise it returns None."""
+import json
+
 SEEDS = {}
 
 
@@ -147,3 +149,44 @@ def toured(world):
     for who in (DANA, OMAR, PRIYA):
         _ok(world.api("post", "/api/v2/setup/getting-started/state", {"tour": True}, who=who), "tour seen")
     _ok(world.api("post", "/api/v2/system/usage-count/notice", {"state": "dismissed"}, who=DANA), "usage notice")
+
+
+PAGE_HTML = ('<!doctype html><html><head><title>{title}</title></head><body style="margin:0;font:15px system-ui">'
+             '<h1 style="margin:16px">{title}</h1><p style="margin:16px">{text}</p>'
+             '<svg viewBox="0 0 300 80" width="300" height="80"><rect x="16" y="10" width="{bar}" height="40" fill="#4a7"/>'
+             '</svg><script>steal()</script></body></html>')
+
+
+@seed("pages")
+def pages(world):
+    """The Engineering Lead's pages and files, published during one turn on Dana's task "Q3 launch": an older weekly
+    page filed on the task and a bot-wide weekly page that replaced it (data from Oct 27), a launch plan filed on the
+    task, and a signup funnel CSV bot-wide, so Library › Files has pages, data and a search hit inside a CSV. A page
+    filed on the task is pinned to its top; the replaced one is left out there. The bot is named "Engineering Lead",
+    so the status lines name it, not its slug."""
+    from .harness import DANA
+    # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
+    with world.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
+                            or "{}")
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='engineering-lead'",
+                  (json.dumps({**config, "display_name": "Engineering Lead"}),))
+    made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
+                                                    "owner": "engineering-lead"}, who=DANA), "task")
+    task = (made.get("task") or made)["id"]
+
+    def act(token, attempt):
+        def page(name, title, text, bar, **fields):
+            body = {"name": name, "title": title, "text": PAGE_HTML.format(title=title, text=text, bar=bar), **fields}
+            return _ok(world.api("post", "/api/v2/pages", body, who=token), name)["page"]["file_id"]
+        old = page("weekly-old.html", "Engineering weekly (old)", "Last month's numbers.", 90, task=task,
+                   cadence="weekly")
+        page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240,
+             scope="bot", cadence="weekly", as_of="2026-10-27", replaces=old)
+        page("launch.html", "Launch plan", "Beta on Nov 3, general release on Nov 17.", 160, task=task)
+        _ok(world.api("post", "/api/v2/files/uploads", {
+            "name": "funnel.csv", "title": "Signup funnel", "scope": "bot",
+            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
+    if world.turn("engineering-lead", act=act) is None:
+        raise RuntimeError("the Engineering Lead's turn did not run")

@@ -316,7 +316,7 @@ function runsReportHTML(r, icon = false) {
     group: 'run:' + String(why).replace(/\d+/g, '#').slice(0, 80)}, icon)}</div>`;
 }
 function runsTable(list, showEmp=true) {
-  if (!list.length) return `<div class="empty">No runs yet.${window.talkLineHTML?.() || ''}</div>`;
+  if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="scroll"><table><tr>${showEmp ? '<th>Bot</th>' : ''}<th>Finished</th><th>Result</th><th>Duration</th><th>Cost</th><th>Model</th><th>Picked up</th><th></th></tr>
   ${list.map(r => `<tr>${showEmp ? `<td>${empChip(r.employee)}</td>` : ''}
     <td class="muted tnum">${ago(r.finished)}</td><td>${r.record_kind === 'attempt' ? `<span class="pill fail">${esc(r.outcome)} attempt</span><div class="mono muted">${esc(r.attempt_id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>

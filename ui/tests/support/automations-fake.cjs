@@ -20,6 +20,17 @@ const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner: 'person:dana'
 const DRAFT_VERSIONS = [{n: 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z', status: 'pending',
   summary: 'Archive receipts from billing'}];
 
+// A system job's mirror (`system: true`): Tico runs it from its own code, so it reads only; the top of the org may pause it.
+const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner: 'person:dana', enabled: true, builtin: true, readonly: true,
+  kind: 'system', version: 1, schedule: 'Daily at 07:00', can_edit: false, can_pause: true,
+  description: 'Asks each owner whether tasks open for 30 days are still wanted.',
+  trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
+  source: {kind: 'system_job', id: 'job:still_wanted'}};
+const systemRuns = (now = Date.now()) => Array.from({length: 8}, (_, i) => ({id: 'sys_' + (50 - i), automation_id: SYSTEM.id,
+  started: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
+  status: i === 2 ? 'failed' : 'ok', cost: 0, steps: [], started_by: 'Schedule', outcome: i === 2 ? 'Mail down' : 'Asked 3 owners',
+  summary: i === 2 ? 'Mail down' : 'Asked 3 owners'}));
+
 // 30 runs of the inbox automation, newest first: most reply, a few fail at the LLM, a few hit the spend limit.
 function inboxRuns(now = Date.now()) {
   return Array.from({length: 30}, (_, i) => {
@@ -43,8 +54,9 @@ function inboxRuns(now = Date.now()) {
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
 // tweak(fx) changes the fixture copy before the page reads it. proposal: a bot's pending version on the inbox one.
 async function openAutomations(browser, {viewport = PHONE, hash = '#/automations', viewer = 'dana', tweak = null, draft = false,
-                                         proposal = false} = {}) {
+                                         proposal = false, system = false} = {}) {
   const fx = clone(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')));
+  if (system) fx.automations.push(clone(SYSTEM));
   if (draft) { fx.automations.push(clone(DRAFT)); fx.versions = {...fx.versions, au_draft: clone(DRAFT_VERSIONS)}; }
   tweak?.(fx);
   const owner = viewer === fx.me.id;
@@ -52,8 +64,8 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     role: 'member', company_role: 'member', cloud: true};
   const config = {};
   const db = {
-    list: fx.automations.map(a => ({...a, can_edit: owner && a.can_edit !== false})),
-    versions: {}, runs: {au_inbox: inboxRuns()}, conv: null, messages: [],
+    list: fx.automations.map(a => ({...a, can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
+    versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[SYSTEM.id]: systemRuns()} : {})}, conv: null, messages: [],
     held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
   };
   for (const a of db.list) {
@@ -79,8 +91,13 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     return out;
   });
   const full = a => ({...clone(a), steps: withSets(a.steps)});
-  // A list row carries how many versions wait for a person (the Pending pill).
-  const row = a => { const {steps, ...rest} = clone(a); return {...rest, pending: db.versions[a.id].filter(v => v.status === 'pending').length}; };
+  // A list row carries how many versions wait for a person (the Pending pill)
+  // and its newest run (the Last run column).
+  const row = a => {
+    const {steps, ...rest} = clone(a), last = db.runs[a.id]?.[0];
+    return {...rest, pending: db.versions[a.id].filter(v => v.status === 'pending').length,
+      ...(last && !rest.last_run ? {last_run: {id: last.id, started: last.started, status: last.status}} : {})};
+  };
   const nextN = id => Math.max(...db.versions[id].map(v => v.n)) + 1;
   const newVersion = (a, actor = 'person:' + me.id) => {
     a.version = nextN(a.id);
@@ -118,7 +135,41 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       return json(full(a));
     }
     if (p === '/api/v2/automations') return json({automations: db.list.map(row), next: null});
-    let m = p.match(/^\/api\/v2\/automations\/([^/]+)(?:\/(.*))?$/);
+    // The overview's reads: every run in the range across the list, newest first, and its counts per bucket.
+    const RANGES = {'5m': [300, 10], '1h': [3600, 12], '24h': [86400, 24], '7d': [604800, 28]};
+    const inRange = range => {
+      const [secs] = RANGES[range] || RANGES['1h'], since = Date.now() - secs * 1000;
+      return Object.values(db.runs).flat().filter(r => new Date(r.started).getTime() >= since && find(r.automation_id))
+        .sort((x, y) => y.started.localeCompare(x.started));
+    };
+    if (p === '/api/v2/automations/runs') {
+      const q = url.searchParams, ids = (q.get('ids') || '').split(',').filter(Boolean), status = q.get('status') || '';
+      const all = inRange(q.get('range')).filter(r => (!ids.length || ids.includes(r.automation_id))
+        && (!status || (status === 'done' ? ['ok', 'empty', 'skipped'].includes(r.status) : r.status === status)));
+      const from = q.get('before') ? all.findIndex(r => r.id === q.get('before')) + 1 : 0, limit = Number(q.get('limit') || 50);
+      const rows = all.slice(from, from + limit).map(r => {
+        const a = find(r.automation_id);
+        return {...r, steps: undefined, automation_name: a.name, trigger: a.kind || a.trigger.type, owner: a.owner,
+          started_by: r.started_by || 'From Sam Lee · Thursday?', outcome: r.outcome || (r.status === 'failed' ? 'LLM failed: model timed out' : 'Draft reply'),
+          step_count: (r.steps || []).length, count: 1};
+      });
+      return json({runs: rows, next: from + limit < all.length ? rows.at(-1).id : null});
+    }
+    if (p === '/api/v2/automations/stats') {
+      const range = url.searchParams.get('range') || '1h', [secs, n] = RANGES[range], width = secs * 1000 / n, since = Date.now() - secs * 1000;
+      const per = new Map(), blank = () => Array.from({length: n}, () => ({ok: 0, failed: 0}));
+      for (const r of inRange(range)) {
+        const s = per.get(r.automation_id) || {id: r.automation_id, runs: 0, failed: 0, cost: 0, buckets: blank()};
+        const b = Math.min(n - 1, Math.floor((new Date(r.started).getTime() - since) / width)), bad = r.status === 'failed';
+        s.runs++; s.failed += bad; s.cost += r.cost || 0; s.buckets[b][bad ? 'failed' : 'ok']++;
+        per.set(r.automation_id, s);
+      }
+      const totals = {runs: 0, failed: 0, cost: 0, buckets: blank()};
+      for (const s of per.values()) { totals.runs += s.runs; totals.failed += s.failed; totals.cost += s.cost;
+        s.buckets.forEach((x, i) => { totals.buckets[i].ok += x.ok; totals.buckets[i].failed += x.failed; }); }
+      return json({range, bucket_seconds: width / 1000, automations: [...per.values()], totals});
+    }
+    let m =p.match(/^\/api\/v2\/automations\/([^/]+)(?:\/(.*))?$/);
     if (m) {
       const a = find(decodeURIComponent(m[1])), rest = m[2] || '';
       if (!a) return refuse(404, 'not_found', 'No such automation');
@@ -146,6 +197,14 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         const all = db.runs[a.id] || [], limit = Number(url.searchParams.get('limit') || 25), before = url.searchParams.get('before');
         const from = before ? all.findIndex(r => r.id === before) + 1 : 0, rows = all.slice(from, from + limit);
         return json({runs: rows, next: from + limit < all.length ? rows.at(-1).id : null});
+      }
+      // The run guard's hold: release queues its held runs, drop skips them (backend/automations.py `_unhold`).
+      if (rest === 'held' && method === 'POST') {
+        if (!a.hold) return refuse(409, 'not_on_hold', 'The automation is not on hold');
+        const moved = a.hold.held;
+        delete a.hold;
+        for (const r of db.runs[a.id] || []) if (r.status === 'held') r.status = body.action === 'release' ? 'queued' : 'skipped';
+        return json({...full(a), moved});
       }
       if (rest === 'versions') {
         const status = url.searchParams.get('status');

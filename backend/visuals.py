@@ -369,8 +369,14 @@ def read(key, token, now=None):
 
 def ancestors(settings):
     """The frame-ancestors sources of a visual's content policy: the visual address itself, the app's own address and
-    its CORS origins (where the app's pages that frame it are)."""
-    return list(dict.fromkeys(["'self'", origin_of(settings.public_url), *settings.cors_origins]))
+    its CORS origins (where the app's pages that frame it are). On a loopback address the other loopback spelling
+    too: a local install opened at localhost instead of 127.0.0.1 (or the desktop app pointed at it) is the same app."""
+    own = origin_of(settings.public_url)
+    twin = {"127.0.0.1": "localhost", "localhost": "127.0.0.1"}.get(hostname(own))
+    if twin:
+        parts = urlsplit(own)
+        twin = f"{parts.scheme}://{twin}" + (f":{parts.port}" if parts.port else "")
+    return list(dict.fromkeys(["'self'", own, *([twin] if twin else []), *settings.cors_origins]))
 
 
 def origin_of(url):
@@ -410,6 +416,29 @@ def mode(settings):
     cards that open the file viewer. A page or SVG is never served from the app's own address: not on a loopback
     install, and TICO_VISUAL_SAME_ORIGIN, the opt-in that once did it, is no longer read."""
     return "full" if getattr(settings, "visual_origin", "") else "media"
+
+
+def shown(settings, c):
+    """What Settings and the clients are told (config `visuals`): "full" with a visual address; "hosted" without one
+    while Tico file hosting takes new files, so new pages and SVG show inline from the company's files address
+    (tico_storage.visual_ready); "media" otherwise (pages and SVG are Open cards)."""
+    if mode(settings) == "full":
+        return "full"
+    from .tico_storage import visual_address
+    return "hosted" if visual_address(c)[1] else "media"
+
+
+def src_for(app, settings, c, who, fid, version):
+    """A fresh `src` for one version of a file, as `for_reader` gives a message's visual (same reader check, same
+    address rules), or None: a type that doesn't show inline, a file `who` may not read, or a page or SVG this install
+    can't show inline (an Open card). A page held in Tico file hosting gets a `src` on the app's own route, which
+    checks the reader on every load and sends them on to a short link on the company's files address (`serve`)."""
+    v = c.execute("SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, int(version))).fetchone()
+    kind = kind_of(v["mime"], v["size"]) if v else "file"
+    if kind not in INLINE:
+        return None
+    message = {"refs": {"attachments": [{"file_id": fid, "version": int(version), "kind": kind}]}}
+    return for_reader(app, settings, c, who, [message])[0]["refs"]["attachments"][0].get("src")
 
 
 # What the fallback serves from the app's own address: kinds that a browser only ever shows as media.
@@ -614,7 +643,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
     fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused.
     A page or SVG held in Tico file hosting's bucket is never served from here, in either mode: once the reader is
-    checked, they are sent (302) to a five-minute link to its cleaned copy on the company's address
+    checked, they are sent (302) to a four-minute link to its cleaned copy on the company's address
     (tico_storage.visual_link)."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver

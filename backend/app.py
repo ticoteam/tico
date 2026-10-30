@@ -29,11 +29,13 @@ from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
 from . import start_places
-from . import ask_ingest, ceo_bot, invites, owner_link
+from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import login_holds
+from . import cloud_access
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
-from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
+from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
+               topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -65,6 +67,7 @@ from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
 from .providers import MODEL_BY_ID, MODEL_CATALOG
+from . import report_managers
 from .settings_admin import SettingsAdmin, compact_at as compact_at_of, repository_present
 from .readiness import absolute as absolute_link, can_run
 from . import fleet_check as fleet_check_module
@@ -142,6 +145,7 @@ def create_app(settings=None):
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
+        cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
@@ -334,6 +338,12 @@ def create_app(settings=None):
         from . import read_deps
         reads_stop = threading.Event()
         reads_task = asyncio.create_task(asyncio.to_thread(read_deps.loop, store, reads_stop)) if timers else None
+        # Library › Files: search text for files published before it existed, and bytes a hard delete still has to
+        # remove from storage (backend/file_library.py).
+        from . import file_library
+        library_stop = threading.Event()
+        library_task = (asyncio.create_task(asyncio.to_thread(file_library.loop, store, app.state.blobs, library_stop))
+                        if timers else None)
         demo_task = None
         if settings.demo:
             from . import demo
@@ -356,6 +366,7 @@ def create_app(settings=None):
             copy_stop.set()
             index_stop.set()
             reads_stop.set()
+            library_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
@@ -363,6 +374,8 @@ def create_app(settings=None):
             await index_task
             if reads_task:
                 await reads_task
+            if library_task:
+                await library_task
             await media_task
             app.state.github_app.repository_stop.set()
             if demo_task:
@@ -603,6 +616,8 @@ def create_app(settings=None):
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
                 app.state.sleep_idle.seen(who, request.url.path)
+                # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
+                cloud_access.gate(store, who, request.url.path)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -684,12 +699,12 @@ def create_app(settings=None):
                     # A direct setting from the catalogue the person asked for runs on their words the same way.
                     setting = (not approves and request.state.identity.via == "assistant"
                                and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (the Strategy Bot's suggestion they said to make) runs the same way.
+                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
                     org = (not approves and request.state.identity.via == "assistant"
                            and assistant_mod.instructed_org(request.method, request.url.path, raw))
-                    # The owner's yes to a goal read-back in their CEO Bot chat (backend/goal_read_back.py): the goal,
-                    # measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
-                    goal_yes = (not approves and goal_read_back.ceo_turn(request.state.identity)
+                    # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
+                    # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
+                    goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
                     if goal_yes and not asked:
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
@@ -713,7 +728,7 @@ def create_app(settings=None):
                                     record = assistant_instruction(c, request.state.identity, asked)
                                 except Problem as exc:
                                     raise goal_read_back.not_agreed(exc.detail.split(";")[0]) from None
-                                # Recorded on every save as the owner, via the CEO Bot, citing their yes and the
+                                # Recorded on every save as the owner, via their Assistant, citing their yes and the
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
@@ -731,7 +746,7 @@ def create_app(settings=None):
                                                                     settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                                # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
+                                # The bot whose turn it is: the person's Assistant.
                                 acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
                                 record = {**record, "assistant": acting,
                                           **assistant_mod.approval_words(c, request.state.identity, record["cited"],
@@ -807,6 +822,11 @@ def create_app(settings=None):
             elif request.url.path in ui_bundle.PATHS and response.status_code in (200, 304) \
                     and "immutable" in str(response.headers.get("cache-control", "")):
                 pass                    # a hashed script or stylesheet (ui_bundle): kept for a year
+            elif request.query_params.get("v") and response.status_code in (200, 304) \
+                    and re.fullmatch(r"/(?:tico/ui/)?vendor/fonts/[\w.-]+\.woff2", request.url.path):
+                # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
+                # optional, so a font that had to be revalidated first could miss the first paint.
+                response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = ("private, max-age=3600" if request.url.path.startswith("/assets/")
                                                      else "private, no-cache")
@@ -1024,11 +1044,14 @@ def create_app(settings=None):
                  "next_run": bool(row.get("next_run")), "private": H.task_private(c, row), "cover": None}
         if c is not None and row.get("next_run"):
             value["next_run_waiting"] = H.next_run_waiting(c, row)
-        if c is not None and (quiet := quiet_work.view(c, row)):
-            # Quiet work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
-            value["quiet"] = quiet
-        # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
+        if c is not None and (deferred := quiet_work.view(c, row)):
+            # Deferred work: delivered (into which run, when; deferred until what), eligible or queued (quiet_work.view).
+            # `quiet` is its older name, kept one more release for callers that read it.
+            value["deferred"] = value["quiet"] = deferred
+        # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
+        if not value.get("snoozed_note"):
+            value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
@@ -1178,7 +1201,7 @@ def create_app(settings=None):
             legacy_owner = H.human_actor(H.default_human(c))
         pipelines = H.type_list(c)
         summaries = H.children_summaries(c, ids, visible_sql)
-        # The rows each row's from_person and quiet state read, read for the whole page first; each row is still
+        # The rows each row's from_person and deferred state read, read for the whole page first; each row is still
         # decided one at a time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
@@ -1199,8 +1222,8 @@ def create_app(settings=None):
             })
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
-                if quiet := quiet_work.view(c, row, history=False):
-                    value["quiet"] = quiet
+                if deferred := quiet_work.view(c, row, history=False):
+                    value["deferred"] = value["quiet"] = deferred     # `quiet`: the older name, one more release
             if row["id"] in step_since:
                 value["step_since"] = step_since[row["id"]]
             if row["id"] in routines_by_task:
@@ -1276,6 +1299,11 @@ def create_app(settings=None):
                 # A chat about one automation (BotOps edits the one a person has open): the caller must be able to see it.
                 if not automations.may_reference(c, who, values):
                     raise Problem("reference", "Unknown automation", 422)
+            elif kind == "automations_filter":
+                # What the Automations page shows (range, tab, filters), so BotOps answers about that view; only words
+                # the asker typed or picked, never another person's data.
+                if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
+                    raise Problem("reference", "automations_filter is a small object", 422)
             elif kind not in ("depth", "turn_id"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
@@ -1286,7 +1314,6 @@ def create_app(settings=None):
                 raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
             if body.conversation_id and not assistant_room(c, who, body.conversation_id):
                 raise Problem("forbidden", "Use your own Assistant room", 403)
-            # The owner's is the CEO Bot (backend/assistant.py).
             info = assistant_mod.availability(c, settings, who)
             if not info["available"]:
                 raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
@@ -1306,15 +1333,18 @@ def create_app(settings=None):
                         raise Problem("forbidden", settings.assistant_name + " chats only in your own Assistant "
                                       "(/api/v2/assistant); message one of your bots here", 403)
                     in_assistant_room = True
-                elif who.role in ("human", "owner") and H.actor_id(to) == ceo_bot.SLUG:
-                    # Of people, only the owner talks to the CEO Bot, in the CEO Bot chat (their menu tab). Bots still
-                    # message it; that is its goals session, never the owner's chat. The owner's post with no room
-                    # (the Goals page, `hub chat`) goes to that one chat.
-                    if not body.conversation_id and not who.via and assistant_mod.ceo_seat(c, who):
-                        body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-                    if not assistant_room(c, who, body.conversation_id) or not assistant_mod.ceo_seat(c, who):
-                        raise Problem("forbidden", "Only the company's owner talks to the " + ceo_bot.name(c)
-                                      + ", in their own chat with it; talk to your Assistant", 403)
+                elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
+                    # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
+                    # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
+                    # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
+                    if body.conversation_id or who.via:
+                        raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask "
+                                      "your " + settings.assistant_name + ", which hands it the work", 403)
+                    info = assistant_mod.availability(c, settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    to = "bot:" + info["bot"]
+                    body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
         auth.require_bot_contact(c, who, to, body.conversation_id,
@@ -1338,6 +1368,15 @@ def create_app(settings=None):
             refs["command"] = True
         if body.needs_action:
             refs["needs_action"] = True
+        if wrong := delivery.check(body.delivery, body.defer_for):
+            raise Problem("delivery", wrong, 422)
+        if body.delivery and body.kind == "ask":
+            raise Problem("delivery", "A question always wakes the one it is for: send it without a delivery", 422)
+        # How it reaches a bot (backend/delivery.py). With none named a message goes as it always has: a person's
+        # steers, a bot's goes as bot-to-bot messages do (backend/bot_to_bot.py).
+        way = body.delivery
+        if to.startswith("bot:") and way in ("steer", "queue") and who.role == "bot":
+            refs["needs_action"] = True
         if in_assistant_room:
             refs["assistant"] = True           # the server's mark: this turn acts for the person
         conversation_id = body.conversation_id
@@ -1353,8 +1392,27 @@ def create_app(settings=None):
         lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
         privacy.require_destination(c, who, to, conversation_id, refs,
                                     H.message(c, body.in_reply_to) if body.in_reply_to else None)
+        # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
+        if way == "defer" and to.startswith("bot:") and who.role != "bot" and conversation_id \
+                and delivery.running_in_session(c, H.actor_id(to), [conversation_id]):
+            way = "queue"
+        if to.startswith("bot:") and way == "queue":
+            refs["delivery"] = "queue"           # after the bot's running turn, not into it (execution.inputs)
+        if to.startswith("bot:") and way == "defer":
+            refs["quiet"] = True                 # no job: the session's next turn, or its deadline, takes it
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
+        due = None
+        if to.startswith("bot:") and way == "defer":
+            if who.role == "bot":
+                # A bot's deferred message rides with the recipient's next run of any kind, as a waiting
+                # bot-to-bot message does: its own DM may not see another turn.
+                task_ref = refs.get("task") if isinstance(refs.get("task"), str) else None
+                held_note = bot_to_bot.hold(c, message, H.task(c, task_ref) if task_ref else None)
+                due = delivery.defer(c, to, "note", held_note["id"], defer_for=body.defer_for)
+            else:
+                due = delivery.defer(c, to, "message", message["id"], conversation_id=message["conversation_id"],
+                                     defer_for=body.defer_for)
         from .chat_goals import current as current_chat_goal
         goal = current_chat_goal(c, message["conversation_id"])
         # Added to the stored references, so the marks H.say set (a bot_to_bot hold, quiet) stay (Dev 328).
@@ -1382,6 +1440,9 @@ def create_app(settings=None):
             message = {**message, "warning": note}
         if held := bot_to_bot.held_reason(message):
             message = {**message, "woke": False, "held": held}
+            way = "defer"
+        if to.startswith("bot:"):
+            message = {**message, "sent_as": delivery.sent_as(way or "steer", due)}
         return message
 
     # Liveness reads the database on its own two threads: when slow handlers hold every worker in the shared
@@ -1594,6 +1655,8 @@ def create_app(settings=None):
                                                     "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
+        if cloud_access.cell():
+            cloud_access.sync_later(store, vault, settings)  # a Tico Cloud cell's new key: its access answer, now
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 
@@ -1670,8 +1733,18 @@ def create_app(settings=None):
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
-        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ."""
-        return company_billing.read(*billing_key(request.state.identity), month)
+        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
+        Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
+        answer = company_billing.read(*billing_key(request.state.identity), month)
+        cloud_access.from_billing(store, answer)
+        return answer
+
+    @app.get("/api/v2/cloud-access")
+    def cloud_access_view(request: Request):
+        """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
+        cloud. Open to every signed-in person, also while locked."""
+        views.human_only(request.state.identity)
+        return {"cloud": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):
@@ -1913,16 +1986,20 @@ def create_app(settings=None):
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    @app.get("/api/v2/ceo-bot")
-    def ceo_bot_settings(request: Request):
-        """The CEO Bot's name, level and regular checks (backend/ceo_bot.py). How many items it put in each person's
-        Needs you today is the owner's, an admin's and the CEO Bot's to read; anyone else sees only their own count."""
+    # The /api/v2/ceo-bot path is the Strategy Bot's old one: clients built before the rename still call it, so it
+    # stays a hidden alias of the route under it.
+    @app.get("/api/v2/ceo-bot", include_in_schema=False)
+    @app.get("/api/v2/strategy-bot")
+    def strategy_bot_settings(request: Request):
+        """The Strategy Bot's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
+        person's Needs you today is the owner's, an admin's and the Strategy Bot's to read; anyone else sees only their
+        own count."""
         who = request.state.identity
         auth.domain(who)
-        from . import ceo_bot
+        from . import strategy_bot
         with store.read() as c:
-            value = ceo_bot.named(c, ceo_bot.view(c))
-        if who.actor != "bot:" + ceo_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
+            value = strategy_bot.named(c, strategy_bot.view(c))
+        if who.actor != "bot:" + strategy_bot.SLUG and auth.company_role(who) not in ("owner", "admin"):
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
 
@@ -1930,9 +2007,9 @@ def create_app(settings=None):
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
-            from . import ceo_bot
+            from . import strategy_bot
             with store.read() as c:
-                raise Problem("forbidden", "Only the owner turns the " + ceo_bot.name(c) + " on", 403)
+                raise Problem("forbidden", "Only the owner turns the " + strategy_bot.name(c) + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_goal_manager(c, who))
 
     @app.get("/api/v2/onboarding")
@@ -2169,6 +2246,8 @@ def create_app(settings=None):
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                                   task_models.of(declared)),
+                        # Whether it changes its direct reports (backend/report_managers.py): on unless turned off.
+                        "manages_reports": report_managers.switch_on(declared),
                         "wake": wake_presets.effective(declared),
                         "profile": profiles.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
@@ -2282,25 +2361,26 @@ def create_app(settings=None):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-            # The CEO Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has (backend/ceo_bot.py).
-            # A person who hid the CEO Bot from their chart gets it without the CEO Bot, nothing moved under it.
-            from . import ceo_bot
-            hide_ceo = ceo_bot.hidden_for(c, who)
-            chart = ceo_bot.chart_entries(c, settings, roster, configs, archived, hidden=hide_ceo)
+            # The Strategy Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has
+            # (backend/strategy_bot.py). A person who hid the Strategy Bot from their chart gets it without the Strategy
+            # Bot, nothing moved under it.
+            from . import strategy_bot
+            hide_strategy = strategy_bot.hidden_for(c, who)
+            chart = strategy_bot.chart_entries(c, settings, roster, configs, archived, hidden=hide_strategy)
             # A bot's bare person id in reports_to is that person (backend/people.py).
             view = P.org_view(roster, chart, archived, person_id=person or "", team=team or "", bare_people=True)
-            view["org_groups"] = ceo_bot.chart_groups(roster, configs, chart, view["org_groups"], archived,
-                                                      hidden=hide_ceo)
+            view["org_groups"] = strategy_bot.chart_groups(roster, configs, chart, view["org_groups"], archived,
+                                                      hidden=hide_strategy)
             for row in view["bots"]:
                 row["reports_to"] = P._clean((configs.get(row["id"]) or {}).get("reports_to"))
             live = {row["slug"]: row for row in H.bots(c)}
             bots = []
             by_id = {row["id"]: row for row in view["bots"]}
             departments = P.bot_departments(configs, roster, archived)
-            # On the chart: what the caller may see, less the CEO Bot when they hid it (those under it hang from the
-            # next thing up, as under a bot they may not see; their `reports_to` stays the stored one).
+            # On the chart: what the caller may see, less the Strategy Bot when they hid it (those under it hang from
+            # the next thing up, as under a bot they may not see; their `reports_to` stays the stored one).
             def drawn(slug):
-                return access.get(slug, auth.FULL)["see"] and not (hide_ceo and slug == ceo_bot.SLUG)
+                return access.get(slug, auth.FULL)["see"] and not (hide_strategy and slug == strategy_bot.SLUG)
             for row in view["bots"]:
                 level = access.get(row["id"], auth.FULL)
                 if not drawn(row["id"]) or (can and not level[can]):
@@ -2432,6 +2512,8 @@ def create_app(settings=None):
                 from .report_order import roster_saved
                 roster_saved(c, roster)                    # a new manager's report goes last there
                 c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+                from . import people_mirror
+                people_mirror.changed()                    # `left` and sign-in changes reach the Tico account
                 H.event(c, who.actor, "person.updated", pid, {"title": body.title is not None, "about": body.about is not None,
                                                               "goals": body.goals is not None, "notes": body.notes is not None,
                                                               "notify_slack_task_done": body.notify_slack_task_done,
@@ -2679,7 +2761,8 @@ def create_app(settings=None):
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
             message = send(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs, command=body.command,
-                                                   attachments=body.attachments))
+                                                   attachments=body.attachments, delivery=body.delivery,
+                                                   defer_for=body.defer_for))
             if cleared:
                 message = topic_change.record(c, who, message, topic)
             onboarding.start_setup(c, who, bot)
@@ -2702,7 +2785,8 @@ def create_app(settings=None):
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
-            return target == bot and bot not in (settings.assistant_bot, ceo_bot.SLUG) and views.may_chat(c, auth, who, bot)
+            return (target == bot and bot not in (settings.assistant_bot, strategy_bot.SLUG)
+                    and views.may_chat(c, auth, who, bot))
         return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
@@ -3047,7 +3131,8 @@ def create_app(settings=None):
             if not target:
                 raise Problem("recipient", "This conversation has no other recipient", 422)
             return {"message": send(c, who, M.MessageCreate(to=target, text=body.text, conversation_id=cid, refs=body.refs,
-                                                            command=body.command, attachments=body.attachments))}
+                                                            command=body.command, attachments=body.attachments,
+                                                            delivery=body.delivery, defer_for=body.defer_for))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/messages/{mid}/answer")
@@ -3059,6 +3144,9 @@ def create_app(settings=None):
                 raise Problem("not_found", "Message not found", 404)
             conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
             lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
+            if H.has_pick_options(msg):
+                from .task_review import answer_text
+                return answer_text(c, auth, who, msg, body.text, unknown=body.unknown)
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -3194,6 +3282,8 @@ def create_app(settings=None):
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
+                        # A snooze's note is left out of a list row; the task's own view keeps it whole.
+                        row.pop("snoozed_note", None)
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
                 ids = reads.around(c, found[0]) if found else []
@@ -3252,7 +3342,10 @@ def create_app(settings=None):
             to = auth.target(c, who, body.to, need="write")
             auth.require_bot_contact(c, who, to, kind="note")
             lifecycle.refuse_send(c, who, to, what="a note")
-            return {"note": note_view(H.note_create(c, who.actor, to, body.text), c)}
+            # A note is a deferred message to the bot's next run of any kind; `defer_for` wakes it by then.
+            made = H.note_create(c, who.actor, to, body.text)
+            due = delivery.defer(c, made["to_actor"], "note", made["id"], defer_for=body.defer_for)
+            return {"note": {**note_view(made, c), "sent_as": delivery.sent_as("defer", due)}}
         return mutate(request, body, work)
 
     @app.get("/api/v2/notes")
@@ -3379,11 +3472,18 @@ def create_app(settings=None):
                                                                           H.task_comments(c, tid, actor=privacy.actor(who)))),
                     "execution": task_execution(c, who, row),
                     "comment_to": comment_to(c, who, row) if can_comment else None,
+                    "comment_delivery": delivery_choices(c, who, row) if can_comment else None,
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
                     "runs": task_runs(c, who, tid),
                     # The model a bot's check subtask runs on (backend/check_models.py), or null.
                     "check_model": H.check_model(c, tid),
+                    # The task's own model (backend/task_run_models.py), or null when its runs use the bot's task model.
+                    "run_model": task_run_models.of(c, tid),
+                    # Whether this reader may set that model: the answer POST /v2/tasks/{id}/model gives, so the task
+                    # page offers its form to whoever the server would accept. A person's task has no model to set.
+                    "can_set_run_model": H.is_bot(row["owner"]) and task_run_models.may_set(
+                        c, auth, who, H.actor_id(row["owner"])),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
     def task_execution(c, who, row):
@@ -3401,10 +3501,10 @@ def create_app(settings=None):
                                       auth=auth, people=True)
 
     def comment_to(c, who, row):
-        """Who a plain comment from this reader reaches (H.task_comment, H.comment_wakes): `bot`, the bot it goes to,
-        or None when no bot will get it; `wakes`, whether it starts that bot's turn now rather than waiting for its
-        next run on the task; `mention`, the @names that would wake it anyway for this reader, each checked against
-        the same rule (names_a_filer counts only for someone who may direct the task). None for a bot reader."""
+        """Who a plain comment from this reader reaches (H.task_comment, H.comment_way): `bot`, the bot it goes to,
+        or None when no bot will get it; `wakes`, whether it wakes that bot (queue) rather than waiting for its next
+        turn on the task (defer); `mention`, the @names that would queue it anyway for this reader, each checked
+        against the same rule. None for a bot reader."""
         if who.role == "bot":
             return None
         target = H.comment_target(c, who.actor, row)
@@ -3412,9 +3512,32 @@ def create_app(settings=None):
             return {"bot": None, "wakes": False, "mention": []}
         moves = mover(c, who)
         wakes = H.comment_wakes(c, who.actor, row, "", mover=moves)
-        mention = [] if wakes else [n for n in H.filer_handles(c, row)
+        mention = [] if wakes else [n for n in H.bot_handles(c, row)
                                     if H.comment_wakes(c, who.actor, row, "@" + n, mover=moves)]
         return {"bot": H.actor_id(target), "wakes": wakes, "mention": mention}
+
+    def delivery_choices(c, who, row):
+        """How this reader's comment can reach the task's bot (docs/tasks.md, backend/delivery.py): `default`, the way
+        a comment with none named goes (queue or defer; null when no bot is on the task) and `default_for`, a default
+        defer's deadline (24h, never); `steer` and `queue`, whether the reader may wake the bot (chat_goals.may_direct;
+        anyone may defer); `steers`, whether that bot's harness writes a steer into its running turn; `goal`, whether
+        the reader may set the task session's goal (chat_goals.own_room and chat_goals.may_set). None for a bot
+        reader."""
+        if who.role == "bot":
+            return None
+        target = H.comment_target(c, who.actor, row)
+        if not H.is_bot(target):
+            return {"default": None, "default_for": None, "steer": False, "queue": False, "steers": False,
+                    "goal": False}
+        way, defer_for = H.comment_way(c, who.actor, row, "", mover=mover(c, who))
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(target),)).fetchone()
+        config = json.loads(config[0] or "{}") if config else {}
+        from .harnesses import steers
+        from .chat_goals import may_direct, may_set, own_room
+        directs = may_direct(c, who, row)
+        return {"default": way, "default_for": defer_for if way == "defer" else None, "steer": directs,
+                "queue": directs, "steers": steers(config, config.get("runtime")),
+                "goal": own_room(c, row) and may_set(c, auth, who, row["conversation_id"])}
 
     def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
@@ -3448,6 +3571,16 @@ def create_app(settings=None):
         private they are its requester, so its two parties are the bot and them."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
+        # A new task has no turn to steer. Defer is a deferred task (`next_run`, the older word for it); queue, as
+        # omitted, wakes its bot.
+        if body.delivery == "steer":
+            raise Problem("delivery", "A new task has no running turn to steer: send it with queue or defer", 422)
+        if wrong := delivery.check(body.delivery, body.defer_for):
+            raise Problem("delivery", wrong, 422)
+        if body.next_run and body.delivery == "queue":
+            raise Problem("delivery", "next_run is delivery defer: send one or the other", 422)
+        if body.delivery == "defer" and not body.next_run:
+            body = body.model_copy(update={"next_run": True})
         if body.from_private:
             pass                        # company-visible, its words checked (task_privacy.from_private)
         elif privacy.private_execution(c, who):
@@ -3458,6 +3591,8 @@ def create_app(settings=None):
         handoff = who.role == "bot" and who.actor != "bot:" + BOTOPS and not who.via
         if request_id and handoff:
             request_id = None          # a bot cites the person it is handing on; it never acts as them itself
+        elif request_id and who.via == "assistant":
+            pass                       # the person's own words to their Assistant, checked once the owner is known
         elif request_id:
             who = delegated_identity(c, who, request_id, new_task=True)
         parents = [r.task for r in body.relations if r.kind == "parent"]
@@ -3469,6 +3604,18 @@ def create_app(settings=None):
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
+        asked_botops = None
+        if request_id and who.via == "assistant":
+            # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
+            # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
+            # owner lets the Assistant act without asking. BotOps then acts with the person's rights
+            # (delegated_identity, `assistant`); the Strategy Bot and the Librarian work it with their own rights, so
+            # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
+            if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
+                raise Problem("request_id", "Only a task for BotOps, the " + strategy_bot.name(c)
+                              + " or the Librarian carries the person's request", 422)
+            asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
+            request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
@@ -3498,6 +3645,15 @@ def create_app(settings=None):
             check = check_choice(c, who, body, owner, parent_id)
         else:
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)
+        # The task's own model, checked before anything is written (the same rights as the bot's model, a bot never).
+        run_model = None
+        if body.model is not None or body.effort or body.harness:
+            if not H.is_bot(owner):
+                raise Problem("owner", "Only a task a bot runs has a model to choose", 422)
+            if body.model is None:
+                raise Problem("model", "Choose a model to pick an effort or harness for it", 422)
+            run_model = settings_admin.task_run_choice(c, who, H.actor_id(owner), "set the model a new task runs on",
+                                                       body.model, body.effort, body.harness)
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
@@ -3574,6 +3730,12 @@ def create_app(settings=None):
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        due = None
+        if body.next_run and H.is_bot(owner):
+            # A deferred task waits for its bot's next run, and starts one by its deadline (24h unless named).
+            due = delivery.defer(c, owner, "task", row["id"], task_id=row["id"], defer_for=body.defer_for)
+        if run_model:
+            task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
         task_caps.record(c, row["id"], who.actor, owner)     # a send, counted against the sender's cap for this owner
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
@@ -3610,6 +3772,20 @@ def create_app(settings=None):
                                      {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
         elif handoff and body.request_id:
             raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
+        if asked_botops:
+            request_id = asked_botops["cited"]
+            # BotOps' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
+            # which helper, and lends nothing.
+            if owner == "bot:" + BOTOPS:
+                H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            else:
+                H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_botops, "helper": owner})
+            words = (H.message(c, request_id) or {}).get("body") or ""
+            name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
+            H._write_message(c, H.KEEPER, owner, f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "
+                             + "\n> ".join(words[:2000].splitlines() or [""]),
+                             H.conversation(c, row["conversation_id"]), "say",
+                             {"task": row["id"], "comment": True, "quiet": True, "carried": True}, None, None)
         inherited_request = parent.get("request_id") if parent and H.is_human(who.actor) and who.actor == parent["requester"] else None
         if request_id in ("turn", "default"):
             # `turn` names the run's own request: store that message, which delegated_identity resolved, so the task's
@@ -3635,6 +3811,7 @@ def create_app(settings=None):
         note = " ".join(filter(None, (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),
                                       *own_subtask, joined)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
+                **({"sent_as": delivery.sent_as("defer", due)} if body.next_run and H.is_bot(owner) else {}),
                 **({"readback": readback} if readback else {}),
                 **({"joined": {"task": joins["id"], "title": joins["title"], "owner": joins["owner"]}} if joins else {}),
                 **ask_ingest.reply(gate),
@@ -4030,6 +4207,21 @@ def create_app(settings=None):
             return {"waiver": waiver, "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/tasks/{tid}/model")
+    def task_run_model(request: Request, tid: str, body: M.TaskRunModel):
+        """The model this task's runs use, with its effort and harness (backend/task_run_models.py). An absent
+        `model` keeps it and changes only what is named; a null `model` clears it, so the bot's task model runs
+        the task again.
+        Whoever may change the bot's model may change this, and a bot never does. `readiness` says whether the bot's
+        computer can run it now; `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or
+        writes. It still saves."""
+        def work(c):
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return settings_admin.set_task_run_model(c, who, task_id, body)
+        return mutate(request, body, work)
+
     @app.post("/api/v2/tasks/{tid}/snooze")
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
         """Snooze a task until a date: off the board, lists and Needs you, and quiet, until then
@@ -4039,15 +4231,16 @@ def create_app(settings=None):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who))
+            after = TS.snooze(c, who.actor, task_id, body.until, mover=mover(c, who), note=body.note)
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
-    @app.post("/api/v2/tasks/{tid}/defer")
+    @app.post("/api/v2/tasks/{tid}/later")
+    @app.post("/api/v2/tasks/{tid}/defer")           # its older name, kept for clients from before Steer, Queue, Defer
     def task_defer(request: Request, tid: str, body: M.TaskDefer):
-        """Say when a quiet task a run carried (or one still waiting for a run) is picked up again: after another task
-        is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's own
-        bot, or a person."""
+        """Say when a deferred task a run carried (or one still waiting for a run) is picked up again: after another
+        task is done, at a time, or with the next run; or that the run handled it (backend/quiet_work.py). The task's
+        own bot, or a person (`hub task later`)."""
         def work(c):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
@@ -4108,10 +4301,20 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
-        """A comment on a task. It wakes the bot on the task when the comment is meant for it
-        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task. A bot's question to a person
-        passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked."""
+        """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
+        running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
+        goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, H.comment_way decides. A bot's
+        question to a person passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it
+        is asked."""
         who = request.state.identity
+        if body.delivery and (body.ask or (body.needs_action and body.delivery != "steer")):
+            raise Problem("delivery", "A question always wakes the one it is for, and needs_action is steer: send it "
+                          "without a delivery, or with steer", 422)
+        if wrong := delivery.check(body.delivery, body.defer_for):
+            raise Problem("delivery", wrong, 422)
+        if body.delivery == "goal" and (body.attachments or body.public):
+            raise Problem("delivery", "A goal is the comment's text: send it without files or as a public comment",
+                          422)
         ingest = None
         if body.ask and ask_ingest.gated(who, settings.assistant_bot):
             with store.read() as c:
@@ -4128,6 +4331,7 @@ def create_app(settings=None):
             mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
+            from .chat_goals import may_direct, own_room, set_goal
             from .task_review import comment_rights, check_ask
             comment_rights(c, auth, who, task_id)
             ask = check_ask(c, task_id, body.ask, auth, who)
@@ -4137,23 +4341,66 @@ def create_app(settings=None):
             # The comment itself is the question to the first one, unless it would wake a bot, which
             # must hear it; everyone else mentioned gets their own copy. A task with no bot on it has
             # no one else to hear the comment, so a copy there would only show it twice.
-            people = [] if ask or who.role == "bot" else H.mentioned_people(c, body.text, row, who.actor)
-            wakes_bot = H.is_bot(H.comment_target(c, who.actor, row)) and H.comment_wakes(
-                c, who.actor, row, body.text, mover=moves)
-            if people and not wakes_bot:
-                ask, people = H.mention_ask(body.text, people[0]), people[1:]
-            if ask:
-                wake = who.role == "bot" or H.task_participant(c, who.actor, row) or moves
+            # A goal is the comment's text, so it is not turned into a question to anyone.
+            people = [] if ask or who.role == "bot" or body.delivery == "goal" \
+                else H.mentioned_people(c, body.text, row, who.actor)
+            # Steer and queue wake the bot on the task (a bot's is its needs_action); with no bot on the task the
+            # comment is plain. Defer and goal do not: a goal's own control does (set_goal below).
+            target = H.comment_target(c, who.actor, row)
+            to_bot = H.is_bot(target)
+            if body.delivery in ("steer", "queue") and to_bot and who.role != "bot" and not may_direct(c, who, row):
+                raise Problem("delivery", "Only someone on this task can wake its bot: send it with defer", 403)
+            if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
+                raise Problem("delivery", "Only someone on this task can set its goal: send it with defer", 403)
+            # A goal is set in the task's own room only. In a chat the task was filed into, the goal is the chat's
+            # (chat_goals.own_room), so nothing is saved and no control is queued or cancelled there.
+            if body.delivery == "goal" and not own_room(c, row):
+                raise Problem("delivery", "This task has no room of its own: send it with steer or queue", 409)
+            defer_for = body.defer_for
+            if body.delivery in ("steer", "queue", "defer"):
+                way = body.delivery
+            elif body.delivery == "goal":
+                way = None
+            elif ask:
+                way = "steer" if who.role == "bot" or H.task_participant(c, who.actor, row) or moves else "defer"
+            elif who.role == "bot" and body.needs_action:
+                way = "steer"
             else:
-                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
-                    who.role == "bot" and body.needs_action)
+                way, defer_for = H.comment_way(c, who.actor, row, body.text, mover=moves)
+            directs = who.role == "bot" or may_direct(c, who, row)
+            if way == "defer" and to_bot and not ask and not directs:
+                # A deadline wakes the bot as a steer would, so it takes the same right. Someone off the task defers
+                # with none: their comment waits for the bot's next turn here.
+                if body.defer_for not in (None, delivery.NEVER):
+                    raise Problem("delivery", "Only someone on this task can give its bot a deadline: send it with "
+                                  "defer and no defer_for", 403)
+                defer_for = delivery.NEVER
+            # Ride-along: a defer someone chose while the bot works this task goes in right after that turn, if they
+            # may wake it. A default defer (a plain comment on a bot-filed task, or from outside it) keeps its deadline.
+            rides = body.delivery == "defer" and directs
+            if way == "defer" and to_bot and not ask and rides and delivery.running_in_session(
+                    c, H.actor_id(target), [row["conversation_id"]], task_id):
+                way = "queue"
+            if people and not (to_bot and way in ("steer", "queue")):
+                ask, people = H.mention_ask(body.text, people[0]), people[1:]
+            wake = way in ("steer", "queue")
             extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
-            if body.needs_action:
+            if body.needs_action or (who.role == "bot" and body.delivery in ("steer", "queue")):
                 extra["needs_action"] = True
+            if way == "queue" and to_bot:
+                extra["delivery"] = "queue"      # after the bot's running turn, not into it (execution.inputs)
             # Judged against the plate before the question is on it.
             gate = ask_ingest.apply(c, ingest) if ingest and ask else None
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
+            due = None
+            if way == "defer" and to_bot and not ask:
+                due = delivery.defer(c, target, "comment", msg["id"], conversation_id=msg["conversation_id"],
+                                     task_id=task_id, defer_for=defer_for)
+            goal = None
+            if body.delivery == "goal":
+                # The task session's goal, set as a chat's is (chat_goals.set_goal): its /goal control wakes the bot.
+                goal = set_goal(c, auth, who, row["conversation_id"], "set", body.text, send)
             if gate and not ask_ingest.matches(ingest, msg.get("to_actor")):
                 gate = None
             if gate:
@@ -4171,9 +4418,13 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             waits = bot_to_bot.held_reason(msg)
+            if bot_to_bot.held_reason(msg):
+                way, due = "defer", None             # a bot's plain comment to a bot waits for its next run
             return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
+                    **({"sent_as": delivery.sent_as(way, due)} if to_bot and way else {}),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
-                    **({"visuals": report} if report else {}), **ask_ingest.reply(gate)}
+                    **({"visuals": report} if report else {}), **({"goal": goal} if goal else {}),
+                    **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
@@ -4306,10 +4557,10 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/delete")
     def task_delete(request: Request, tid: str, body: M.Empty):
-        """A person deletes a task made by mistake: its human requester, or anyone who may move any
-        task. Bots and delegated sessions close instead. A task carrying work (a bot turn, a bot's own file,
-        an approval, a subtask) is refused, so deleting never takes away what someone did. The task
-        goes to the trash, from which it can be restored."""
+        """A person deletes a task: its human requester, or anyone who may move any task. Bots and
+        delegated sessions close instead. Closing reads as finished work, so a person can always delete,
+        whatever bots did on the task: that work stays in place, unreadable while the task is gone
+        (task_delete.delete_tasks keep_work). The task goes to the trash, from which it can be restored."""
         who = request.state.identity
         person_only(who, "deletes a task; close it instead")
         def work(c):
@@ -4318,7 +4569,7 @@ def create_app(settings=None):
             row = auth.task(c, who, task_id)
             if row["requester"] != who.actor and not mover(c, who):
                 raise Problem("forbidden", "Only the task's requester, or someone who may move any task, deletes it", 403)
-            report = delete_tasks(c, [task_id], apply=True, actor=who.actor)
+            report = delete_tasks(c, [task_id], apply=True, actor=who.actor, keep_work=True)
             if not report["applied"]:
                 reasons = ", ".join(sorted(report["refused"])) or "unknown task"
                 raise Problem("has_work", "This task carries work (" + reasons + "); close it instead", 409)
@@ -4402,6 +4653,9 @@ def create_app(settings=None):
             kind, _, value = body.on.partition(":")
             note = None
             if kind.strip().lower() == "task":
+                if body.note and not body.remove:
+                    H.refuse(c, who.actor, "note", "a note goes with a pr: or release: wait; a task: wait is a blocked_by "
+                                                   "and says nothing of its own")
                 other_id = auth.resolve_task(c, who, value.strip())
                 auth.task(c, who, other_id)
                 changed = TR.relate(c, who.actor, task_id, other_id, "blocked_by", remove=body.remove,
@@ -4423,7 +4677,7 @@ def create_app(settings=None):
                     readback = [f"Removed: {TR._name(c, task_id)} waits for {gone}"]
                 else:
                     wait = milestone_waits.add(c, who.actor, row, body.on, release_repo=settings.release_repo,
-                                               resolve_task=resolve)
+                                               resolve_task=resolve, note=body.note)
                     readback = [("" if wait["added"] else "Already: ") + f"{TR._name(c, task_id)} {wait['sentence']}"
                                 + (" (already happened: woken once)" if wait["woke_at"] else "")]
             return {"readback": readback,
@@ -4449,10 +4703,11 @@ def create_app(settings=None):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
-        if key == ceo_bot.HIDE_PREF:                        # Hide from my chart on the CEO Bot: a person's own view
+        # Hide from my chart on the Strategy Bot: a person's own view
+        if key == strategy_bot.HIDE_PREF:
             views.human_only(who)
             if not isinstance(body.value, bool):
-                raise Problem("validation", ceo_bot.HIDE_PREF + " is a boolean", 422)
+                raise Problem("validation", strategy_bot.HIDE_PREF + " is a boolean", 422)
         if not re.fullmatch(r"[a-z0-9_.-]{1,64}", key):
             raise Problem("kind", "A preference key is lower-case letters, digits, dots, dashes", 422)
         if not request.headers.get("idempotency-key"):
@@ -4465,9 +4720,12 @@ def create_app(settings=None):
             if same:
                 return {"key": key, "value": body.value}
         def work(c):
+            at = H.now()
             c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
                       "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
-                      (who.actor, key, encode(body.value), H.now()))
+                      (who.actor, key, encode(body.value), at))
+            if key == strategy_bot.HIDE_PREF:
+                strategy_bot.mirror_hide(c, who.actor, encode(body.value), at)
             return {"key": key, "value": body.value}
         return mutate(request, body, work)
 
@@ -4576,17 +4834,31 @@ def create_app(settings=None):
                     # Tico updating itself, shown beside the status line
                     "updating": updating(c)}
 
+    def report_mutate(request, body, work):
+        """`mutate` for a change to a manager bot's report: a refusal over the week's limit still files its Needs you ask
+        for the person above, which the refusal's rollback would take with it (settings_admin._report_cap)."""
+        try:
+            return mutate(request, body, work)
+        except Problem as exc:
+            ask = getattr(exc, "ask", None)
+            if exc.code == "report_cap" and ask:
+                store.write(request.state.identity, lambda c: H.task_create(
+                    c, ask["actor"], ask["title"], ask["body"], ask["person"]))
+            raise
+
     @app.post("/api/v2/bots")
     def create_bot(request: Request, body: M.BotDefinitionCreate):
         who = request.state.identity
         def work(c):
+            if who.role == "bot" and who.via == "botops":
+                return settings_admin.create_report(c, who, body)     # a manager bot's report, asked of BotOps
             created = settings_admin.create_bot(c, who, body)
             if body.template:
                 # Adding from the catalog after onboarding is the same handoff to BotOps.
                 created.update(onboarding.attach_template(c, who, created["slug"], body.template,
                                                           body.instructions))
             return created
-        return mutate(request, body, work)
+        return report_mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/onboarded")
     def bot_onboarded(request: Request, bot: str, body: M.OnboardingComplete):
@@ -4607,7 +4879,7 @@ def create_app(settings=None):
 
     @app.get("/api/v2/org-models")
     def org_models(request: Request):
-        """Published Tico starter org charts, the only chart models the CEO Bot uses for re-org recommendations."""
+        """Published Tico starter org charts, the only chart models the Strategy Bot uses for re-org recommendations."""
         from . import org_models as published_models
         auth.domain(request.state.identity)
         return {"models": published_models.published()}
@@ -4636,7 +4908,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/seats/{seat_id}")
     def seat_show(request: Request, seat_id: str):
-        """One Recruiting seat, with whether the CEO Bot's draft of its job description is done (backend/recruiting.py)."""
+        """One Recruiting seat, with whether the Strategy Bot's draft of its job description is done
+        (backend/recruiting.py)."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -4644,14 +4917,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/seats/{seat_id}/open")
     def seat_open(request: Request, seat_id: str, body: M.Empty):
-        """Open a seat: the owner opening it asks the CEO Bot to draft its job description, unless a person wrote it."""
+        """Open a seat: the owner opening it asks the Strategy Bot to draft its job description, unless a person wrote
+        it."""
         who = request.state.identity
         auth.domain(who)
         return mutate(request, body, lambda c: recruiting.open_seat(auth, c, who, seat_id))
 
     @app.post("/api/v2/seats/{seat_id}/draft")
     def seat_draft(request: Request, seat_id: str, body: M.SeatDraft):
-        """The CEO Bot's draft of the job description the owner asked for by opening the seat (`hub seat draft`)."""
+        """The Strategy Bot's draft of the job description the owner asked for by opening the seat (`hub seat
+        draft`)."""
         who = request.state.identity
         auth.domain(who)
         return mutate(request, body, lambda c: recruiting.draft(auth, c, who, seat_id, body.text))
@@ -4684,14 +4959,16 @@ def create_app(settings=None):
     def archive_bot(request: Request, bot: str, body: M.BotArchive):
         who = request.state.identity
         def work(c):
-            acting = delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who
+            # A manager bot's ask is already BotOps acting as that bot (act_for_requester), not a person's request to find.
+            acting = who if who.role == "bot" and who.via == "botops" else (
+                delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who)
             result = settings_admin.archive(c, acting, bot, body)
             rooms.archive_shared_room(c, acting.actor, bot)
             if acting is not who:
                 H.event(c, who.actor, "bot.archive_delegated", bot,
                         {"on_behalf_of": acting.actor, "message_id": body.on_behalf_of, "successor": body.successor})
             return result
-        return mutate(request, body, work)
+        return report_mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/restore")
     def restore_bot(request: Request, bot: str, body: M.Empty):
@@ -4702,7 +4979,7 @@ def create_app(settings=None):
             if rooms.thread_mode(c, bot) == rooms.SHARED:
                 rooms.sync_shared_room(c, auth, bot, actor=who.actor, create=True)
             return result
-        return mutate(request, body, work)
+        return report_mutate(request, body, work)
 
     # A person's request lends their rights for as long as the task it created (or that cites it) is open, up to
     # botops_act.LEND_MAX_DAYS after they last spoke on it, and never again once someone else reopens it. A chat
@@ -4852,6 +5129,18 @@ def create_app(settings=None):
                     person = auth.identity_for_actor(c, origin["actor"])
                     H.VIA.set("botops")
                     return acting_as(person, task_id)
+            asked = c.execute("SELECT detail_json FROM events WHERE action='botops.asked_via_assistant' AND target=? "
+                              "AND actor=? LIMIT 1", (task_id, task["requester"])).fetchone() if task else None
+            if asked and task["owner"] == who.actor and H.is_human(task["requester"]) and open_task(task):
+                # The person's own words to their Assistant, checked when it filed this (task_create): BotOps acts
+                # as them, as if they had asked it in their BotOps chat.
+                origin = H.message(c, (H._json(asked["detail_json"], {}) or {}).get("cited") or "")
+                if (not origin or origin.get("deleted_at") or origin["from_actor"] != task["requester"]
+                        or week_old(origin["created"])):
+                    raise Problem("on_behalf_of", "The request the Assistant handed on no longer stands; ask the "
+                                  "person again", 403)
+                H.VIA.set("botops")
+                return acting_as(auth.identity_for_actor(c, task["requester"]), origin["id"], "assistant")
             if task and task.get("request_id") in ("turn", "default"):
                 # Tasks filed before the request was stored by id: the person's message the filing cited.
                 made = c.execute("SELECT detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
@@ -5122,11 +5411,29 @@ def create_app(settings=None):
                 return False
         return bool(row and row["owner"] == "bot:" + BOTOPS)
 
+    def manager_asker(c, who):
+        """The manager bot whose chat message to BotOps started this run, as the identity BotOps acts as for a report's
+        create, archive or restore (`Auth.report_lifecycle`): its actor is the manager and `via` is "botops", so its own
+        token, which has no `via`, is never mistaken for it. None when a bot did not ask."""
+        turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                         (who.attempt_id,)).fetchone() if who.attempt_id else None
+        msg = H.message(c, turn["message_id"]) if turn else None
+        if (not msg or msg.get("deleted_at") or msg["to_actor"] != "bot:" + BOTOPS or msg["kind"] not in ("say", "answer")
+                or not H.is_bot(msg["from_actor"])):
+            return None
+        return replace(who, actor=msg["from_actor"], role="bot", via="botops", task_actor="")
+
     def act_for_requester(request, ref):
         """Apply the requester's identity before the route checks its normal permissions."""
         who = request.state.identity
         if who.actor != "bot:" + BOTOPS:
             raise Problem("forbidden", "Only BotOps acts on a person's behalf", 403)
+        if botops_act.lifecycle_call(request.method, request.url.path) and ref in ("turn", "default", ""):
+            # A manager bot's report: BotOps acts as that manager, which the lifecycle routes check (Auth.report_lifecycle).
+            with store.read() as c:
+                asker = manager_asker(c, who)
+            if asker is not None:
+                return None, asker
         # Runs on an executor thread: the delegation record is read back here and set again for the route.
         token = H.DELEGATION.set(None)
         try:
@@ -5302,7 +5609,7 @@ def create_app(settings=None):
                     rooms.archive_shared_room(c, who.actor, bot)
                 reset_bot_sessions(c, bot)
             return result
-        return mutate(request, body, work)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "definition", work))
 
     @app.post("/api/v2/bots/{bot}/status")
     def status_set(request: Request, bot: str, body: M.StatusUpdate):
@@ -5855,7 +6162,7 @@ def create_app(settings=None):
         """What is wrong with the bots this person may see, most urgent first, each with its one fix."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        with store.read_transaction() as c:      # one snapshot: company-wide reads are shared by every bot's row
             result = fleet_check_module.check(c, who, auth, settings)
             result["computers"] = computer_rows(c, who)
             result["services"] = views.team_services(c, who, auth)
@@ -6382,9 +6689,10 @@ def create_app(settings=None):
     def model(request: Request, bot: str, body: M.BotModel):
         who = request.state.identity
         def work(c):
-            from . import ceo_acts
-            ceo_acts.gate(c, who.actor, "cost", f"change {bot}'s model to {body.model}")     # the owner's at every level
-            settings_admin._manager(c, who, bot)
+            from . import strategy_acts
+            # the owner's at every level
+            strategy_acts.gate(c, who.actor, "cost", f"change {bot}'s model to {body.model}")
+            settings_admin._manager(c, who, bot, report="model")
             from .shared_bots import refuse_copy
             refuse_copy(c, bot)
             choice = MODEL_BY_ID.get(body.model)
@@ -6440,7 +6748,7 @@ def create_app(settings=None):
                      "sessions_reset": reset})
             return {"bot": bot, "model": choice["id"], "runtime": runtime, "harness": harness,
                     "effort": effort, "revision": row["revision"] + 1, "sessions_reset": reset, "readiness": can}
-        return mutate(request, body, work)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "model", work))
 
     @app.post("/api/v2/bots/{bot}/fallback")
     def fallback(request: Request, bot: str, body: M.BotFallback):
@@ -6463,7 +6771,16 @@ def create_app(settings=None):
         """The harness, model and effort the bot's tasks run on, or null for the same as the bot
         (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that.
         `warning` is plain words for a cheaper pick on a bot that sends, spends, publishes or writes; it still saves."""
-        return mutate(request, body, lambda c: settings_admin.set_task_model(
+        who = request.state.identity
+        def work(c):
+            return settings_admin.set_task_model(c, who, bot, body)
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, "task_model", work))
+
+    @app.post("/api/v2/bots/{bot}/manages-reports")
+    def bot_manages_reports(request: Request, bot: str, body: M.BotManagesReports):
+        """Whether this bot changes its direct reports (backend/report_managers.py). A person who manages this bot sets
+        it; with the owner's team rule `managers_manage_reports` off, no bot does, whatever this says."""
+        return mutate(request, body, lambda c: settings_admin.set_manages_reports(
             c, request.state.identity, bot, body))
 
     @app.post("/api/v2/bots/{bot}/compact-at")
@@ -6487,15 +6804,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/bots/{bot}/transitions")
     def begin_transition(request: Request, bot: str, body: M.BotTransitionCreate):
+        who = request.state.identity
         def work(c):
-            who = request.state.identity
             acting = delegated_identity(c, who, body.on_behalf_of) if body.on_behalf_of else who
             result = settings_admin.begin(c, acting, bot, body)
             if acting is not who:
                 H.event(c, who.actor, "bot.transition_delegated", bot,
                         {"on_behalf_of": acting.actor, "message_id": body.on_behalf_of, "kind": body.kind})
             return result
-        return mutate(request, body, work)
+        scope = "model" if body.kind == "model" else None
+        return mutate(request, body, settings_admin.as_report_manager(who, bot, scope, work))
 
     @app.get("/api/v2/settings/transitions/{transition_id}")
     def transition(request: Request, transition_id: str):
@@ -6511,9 +6829,10 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: settings_admin.cancel(c, request.state.identity, transition_id))
 
     @app.get("/api/v2/settings/history")
-    def settings_history(request: Request, limit: int = 100):
-        with store.read() as c:
-            return settings_admin.history(c, request.state.identity, limit)
+    def settings_history(request: Request, limit: int = 100, bot: str = "", before: str = ""):
+        # One snapshot for the bots and the changes, so the people and bot rules it reads are computed once for it.
+        with store.read_transaction() as c:
+            return settings_admin.history(c, request.state.identity, limit, bot=bot, before=before)
 
     @app.post("/api/v2/settings/history/{change_id}/undo")
     def undo_setting(request: Request, change_id: str, body: M.SettingsUndo):
@@ -6784,6 +7103,8 @@ def create_app(settings=None):
     install_chat_goals(app, store, auth, mutate, send)
     from .bot_task_tabs import install as install_bot_task_tabs
     install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
+    from .cards import install as install_cards
+    install_cards(app, store, auth, mutate, settings, task_view)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)
@@ -6856,6 +7177,8 @@ def create_app(settings=None):
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)
+    from . import screening
+    screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

@@ -225,6 +225,11 @@ def _check_step(step, where, seen, depth, counts):
         _need(isinstance(step.get("bot"), str) and re.fullmatch(r"(bot:)?[a-z0-9][a-z0-9._-]{0,63}", step["bot"]), where,
               "bot names a bot")
         _text(step.get("prompt"), where, "prompt", cap=MAX_PROMPT)
+        # The model, effort and harness its task runs on (backend/task_run_models.py): checked against the catalog when
+        # the automation is saved (automations._checked), so here only that each is a name.
+        for key in ("model", "effort", "harness"):
+            if step.get(key) is not None:
+                _need(isinstance(step[key], str) and 0 < len(step[key]) <= 200, where, f"{key} is a name")
     elif kind == "action":
         check_action({"do": step.get("do"), "args": step.get("args", {})}, where)
     elif kind == "paths":
@@ -557,7 +562,9 @@ Do not ask about anything a sensible default answers.
 
 ## Commands
 - Read: `hub automation list`, `hub automation show <id>`, `hub automation runs <id>`, `hub automation versions <id>`,
-  `hub automation question-sets` (the saved question sets a Decide step can name).
+  `hub automation question-sets` (the saved question sets a Decide step can name). Across every automation:
+  `hub automation recent-runs [--range 1h] [--status failed]` and `hub automation stats [--range 24h]` (which fail or
+  cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `hub automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
   It is saved off; send `"enabled": true` only when the request said to turn it on.
 - Edit: when the message names an automation (its `automation` reference), `hub automation update <id> --file -` with the
@@ -573,6 +580,19 @@ Do not ask about anything a sensible default answers.
 
 ## The flow
 {{flow_shape}}
+
+## What wakes
+A "What wakes" automation (`wakes: {scope_kind, scope_id}`) holds the wake rules of one scope: a bot, a type, a
+department or the team. Each Filter rule matches one event (`event is <name>`; a step rule is `step_entered` with
+`task.step is <step>`) and wakes a bot, notes, archives or leaves it for a person. Its trigger is `tico.wake`; keep
+`stop` on.
+- A `task.step` value is the exact name or id of a step on that task type, ignoring case. List a type's steps with
+  `hub task types <id or name>` (`hub_task_types`).
+- Read `problems` on `hub automation show <id>` and `hub automation list` before and after an edit. Each entry is a
+  rule naming a step its type lacks: fix every one.
+- A save that names a missing step is refused, and its message lists the type's steps. Use one of them; do not retry the name.
+- A step a rule names cannot be deleted from its type until the rule changes.
+- To move a rule, set its `task.step` condition and its `then[0].args.rule.when.step` to the same step, then save.
 
 ## Each reply
 One sentence on what you saved: its name, trigger, what it does, and whether it is on, off or pending. A refusal is one

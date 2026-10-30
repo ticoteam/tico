@@ -2,7 +2,7 @@
 fixes it when it is a known gap today, so a failing check reads as "not built yet", not as a broken simulation."""
 from collections import Counter
 
-from .board import design_board, dev_board
+from .board import design_board
 from .sim import Scenario, at, tickets
 from .world import START
 
@@ -108,6 +108,68 @@ def no_uncertain_runs(run):
     return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
 
 
+def no_server_error(run):
+    """No call the sim makes gets a server error: a route that raises or answers 500 fails the run's checks, with the
+    first error and its traceback when the app raised. Each claim's status is counted in the detail."""
+    errors = run.w.server_errors
+    counts = ", ".join(f"{status} x{n}" for status, n in sorted(run.claims.items())) or "no claims"
+    if not errors:
+        return True, f"no call got a server error; claims: {counts}"
+    when, route, status, body = errors[0]
+    text = body if len(body) <= 500 else body[:200] + " ... " + body[-300:]
+    return False, (f"{len(errors)} calls got a server error; first {status} on {route} at {when:%H:%M}: {text}; "
+                   f"claims: {counts}")
+
+
+def board_keeps_moving(since, waits=(), fallback=False):
+    """From `since` on, each claim round that has a free slot and a ready bot starts as many turns as the smaller of its
+    free slots and its ready bots. A bot is ready when the records say it can run then (sim.Run.readiness): its computer
+    is awake, and a login it can run on is free, its own (no hold, no probe out, not cooling off) or a fallback that is
+    signed in and not held. The claim's own answer is not the judge: a round the server passes over while work is ready
+    is a stall whatever its reason, and that reason is printed with the round (sim.Run.reasons). `waits` are (from, to)
+    windows of the scenario's clock in which a team-wide or group-wide cap holds every login: a round inside one is not
+    judged. `fallback` also requires a judged round in which a bot started on a fallback login, for a scenario whose
+    point is that fallback. A run with no judged round fails, since nothing then shows the board moved."""
+    def check(run):
+        if not run.marks:
+            return False, "no runner claim rounds: this check needs runner-style claims"
+        start = START + since
+        windows = [(START + lo, START + hi) for lo, hi in waits]
+        judged, short, waived, on_fallback = 0, [], 0, 0
+        for m in run.marks:
+            if m["at"] < start or not m["free"] or not m["ready"]:
+                continue
+            if any(lo <= m["at"] < hi for lo, hi in windows):
+                waived += 1
+                continue
+            judged += 1
+            on_fallback += bool(m["fallback"])
+            if m["started"] < min(m["free"], len(m["ready"])):
+                short.append(m)
+        if not judged:
+            return False, ("no claim round had a free slot and a ready bot outside the waits: nothing shows the board "
+                           "moved")
+        if short:
+            return False, (f"{len(short)} of {judged} claim rounds started fewer turns than the smaller of free slots "
+                           "and ready bots: " + " || ".join(_round_line(m) for m in short[:5]))
+        if fallback and not on_fallback:
+            return False, (f"{judged} claim rounds judged, and no bot started on a fallback login: the fallback this "
+                           "scenario is about was never tested")
+        note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        return True, (f"all {judged} claim rounds with a free slot and a ready bot started the smaller of the two; "
+                      f"{on_fallback} of them started a bot on a fallback login{note}")
+    return check
+
+
+def _round_line(m):
+    """One short round for a failing check: its time, its ready bots, its turns started, and the server's reasons."""
+    ready = ", ".join(m["ready"][:6]) + (f" (+{len(m['ready']) - 6})" if len(m["ready"]) > 6 else "")
+    text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started']}"
+    if m.get("why"):
+        text += " [" + m["why"][:700] + "]"
+    return text
+
+
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):
@@ -205,7 +267,8 @@ def company_cap(per_30m):
 
 BASE = [("tickets not merged by the end", REPORT, all_through),
         (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
-        ("merged tickets never Blocked", HOLD, never_blocked_after_merge)]
+        ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
+        ("no call got a server error", None, no_server_error)]
 
 
 # ---------------------------------------------------------------------------------------------- events

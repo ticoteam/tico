@@ -27,7 +27,7 @@ and reading back a small object (company_storage.check). Keys are sealed with th
 company's own; no read returns them.
 
 Reads. A picture, video or audio file whose bytes are in Tico's bucket is not streamed through this server: after
-the usual access check the reader is sent (302) to a link on the company's address that lasts five minutes
+the usual access check the reader is sent (302) to a link on the company's address that lasts four minutes
 (`edge_link`), which Tico's edge checks before serving it from the bucket:
     https://<address><path>?e=<unix expiry>&k=<signing key id>&s=<sig>
 `<path>` is the file's key below the company's folder (`/blobs/<2 hex>/<sha256>`), and `<sig>` base64url (no
@@ -51,7 +51,7 @@ the slots and `VISUAL_COPY`, so a new reporter or a new app address gets a new c
 overwritten. The copy is made when the file is uploaded there (`Blobs._landing`), when Move existing files copies it
 there (`copy_one`), or else on its first view, and is checked like a moved file: S3's SHA-256 of what it received,
 size, type and disposition, and the metadata, by a body-less HEAD. After the usual access check a reader is sent to a
-five-minute link to it; the app's own address never serves a page or SVG. A first view reads the original once through
+four-minute link to it; the app's own address never serves a page or SVG. A first view reads the original once through
 the company's address (counted as delivery, as the view itself would be); uploads and moves have the bytes in hand. A
 place that no longer takes new files (credits out, stopped) makes no copy: such a file with none yet stays a card.
 """
@@ -108,7 +108,9 @@ PAUSED = ("Gateway credits have run out, so new files go to the company's own st
 # How often HQ is asked while the company has file hosting, and how long before its keys expire.
 REFRESH, EARLY = 300, 600
 # How long an edge link lasts, and how long a file the bucket doesn't hold (yet) streams before it is looked for again.
-LINK_SECONDS, MISS_SECONDS = 300, 60
+# The edge refuses an expiry more than 300 seconds ahead of its own clock (infra/files-edge/request.js), so a link
+# lasts a minute less: a server clock running a little ahead never makes a link the edge refuses.
+LINK_SECONDS, MISS_SECONDS = 240, 60
 # How this server fetches from the edge (`edge_read`); a test hands in its own.
 fetch = urllib.request.urlopen
 LOG = logging.getLogger("tico.storage")
@@ -163,6 +165,17 @@ def edge(c, vault):
         return None
     return {"location": _location(saved), "address": saved["address"], "key_id": saved["signing_key_id"],
             "secret": signing}
+
+
+def visual_address(c):
+    """(the company's files origin, whether new pages get a copy there): `https://<address>` while Tico's bucket
+    holds files and links can be signed (`edge`), else "". Copies are made only while it takes new files (`on`); in
+    the other states a page that has one still shows from it. For the client config (onboarding.config_view)."""
+    saved = row(c)
+    if not saved or saved["state"] == "off" or not saved["bucket"] or not saved["secret"] \
+            or not saved["signing_key_id"] or not HOST.match(saved["address"] or ""):
+        return "", False
+    return "https://" + saved["address"], saved["state"] == "on"
 
 
 def active_location(c):
@@ -414,7 +427,7 @@ def sync_later(store, due_only=False, report=False):
 
 # ---------------------------------------------------------------------------------------------- reads
 def edge_link(blobs, digest, size, mime, now=None):
-    """A five-minute link to the file on the company's address, or None to stream it from here. Only pictures (not
+    """A four-minute link to the file on the company's address, or None to stream it from here. Only pictures (not
     SVG), video and audio, and only once the bucket was seen to hold the file as this server would serve it."""
     found = getattr(blobs, "edge", None)
     if not found or not mime.startswith(("image/", "video/", "audio/")) or "svg" in mime or "xml" in mime:
@@ -602,7 +615,7 @@ def visual_ready(blobs, digest, size, mime, ancestors):
 
 
 def visual_link(blobs, digest, size, mime, ancestors, now=None):
-    """A five-minute link to the cleaned copy of a page or SVG version on the company's address, making the copy first
+    """A four-minute link to the cleaned copy of a page or SVG version on the company's address, making the copy first
     when it is missing (`make_visual`, from the file read through that address), or None: then it can't show inline
     from there. The caller has checked access already."""
     found = getattr(blobs, "edge", None)

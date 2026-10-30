@@ -365,6 +365,26 @@ def test_a_run_that_fails_cancels_its_unclaimed_mail_and_a_late_result_changes_n
     assert late["state"] == "cancelled"
 
 
+@pytest.mark.parametrize("ok", [True, False])
+def test_a_late_mail_report_after_its_held_run_was_dropped_is_recorded_and_the_run_stays_skipped(api, computer, ok):
+    from backend import automations
+    aid = automate(api, SEND)
+    computer.sync()
+    action, = claim(api, computer.token)["actions"]   # out on its lease when the run is held and dropped
+    with api.app.state.store.transaction() as c:
+        automations._hold(c, dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()), "flood")
+        c.execute("UPDATE automation_runs SET status='held' WHERE automation_id=?", (aid,))
+    assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
+    late = post(api, f"automations/mail-actions/{action['id']}/result",
+                {"ok": ok, "detail": "sent" if ok else "no such thread", "retry": False}, computer.token)
+    assert late["state"] == ("done" if ok else "failed")
+    run = last_run(api, aid)
+    assert run["status"] == "skipped" and run["finished"]
+    step = run["steps"][0]
+    assert step["status"] == ("ok" if ok else "failed") and step["outputs"]["ok"] is ok
+    assert step["outputs"]["detail"] == ("sent" if ok else "no such thread")
+
+
 def test_a_lease_that_runs_out_after_its_run_failed_is_cancelled_not_queued(api, computer):
     automate(api, SEND)
     computer.sync()

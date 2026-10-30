@@ -208,7 +208,14 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     # Every queued job but the one Ben's private room raised.
     assert jobs == 5 and len(column(api, "SELECT id FROM jobs")) == 4
     # Clone and subscription profile reports have per-computer keys; the rest are fixed.
-    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key NOT LIKE 'computer-profiles:%'") == ["access", "access_bot_limit", "bot_access", "ceo-bot", "company-turn-incident", "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated", "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36", "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history", "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field", "roadmaps_explicit_public_text", "task_session_default", "usage-count"]
+    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key "
+                       "NOT LIKE 'computer-profiles:%'") == [
+        "access", "access_bot_limit", "bot_access", "ceo-bot", "company-turn-incident",
+        "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
+        "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
+        "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
+        "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
+        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):
@@ -970,3 +977,117 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
         finally:
             conn.close()
     assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403
+
+
+def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api):
+    """Every /api/v2/sql call reads the private-task parties through the store's shared row cache: two calls at one
+    clock build them once (they were rebuilt on every call, about 4.6% of TIDY's CPU)."""
+    from backend import row_clock
+    from backend import sql as S
+    from backend.auth import Identity
+    store, auth = api.app.state.store, api.app.state.auth
+    who = Identity("human:ben", "human")
+    with store.transaction() as c:
+        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+                  "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
+    builds = []
+    original = row_clock._rows
+    row_clock._rows = lambda c, statement: builds.append(statement) or original(c, statement)
+    try:
+        for _ in range(2):
+            with store.read() as c:
+                conn = S.connect(store.settings.db_path, c, auth, who)
+                try:
+                    S.run(conn, "SELECT count(*) FROM tasks", [], 5000, 20)
+                finally:
+                    conn.close()
+    finally:
+        row_clock._rows = original
+    assert sum(row_clock.PARTIES in s for s in builds) == 1, builds
+
+
+def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task(api):
+    """Visibility per private task reads no table-existence probe again: a member's sqlite_master reads stay flat as
+    private tasks grow (they were one per private task, 184 for 184 tasks on a 6k-task hub)."""
+    from backend import sql as S
+    from backend.auth import Identity
+    store, auth = api.app.state.store, api.app.state.auth
+    who = Identity("human:ben", "human")
+
+    def catalog_reads():
+        seen = []
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who, trace=seen.append)
+            try:
+                S.run(conn, "SELECT id FROM tasks ORDER BY id", [], 5000, 20)
+            finally:
+                conn.close()
+        return sum("sqlite_master" in text for text in seen)
+
+    def add(count, start):
+        with store.transaction() as c:
+            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+                          "VALUES(?,?,?,?,?,?,?,?)",
+                          [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
+                           for i in range(start, start + count)])
+
+    add(20, 0)
+    before = catalog_reads()
+    add(200, 20)
+    assert catalog_reads() == before
+
+
+def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(api):
+    """`sql.guarded` asks which shared rooms a person may join for every bot at once. It reads the roster, the configs
+    and the access rows once for the whole list (the per-bot check copied the whole roster and configs for each bot), and
+    answers exactly as the per-bot membership does: primary users, open and restricted reads, the owner, a bot actor."""
+    from backend import rooms
+    from backend import sql as S
+    from backend.auth import Identity
+    from backend.store import H, encode
+    from backend.tests.test_api import restrict
+
+    store, auth = api.app.state.store, api.app.state.auth
+    people = [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+              {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "ops"]},
+              {"id": "cara", "email": "cara@acme.example", "primary_for": [f"b{i}" for i in range(6)]}]
+    people += [{"id": f"p{i}", "email": f"p{i}@acme.example", "primary_for": [f"b{i}"] if i % 2 else []}
+               for i in range(37)]
+    fleet = [f"b{i}" for i in range(53)]
+    with store.transaction() as c:
+        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in fleet},
+                        {"people": people})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        for slug in fleet:
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)", (slug, "{}", "ana"))
+        for i, slug in enumerate(fleet):
+            if i % 3 == 0:
+                restrict(c, slug, people=[f"p{i % 37}"])
+            elif i % 3 == 1:
+                restrict(c, slug, see=["cara"], read=["cara"], write=["p1"])
+        slugs = [row[0] for row in c.execute("SELECT bot FROM bot_config ORDER BY bot")]
+    actors = ["human:ana", "human:ben", "human:cara", "human:p1", "human:p2", "human:nobody", "bot:ops"]
+
+    answers = {}
+    with store.read() as c:
+        for actor in actors:
+            expected = (set() if not actor.startswith("human:") else
+                        {slug for slug in slugs if H.actor_id(actor) in rooms.shared_member_ids(c, auth, slug)})
+            assert rooms.shared_member_bots(c, auth, actor, slugs) == expected, actor
+            answers[actor] = expected
+    # The mix is real: the owner joins every room, a plain member some but not all, a stranger none.
+    assert answers["human:ana"] == set(slugs)
+    assert answers["human:cara"] and answers["human:cara"] != set(slugs)
+    assert {"b1", "b2"} <= answers["human:cara"] and "b0" not in answers["human:cara"]
+    assert answers["human:nobody"] == set() and answers["bot:ops"] == set()
+
+    # One caller's connection reads the access rows in one statement, not once per bot.
+    who = Identity("human:cara", "human", email="cara@acme.example")
+    statements = []
+    with store.read() as c:
+        conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
+        try:
+            access_reads = sum("access_json FROM bot_config" in text for text in statements)
+        finally:
+            conn.close()
+    assert access_reads <= 1, access_reads

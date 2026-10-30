@@ -265,3 +265,24 @@ def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read
             batched = privacy.status(c, who, row, **privacy.status_inputs(c, ["busy-1"])["busy-1"])
             alone = privacy.status(c, who, row)
         assert batched["focus"] == alone["focus"] == focus
+
+
+def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(api, monkeypatch):
+    # A bot with a stopped run costs its own queries on the status page (held runs, the keeper's leftovers, the
+    # queued work behind them). Its runs are read for all bots together, so each further bot adds fewer statements
+    # than before (about ten, now about seven); the bot's own checks still read per bot.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 6)
+    store = api.app.state.store
+
+    def stop(count):
+        with store.transaction() as c:
+            c.execute("UPDATE jobs SET state='uncertain' WHERE id IN "
+                      "(SELECT id FROM jobs WHERE state='queued' GROUP BY bot LIMIT ?)", (count,))
+
+    stop(2)
+    two = page(api, monkeypatch, "/api/status")[1]
+    stop(6)
+    six = page(api, monkeypatch, "/api/status")
+    assert len(six[0]["health_issues"]) >= 6
+    assert (six[1] - two) / 4 <= 8

@@ -1,25 +1,24 @@
-"""Goals agreed in words: the CEO Bot's goal read-back (docs/goals-and-kpis.md; spec chat-first-goals.md).
+"""Goals agreed in words: the goal read-back (docs/goals-and-kpis.md; spec chat-first-goals.md).
 
-In the owner's chat the CEO Bot asks Tico to read back up to 20 changes to goals, their measures and the CEO Bot's
-suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes and what is stored
-now, posts it as the CEO Bot's reply and stores the exact saves it stands for (event `goal.read_back` on the
-message): each change is one or more steps, a route, a body. A change the owner could not make by their own click
-here (a colour, done or dropped, archiving, a reading, the company Vision) is refused before anything is posted.
+In the owner's own chat, their Assistant asks Tico to read back up to 20 changes to goals, their measures and the
+Strategy Bot's suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes and what
+is stored now, posts it as the Assistant's reply and stores the exact saves it stands for (event `goal.read_back` on the
+message): each change is one or more steps, a route, a body. A change the owner could not make by their own click here
+(a colour, done or dropped, archiving, a reading, the company Vision) is refused before anything is posted.
 
 The goal, goal-KPI and suggestion routes then accept the owner's yes to it (`agreement`): their next message in the
 chat, with nothing from anyone in between and nothing after it, a plain yes ("yes", "ok", "go ahead", "save it") or a
 yes to some by number ("yes to 1 and 3", "yes except 2"), within 30 minutes of the read-back. Tico reads the numbers,
-not the bot. A save must be one stored step exactly, of a change the yes covers, saved once, and the goal must not
-have been changed by anyone since the read-back but these saves. Anything else is `403 not_agreed` and saves nothing.
-Each save is recorded as the owner, via the CEO Bot, citing their yes and the read-back (`H.DELEGATION`).
-"""
+not the bot. A save must be one stored step exactly, of a change the yes covers, saved once, and the goal must not have
+been changed by anyone since the read-back but these saves. Anything else is `403 not_agreed` and saves nothing. Each
+save is recorded as the owner, via their Assistant, citing their yes and the read-back (`H.DELEGATION`)."""
 
 import json
 import re
 
 from pydantic import ValidationError
 
-from . import ceo_bot
+from . import strategy_bot
 from . import goals as G
 from . import kpis as K
 from .store import H, Problem
@@ -38,7 +37,7 @@ _SAVING = [re.compile(p) for p in (
     r"/api/v2/goals/[^/]+/kpis", r"/api/v2/goals/[^/]+/kpis/[^/]+", r"/api/v2/goals/[^/]+/kpis/[^/]+/unlink",
     r"/api/v2/goal-proposals/[^/]+/decide")]
 
-# What stays the owner's click, in the one sentence the CEO Bot passes on (criterion 12).
+# What stays the owner's click, in the one sentence the Strategy Bot passes on (criterion 12).
 CLICK = {
     "colour": "A goal's colour stays your click on the Goals page, so I left it out.",
     "status": "Marking a goal done or dropped stays your click on the Goals page, so I left it out.",
@@ -68,10 +67,11 @@ def saving(method, path):
     return method == "POST" and any(p.fullmatch(str(path or "")) for p in _SAVING)
 
 
-def ceo_turn(who):
-    """The CEO Bot's turn in the owner's own chat: the owner's rights, via the CEO Bot, not a click."""
+def strategy_turn(who):
+    """The owner's Assistant's turn in their own chat (backend/auth.py assistant_principal, the only identity `via`
+    assistant): the owner's rights, via their Assistant, not a click."""
     return bool(who.via == "assistant" and not who.confirmed and who.attempt_id and who.role == "owner"
-                and who.task_actor == "bot:" + ceo_bot.SLUG)
+                and str(who.task_actor or "").startswith("bot:") and who.task_actor != "bot:" + strategy_bot.SLUG)
 
 
 def active():
@@ -150,7 +150,7 @@ def answered(c, who, cited):
     before = c.execute("SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created<=? AND deleted_at IS NULL "
                        "ORDER BY created DESC, rowid DESC LIMIT 1", (room, cited, at)).fetchone()
     back = stored(c, before["id"]) if before else None
-    if not back or H.message(c, back["id"])["from_actor"] != "bot:" + ceo_bot.SLUG:
+    if not back or H.message(c, back["id"])["from_actor"] != who.task_actor:
         raise not_agreed("The owner's message is not a reply to a goal read-back (anything said after the read-back "
                          "takes the yes back)")
     later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "

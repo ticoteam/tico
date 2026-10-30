@@ -30,13 +30,13 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
           "updated TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
 
 
-# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for a
-# chart model's text, the CEO Bot's actor for its draft), when the CEO Bot drafted it and the task that asked it to, and
-# the bot that filled the seat.
+# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
+# a chart model's text, the Strategy Bot's actor for its draft), when the Strategy Bot drafted it and the task that
+# asked it to, and the bot that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
            ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
-# wrote seats then, so it is kept like a person's words and the CEO Bot never drafts over it.
+# wrote seats then, so it is kept like a person's words and the Strategy Bot never drafts over it.
 EARLIER = "earlier"
 
 
@@ -237,7 +237,8 @@ def _clean_title(value):
 
 def create_seat(auth, c, who, title, description="", reports_to="", team="", description_by=None):
     """`description_by` says whose words the job description is: the caller's by default when they wrote one, `chart`
-    for a chart model's text. Only a description no person wrote is replaced by the CEO Bot's draft (recruiting.py)."""
+    for a chart model's text. Only a description no person wrote is replaced by the Strategy Bot's draft
+    (recruiting.py)."""
     reports_to = _reports_to(c, reports_to or who.actor)
     _may_place(auth, c, who, reports_to)
     return _seat(seat(c, _insert(c, who.actor, title, description, reports_to, team, description_by)))
@@ -297,7 +298,8 @@ def update_seat(auth, c, who, seat_id, fields):
         values["title"] = _clean_title(fields["title"])
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
-        values["description_by"] = who.actor          # a person's words now: the CEO Bot's draft never replaces them
+        # a person's words now: the Strategy Bot's draft never replaces them
+        values["description_by"] = who.actor
     if fields.get("team") is not None:
         values["team"] = str(fields["team"]).strip()
     if fields.get("reports_to") is not None:

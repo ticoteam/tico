@@ -6,15 +6,17 @@ When a ticket enters a step with a pool and has no open check there for its pull
 (`Review 1: PR #n`, the head recorded as any check's is: review_gate.remember_heads) and gives it to the least busy
 eligible member: other model company first, then fewest open checks, then longest idle. Eligible means active and
 online, not paused or held, under the step's limit of open checks, and on a later review step not the bot of an
-earlier one (Review 2 is never Review 1's bot). For a review, model company
-is a preference, never a requirement. A QA bot known to run on a model company the builder builds on is never given
-the ticket's QA: it declines the build, so the check waits for a QA bot of another company (Dev 646). The
-check is filed as the ticket's owner would file it, so the gate, the one-check-per-head rule, the reviewer's wake and
-the verdict's way back to the builder are the ones a builder's own request gets.
+earlier one (Review 2 is never Review 1's bot). For a review or a QA check, model company is a preference by default: a
+bot of another model company than the builder's goes first, and a bot of the builder's company takes the check when no
+other is free, rather than the check waiting. A step whose `other_company` is `require` gives its check only to another
+company's bot: a bot of the builder's company is never free for it, so the check waits when every free bot runs on that
+company, and such a bot that frees up does not take it. The check is filed as the ticket's owner would file it, so
+the gate, the one-check-per-head rule, the reviewer's wake and the verdict's way back to the builder are the ones a
+builder's own request gets.
 
-With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the
-first pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed, or the ticket leaves
-the step or finishes. A pool member only ever takes checks this way, never other work.
+With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the first
+pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed,
+or the ticket leaves the step or finishes. A pool member only ever takes checks this way, never other work.
 """
 import json
 import logging
@@ -215,47 +217,96 @@ def online(c, slug):
     return bool(seen and seen[0] and seen[0] >= H.shift(H.now(), minutes=-ONLINE_MINUTES))
 
 
-def maker(c, slug):
-    """The model company a bot runs on (`anthropic`, `openai`, ...), '' when its config names none Tico knows."""
-    from . import providers
+def _task_model(c, slug):
+    """(config, task model or None, whether it runs now): the bot's config, and the task model a task filed to it
+    would run on. A check is a task the bot owns, so it runs on the bot's task model whenever the bot gives its tasks
+    their own sessions, unless that model cannot run on the bot's computer now (retired, not installed or signed in,
+    held at a usage limit): then on the bot's own model, as backend/task_models.py `pick` falls back."""
+    from clients import sessions
+    from . import task_models
     from .shared_bots import follow
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
     config = follow(c, slug, H._json(row["config_json"], {}) or {}) if row else {}
+    task = task_models.of(config) if sessions.session_key(config, slug, "check", None).startswith("task:") else None
+    if not task:
+        return config, None, False
+    runner = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (slug,)).fetchone()
+    return config, task, not task_models.why_not(c, None, slug, task, runner[0] if runner else None)
+
+
+def _company(model, runtime):
+    """The named model's maker from Tico's catalog, or with no model named, the runtime's; '' for a model the catalog
+    does not list (a harness can run another maker's model) or one a reseller picks (Cursor auto, OpenRouter), as
+    usage_records.family reads a run."""
+    from . import providers
+    from .usage_records import RESELLERS
+    found = (providers.MODEL_BY_ID.get(model) or {}).get("provider") if model else providers.runtime_provider(runtime)
+    return "" if not found or found in RESELLERS else found
+
+
+def maker(c, slug):
+    """The model company a task filed to the bot runs on (`anthropic`, `openai`, ...): its task model's when it has
+    one that can run, else its own model's; '' when its config names none Tico knows."""
+    from . import providers
+    config, task, runs = _task_model(c, slug)
+    if runs:
+        return _company(task["model"], task["runtime"])
     runtime, model = providers.bot_choice(c, None, config)
-    for named in (model, config.get("model"), runtime, config.get("runtime")):
-        found = providers.author_provider(named)
-        if found:
-            return found
-    return ""
+    return _company(model or config.get("model") or "", runtime or config.get("runtime") or "")
 
 
 RECENT_TURNS = 3
+TURNS_READ = 20
 
 
-def makers(c, slug, known_only=False):
-    """Every model company a checker may run on: its own model, and what its last few runs actually ran on (a bot whose
-    model is not signed in runs on its fallback, which is the company that would do the check). A run with an unknown
-    segment makes the answer empty, or with `known_only` adds nothing, leaving what is known."""
+def _recent_turns(c, slug, task, runs):
+    """The bot's last few finished turns that ran where a check filed to it would: none on a task with a model of its
+    own or a check model, which ran on that. With a task model that runs, only its turns on tasks; with one that
+    cannot run now, all of them (`makers` sets aside what ran on that task model)."""
+    from . import task_run_models
+    where = " AND task_id IS NOT NULL" if task and runs else ""
+    rows = c.execute("SELECT id,task_id FROM turns WHERE bot=? AND finished IS NOT NULL" + where
+                     + " ORDER BY finished DESC LIMIT ?", (slug, TURNS_READ)).fetchall()
+    return [r[0] for r in rows
+            if not (r[1] and (task_run_models.of(c, r[1]) or H.check_model(c, r[1])))][:RECENT_TURNS]
+
+
+def makers(c, slug, known_only=False, whole=False):
+    """Every model company a checker may run on: the one a task filed to it runs on (`maker`), and what its last few
+    such runs actually ran on (a bot whose model is not signed in runs on its fallback, which is the company that would
+    do the check). A run with an unknown segment makes the answer empty, or with `known_only` adds nothing, leaving
+    what is known. With `whole`, a model of a company Tico cannot name makes it empty too."""
     from .usage_records import ran_on
-    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
-                                     (slug, RECENT_TURNS))]
-    recent = ran_on(c, turns).values()
+    mine = maker(c, slug)
+    if whole and not mine:
+        return set()
+    _, task, runs = _task_model(c, slug)
+    recent = ran_on(c, _recent_turns(c, slug, task, runs)).values()
+    # A task model that cannot run now won't do the check, so what ran on it says nothing; what fell back from it does.
+    idle = task["model"] if task and not runs else None
     found = set()
     for run in recent:
-        segments = run["segments"]
+        segments = [segment for segment in run["segments"] if not (idle and segment.get("model") == idle)]
+        if run["segments"] and not segments:
+            continue
         if not known_only and (not segments or any(not segment.get("family") for segment in segments)):
             return set()
         found.update(segment["family"] for segment in segments if segment.get("family"))
-    return (found | {maker(c, slug)}) - {""}
+    return (found | {mine}) - {""}
 
 
-def builder_makers(c, ticket):
-    """The model companies the ticket's builder is known to build on: what its runs on the ticket ran on, and its
-    configured model's, so a run with no usage record leaves the rest known."""
+def builder_makers(c, ticket, whole=False):
+    """The model companies the ticket's builder builds on: what its runs on the ticket actually ran on. Its configured
+    model's company stands in only while none of those runs is known, since a run that fell back ran on another one.
+    With `whole`, a run on the ticket with a part of unknown company makes the answer empty: that part may be any."""
     from .check_independence import _executed
-    built, _ = _executed(c, ticket["id"])
+    built, known = _executed(c, ticket["id"])
+    if whole and not known and c.execute("SELECT 1 FROM turns WHERE task_id=?", (ticket["id"],)).fetchone():
+        return set()
+    if built:
+        return set(built)
     owner = ticket.get("owner") or ""
-    return (set(built) | ({maker(c, H.actor_id(owner))} if H.is_bot(owner) else set())) - {""}
+    return ({maker(c, H.actor_id(owner))} if H.is_bot(owner) else set()) - {""}
 
 
 def candidate_details(c, slugs):
@@ -310,20 +361,29 @@ def _earlier_reviewers(c, ticket, step):
     return out
 
 
+def _company_rank(c, slug, builder):
+    """How a bot's model company orders it for a check of a build on the `builder` companies: 0 for another company,
+    1 for one Tico can't name all of, which may be the builder's, 2 for the builder's own."""
+    if makers(c, slug, known_only=True) & builder:
+        return 2
+    return 0 if makers(c, slug, whole=True) else 1
+
+
 def ranked(c, ticket, step, slugs, limit, exclude=()):
-    """(free members best first, why none is) for this ticket's check at `step`. Best is fewest open checks, then the
-    longest idle (no turn yet counts as longest), then by name. A QA bot known to run on a model company the builder
-    builds on is never free for that ticket: it declines the build (Dev 646), so the check waits for another QA bot."""
+    """(free members best first, why none is) for this ticket's check at `step`. A check ranks a bot of another model
+    company than the builder's (`builder_makers`) ahead of a bot of a company Tico can't name, and that ahead of a bot of
+    the builder's company, which is still free when no other is, unless the step's `other_company` is `require`: then such a bot is never free for the ticket, nor is any
+    bot while Tico cannot name the builder's company or the bot's. Then eligibility from `assess`, fewest open checks,
+    the longest idle (no turn yet counts as longest), then by name."""
     from . import step_flow
     from .check_independence import assess
     excluded = set(exclude) | _earlier_reviewers(c, ticket, step)
-    builder = builder_makers(c, ticket) if step_flow.check_kind(step) == "qa" else set()
+    kind = step_flow.check_kind(step)
+    required = bool(kind) and step_flow.other_company(step) == "require"
+    builder = builder_makers(c, ticket, whole=required) if kind else set()
     free, why = [], set()
     for slug in slugs:
         if slug in excluded or "bot:" + slug == ticket["owner"]:
-            continue
-        if builder and makers(c, slug, known_only=True) & builder:
-            why.add("family")
             continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
@@ -334,23 +394,38 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
             why.add("busy")
             continue
         idle = (c.execute("SELECT last_turn_at FROM bots WHERE slug=?", (slug,)).fetchone() or [None])[0] or ""
-        # Model company is a preference only; workload and idle time break ties within each family group.
-        free.append((0 if decision["eligible"] else 1, held, idle, slug))
+        # Require needs both companies named and apart: a company Tico cannot name, or a run with a segment it cannot
+        # name, may be the builder's.
+        if required:
+            known = makers(c, slug, whole=True) if builder else set()
+            same = bool(known & builder)
+            if not builder or same or not known:
+                why.add("builder" if not builder else "company" if same else "unknown")
+                continue
+        # Model company only orders the free bots, so it ranks first; eligibility, workload and idle time break ties.
+        rank = _company_rank(c, slug, builder) if builder and not required else 0
+        free.append((rank, 0 if decision["eligible"] else 1, held, idle, slug))
     free.sort()
     if free:
-        return [slug for _, _, _, slug in free], ""
-    if "busy" in why:
-        reason = "every reviewer in the pool is at its limit of open checks"
-    elif "offline" in why:
-        reason = "no reviewer in the pool is online"
-    elif "family" in why:
-        reason = "every QA bot in the pool runs on the builder's model company"
+        return [slug for _, _, _, _, slug in free], ""
+    base = ("every reviewer in the pool is at its limit of open checks" if "busy" in why
+            else "no reviewer in the pool is online" if "offline" in why else "")
+    if "builder" in why:
+        rest = "Tico can't name the model company the builder ran on, so no bot is shown to run on another"
+        reason = f"{base}; {rest}" if base else rest
+    elif "unknown" in why:
+        rest = "the builder's model company or one Tico can't name" if "company" in why else \
+            "a model company Tico can't name"
+        reason = f"{base}; the rest run on {rest}" if base else f"every free bot in the pool runs on {rest}"
+    elif "company" in why:
+        reason = (f"{base}; the rest run on the builder's model company" if base
+                  else "every free bot in the pool runs on the model company the builder ran on")
+    elif base:
+        reason = base
     elif slugs:
         reason = "no reviewer in the pool is eligible for this check"
     else:
         reason = "the step's pool has no reviewers"
-    if "family" in why and ("busy" in why or "offline" in why):
-        reason += "; the rest run on the builder's model company"
     return [], reason
 
 
@@ -542,7 +617,12 @@ def _take(c, wait, only=None):
         return None
     free, reason = ranked(c, ticket, step, slugs, limit)
     if only is not None:
-        free = [s for s in free if s == only]
+        builder = builder_makers(c, ticket)
+        def rank(slug):
+            return _company_rank(c, slug, builder) if builder else 0
+        # The bot that just finished takes the wait, unless a free bot ranks ahead of it by model company: then the
+        # best free one does, as `ranked` orders them.
+        free = [] if only not in free else [only] if rank(only) <= rank(free[0]) else free
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated=? WHERE id=?", (H.now(), wait["id"]))
@@ -552,7 +632,7 @@ def _take(c, wait, only=None):
                                   note="Tico routed this waiting check to the first available reviewer.")
         else:
             child = _file(c, ticket, step, slug, wait["title"], heads, None,
-                          "it finished a check and took the next waiting one" if only else _why(c, slug))
+                          "it finished a check and took the next waiting one" if slug == only else _why(c, slug))
         if child:
             c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (child["id"], wait["id"]))
             return child
@@ -569,7 +649,8 @@ def _all_waiting(c):
 
 
 def freed(c, row):
-    """A check request left the board (done, declined or closed): its bot takes the oldest waiting check it may."""
+    """A check request left the board (done, declined or closed): its bot takes the oldest waiting check it may. A wait
+    a free bot of a better company takes instead does not stop it looking at the next."""
     parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner")) else None
     if not parent or not is_check_title(c, H.task(c, parent), row.get("title")):
         return None
@@ -581,7 +662,7 @@ def freed(c, row):
         if not found or slug not in found[1]:
             continue
         child = _take(c, wait, only=slug)
-        if child:
+        if child and child["owner"] == "bot:" + slug:
             return child
     return None
 

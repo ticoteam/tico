@@ -357,8 +357,9 @@ def drop_materialised(c, bot):
 
 
 def set_profile(admin, c, who, bot, body, undo_change_id=None):
-    """Set the bot's profile (SettingsAdmin's pattern: CEO gate, manager check, revision check, audit row, undo)."""
-    from . import ceo_acts as CA
+    """Set the bot's profile (SettingsAdmin's pattern: Strategy Bot gate, manager check, revision check, audit row,
+    undo)."""
+    from . import strategy_acts as CA
     from .store import Problem, encode
     CA.gate(c, who.actor, "cost", f"change how {bot} wakes and what tasks it takes")
     admin._manager(c, who, bot, botops=True)

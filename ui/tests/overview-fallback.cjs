@@ -40,7 +40,7 @@ const SCENE = `export function createBuilding() {
     });
     await page.goto('http://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    await page.evaluate(() => location.hash = '#/overview/campus');
     await page.frameLocator('#overview-frame').locator('body[data-scene-ready]').waitFor();
     await page.evaluate(() => hlRefresh());
     const strip = page.locator('#overview-stuck');

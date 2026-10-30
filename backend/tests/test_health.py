@@ -895,9 +895,9 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         [row] = health._waiting(c, online)[2]
         assert row["bot"] == "ops" and row["reason"] == "slow"         # nothing says it is updating: a bug
         c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported) "
-                  "VALUES(?,'0.3.46','docker','waiting','0.3.48',?)", (runner, H.now()))
+                  "VALUES(?,'0.4.46','docker','waiting','0.4.48',?)", (runner, H.now()))
         [row] = health._waiting(c, online)[2]
-        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.3.48"
+        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.4.48"
         [turn] = row["turns"]
         assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""   # a chat: no task
         since = turn["since"][11:16]
@@ -905,7 +905,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     assert "queue_idle" not in found
     held = found["runner_outdated"]
     assert held["kind"] == health_monitor.SETUP
-    assert (f"Team box is holding new work to update to Tico 0.3.48: it starts once dev's turn (running since {since} "
+    assert (f"Team box is holding new work to update to Tico 0.4.48: it starts once dev's turn (running since {since} "
             "UTC) ends; it holds 1 queued job(s) for ops.") in held["detail"]
     # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.
     assert "BotOps: update the runner" not in held["fix"] and "record the wait" in held["fix"]
@@ -924,7 +924,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             c.execute("UPDATE runner_versions SET " + ",".join(f"{k}=?" for k in change) + " WHERE runner_id=?",
                       (*change.values(), runner))
             found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}["runner_outdated"]["fix"]
-            c.execute("UPDATE runner_versions SET release='0.3.46',update_state='waiting',update_error='' WHERE runner_id=?",
+            c.execute("UPDATE runner_versions SET release='0.4.46',update_state='waiting',update_error='' WHERE runner_id=?",
                       (runner,))
         return found
     assert fix(update_error="could not start the update: OSError").startswith("BotOps: update the runner on Team box")

@@ -23,6 +23,7 @@ import json
 import re
 
 from . import rules as R
+from . import task_run_models
 from .store import H, Problem
 
 MAIL_ACTIONS = {"archive": "archive", "label": "label", "leave_for_you": "leave", "draft_reply": "draft",
@@ -374,7 +375,7 @@ ACTIONS = {"archive": _mail_or_slack("archive"), "leave_for_you": _mail_or_slack
 
 
 # ---------------------------------------------------------------------------------------------------- turns
-def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None):
+def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None):
     """A turn for this run alone: a new task for the named bot, filed by the automation's owner the way a routine
     files its run (backend/routines.py `open_task`), so it runs in that task's own room and never in a person's chat,
     an Assistant room or another task's session. `assistant:<person>` is the person's Assistant (its room is made on
@@ -399,10 +400,15 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
             raise ValueError(f"No bot {bot}" if not found else f"{bot} is {found['state']}")
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
-    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False,
+    task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), lint=False, deduplicate=False, routine=True,
                          trigger="other", trigger_source="automation:" + auto["id"],
                          wake_refs={"automation": auto["id"], "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})
+    if run_model:
+        # The step's model is the task's own (checked when the automation was saved, so kept as it is here).
+        task_run_models.set_choice(c, actor, task["id"], task_run_models.stamped(
+            run_model["model"], run_model.get("effort"), run_model.get("harness")),
+            note=f"Set by routine step {step_id}")
     # The wake names its task; the turn's end finds the run by it (backend/automations.py `turn_done`).
     return {"ref": task["id"], "turn": {"bot": bot, "task": task["id"], "session": task.get("conversation_id")}}
 

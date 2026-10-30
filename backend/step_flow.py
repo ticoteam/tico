@@ -22,6 +22,9 @@ A step's `flow` (all keys optional):
 - `check`: the kind of check the step asks for: `review`, `qa` or `release_qa` (after the release). Every rule about
   reviews, QA, waivers and check pools finds its steps by this, never by their names (`check_kind`, `titled`). A saved
   flow that leaves `check` out keeps the step's kind; `"check": null` clears it.
+- `other_company`: on a check step only, `prefer` (the default) or `require`: whether the check goes to a bot of another
+  model company than the builder's before one of the builder's company (`prefer`), or only ever to another company's
+  bot, waiting when none is free (`require`) (backend/check_pools.py, `ranked`).
 
 Step references are stored by step id, so renaming a step keeps its flow; the API takes names or ids."""
 import json
@@ -31,12 +34,13 @@ from . import hubdb as H
 
 MERGE = "merge"
 KEYS = ("on_pass", "on_fail", "after_green", "on_merge", "skip_tag", "timeout_hours", "status_hours", "late_hours",
-        "can_hold", "gate", "assign", "backlog", "check")
+        "can_hold", "gate", "assign", "backlog", "check", "other_company")
 HOURS = ("timeout_hours", "status_hours", "late_hours")
 STEP_KEYS = ("on_pass", "on_fail", "after_green")
 SEEDED = "step_flow.seeded"
 CHECKS_SEEDED = "step_flow.checks_seeded"
 CHECK_KINDS = ("review", "qa", "release_qa")
+OTHER_COMPANY = ("prefer", "require")
 MAX_TIMEOUT_HOURS = 24 * 14
 
 
@@ -92,6 +96,12 @@ def clean(c, actor, raw, existing):
         # A flow sent without `check` (a steps file written before steps had kinds) keeps the step's kind: losing it
         # quietly makes its QA request an open child that holds the ticket. Send `"check": null` to clear it.
         out["check"] = check_kind(existing)
+    if flow.get("other_company") not in (None, ""):
+        if not out.get("check"):
+            H.refuse(c, actor, "kind", "A step's other_company is set on a check step (review, qa or release_qa) only")
+        if flow["other_company"] not in OTHER_COMPANY:
+            H.refuse(c, actor, "kind", "A step's other_company is " + " or ".join(OTHER_COMPANY))
+        out["other_company"] = flow["other_company"]
     for key in ("on_merge", "can_hold", "gate"):
         if flow.get(key) is not None:
             if not isinstance(flow[key], bool):
@@ -182,6 +192,13 @@ def check_kind(s):
     """The kind of check step `s` asks for (`review`, `qa`, `release_qa`), or None for a step that is no check."""
     value = of(s).get("check")
     return value if value in CHECK_KINDS else None
+
+
+def other_company(s):
+    """How a check step treats the builder's model company: `require` when only another company's bot may take its
+    check, else `prefer` (the default, and every step that is no check)."""
+    value = of(s).get("other_company")
+    return value if value in OTHER_COMPANY else "prefer"
 
 
 def checks(c, type_id, kind=None):

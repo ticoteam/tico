@@ -30,15 +30,16 @@ The owner and the admins see every bot. Anyone else sees the bots they own. A bo
 
 A limit is a cap in estimated USD per 30 minutes, day, week or month, set at three levels.
 
-- **A bot**: its own limits; the team has a default for bots with none of their own. Change a bot's on its Usage row or in
-  Settings > Bots; the owner and administrators also set the default (Usage > **Default limit**). The owner of a bot may set its
+- **A bot**: its own limits; the team has a default (**Each bot**) for bots with none of their own. The owner of a bot may set its
   limit, no higher than the team default.
 - **A group** (department): the combined spend of the group's bots, and of the bots in groups nested under it.
 - **The whole team**: the combined spend of every bot. Set it to keep all the bots together under what a shared subscription or
   budget can take in an hour, so they slow down before the provider stops them for hours.
 
-The owner and administrators set group and team limits (Usage > **Team and group limits**). None of them is set until someone sets
-it.
+Usage > **Limits** is one table of every limit: the default and the whole team, then each group and bot with a limit of its own.
+**Add limit** adds any group or bot; change several and save them together. A bar under an amount is what that window has spent.
+The owner and administrators set the default, group and team limits; a group's lead sets the group's and its bots'. A bot's
+Usage row and Settings > Bots open its limit too. None is set until someone sets it.
 
 - At 80% of a limit, one message goes to the bot's owner (else the team owner); for a group or the team, to the team owner. A chip
   shows on the bot's Usage row.

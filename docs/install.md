@@ -87,6 +87,7 @@ run `sudo apt-get install -y curl` first. That installs the newest release; to p
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
+To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` it replaces the sample company).
 
 It prints a reusable private owner sign-in link. Keep it private: anyone with the link on this computer can sign in as you.
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.
@@ -196,6 +197,10 @@ before a computer or an AI provider exists. Join this computer under **Settings 
 
 The server answers on this computer only: compose publishes the port on `127.0.0.1`, and a server with a domain and no
 sign-in refuses to start. A public address always needs sign-in.
+
+Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
+[Tico file hosting](files.md#tico-file-hosting) on the Gateway page and they show inline from your `ticofiles.com`
+address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
 
@@ -1286,3 +1291,4 @@ model CLIs are not in the image; the runner installs them (see [harnesses](harne
 Everything above is the one way to install: Docker is the only supported way to run the server. Driving the wizard from a
 laptop, pasting cloud-init by hand, and putting your own load balancer or Cloudflare Access in front are in
 [install-advanced.md](install-advanced.md).
+Many companies' servers on one shared host (how Tico runs its cloud companies) are in [cell.md](cell.md).

@@ -25,9 +25,12 @@ import json
 
 from ..harness import CLAUDE_ID, DANA_ID, LEAD_ID, OPENAI_ID, PRIYA_ID, RELEASE_ID, W5, Unmet
 
-CEO, LIBRARIAN, HEALTH = "goal-manager", "librarian", "health-monitor"   # backend/ceo_bot.py SLUG, groups.SYSTEM_BOTS
+# The slugs the Strategy Bot and the system bots are built with (backend/strategy_bot.py SLUG, groups.SYSTEM_BOTS).
+STRATEGY, LIBRARIAN, HEALTH = "goal-manager", "librarian", "health-monitor"
+# The name an install before this release stored for the Strategy Bot; the migration renames it to "Strategy Bot".
+OLD_NAME = "CEO Bot"
 INBOX_DANA, INBOX_PRIYA = "inbox-manager-dana", "inbox-manager-priya"
-FIXTURE_BOTS = {CEO: ("ceo", "claude"), LIBRARIAN: ("librarian", "claude"), HEALTH: ("health", "claude"),
+FIXTURE_BOTS = {STRATEGY: ("strategy", "claude"), LIBRARIAN: ("librarian", "claude"), HEALTH: ("health", "claude"),
                 INBOX_DANA: ("inbox", "claude"), INBOX_PRIYA: ("inbox", "claude")}
 
 HOOK_ID = "deploy-failed"
@@ -98,7 +101,7 @@ def rule_id(name):
 def old_rows(org):
     """What only the old system wrote, as its tables held it: no cutover record, routines (with the next_due the old
     scheduler set), wake rules, hourly limits, team and bot turn budgets, the CEO Bot's name."""
-    from backend import ceo_bot, profiles, redesign_migration as M, turn_budgets as TB
+    from backend import profiles, redesign_migration as M, turn_budgets as TB
     from backend.scheduler import next_due, stamp
     from backend.store import H
     now, made = org.now(), {}
@@ -129,7 +132,7 @@ def old_rows(org):
         bot, own = BOT_BUDGET
         config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")
         c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, **own}), bot))
-        c.execute("UPDATE bots SET display_name=? WHERE slug=?", (ceo_bot.NAME, CEO))
+        c.execute("UPDATE bots SET display_name=? WHERE slug=?", (OLD_NAME, STRATEGY))
         rule_bots = sorted({r[0] for r in c.execute("SELECT scope_id FROM rules WHERE scope_kind='bot'")})
     return {"due": made, "rule_bots": rule_bots}
 
@@ -164,7 +167,7 @@ def install_fixture(org, facts):
            "destinations": [key for key in DESTINATIONS if _id(facts, "fx:destination:" + key, "destination", "key")],
            "limits": dict(HOURLY) if old else {},
            "goal": _id(facts, "fx:goal", "goal", "id"),
-           "bots": {"ceo": CEO, "librarian": LIBRARIAN, "health": HEALTH}}
+           "bots": {"strategy": STRATEGY, "librarian": LIBRARIAN, "health": HEALTH}}
     facts["fixture"] = ids
     return ids
 

@@ -8,7 +8,7 @@ reschedules (`control`). The trigger/action catalog (TRIGGERS, ACTIONS) is share
 searched the same way.
 
 `CONTROLS` holds what a person may change: on/off and a schedule preset for the six jobs that use AI or reach people,
-and the Topic changed and Quiet task triage switches. Stale ticket review, Topic changed and Quiet task triage keep their on/off in the team rules
+and the Topic changed and Stalled task check switches. Stale ticket review, Topic changed and Stalled task check keep their on/off in the team rules
 (backend/team_rules.py), so the value they had in Settings > General carries over; the rest live here in
 `registry_metadata` CONFIG_KEY. An owner or admin changes them; Health scan only the owner. `due` is when a job's
 preset says it runs again, read by the scheduler and the job's next run alike. Run now runs a job once, through the same
@@ -36,9 +36,17 @@ LOG = logging.getLogger("tico.system_routines")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_runs(
  id TEXT PRIMARY KEY, job TEXT NOT NULL, started TEXT NOT NULL, finished TEXT, ok INTEGER NOT NULL DEFAULT 1,
- result TEXT NOT NULL DEFAULT '', route TEXT, fallback TEXT, cost_usd REAL, runs INTEGER NOT NULL DEFAULT 1);
+ result TEXT NOT NULL DEFAULT '', route TEXT, fallback TEXT, cost_usd REAL, runs INTEGER NOT NULL DEFAULT 1,
+ first_started TEXT);
 CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started);
 """
+
+
+def ensure(c):
+    """Add what SCHEMA's table gained since a database was made: `first_started`, the first of a folded row's quiet
+    repeats (its `started` moves to the latest), so counts can spread `runs` over the time they happened."""
+    if "first_started" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
+        c.execute("ALTER TABLE system_runs ADD COLUMN first_started TEXT")
 
 KEEP = 50                   # rows per job
 QUIET_WRITE_SECONDS = 60    # a repeated quiet run moves its row at most this often
@@ -96,6 +104,9 @@ ACTIONS = {
     "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
+    "check_invariants": ("check production invariants (stuck runs and tasks, unreachable owners, refusal loops, "
+                         "provider sign-in, webhooks, automations, relays) and raise one task per failing check",
+                         ("health", "invariants", "production", "alert", "stuck")),
     "report_tasks": ("list each department's stalled, overdue and out-of-step tasks for the Task Manager",
                      ("tasks", "stalled", "overdue", "department", "report")),
     "wake_task_manager": ("open a Task check task for each department that has something to fix",
@@ -205,6 +216,10 @@ JOBS = [
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
+    Job("invariant_checks", "Production checks",
+        "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
+        "owner; the task is closed when the check passes.",
+        HOUSEKEEPING, "Every 15 minutes", 900, then=("check_invariants",)),
     Job("go_live_expiry", "Go-live expiry", "Ends a go-live waiting for a computer that never reports.",
         HOUSEKEEPING, "Every 10 minutes", 600, then=("end_go_live",)),
     Job("goal_colours", "Goal colours", "Works out every goal's colour again as its data ages.",
@@ -241,7 +256,7 @@ JOBS = [
         HOUSEKEEPING, "Every 30 seconds", 30, records=False, then=("sync_meetings",)),
     Job("doc_sync", "Document sync", "Refreshes linked documents from their sources.",
         HOUSEKEEPING, "Every few seconds", 5, records=False, then=("sync_docs",)),
-    Job("stall_triage", "Quiet task triage",
+    Job("stall_triage", "Stalled task check",
         "Before a stall check stays silent on a quiet task nothing has changed on, Decide reads its last messages: "
         "if it waits on someone it sets that wait, if it is finished it closes it, if it is stuck one wake goes through.",
         CHECKS, "When it happens", ai=True, control=True, labels=("stall-triage",), records=False, when="quiet_task",
@@ -536,9 +551,10 @@ def save(c, run, finished=None):
         c.execute("UPDATE system_runs SET started=?,finished=?,runs=runs+1 WHERE id=?", (run.started, finished, last["id"]))
         return last["id"]
     rid = H.new_id()
-    c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,route,fallback,cost_usd) VALUES(?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,route,fallback,cost_usd,first_started) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?)",
               (rid, run.job, run.started, finished, 0 if run.error else 1, run.error or run.result or "Done",
-               run.route, run.fallback, run.cost_usd))
+               run.route, run.fallback, run.cost_usd, run.started))
     return rid
 
 

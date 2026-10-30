@@ -541,6 +541,33 @@ function decideWriteBody(c, what, i, note) {
   if (what === 'done' && !decideStepsOnly(c)) return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
+// Text may be only a note on an unresolved choice. Keep its card until the server settles it,
+// using the same durable outbox and request key as every other card action.
+function decideTextAnswer(st, c, note) {
+  st.busy = true;
+  const root = $('.decide');
+  root?.setAttribute('aria-busy', 'true');
+  root?.querySelectorAll('button, textarea').forEach(el => el.disabled = true);
+  const p = {key: c.key, write: decideWrite(c, 'answer', null, note), note, sent: 0, waitSettlement: true};
+  DEC_OUTBOX.add(p);
+  decideSave();
+  void decideSend(st, p);
+}
+function decideTextResult(st, p, feedback, saved) {
+  if (!st) return;
+  st.busy = false;
+  if (DEC !== st) return;
+  $('.decide')?.removeAttribute('aria-busy');
+  decideRender(st);
+  if (st.at !== p.key) return;
+  const box = $('.decide .dc-note textarea');
+  if (box) { box.value = saved ? '' : p.note || ''; box.dispatchEvent(new Event('input', {bubbles: true})); }
+  if (feedback) {
+    const status = document.createElement('p');
+    status.className = 'dc-answer-feedback'; status.setAttribute('role', 'status'); status.textContent = feedback;
+    $('.decide .dc-body')?.append(status);
+  }
+}
 function decideAct(st, what, i, shown = st.shown) {
   const key = st.at, c = decideCurrent(st), root = $('.decide');
   // A second tap while the card leaves, or a button from a card no longer current, does nothing.
@@ -556,6 +583,7 @@ function decideAct(st, what, i, shown = st.shown) {
   }
   const box = $('.dc-note textarea', root), note = box?.value.trim() || '';
   if ((what === 'comment' || what === 'answer') && !note) { box?.focus(); return; }
+  if (what === 'answer') { void decideTextAnswer(st, c, note); return; }
   if (what === 'ticked' && !decideTicked(st, c).size) return;
   st.lockUntil = performance.now() + 350;
   const write = decideWrite(c, what, i, note);
@@ -592,7 +620,7 @@ const DEC_SAVED = 'tico.decide.outbox';
 let DEC_SIGNED_OUT = false;
 function decideSave() {
   if (DEC_SIGNED_OUT) return;
-  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
+  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, waitSettlement: p.waitSettlement, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
 }
 function decideResume() {
   let saved = [];
@@ -601,7 +629,7 @@ function decideResume() {
   if (!S.me?.id) return;
   for (const item of Array.isArray(saved) ? saved : []) {
     if (!item?.writes?.length || item.me !== S.me.id || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
-    const p = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0};
+    const p = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0, waitSettlement: item.waitSettlement};
     DEC_OUTBOX.add(p);
     void decideSend(null, p);
   }
@@ -634,12 +662,21 @@ function needsSay(text, err = false) {
 async function decideSend(st, p) {
   try {
     for (const w of p.write.writes.slice(p.sent)) {
-      await post(w.path, w.body, w.key);
+      const result = await post(w.path, w.body, w.key);
+      if (p.waitSettlement) { p.decisionOpen = !!result.decision_open; p.feedback = result.feedback; }
       p.sent++;
       decideSave();
     }
     DEC_OUTBOX.delete(p);
     decideSave();
+    if (p.waitSettlement) {
+      if (!p.decisionOpen) {
+        DEC_HANDLED.add(p.key);
+        if (st?.at === p.key) st.at = decideAfter(st, p.key);
+      }
+      decideTextResult(st, p, p.decisionOpen ? p.feedback || 'Note saved. Decision still open; choose an option.' : '', true);
+      needsListsRedraw();
+    }
     if (st && !liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => {
       if (DEC === st) decideRefresh(st, S.v2.needs || []);
       needsListsRedraw();
@@ -656,6 +693,7 @@ async function decideSend(st, p) {
     DEC_HANDLED.delete(p.key);
     decideSave();
     needsListsRedraw();
+    if (p.waitSettlement) { decideTextResult(st, p, e.message, false); return; }
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
     const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
     needsSay(changed ? 'That task changed. Look again.' : e.message, true);

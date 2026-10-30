@@ -1,7 +1,8 @@
 // Offline browser test of a chat's pinned goal and the "/" menu, against a mocked API
 // (GET/POST /api/v2/conversations/{id}/goal, the watch stream's `goal` event, and `command: true` on a chat send).
 // Sets a goal from the target, checks the 3-line clamp and tap to expand, pauses and clears it, sees a met goal fold
-// into one line, filters and picks commands, and repeats the bar and menu at phone width.
+// into one line, filters and picks commands, and repeats the bar and menu at phone width. The send's ways (Steer now,
+// Queue, Defer <duration>, Set as goal) go out as `delivery`/`defer_for` on the send, at desktop and phone widths.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -340,8 +341,93 @@ async function emptyChat(browser) {
   console.log('empty chat: ok');
 }
 
+// The send's caret: how the next message reaches the bot. Plain Send (Steer) names no way; Queue and Defer <duration>
+// go with the message once, then Send is plain again; Set as goal turns on goal mode. At desktop and phone widths.
+async function sendWays(browser, viewport, touch) {
+  const api = await open(browser, viewport, touch), {page} = api;
+  const press = loc => touch ? loc.tap() : loc.click();
+  const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
+  const caret = page.locator('#chat-composer .p-way'), menu = page.locator('#chat-composer .p-ways');
+  await page.locator('#chat-composer .p-goal').waitFor();         // the goal is offered, so the menu offers it too
+  const sendText = async text => {
+    const n = api.sends.length;
+    await box.fill(text);
+    await press(send);
+    for (const end = Date.now() + t(5000); api.sends.length === n && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+    return api.sends.at(-1);
+  };
+  assert.deepEqual(await sendText('Morning'), {text: 'Morning', refs: {}}, 'plain Send is Steer and names no way');
+
+  await press(caret);
+  await menu.waitFor();
+  assert.deepEqual(await menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => x.dataset.deliver)),
+    ['steer', 'queue', 'defer:never', 'defer:30m', 'defer:1h', 'defer:4h', 'defer:24h', 'defer:2d', 'defer:7d', 'defer:never', 'goal']);
+  await menu.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));
+  const m = await menu.boundingBox(), c = await caret.boundingBox();
+  assert.ok(m.y + m.height <= c.y + 1, 'the menu opens upward');
+  assert.ok(m.x >= 0 && m.x + m.width <= viewport.width, `the menu fits the ${viewport.width} px width`);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
+  const small = await menu.locator('button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect()).filter(r => r.height < 34 || r.width < 34).length);
+  assert.equal(small, 0, 'every menu target is at least 34 px');
+  assert.ok(c.width >= 34 && c.height >= 34, 'the caret is at least 34 px');
+  if (process.env.CHAT_GOAL_SHOTS) {
+    fs.mkdirSync(process.env.CHAT_GOAL_SHOTS, {recursive: true});
+    await page.screenshot({path: require('node:path').join(process.env.CHAT_GOAL_SHOTS, `send-ways-${viewport.width}.png`)});
+  }
+  // Escape closes the menu only; a press outside closes it too.
+  await page.keyboard.press('Escape');
+  assert.equal(await menu.isHidden(), true);
+  await press(caret); await menu.waitFor();
+  await press(page.locator('#conv-thread'));
+  assert.equal(await menu.isHidden(), true, 'a press outside closes the menu');
+
+  // Queue: the button says so, the message carries it, then Send is plain again.
+  await press(caret); await press(menu.locator('[data-deliver="queue"]'));
+  assert.equal(await send.innerText(), 'Queue');
+  assert.deepEqual(await sendText('Use the staging data'), {text: 'Use the staging data', refs: {}, delivery: 'queue'});
+  assert.equal(await send.getAttribute('aria-label'), 'Send', 'the pick is for one send');
+  assert.deepEqual(await sendText('And thanks'), {text: 'And thanks', refs: {}});
+
+  // Defer with a duration (Return sends on a computer).
+  await press(caret); await press(menu.locator('.p-for [data-deliver="defer:4h"]'));
+  assert.equal(await send.innerText(), 'Defer 4h');
+  if (touch) assert.deepEqual(await sendText('Later today'), {text: 'Later today', refs: {}, delivery: 'defer', defer_for: '4h'});
+  else {
+    const n = api.sends.length;
+    await box.fill('Later today'); await box.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+    assert.equal(api.sends.length, n + 1);
+    assert.deepEqual(api.sends.at(-1), {text: 'Later today', refs: {}, delivery: 'defer', defer_for: '4h'});
+    // A file goes through the upload with the way it was sent.
+    await press(caret); await press(menu.locator('[data-deliver="defer:never"]').first());
+    await box.fill('With a file');
+    await page.locator('#chat-composer .p-file').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('fixture')});
+    await press(send);
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
+    assert.match(api.uploads.at(-1), /name="delivery"\r\n\r\ndefer\r\n/);
+    assert.match(api.uploads.at(-1), /name="defer_for"\r\n\r\nnever\r\n/);
+  }
+  assert.equal(await send.getAttribute('aria-label'), 'Send');
+
+  // Set as goal is goal mode; a way picked after it leaves goal mode.
+  await press(caret); await press(menu.locator('[data-deliver="goal"]'));
+  assert.equal(await page.locator('#chat-composer .p-goal').getAttribute('aria-pressed'), 'true');
+  assert.equal(await send.innerText(), 'Set goal');
+  await press(caret); await press(menu.locator('[data-deliver="steer"]'));
+  assert.equal(await page.locator('#chat-composer .p-goal').getAttribute('aria-pressed'), 'false');
+  assert.equal(await send.getAttribute('aria-label'), 'Send');
+  assert.deepEqual(api.goalPosts, [], 'no goal was set');
+  assert.deepEqual(api.errors, []);
+  console.log(`send ways ${viewport.width}: ok`);
+  await page.close();
+}
+
 (async () => {
   const browser = await launch();
-  try { await desktop(browser); await phone(browser); await serverNotice(browser); await emptyChat(browser); }
+  try {
+    await desktop(browser); await phone(browser); await serverNotice(browser); await emptyChat(browser);
+    await sendWays(browser, {width: 1200, height: 800}, false); await sendWays(browser, {width: 390, height: 844}, true);
+  }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

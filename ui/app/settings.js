@@ -3,10 +3,12 @@
 'use strict';
 
 // How visuals show (Visuals always on): decided by the setup, so a line to read, never a switch. "full" with a
-// separate visual address; otherwise pictures, video and audio only (backend/visuals.py mode).
+// separate visual address, "hosted" from Tico file hosting's address; otherwise pages and SVG are Open cards, and the
+// line says what fixes it (backend/visuals.py shown).
+const SETTINGS_VISUALS = {full: 'Visuals: full', hosted: 'Visuals: full, from Tico file hosting',
+  media: "Visuals: pages and SVG can't show inline. Add a visual address or Tico file hosting."};
 function settingsVisualsLine() {
-  const full = S.config?.visuals === 'full';
-  return `${full ? 'Visuals: full' : 'Visuals: pictures, video and audio only (no separate visual address)'}
+  return `${SETTINGS_VISUALS[S.config?.visuals] || SETTINGS_VISUALS.media}
     <a href="${GH}/blob/main/docs/visuals.md#self-hosting" target="_blank" rel="noopener noreferrer">How visuals show</a>`;
 }
 
@@ -80,7 +82,8 @@ let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY
 let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'ceo', 'devices', 'repos', 'tasks', 'inbox', 'inbound', 'system',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'repos', 'tasks', 'inbox',
+  'inbound', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
 // System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab, now the Models card.
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
@@ -193,14 +196,13 @@ function pageSettings() {
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
-  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin()) && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
+  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
+    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
-      ${settingsCeoBotShown() ? `<button type="button" data-settings-tab="ceo" role="tab">${esc(ceoBotName())}</button>` : ''}
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
@@ -218,11 +220,9 @@ function pageSettings() {
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
-        <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
-          <a href="#/settings/system" data-settings-moved>Moved to Settings &gt; System</a></p>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
-          <div><strong>Team icon</strong><p class="settings-cell-note">PNG, JPEG or WebP, up to 1 MB.</p>
+          <div><strong>Team icon</strong>
             <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
             <button type="button" class="ghost" id="settings-team-icon-change">Choose icon</button>
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
@@ -261,6 +261,9 @@ function pageSettings() {
       <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
       <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
+      ${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
+        <div class="row"><a class="ghost" href="#/bot/goal-manager/more">Bot settings</a></div></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+      ${settingsIsAdmin() ? '<section class="card" id="set-screening-card" hidden><header><h2>Screening</h2></header><div id="set-screening"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-webhooks" role="tabpanel" hidden>
       <section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
@@ -279,7 +282,6 @@ function pageSettings() {
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
       ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
-    ${settingsCeoBotShown() ? `<div class="settings-pane" id="settings-ceo" role="tabpanel" hidden><section class="card"><header><h2>${esc(ceoBotName())}</h2></header><div id="set-ceo-bot">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     <dialog class="tmodal" id="people-dialog" aria-label="People"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
@@ -336,12 +338,14 @@ function settingsShow(tab) {
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
   // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
   if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
+  // The Strategy Bot's settings were a tab of their own; they are a helper's card in System now.
+  if (tab === 'strategy-bot') { tab = 'system'; SETTINGS_REVEAL = '#set-strategy-bot-card'; }
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
   if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; }   // the Runs page moved here
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), gateway: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), gateway: settingsIsAdmin()};
   const shown = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab);
   // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
   SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
@@ -392,8 +396,6 @@ function settingsShow(tab) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const gatewayPane = $('#settings-gateway');
   if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
-  const ceoPane = $('#settings-ceo');
-  if (ceoPane) { ceoPane.hidden = SETTINGS_TAB !== 'ceo'; if (SETTINGS_TAB === 'ceo') void renderSettingsCeoBot(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboundPane = $('#settings-inbound');
@@ -403,7 +405,7 @@ function settingsShow(tab) {
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const system = $('#settings-system');
-  if (system) { system.hidden = SETTINGS_TAB !== 'system'; if (SETTINGS_TAB === 'system') { void renderSystemRoutines(); void renderReleaseCard(); void renderTaskManagerCard(); } }
+  if (system) { system.hidden = SETTINGS_TAB !== 'system'; if (SETTINGS_TAB === 'system') { void renderSystemRoutines(); void renderReleaseCard(); void renderTaskManagerCard(); void renderScreeningCard(); void renderSettingsStrategyBot(); } }
   const webhooksPane = $('#settings-webhooks');
   if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
   settingsRevealSoon(SETTINGS_REVEAL);

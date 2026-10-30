@@ -3,7 +3,7 @@
 /* tasks: labels, links, comments */
 .tfilters{display:flex;gap:6px;align-items:center}
 .tlabel{display:inline-flex;align-items:center;gap:3px;font-size:var(--t-xs);padding:1px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);white-space:nowrap}
-.tlabel .x,.tlink .x{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;font-size:var(--t-sm);line-height:1}
+.tlabel .x,.tlink .x{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;font-size:var(--t-sm);line-height:var(--lh-none)}
 .tlink{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-xs);padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .tlink a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
 .tlink .tcopy{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;display:inline-flex;align-items:center}
@@ -12,11 +12,19 @@
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
 .tlink.pr.closed{color:var(--muted);border-color:var(--line)}
+.tchip-note{display:inline-block;max-width:min(28ch,40vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .tparts{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 [draggable="true"]{cursor:grab}
 .dragging{opacity:.4}
 .tmeta .linkish{font:inherit;font-size:inherit}
 .tsection{margin:12px 0}
+/* Runs on: the model pickers wrap to as many columns as a phone sheet leaves room for. */
+.task-run-now{margin:0 0 6px;font-size:var(--t-sm);color:var(--ink);overflow-wrap:anywhere}
+.task-run-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;align-items:end;min-width:0}
+.task-run-form label{display:grid;gap:3px;min-width:0;font-size:var(--t-xs);color:var(--muted)}
+.task-run-form select{min-width:0;max-width:100%}
+.task-run-form button{justify-self:start}
+@media (max-width:760px){.task-run-form button{height:40px}}   /* as tall as the phone select beside it */
 .tlabels,.tlinks{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .tlabels form.inline,.tlinks form.inline{display:inline-flex;margin:0}
 .tlabels form.inline input,.tlinks form.inline input{font-size:var(--t-sm);padding:2px 6px;width:auto}
@@ -32,7 +40,7 @@
 /* comments read like the chat column: a person's in a bubble, a bot's on the page */
 .tcomment{background:var(--bubble);border-radius:12px;padding:8px 12px;font-size:var(--read-size);line-height:var(--read-leading)}
 .tcomment.bot{background:none;padding:4px 0}
-.tcomment .tcomment-head{line-height:1.5}
+.tcomment .tcomment-head{line-height:var(--lh)}
 .tcomment .md{margin-top:4px}
 .tcomment.sys{background:none;padding:2px 4px;font-size:var(--t-sm);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .tcomment-head{display:flex;align-items:center;gap:8px;font-size:var(--t-sm)}
@@ -74,7 +82,7 @@
 #task-modal.thread[open] .tmodal-head>:not(.tthread-only,.tstatus,.tchip-blocked){display:none}
 #task-modal.thread[open] .tthread-back{order:-2;flex:none;display:grid;place-items:center;color:var(--ink)}
 #task-modal.thread[open] .tthread-back svg{width:14px;height:14px;flex:none}
-#task-modal.thread[open] .tthread-title{order:-1;flex:1;min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:600;color:var(--ink);outline:0}
+#task-modal.thread[open] .tthread-title{order:-1;flex:1;min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:600;color:var(--ink);outline:0;letter-spacing:var(--track-snug)}
 #task-modal.thread[open] .tmodal-head .pill.tstatus{color:var(--muted);font-weight:500}
 #task-modal.thread[open]>.tmodal-title,#task-modal.thread[open]>.tmeta,#task-modal.thread[open] .tmodal-main,#task-modal.thread[open] .task-side{display:none}
 #task-modal.thread[open] .tmodal-body.task-layout{flex:1;min-height:0;max-height:none;display:flex;flex-direction:column;align-items:stretch;overflow:hidden;padding:0 16px max(12px,env(safe-area-inset-bottom))}
@@ -87,5 +95,23 @@
 .task-chat .task-pill .p-send-icon{margin-bottom:1px}
 .task-chat .task-pill [data-task-chat-status]:empty,.task-chat .task-pill [data-task-chat-to]:empty{display:none}
 .task-chat .task-pill [data-task-chat-status],.task-chat .task-pill [data-task-chat-to]{font-size:var(--t-sm);padding:0 12px}
-@media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}}
+/* The send, split when a bot gets the comment: the way it reaches the bot in words, and a caret for the ways
+   (ui/styles/chat.css .p-ways). The menu opens upward, over the thread. */
+.task-chat .task-send{position:relative;display:inline-flex;align-items:center;flex:none}
+.task-chat .task-send .p-send-goal{border-radius:17px 0 0 17px}
+.task-chat .task-send .task-send-caret{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:26px;height:34px;margin-bottom:1px;padding:0;border:0;border-radius:0 17px 17px 0;background:var(--accent);color:var(--accent-ink);cursor:pointer;touch-action:manipulation;box-shadow:inset 1px 0 0 color-mix(in srgb,var(--accent-ink) 28%,transparent)}
+.task-chat .task-send .task-send-caret:hover:not(:disabled){filter:brightness(1.06)}
+.task-chat .task-send .task-send-caret:disabled{opacity:.45;cursor:default}
+.task-chat .task-send .task-send-caret[hidden]{display:none}
+/* The font ships expand_more only: turned over, it points the way the menu opens. */
+.task-chat .task-send .task-send-caret .nav-icon{width:18px;height:18px;font-size:18px;transform:rotate(180deg)}
+.task-chat .task-send .p-menu{top:auto;bottom:calc(100% + 8px);right:0;min-width:168px}
+.task-chat .task-send .p-menu button{border:0}
+@media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}.task-chat .task-send .task-send-caret{width:34px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
+/* A reconnect card (ui/app/task-modal.js reconnectCardHTML): one line and its fix, as dense as a credential card. */
+.rc-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:4px 0;background:var(--surface)}
+.rc-line{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.rc-card button,.rc-card .button{min-height:36px}
+.rc-card:not([data-status="open"]){background:none}
+.rc-done{font-size:12.5px;color:var(--ok);font-weight:600}

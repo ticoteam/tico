@@ -442,7 +442,7 @@ def record(c, verdict, decided, ref, message_id=None):
 def on_reply(c, actor, task_id, text):
     """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
     to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
-    message. The CEO Bot's merge (backend/ceo_merge.py) relays the same way for its own merged items."""
+    message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:

@@ -18,6 +18,7 @@ async function refresh(force) {
       seatsDue ? get('/v2/seats') : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
+    cloudAccessFromStatus();
     if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
       S.emps = namedRoster(emps.value);
       setPeople(people.value);
@@ -71,28 +72,32 @@ function liveTasksApply(events) {
   const bulk = events.some(d => d.bulk);
   const unchanged = new Set();
   if (bulk && state && isTasksRoute(S.route)) liveThrottle('tasks-bulk', () => { if (TASKS_ST === state) void tasksLoad(state); }, 5000);
-  if (state && isTasksRoute(S.route) && state.tasks) {
-    const known = new Map(state.tasks.map((t, i) => [String(t.id), i]));
+  // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
+  // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
+  if (bulk && !state) S.lastRead.tasks = null;
+  const list = state && isTasksRoute(S.route) && state.tasks ? state : !state ? S.lastRead.tasks : null;
+  if (list) {
+    const known = new Map(list.tasks.map((t, i) => [String(t.id), i]));
     let changed = false;
     for (const d of events) {
       const i = known.get(String(d.id));
-      if (d.gone) { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      if (d.gone) { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
       if (!d.task) continue;
-      if ((d.task.lane || 'company') !== 'company') { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      if ((d.task.lane || 'company') !== 'company') { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
       // A write that shows nothing new on the list: no redraw. The open task follows any change (a worktree's
       // progress shows there), so only an identical copy is left out of that.
-      if (i != null && sameData(taskListCopy(state.tasks[i]), taskListCopy(d.task))) {
-        if (sameData(state.tasks[i], d.task)) unchanged.add(String(d.id));
-        else state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
+      if (i != null && sameData(taskListCopy(list.tasks[i]), taskListCopy(d.task))) {
+        if (sameData(list.tasks[i], d.task)) unchanged.add(String(d.id));
+        else list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
         continue;
       }
-      if (i != null) state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
-      else { state.tasks = [...state.tasks, d.task]; known.set(String(d.id), state.tasks.length - 1); }   // a new task arrives whole
+      if (i != null) list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
+      else { list.tasks = [...list.tasks, d.task]; known.set(String(d.id), list.tasks.length - 1); }   // a new task arrives whole
       changed = true;
     }
     // Never the whole list again: every open tab gets every change, and a busy team's bots change tasks every few
     // seconds. The 2-minute refresh catches up from the list's cursor.
-    if (changed) { tasksTools(state); tasksRender(state); }
+    if (changed && list === state) { tasksTools(state); tasksRender(state); }
   }
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
   if (BOT && isKeeper(BOT.slug)) {

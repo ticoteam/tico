@@ -112,11 +112,11 @@ async function pageRdTools() {
     // The list is still loading for an earlier visit: wait for it, then draw only if this is still the route.
     const state = LC;
     await state.loading;
-    if (LC !== state || S.route.split('?')[0] !== path) return;
+    if (LC !== state || location.hash.split('?')[0] !== path) return;
   } else if (!LC || !document.body.contains(LC.root)) {
     $('#main').innerHTML = `<div class="lc" id="lc-root">
       <header class="lc-ph"><h1>Tools</h1>${helpBubble('Who may use each tool, and what they may change there: read only, with approval, or freely.')}
-        <span class="spacer"></span><span class="lc-add"></span></header>
+        <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button><span class="lc-add"></span></header>
       <div class="lc-body"><aside class="lc-list" aria-label="Tools">
           <div class="lc-filters"><input class="lc-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off">
             <div class="lc-frow"><select class="lc-who" aria-label="Who has access"><option value="">Everyone</option></select>
@@ -136,8 +136,9 @@ async function pageRdTools() {
             e => { state.rows = []; state.error = e.message; })
       .then(() => { state.loading = null; if (LC !== state) return; state.items = lcModel(state.rows); lcDrawControls(); });
     await state.loading;
-    // Left, or moved to another tool meanwhile (a filter typed while it loads changes only the query).
-    if (LC !== state || S.route.split('?')[0] !== path) return;
+    // Left, or moved to another tool meanwhile (a filter typed while it loads changes only the query). The address, not
+    // S.route: a click away that the router has not handled yet must not be sent back to the first tool below.
+    if (LC !== state || location.hash.split('?')[0] !== path) return;
   }
   // `?show=credentials` (the old Credentials page's links) opens on the credentials.
   const show = params.get('show');
@@ -377,10 +378,13 @@ function rdToolsRoute(r) {
   if (rdUnder(r, RD_TOOLS)) { pageRdTools(); return true; }
   return false;
 }
-// An old address the redesign's router did not take (ui/app/router.js): Library › Tools at its new one, in place.
+// An old address the redesign's router did not take (ui/app/router.js): Library › Tools at its new one, in place. The
+// router marked the rail for the old address, and the rail may already hold Tools (redesignNav ran first), so it is
+// marked again for the new one.
 function rdToolsOpen(hash) {
   history.replaceState(null, '', hash);
   S.route = LAST_ROUTE = location.hash;
+  renderTree();
   pageRdTools();
 }
 // Leaving the page drops its list, so coming back reads the hub again.

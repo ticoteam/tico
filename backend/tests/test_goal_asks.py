@@ -1,10 +1,10 @@
-"""What the Goals page needs from a person is a CEO Bot task (backend/goal_asks.py): one per KPI or proposal, kind and
-person, in Tasks and Decide, closed by itself once resolved. Only above Passive: at Passive, the default, nobody is
-asked anything (spec: CEO Bot v3, test 20)."""
+"""What the Goals page needs from a person is a Strategy Bot task (backend/goal_asks.py): one per KPI or proposal, kind
+and person, in Tasks and Decide, closed by itself once resolved. Only above Passive: at Passive nobody is asked anything
+(spec: Strategy Bot v3, test 20). `goal_manager(api)` is an install the owner set to Passive."""
 
 from datetime import datetime, timedelta, timezone
 
-from backend import ceo_bot
+from backend import strategy_bot
 from backend import goal_asks as GA
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
@@ -14,18 +14,20 @@ MANAGER = "bot:goal-manager"
 
 
 def goal_manager(api, level=1):
-    """The CEO Bot, at Passive unless the owner raised it (`level`)."""
+    """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
+    the default level."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','CEO Bot','fake','','','','keeper','active',?)", (H.now(),))
+                  "VALUES('goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
     raise_level(api, level)
 
 
 def raise_level(api, level):
-    if level != 1:
+    """The owner chooses `level` (`strategy_bot.set_level`); None chooses nothing."""
+    if level is not None:
         with api.app.state.store.transaction() as c:
-            ceo_bot.set_level(c, "human:ana", level)
+            strategy_bot.set_level(c, "human:ana", level)
 
 
 def asks(api, owner=None):
@@ -66,7 +68,7 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     post(api, "kpis", {"name": "Second measure", "owner": "me", "cadence": "weekly"})
     sync(api)
     assert [a["ref"] for a in asks(api, "human:ana")].count(kpi["id"]) == 1
-    # A fresh reading closes it at once, as the CEO Bot.
+    # A fresh reading closes it at once, as the Strategy Bot.
     log(api, kpi["id"], 12, period_end=H.now())
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
@@ -129,10 +131,10 @@ def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_fil
     raise_level(api, 2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
-    # No CEO Bot: no task, and the Goals page still says what waits.
+    # No Strategy Bot: no task, and the Goals page still says what waits.
     assert not asks(api)
     assert any(i["kind"] == "kpi_red" and "task" not in i for i in get(api, "goals/needs-you", "ben-test")["items"])
-    goal_manager(api)
+    goal_manager(api, level=2)
     sync(api)
     [old] = [a for a in asks(api) if a["kind"] == "kpi_red"]
     assert old["owner"] == "human:ben"

@@ -36,6 +36,8 @@ const CONDITIONS = {
 };
 const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
 const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
+const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated: ago(90), archived: false},
+  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated: ago(30), archived: false}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
@@ -113,6 +115,11 @@ async function open(browser, viewport, colorScheme, server) {
       return json({tasks: (server.tasks || TASKS).filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
+    // The sidebar's pages (backend/cards.py): what GET /api/v2/places/bot:<slug> answers for the saved widgets.
+    const pinned = decodeURIComponent(p).match(/^\/api\/v2\/places\/bot:([^/]+)$/);
+    if (pinned) return json({place: 'bot:' + pinned[1], kind: 'bot', saved: true, can_edit: pinned[1] === 'lead',
+      pins: ((server.layouts[pinned[1]] || {}).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
+    if (p === '/api/v2/cards/choices') return json({templates: [], teams: [], kpis: [], pages: Object.values(PAGES)});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -417,6 +424,32 @@ async function open(browser, viewport, colorScheme, server) {
     assert.deepEqual(await filtered.page.locator('#t-c1 .ttl').allInnerTexts(), ['Turn on the screen default']);
     assert.deepEqual(filtered.errors, []);
     await filtered.context.close();
+    // A sidebar of pages: the built-ins hidden, a page shown with its title; Add puts another page in the draft, its
+    // cross takes one out, and Done saves them as widgets.
+    const pages = {layouts: {lead: {tabs: DEFAULT, widgets: [{id: 'page:f1', hidden: false, height: null},
+      ...WIDGETS.map(w => ({...w, hidden: true}))]}}, puts: [], page: 200};
+    const paged = await open(browser, {width: 1280, height: 900}, 'light', pages);
+    const prail = paged.page.locator('#pane-tasks');
+    const shown = () => prail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w')].filter(w => w.offsetParent).map(w => w.dataset.widget));
+    await paged.page.goto('https://tico-ui.test/#/bot/lead');
+    await paged.page.waitForFunction(() => document.querySelector('#pane-tasks .bot-w[data-widget="page:f1"]')?.textContent.includes('Weekly numbers'));
+    assert.deepEqual(await shown(), ['page:f1'], 'a sidebar of pages only');
+    const pencil = await prail.locator('#bot-sidebar-edit').boundingBox(), first = await prail.locator('.bot-w[data-widget="page:f1"] .bot-pin > :first-child').boundingBox();
+    assert.ok(pencil.y + pencil.height <= first.y + 1, 'the edit icon sits above the page, not on it');
+    if (process.env.TICO_UI_SHOTS) await paged.page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS, 'bot-sidebar-pages.png')});
+    await prail.locator('#bot-sidebar-edit').click();
+    await prail.locator('#bot-sidebar-add').click();
+    await paged.page.locator('#bot-pin-dialog[open] [name="page"][value="f2"]').check();
+    await paged.page.locator('#bot-pin-dialog[open] [type="submit"]').click();
+    await paged.page.waitForFunction(() => document.querySelector('#pane-tasks .bot-w[data-widget="page:f2"]')?.textContent.includes('Release plan'));
+    await prail.locator('.bot-w[data-widget="page:f1"] [data-w-remove]').click();
+    assert.equal(await prail.locator('.bot-w[data-widget="page:f1"]').count(), 0);
+    await prail.locator('#bot-sidebar-done').click();
+    await paged.page.waitForFunction(() => !document.querySelector('#pane-tasks.editing'));
+    assert.deepEqual(pages.puts.at(-1).body.widgets.map(w => w.id + (w.hidden ? ' hidden' : '')), ['tasks hidden', 'updates hidden', 'files hidden', 'page:f2']);
+    assert.deepEqual(await shown(), ['page:f2']);
+    assert.deepEqual(paged.errors, []);
+    await paged.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

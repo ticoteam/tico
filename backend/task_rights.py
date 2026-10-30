@@ -9,11 +9,14 @@ from . import people as P, read_cache
 def subjects(c, actor):
     """The caller and everyone below them, using the same parents as people.manages."""
     from . import hubdb as H, views
-    if not (H.is_bot(actor) or H.is_human(actor)) or not H._has_table(c, "bot_config"):
-        return {actor}
 
     def build():
-        roster, entries = views.roster(c), views.entries(c)
+        # The table check is inside the cached build: a SQL request asks once per private task, and each
+        # ask was a sqlite_master read (184 per member request on a 6k-task test hub).
+        if not (H.is_bot(actor) or H.is_human(actor)) or not H._has_table(c, "bot_config"):
+            return {actor}
+        # Read only below (people.org_parent never changes them), so the snapshot's own copies are shared, not copied.
+        roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
         archived = {r['slug'] for r in H.bots(c) if r.get('state') == 'archived'}
         nodes = {**{'b:' + slug: ('bot', slug) for slug in entries if slug not in archived},
                  **{'p:' + p['id']: ('person', p['id']) for p in roster.get('people', [])}}
@@ -36,7 +39,9 @@ def subjects(c, actor):
                 out.add(('bot:' if kind == 'bot' else 'human:') + ident)
         return out
 
-    return read_cache.value(c, ('task_rights_subjects', actor), build)
+    # Read only: represents, private_subjects and task_sql take membership and sort copies. A copy per call cost more
+    # than the answer (one call per task a visibility check reads).
+    return read_cache.value(c, ('task_rights_subjects', actor), build, shared=True)
 
 
 def represents(c, actor, party):

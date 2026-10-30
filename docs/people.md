@@ -46,6 +46,19 @@ Cancel keeps the current access. Sign-in switches show **Saved** on success; a r
 - **Bot limit per member**: 25 active bots by default. A team still on the old default of 5 is moved to 25 once on upgrade;
   a 5 someone set by changing it from another number, and any other number, stays.
 
+## Sign-in matching
+
+With a Tico account sign-in, the install remembers which account each person signed in with. The next sign-in matches that
+account first, then the email. A person who changed their address keeps their place and the address moves to the new one,
+unless someone else on the roster already has it. Without a Tico account, the email alone decides.
+
+## Tico account
+
+When the install signs people in with a Tico account, it sends the account the list of people who may sign in: their email and
+role. Bots, people marked as left and people with sign-in off are not sent. The list goes about ten seconds after each change and
+once a day. The account uses it to show a person their companies after they sign in at tico.dev. It never gives anyone access here:
+this install's list does.
+
 ## Transferring ownership
 
 The owner picks an active human, ticks whether they stay an Admin, and types the new

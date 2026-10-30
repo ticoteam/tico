@@ -19,6 +19,7 @@ function settingsBotEditorRows(e) {
     ${profileRowHTML(e)}
     ${settingsKeepTasksRow(e)}
     ${settingsTurnsAtOnceRow(e)}
+    ${settingsManagesReportsRow(e)}
     ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
@@ -73,6 +74,21 @@ function settingsTurnsAtOnceRun(input) {
   const slug = input.dataset.botTurnsAtOnce, turns_at_once = input.value === '' ? null : Number(input.value);
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/turns-at-once`,
     {turns_at_once, expected_revision: rev}))?.revision ?? rev + 1;
+}
+// Whether this bot changes its direct reports (backend/report_managers.py). On by default; the owner's team rule turns
+// every manager off whatever this says. The bot cannot set its own: whoever manages it does.
+function settingsManagesReportsRow(e) {
+  if (e.agent) return '';
+  const on = e.manages_reports !== false;
+  return `<div class="sb-row"><span>Manages its reports</span><label class="settings-inline-check"><input type="checkbox" data-bot-manages-reports="${esc(e.name)}"
+    data-current="${on}" ${on ? 'checked' : ''} aria-label="Manages its reports for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+    <span>${on ? 'On' : 'Off'}</span></label><span></span></div>
+    <div class="sb-sub muted">This bot changes its direct reports' model, task model, name and description, as itself. Off: it changes none of them.</div>`;
+}
+function settingsManagesReportsRun(box) {
+  const slug = box.dataset.botManagesReports, manages_reports = box.checked;
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
+    {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
 const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
@@ -138,23 +154,6 @@ function settingsUpdateSubscriptionsChange(form, e) {
   const before = ['templates', 'tico'].filter(name => (e?.update_subscriptions || []).includes(name));
   return picked.join() === before.join() ? {} : {update_subscriptions: picked};
 }
-// The CEO Bot's Hide from my chart / Show on my chart (state.js `ceoChartSet`): one person's own view of the Team chart,
-// by the bot's current name. It saves at once, apart from Save bot, and changes nothing about the bot itself. Settings >
-// Bots shows it on the CEO Bot's row (anyone) and in its editor (who may manage it).
-// `short`: the list row's line, beside the name.
-function settingsCeoChartLine(cls = '', short = false) {
-  const hidden = ceoChartHidden(), name = esc(ceoBotName());
-  const button = `<button class="linkish" type="button" data-ceo-chart-toggle="${hidden ? 'show' : 'hide'}">${hidden ? 'Show on my chart' : 'Hide from my chart'}</button>`;
-  if (short) return `<small class="sb-ceo-chart ${cls}" data-ceo-chart>${hidden ? 'Hidden from your chart · ' : ''}${button}</small>`;
-  return `<small class="${cls}" data-ceo-chart>${hidden ? `${name} is hidden from your chart.` : `${name} is on your chart.`}
-    ${button} Only your view; everyone else's chart stays as it is.</small>`;
-}
-async function settingsCeoChartToggle(button) {
-  button.disabled = true;
-  try { await ceoChartSet(button.dataset.ceoChartToggle === 'hide'); }
-  catch (e) { toast(e.message, true); button.disabled = false; return false; }
-  return true;
-}
 function settingsEditBot(slug = '', inline = false) {
   if (slug && !inline) { location.hash = `#/bot/${encodeURIComponent(slug)}/settings`; return; }
   const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
@@ -180,14 +179,13 @@ function settingsEditBot(slug = '', inline = false) {
   const machineOptions = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
     (settingsIsAdmin() || machine.accepts_member_bots)).map(machine =>
     `<option value="${esc(machine.id)}" data-operator="${esc(machine.operator)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('');
-  // The CEO Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
+  // The Strategy Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
   const ownerNamesIt = editing && e.name === 'goal-manager' && S.me?.role !== 'owner';
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)">✕</button>'}</div>
     <div class="bot-editor-body">
       <div class="bot-editor-grid">
         <h3 class="bot-editor-sec bot-editor-wide">Profile</h3>
-        <label class="bot-editor-wide">Name<input name="display_name" type="text" autocomplete="off" value="${esc(e?.display_name || '')}" placeholder="Release Captain" maxlength="100" required${ownerNamesIt ? ' readonly' : ''}>${ownerNamesIt ? `<small>Only the owner renames the ${esc(ceoBotName())}.</small>` : ''}</label>
-        ${editing && e.name === 'goal-manager' ? settingsCeoChartLine('bot-editor-wide') : ''}
+        <label class="bot-editor-wide">Name<input name="display_name" type="text" autocomplete="off" value="${esc(e?.display_name || '')}" placeholder="Release Captain" maxlength="100" required${ownerNamesIt ? ' readonly' : ''}>${ownerNamesIt ? `<small>Only the owner renames the ${esc(strategyBotName())}.</small>` : ''}</label>
         <label class="bot-editor-wide">Description<textarea name="description" maxlength="2000" placeholder="What this bot owns and does">${esc(e?.description || '')}</textarea></label>
         <label>Status<select name="status">${['planned','active','paused'].map(value => `<option value="${value}" ${(e?.status || 'planned') === value ? 'selected' : ''}>${value === 'planned' ? 'Setting up' : value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></label>
         <label>Reports to<select name="reports_to"><option value="">Top level</option>${parentOptions}</select></label>
@@ -217,13 +215,6 @@ function settingsEditBot(slug = '', inline = false) {
     <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = closeEditor);
-  form.addEventListener('click', async event => {
-    const toggle = event.target.closest('[data-ceo-chart-toggle]'); if (!toggle) return;
-    event.preventDefault();
-    if (!await settingsCeoChartToggle(toggle)) return;
-    const line = form.querySelector('[data-ceo-chart]');
-    if (line) { line.outerHTML = settingsCeoChartLine('bot-editor-wide'); form.querySelector('[data-ceo-chart-toggle]')?.focus(); }
-  });
   // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
   // rows only while nothing is waiting. An agent's credential buttons act at once and move the revision, so after one
   // Save uses the newer revision.
@@ -302,6 +293,8 @@ function settingsEditBot(slug = '', inline = false) {
           turns.validationMessage || 'Enter a whole number from 1 to 256, or leave it blank.');
         stage('turns', 'turns at once', changed(turns) && turns.checkValidity() && settingsTurnsAtOnceRun(turns));
       }
+      const managesReports = event.target.closest('[data-bot-manages-reports]');
+      if (managesReports) stage('manages', 'manages its reports', managesReports.checked !== (managesReports.dataset.current === 'true') && settingsManagesReportsRun(managesReports));
       if (event.target.matches('[data-task-effort]')) event.target.dataset.touched = '1';
       const delivery = event.target.closest('[data-bot-app-delivery]');
       if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));

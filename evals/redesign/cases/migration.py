@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 
 from ..harness import CLAUDE_ID, DANA, OPENAI_ID, RELEASE_ID, W5, Check, Scenario, Unmet, body, find, got, hook_post, \
     replied, rows, setup
-from .migration_fixture import (BOT_BUDGET, BUILTIN_JOBS, CEO, CRON, DESTINATIONS, FIXTURE_BOTS, GUARD, HEALTH,
-                                HOOK_ID, HOURLY, INBOXES, LIBRARIAN, ROUTINES, SYSTEM_JOBS, WAKE_RULES, install_fixture,
-                                installed, report, upgrade)
+from .migration_fixture import (BOT_BUDGET, BUILTIN_JOBS, CRON, DESTINATIONS, FIXTURE_BOTS, GUARD, HEALTH,
+                                HOOK_ID, HOURLY, INBOXES, LIBRARIAN, OLD_NAME, ROUTINES, STRATEGY, SYSTEM_JOBS,
+                                WAKE_RULES, install_fixture, installed, report, upgrade)
 
 UTC, LONDON = dt.timezone.utc, ZoneInfo("Europe/London")
 WAKES = "What wakes"
@@ -92,7 +92,7 @@ def fixture_ids(f):
             **{"destination " + key: "destination:" + key for key in DESTINATIONS},
             **{"hourly limit " + bot: "limit:" + bot for bot in HOURLY},
             "team turn budget": "budget:team", f"{BOT_BUDGET[0]} turn budget": "budget:" + BOT_BUDGET[0],
-            "Health Monitor": "bot:" + HEALTH, "CEO Bot": "bot:" + CEO, "goal": "goal:" + str(ids["goal"])}
+            "Health Monitor": "bot:" + HEALTH, OLD_NAME: "bot:" + STRATEGY, "goal": "goal:" + str(ids["goal"])}
 
 
 # ---------------------------------------------------------------------------------------------- steps
@@ -140,7 +140,7 @@ def deliver(org, f):
 # ---------------------------------------------------------------------------------------------- 39 the cutover
 def s39_steps(org, f):
     cutover(org, f)
-    for slug in (CEO, *(bot for bot, _ in INBOXES.values())):
+    for slug in (STRATEGY, *(bot for bot, _ in INBOXES.values())):
         org.step(f, "bot:" + slug, guarded, f, "cutover", get, org, f"/api/v2/bots/{slug}")
 
 
@@ -277,9 +277,9 @@ def destinations_kept(f):
     return all(have.get(k) == v for k, v in want.items()), f"receivers {have}, want {want}"
 
 
-def ceo_renamed(f):
-    found = body(f, "bot:" + CEO)
-    return found.get("display_name") == "Strategy Bot", f"{CEO} is named {found.get('display_name')!r}"
+def strategy_renamed(f):
+    found = body(f, "bot:" + STRATEGY)
+    return found.get("display_name") == "Strategy Bot", f"{STRATEGY} is named {found.get('display_name')!r}"
 
 
 def wake_rows(f):
@@ -654,7 +654,7 @@ SCENARIOS = [
               builtin_row("Health Monitor", lambda f: HEALTH)),
         Check("the Librarian's market briefing becomes the Market briefing built-in, on its own time and words", W5,
               briefing_row),
-        Check("CEO Bot becomes Strategy Bot in the same row (slug goal-manager)", W5, ceo_renamed),
+        Check(f"{OLD_NAME} becomes Strategy Bot in the same row (slug goal-manager)", W5, strategy_renamed),
     ], bots=FIXTURE_BOTS, first_tick=False),
     Scenario(40, "migration-wake-rules", "Custom wake rules become one What wakes automation per bot", s40_steps, [
         Check("Builder (Claude): one What wakes automation, its two rules as Filter rules (wake, note)", W5,

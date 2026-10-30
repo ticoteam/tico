@@ -255,3 +255,8 @@ CREATE TABLE IF NOT EXISTS live_meeting_access (
  PRIMARY KEY(meeting_id,actor)
 );
 """
+
+# Recorder provenance is nullable for existing connectors and pre-revision-8 meetings.
+LIVE_MEETINGS_CLIENT_SCHEMA = """
+ALTER TABLE live_meetings ADD COLUMN client TEXT CHECK (client IS NULL OR client = 'tico-recorder');
+"""

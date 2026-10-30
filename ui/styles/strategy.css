@@ -1,8 +1,9 @@
 /* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
    (ui/market-page.js), the page's contents rail and reading column, the bets, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
-.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
-.strat-head h1{margin:0;font-size:var(--t-lg);line-height:1.2}
+/* one height on every tab, with or without a button in it: a control (--ctl), the 8px under it and the rule */
+.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:calc(var(--ctl) + 9px);margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.strat-head h1{margin:0;font-size:var(--t-lg);line-height:var(--lh-tight)}
 .strat-head .spacer{flex:1}
 /* On Market the page has no padding of its own: the heading brings the same gutters, so switching tabs never moves it. */
 #main.market-layout .strat-head{flex:none;margin:0;padding:8px 28px}
@@ -12,7 +13,9 @@
 .strat-tabs a.cur{background:var(--surface2);color:var(--ink);font-weight:600}
 .strat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .strat-actions:empty{display:none}
-.strat-why-not{color:var(--muted);font-size:var(--t-sm)}
+/* Why Publish is off: a (?) after it, its words opening below and to the left (it sits at the top right). */
+.strat-actions .rd-help{margin-left:0}
+.strat-actions .rd-help-pop{left:auto;right:-4px;bottom:auto;top:calc(100% + 6px);transform:none}
 .strat-meta{margin:0 0 10px;color:var(--muted);font-size:var(--t-sm)}
 .strat-status{color:var(--ink)}
 .strat-none{margin:8px 0 12px;color:var(--muted);font-size:var(--t-md)}
@@ -23,7 +26,7 @@
 .strat-toc{position:sticky;top:0;display:flex;flex-direction:column;gap:1px;padding-top:6px}
 .strat-toc-link{display:block;width:100%;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .strat-toc-link:hover{background:var(--surface2);color:var(--ink)}
-.strat-toc-link:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.strat-toc-link:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
 .strat-doc{min-width:0}
 .strat-sec{padding:14px 0;border-top:1px solid var(--line);scroll-margin-top:8px}
@@ -32,14 +35,14 @@
 .strat-sec-head .strat-k{margin:0}
 .strat-sec-head .cnt{color:var(--muted);font-size:var(--t-sm)}
 .strat-k{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:1.3}
+.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:var(--lh-tight)}
 .strat-empty{margin:0;font-size:var(--t-base)}
 .strat-text{margin:0;font-size:var(--t-md);line-height:var(--lh-read);white-space:pre-line;overflow-wrap:anywhere}
 .strat-summary .strat-text,.strat-summary .strat-field{font-size:var(--prose)}
 /* The owner's Summary and Vision read as text and become a field on hover and focus. */
 .strat-field{display:block;width:calc(100% + 14px);margin:0 -7px;padding:4px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh-read)}
 .strat-field:hover{border-color:var(--line)}
-.strat-field:focus{border-color:var(--accent);background:var(--surface);outline:none}
+.strat-field:focus{border-color:var(--accent);background:var(--surface);outline:var(--focus-halo);outline-offset:0}
 .strat-field::placeholder{color:var(--muted)}
 .strat-md{font-size:var(--t-md);line-height:var(--lh-read);overflow-wrap:anywhere}
 .strat-md>:first-child{margin-top:0}.strat-md>:last-child{margin-bottom:0}
@@ -51,7 +54,7 @@
 .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
 .strat-bet-top{display:flex;align-items:baseline;gap:8px;min-width:0}
 .strat-bet-n{flex:none;width:16px;color:var(--muted);font-size:var(--t-sm)}
-.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
 .strat-retired .strat-bet-st{font-weight:500;color:var(--g7)}
 .strat-pill{flex:none}
 .pill.proposed{background:var(--wait-bg);color:var(--wait-ink)}
@@ -107,8 +110,8 @@
 .strat-sv-bets li{margin:0 0 6px}
 
 @media (max-width:760px){
-  #main.strategy-layout{padding-left:16px;padding-right:16px;padding-top:12px}
-  #main.market-layout .strat-head{padding:12px 16px 8px}
+  #main.strategy-layout{padding-left:12px;padding-right:12px;padding-top:12px}
+  #main.market-layout .strat-head{padding:12px 12px 8px}
   .strat-head{gap:8px 12px}
   .strat-head .spacer{display:none}
   .strat-actions{flex-basis:100%}
@@ -124,7 +127,6 @@
   .strat-mini{min-height:32px;padding:4px 10px}
   .strat-field,.strat-sec-form textarea,.strat-publish input{font-size:16px}
   .strat-publish{flex-wrap:wrap}.strat-publish input{flex-basis:100%}
-  .strat-why-not{flex-basis:100%;order:3}
   .strat-bet-lines{margin-left:0}
   .strat-bet-line{grid-template-columns:68px minmax(0,1fr)}
   .strat-wrong-row{flex-wrap:wrap}

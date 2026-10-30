@@ -115,11 +115,16 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
         c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester='keeper' WHERE id=?", (routine['id'],))
-        # A database from before task privacy had no change log either (backend/events.py).
-        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'changes_%'").fetchall():
+        # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
+        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND "
+                                 "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')").fetchall():
             c.execute('DROP TRIGGER ' + name)
         c.execute('DROP INDEX IF EXISTS tasks_private')
         c.execute('DROP INDEX IF EXISTS tasks_private_parties')
+        c.execute('DROP INDEX IF EXISTS tasks_private_status')
+        c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
+        c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
+        c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
         c.execute('ALTER TABLE tasks DROP COLUMN private')
         c.execute('DELETE FROM cloud_migrations WHERE version=57')
     api.app.state.store.initialize(seed_market=False)
@@ -199,6 +204,10 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
     c.execute('DROP INDEX IF EXISTS tasks_private')
     c.execute('DROP INDEX IF EXISTS tasks_private_parties')
+    c.execute('DROP INDEX IF EXISTS tasks_private_status')
+    c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
+    c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
+    c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
     c.execute('ALTER TABLE tasks DROP COLUMN private')
     c.execute('PRAGMA user_version=23')
     ids = {row[0] for row in c.execute('SELECT id FROM messages')}

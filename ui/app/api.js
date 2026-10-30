@@ -1,10 +1,26 @@
+// @ts-check
 /* ui/app/api.js — get/post/put/form requests, API errors, toast
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+/** @typedef {import('../types/api').Problem} Problem */
+/**
+ * A failed answer's JSON body: a Problem, a task cap's 409 (`message` beside a code), or FastAPI's validation list.
+ * @typedef {{error?: string | Problem['error'], message?: string, detail?: string | {loc?: (string | number)[], msg: string}[]}} FailureBody
+ */
+/** @typedef {{at: number, raw: Promise<RawGet | null>}} Prefetch */
+/** @typedef {{r: Response, text: string, kept?: {tag: string, text: string}}} RawGet */
+/**
+ * Per-write options: `timeout` caps the whole write in milliseconds; the callbacks hear each retry and each answer.
+ * @typedef {{timeout?: number, onRetry?: (attempt: number, status: number) => void, onResponse?: (status: number) => void}} WriteOptions
+ */
+
+/** @param {number} n @returns {string} */
 const bytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(0)} KB` : n < 1073741824 ? `${(n/1048576).toFixed(1)} MB` : `${(n/1073741824).toFixed(1)} GB`;
 // A task cap's 409 (redesign CONTRACT §1) says why in `message`; `error` is only its code.
-const apiErrorRaw = (j, r) => (j.error === 'task_cap' && j.message) || j.error?.detail || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
+/** @param {FailureBody} j @param {Response} r @returns {string} */
+const apiErrorRaw = (j, r) => (j.error === 'task_cap' && j.message) || (j.error && typeof j.error === 'object' ? j.error.detail : '') || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
+/** @param {FailureBody} j @param {Response} r @returns {string} */
 const apiError = (j, r) => {
   const raw = apiErrorRaw(j, r);
   return String(raw).replace(/\. Rewrite the title\/body to fix these writing errors and retry\. Do not ask the human to waive formatting rules\./g, '. Please edit the title or details and try again.')
@@ -12,21 +28,32 @@ const apiError = (j, r) => {
 };
 // The message is what a person reads; `body` is the one extra fact a refusal carries, such as the
 // task a duplicate feature request already has (`backend/store.py`, Problem.extra).
+/** @param {FailureBody} j @param {Response} r @returns {Error & {body: FailureBody, status: number}} */
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
-// Signed out, by any sign-in (session.js): the built-in login page, or the banner.
-const signInRedirect = (r, j) => r.status === 401 && sessionCheck(r, j);
+// Signed out, by any sign-in (session.js): the built-in login page, or the banner. A locked Tico Cloud company's 402
+// `locked` shows Pay to continue at once (cloud-access.js).
+/** @param {Response} r @param {FailureBody} j */
+const signInRedirect = (r, j) => {
+  const error = /** @type {any} */ (j?.error);
+  if (r.status === 402 && error?.code === 'locked') cloudAccessLocked(error.cloud);
+  return r.status === 401 && sessionCheck(r, j);
+};
 // A list the server tags (tasks, labels, routines) is asked for again with its tag: unchanged, the answer is a 304
 // with no body and the copy kept here is read again, so the server neither loads nor sends it. A few dozen at most.
+/** @type {Map<string, {tag: string, text: string}>} */
 const GET_TAGGED = new Map();
 // Two readers of the same path at the same moment (the bot page asks for its goals twice, a poll lands while a page
 // loads) share one request; each parses its own copy. A write forgets them all, so a read that follows a write never
 // gets an answer from before it. `fresh` never joins a read that is already on its way (later readers join it).
+/** @type {Map<string, Promise<RawGet>>} */
 const GET_INFLIGHT = new Map();
 // What startup asks for ahead of the page that will need it (getPrefetch): read once, within a few seconds.
+/** @type {Map<string, Prefetch>} */
 const GET_PREFETCHED = new Map();
 const getForget = () => { GET_INFLIGHT.clear(); GET_PREFETCHED.clear(); };
 // A read that must come from the server's rows, not a copy kept here: its tag goes, so no 304 can answer it.
 const getForgetTagged = test => { for (const p of [...GET_TAGGED.keys()]) if (test(p)) GET_TAGGED.delete(p); };
+/** @param {string} p @returns {Promise<RawGet>} */
 const getRaw = p => {
   const kept = GET_TAGGED.get(p);
   return fetch(API + p, {cache:'no-store', headers: kept ? {'If-None-Match': kept.tag} : {}}).then(async r => {
@@ -41,9 +68,18 @@ const getRaw = p => {
     return {r, text, kept};
   }, error => { void sessionProbe(); throw error; });   // offline, or a proxy's login on another origin
 };
+/** @param {string} p */
 const getPrefetch = p => { if (!GET_PREFETCHED.has(p)) GET_PREFETCHED.set(p, {at: Date.now(), raw: getRaw(p).catch(() => null)}); };
+/**
+ * A GET of an API path (under /api). Resolves to the parsed JSON; a failed answer throws its apiFailure.
+ * @template [T=any]
+ * @param {string} p
+ * @param {{fresh?: boolean}} [options] `fresh` skips any read already on its way or prefetched
+ * @returns {Promise<T>}
+ */
 const get = async (p, {fresh = false} = {}) => {
   if (SESSION.out) throw signedOutError();
+  /** @type {RawGet | null | undefined} */
   let res = null;
   const pre = !fresh && GET_PREFETCHED.get(p);
   if (pre) { GET_PREFETCHED.delete(p); if (Date.now() - pre.at < 5000) res = await pre.raw; }
@@ -63,6 +99,7 @@ const get = async (p, {fresh = false} = {}) => {
   if (!r.ok) { signInRedirect(r, j); throw apiFailure(j, r); }
   return j;
 };
+/** @type {Map<string, string>} */
 const pendingWrites = new Map();
 const newRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
   const n = globalThis.crypto?.getRandomValues?.(new Uint8Array(1))[0] ?? Math.floor(Math.random() * 256);
@@ -74,7 +111,17 @@ const newRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4
 // instead of waiting for the browser to give up, and the request id is kept so a retry is never saved twice.
 // `opts.onRetry` hears each retry (attempt, status), so a slow send can say it is trying again.
 // The error names the write's signature, so the caller can forget the kept request id once the person moves on.
-const writeTimedOut = (ms, signature) => Object.assign(new Error(`No answer from the server in ${Math.round(ms / 1000)} seconds.`), {unconfirmed: true, timedOut: true, signature});
+/** @param {number | undefined} ms @param {string} signature */
+const writeTimedOut = (ms, signature) => Object.assign(new Error(`No answer from the server in ${Math.round(/** @type {number} */ (ms) / 1000)} seconds.`), {unconfirmed: true, timedOut: true, signature});
+/**
+ * One attempt chain for a JSON write: retries reuse the same Idempotency-Key, and `opts.timeout` bounds all of them.
+ * @param {string} method
+ * @param {string} p
+ * @param {unknown} [body]
+ * @param {string} [operationId] a request id to reuse, as the caller kept it
+ * @param {WriteOptions} [opts]
+ * @returns {Promise<any>}
+ */
 const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
@@ -104,7 +151,8 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
       // A proxy that signed the person out answered before Tico saw the write, so nothing was saved.
       // The probe has its own timeout, but this write may have only milliseconds left. Bound the wait by the
       // same abort signal as the request; the shared probe can still finish for its other callers.
-      let onAbort;
+      /** @type {() => void} */
+      let onAbort = () => {};
       const expired = new Promise((_, reject) => {
         onAbort = () => reject(writeTimedOut(opts.timeout, signature));
         abort.signal.addEventListener('abort', onAbort, {once: true});
@@ -122,12 +170,14 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
 };
 // The button just pressed shows the write is under way until it settles (styles/skeleton.css), so a slow server
 // never looks like an ignored click. Only a press in the last moment counts; a later background save marks nothing.
+/** @type {{el: Element, at: number} | null} */
 let LAST_PRESS = null;
 document.addEventListener('click', e => {
-  const el = e.target.closest?.('button, [role="button"], input[type="submit"]');
+  const el = /** @type {Element} */ (e.target).closest?.('button, [role="button"], input[type="submit"]');
   LAST_PRESS = el ? {el, at: performance.now()} : null;
 }, true);
 document.addEventListener('submit', e => { if (e.submitter) LAST_PRESS = {el: e.submitter, at: performance.now()}; }, true);
+/** @returns {() => void} the function that clears the pending state */
 const pressPending = () => {
   const press = LAST_PRESS;
   if (!press || performance.now() - press.at > 400 || !press.el.isConnected || press.el.classList.contains('is-pending')) return () => {};
@@ -135,26 +185,54 @@ const pressPending = () => {
   el.classList.add('is-pending'); el.setAttribute('aria-busy', 'true');
   return () => { el.classList.remove('is-pending'); el.removeAttribute('aria-busy'); };
 };
-const writeRequest = async (...args) => { const done = pressPending(); try { return await writeRequestOnce(...args); } finally { done(); } };
+/**
+ * @param {string} method
+ * @param {string} p
+ * @param {unknown} body
+ * @param {string} [operationId]
+ * @param {WriteOptions} [opts]
+ */
+const writeRequest = async (method, p, body, operationId, opts) => { const done = pressPending(); try { return await writeRequestOnce(method, p, body, operationId, opts); } finally { done(); } };
+/** @param {string} p @param {unknown} [body] @param {string} [operationId] @param {WriteOptions} [opts] */
 const postRequest = (p, body={}, operationId, opts) => writeRequest('POST', p, body, operationId, opts);
+/** @param {string} p @param {unknown} [body] @param {string} [operationId] */
 const patchRequest = (p, body={}, operationId) => writeRequest('PATCH', p, body, operationId);
+/** @param {string} p @param {unknown} [body] @param {string} [operationId] */
 const putRequest = (p, body={}, operationId) => writeRequest('PUT', p, body, operationId);
+/**
+ * A POST of an API path (under /api): one JSON write, traced when diagnostics are on.
+ * @param {string} p
+ * @param {unknown} [body]
+ * @param {string} [operationId] a request id to reuse, as the caller kept it
+ * @param {WriteOptions} [opts]
+ * @returns {Promise<any>}
+ */
 const post = (p, body={}, operationId, opts) => window.TicoObservability
   ? window.TicoObservability.run(p, () => postRequest(p, body, operationId, opts)) : postRequest(p, body, operationId, opts);
+/** @param {string} p @param {unknown} [body] @param {string} [operationId] @returns {Promise<any>} */
 const patch = (p, body={}, operationId) => window.TicoObservability
   ? window.TicoObservability.run(p, () => patchRequest(p, body, operationId)) : patchRequest(p, body, operationId);
+/** @param {string} p @param {unknown} [body] @param {string} [operationId] @returns {Promise<any>} */
 const put = (p, body={}, operationId) => window.TicoObservability
   ? window.TicoObservability.run(p, () => putRequest(p, body, operationId)) : putRequest(p, body, operationId);
 // WebKit (Safari and the macOS app's web view) can send a file read from disk as an empty or cut-short body
 // while a service worker controls the page, which ours does. The same bytes copied into memory send in full.
 // Above the cap a file goes as picked, so a large video never sits in the page twice over.
 const UPLOAD_COPY_MAX = 100_000_000;
+/** @param {ArrayBuffer} buffer @returns {string} */
 const hexDigest = buffer => Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
+/**
+ * The body with each file copied into memory (see UPLOAD_COPY_MAX).
+ * @param {Blob | FormData} body
+ * @param {Map<Blob, string> | null} digests receives each copy's SHA-256 when given
+ * @returns {Promise<Blob | FormData>}
+ */
 async function memoryBody(body, digests) {
+  /** @param {Blob} file @returns {Promise<Blob>} */
   const copy = async file => {
     if (file.size > UPLOAD_COPY_MAX) return file;
     const bytes = await file.arrayBuffer();
-    const made = new File([bytes], file.name || '', {type: file.type, lastModified: file.lastModified});
+    const made = new File([bytes], /** @type {File} */ (file).name || '', {type: file.type, lastModified: /** @type {File} */ (file).lastModified});
     // One read serves both the copy and the retry signature's digest.
     if (digests) digests.set(made, hexDigest(await crypto.subtle.digest('SHA-256', bytes)));
     return made;
@@ -165,17 +243,26 @@ async function memoryBody(body, digests) {
   return copied;
 }
 // Keep multipart and binary retries stable across newly constructed bodies.
+/**
+ * One multipart or binary POST, retried with the same Idempotency-Key until its answer is confirmed.
+ * @param {string} url
+ * @param {Blob | FormData} body
+ * @param {WriteOptions} [opts]
+ * @returns {Promise<Response>}
+ */
 const formRequestOnce = async (url, body, opts={}) => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
-  const digests = S.me?.cloud ? new Map() : null;
+  /** @type {Map<Blob, string> | null} */
+  const digests = /** @type {any} */ (S).me?.cloud ? new Map() : null;
   body = await memoryBody(body, digests);
   if (!digests) return fetch(url, {method:'POST', body});
+  /** @type {unknown[][]} */
   const fields = [];
   for (const [name, value] of body instanceof Blob ? [['file', body]] : body.entries()) {
     if (value instanceof Blob) {
       const digest = digests.get(value) ?? hexDigest(await crypto.subtle.digest('SHA-256', await value.arrayBuffer()));
-      fields.push([name, value.name || '', value.type, value.size, digest]);
+      fields.push([name, /** @type {File} */ (value).name || '', value.type, value.size, digest]);
     } else fields.push([name, value]);
   }
   const signature = url + '\n' + JSON.stringify(fields), key = pendingWrites.get(signature) || newRequestId();
@@ -203,8 +290,12 @@ const formRequestOnce = async (url, body, opts={}) => {
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
     }
   }
+  // Each attempt above returns or throws; this line only satisfies the type checker.
+  throw new Error('Could not confirm whether this upload saved.');
 };
-const formRequest = async (...args) => { const done = pressPending(); try { return await formRequestOnce(...args); } finally { done(); } };
+/** @param {string} url @param {Blob | FormData} body @param {WriteOptions} [opts] @returns {Promise<Response>} */
+const formRequest = async (url, body, opts) => { const done = pressPending(); try { return await formRequestOnce(url, body, opts); } finally { done(); } };
+/** @param {string} url @param {Blob | FormData} body @param {WriteOptions} [opts] @returns {Promise<Response>} */
 const formFetch = (url, body, opts) => window.TicoObservability
   ? window.TicoObservability.run(url.startsWith(API) ? url.slice(API.length) : '', () => formRequest(url, body, opts)) : formRequest(url, body, opts);
 // `opts` (writeRequestOnce): the timeout applies to a message without files; an upload keeps no time limit, since a
@@ -227,7 +318,7 @@ async function cloudCompose(path, body, files = [], opts = {}) {
 const toast = (msg, isErr, action, opts = {}) => {
   if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
-  if (isErr && !action && msg && typeof talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => talkToUs({kind: 'toast', title: String(msg)})};
+  if (isErr && !action && msg && typeof window.talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => window.talkToUs?.({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;
   if (action) {
     const button = document.createElement('button'); button.className = 'linkish'; button.textContent = action.label;

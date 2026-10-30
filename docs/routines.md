@@ -28,6 +28,30 @@ An install that had routines moved them once, on the upgrade to Automations; see
   `{"type": "webhook", "id": "<trigger id>"}` (`hub trigger list` shows the ids). A new automation is saved off
   unless the flow sends `"enabled": true`.
 
+## Seeing them all
+
+**Automations** opens on a list of every automation you may see, Tico's own jobs included (trigger **System job**).
+Filter by trigger, status, team and owner on the left; pick a range (5m, 1h, 24h, 7d) at the top for each row's runs,
+failures, cost and trend. The **Runs** tab shows every run in that range, newest first, with what started it and how it
+ended. A built-in automation can't be edited or deleted; only the top of the org can turn one off.
+
+```
+hub automation recent-runs [--range 1h] [--status failed] [--trigger system] [--owner O]
+hub automation stats [--range 24h]
+```
+
+These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
+`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
+fold into one row (`count`).
+
+  A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
+  `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice
+  ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)). Leave them out to use the bot's
+  task model. Naming a model needs the same right as changing the bot's model: someone without it sends the change for
+  a manager to approve as a pending version, and a bot's new automation starts off. Until a manager approves that
+  version, someone without the right cannot turn the routine on or run it by hand; a manager who turns it on approves
+  it.
+
   ```
   hub automation list [--owner O]
   hub automation show <id>
@@ -42,6 +66,23 @@ An install that had routines moved them once, on the upgrade to Automations; see
 
 A prompt can read the trigger's values with `{{...}}`, for example `{{webhook.data}}` for a webhook call's body. Each
 one is passed as quoted data after the prompt, never as instructions.
+
+## On hold
+
+An automation that keeps starting runs for 20 minutes (more than 120, spread over at least 15 of those minutes), or
+starts more than 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
+same, so nothing is lost: its queued runs, any run whose wait ends meanwhile, and up to 500 new ones wait as **Held**
+instead of running (past that a trigger is counted as dropped, and the hold shows how many). A run mid-step finishes
+that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and the Health Monitor
+one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
+queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
+
+```
+hub automation held <id> release|drop
+```
+
+Over MCP this is `hub_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
+or `{"action": "drop"}`. Whoever may change the automation may do either.
 
 ## Events
 

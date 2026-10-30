@@ -16,8 +16,8 @@ function v2ChatStop() {
   clearTimeout(V2C.waitTimer);
   V2C = null;
 }
-// Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page and the
-// CEO Bot on Goals both show this one room.
+// Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page shows this
+// one room.
 function v2ChatMode(slug) {
   slug = botBranchChatTarget(slug);
   const bot = (S.emps || []).find(e => e.name === slug);
@@ -783,6 +783,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     watch.end('sent');
     if (pending) pending.acknowledged = true;       // restored composers share this identity too
     pillAcknowledge(P, text, files, draftScope);
+    pillWaySent(P, extra);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;

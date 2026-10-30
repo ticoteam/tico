@@ -149,7 +149,8 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     with store.read() as c:
         first = flight._db(c, MINUTE)
     assert first["objects"]["size_fixture"] > 0
-    assert len(scans) == 1
+    one_pass = len(scans)                        # one short read per object, so many queries make one pass
+    assert one_pass > 1
     with store.transaction() as c:
         c.execute("INSERT INTO size_fixture VALUES(?, zeroblob(?))", (MINUTE + 1, 256 * 1024))
     sampler.size_db(MINUTE + 3600)
@@ -158,7 +159,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     sampler.size_db(MINUTE + 7200)
     with store.read() as c:
         reused = flight._db(c, MINUTE + 7200)
-    assert len(scans) == 1
+    assert len(scans) == one_pass
     assert reused["objects"] == first["objects"] and reused["objects_at"] == MINUTE
     assert reused["at"] == (MINUTE + 7200) // 3600 * 3600
     assert reused["rows"]["size_fixture"] == 2 and reused["oldest"]["size_fixture"] == MINUTE
@@ -168,7 +169,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
         refreshed = flight._db(c, MINUTE + 86400)
         assert [r[1] for r in c.execute("PRAGMA table_info(flight_db)")] == [
             "ts", "bytes", "wal_bytes", "free_bytes", "detail_json"]
-    assert len(scans) == 2
+    assert len(scans) == 2 * one_pass
     assert refreshed["objects_at"] == MINUTE + 86400
     assert refreshed["objects"]["size_fixture"] > first["objects"]["size_fixture"]
     assert all("aggregate=TRUE" in sql and not in_transaction for sql, in_transaction in scans)

@@ -22,7 +22,7 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "strategy", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "service-key"]
@@ -264,7 +264,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
-        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings")):
+        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings",
+                                              "/waits", "/snooze")):
             return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
 
@@ -360,6 +361,19 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
         self.assertEqual(posted, {"approval": "ap-1"})
+
+    def test_task_wait_and_snooze_send_their_note(self):
+        def last(method, path):
+            return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+        pr = "pr:https://github.com/acme/app/pull/9"
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", pr, "--note", "Check the migration", env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/waits"),
+                         {"on": pr, "remove": False, "note": "Check the migration"})
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", "release:v0.3.64", env=self.env)[0], 0)
+        self.assertNotIn("note", last("POST", "/api/v2/tasks/T1/waits"), "no note is sent when none is given")
+        self.assertEqual(run_hub("task", "snooze", "T1", "--until", "2026-11-02", "--note", "Ask the landlord",
+                                 env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"until": "2026-11-02", "note": "Ask the landlord"})
 
     def test_roadmap_commands_send_what_their_tools_send(self):
         def last(method, path):

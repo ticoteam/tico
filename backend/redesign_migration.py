@@ -386,19 +386,19 @@ def _inboxes(c, done):
 
 
 def _bots(c, done):
-    from . import ceo_bot
+    from . import strategy_bot
     out = []
-    ceo = H.bot(c, ceo_bot.SLUG)
-    if ceo and ("bot", "bot:" + ceo_bot.SLUG) not in done:
-        current = (ceo.get("display_name") or "").strip()
-        default = current in ("", ceo_bot.NAME, ceo_bot.OLD_NAME, STRATEGY_NAME)
-        flags = [] if default else [_flag("bot:" + ceo_bot.SLUG, "custom_name",
+    row = H.bot(c, strategy_bot.SLUG)
+    if row and ("bot", "bot:" + strategy_bot.SLUG) not in done:
+        current = (row.get("display_name") or "").strip()
+        default = current in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)
+        flags = [] if default else [_flag("bot:" + strategy_bot.SLUG, "custom_name",
                                           f"Someone named it {current}; it keeps that name and becomes the Strategy "
                                           "bot")]
-        out.append({"kind": "bot", "id": "bot:" + ceo_bot.SLUG, "title": current or ceo_bot.NAME,
-                    "becomes": {"slug": ceo_bot.SLUG, "display_name": STRATEGY_NAME if default else current,
+        out.append({"kind": "bot", "id": "bot:" + strategy_bot.SLUG, "title": current or strategy_bot.NAME,
+                    "becomes": {"slug": strategy_bot.SLUG, "display_name": STRATEGY_NAME if default else current,
                                 "role": "the strategy bot"},
-                    "flags": flags, "_do": ("rename", {"before": ceo.get("display_name"), "rename": default})})
+                    "flags": flags, "_do": ("rename", {"before": row.get("display_name"), "rename": default})})
     return out
 
 
@@ -475,7 +475,7 @@ def _budgets(c, done):
 def _save(c, who, flow):
     from . import automations
     aid = (WAKES_PREFIX if flow.get("wakes") else "auto_mig_") + H.new_id()
-    checked = automations._checked(c, flow)
+    checked = automations._checked(c, flow, wake_steps=False)
     via = "migration" if not who.via else f"{who.via}, migration"
     automations._save(c, who.actor, aid, checked, None, via=via)
     return aid
@@ -490,8 +490,8 @@ def _adopt(c, who, flow):
     if row and row["deleted_at"]:
         c.execute("UPDATE automations SET deleted_at=NULL WHERE id=?", (aid,))
     via = "migration" if not who.via else f"{who.via}, migration"
-    automations._save(c, who.actor, aid, automations._checked(c, flow), automations.flow_of(row) if row else None,
-                      via=via)
+    automations._save(c, who.actor, aid, automations._checked(c, flow, wake_steps=False),
+                      automations.flow_of(row) if row else None, via=via)
     return aid
 
 
@@ -502,7 +502,7 @@ def _mark(c, kind, ident, mid, aid, outcome="converted", why="", title=""):
 
 def _convert_one(c, who, mid, obj, group_done):
     """One object, in the caller's transaction. Returns the automation id (or None) it made."""
-    from . import ceo_bot, team_rules, turn_budgets as TB, usage_limits
+    from . import strategy_bot, team_rules, turn_budgets as TB, usage_limits
     kind, args = obj["_do"]
     now = _now()
     if kind in ("routine", "adopt_briefing"):
@@ -552,7 +552,7 @@ def _convert_one(c, who, mid, obj, group_done):
         return aid
     if kind == "rename":
         if args["rename"]:
-            ceo_bot._rename(c, who.actor, STRATEGY_NAME)
+            strategy_bot._rename(c, who.actor, STRATEGY_NAME)
         _mark(c, "bot", obj["id"], mid, None)
         return None
     if kind == "limit":
@@ -862,7 +862,8 @@ def adopt(c, kind, ident):
             while step["id"] in taken:
                 step["id"] = f"r{start + n + 1}x{H.new_id()[:4]}"
             taken.add(step["id"])
-        automations._save(c, who.actor, row["id"], automations._checked(c, after), flow, via="cutover, migration")
+        automations._save(c, who.actor, row["id"], automations._checked(c, after, wake_steps=False), flow,
+                          via="cutover, migration")
         for rid in ids:
             c.execute("DELETE FROM rules WHERE id=?", (rid,))
             _mark(c, "wake_rule", rid, mid, row["id"])
@@ -887,7 +888,8 @@ def drop_wake_rules(c, scope_kind, scope_id, created_by):
             continue
         gone += len(flow["steps"]) - len(keep)
         if keep:
-            automations._save(c, who.actor, row["id"], automations._checked(c, {**flow, "steps": keep}), flow,
+            kept = {**flow, "steps": keep}
+            automations._save(c, who.actor, row["id"], automations._checked(c, kept, wake_steps=False), flow,
                               via="profile")
         else:
             c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (_now(), row["id"]))
@@ -919,7 +921,8 @@ def rename_steps(c, type_id, lower):
                         source["when"]["step"] = moved(source["when"]["step"])
         if after != flow:
             who = who or system_who(c)
-            automations._save(c, who.actor, row["id"], automations._checked(c, after), flow, via="steps renamed")
+            automations._save(c, who.actor, row["id"], automations._checked(c, after, saved=flow, aid=row["id"]),
+                              flow, via="steps renamed")
 
 
 def wake_rules_by(c, scope_kind, scope_id, created_by):
@@ -1014,15 +1017,93 @@ def wake_rules_of(aid, flow):
     return out
 
 
-def check_wakes(flow):
+def _steps_of(c, type_id):
+    """A task type's steps in board order, as (id, name)."""
+    return [(r[0], r[1]) for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=? ORDER BY position, id",
+                                            (type_id,))]
+
+
+def _named(when):
+    """The step values a rule's `when` names (one name or id, or a list of them), or None when it names no step."""
+    if "step" not in when:
+        return None
+    value = when["step"]
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+
+
+def _missing_steps(c, scope, when):
+    """[(value, step names)] for each step a type-scoped rule names that its type does not have. A step is matched as
+    rules.py matches it: by name or by id, ignoring case. A rule scoped to a team, department or bot names no one
+    type's steps, so nothing is checked for it."""
+    named = _named(when)
+    if named is None or scope.get("scope_kind") != "type":
+        return []
+    steps = _steps_of(c, scope.get("scope_id") or "")
+    known = {str(s).lower() for ident, name in steps for s in (ident, name)}
+    return [(value, [name for _, name in steps]) for value in named if value.lower() not in known]
+
+
+def _missing_why(value, names):
+    return f'The wake rule names step "{value}", which its task type does not have. Its steps are: ' \
+           f'{", ".join(names) or "none"}. Use one of those names, or its id.'
+
+
+def wake_problems(c, aid, flow):
+    """The wake rules of one "What wakes" automation that name a step its type does not have: [{rule, step, why}].
+    Read for every automation payload, so a rule that stopped working says so; nothing here raises."""
+    try:
+        rows = wake_rules_of(aid, flow)
+    except ValueError:
+        return []
+    return [{"rule": row["id"], "step": value, "why": _missing_why(value, names)}
+            for row in rows for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["when_json"], {}))]
+
+
+def check_wakes(flow, c=None, saved=None, aid=None):
     """On save (automations._checked): a "What wakes" automation is refused (422) when an edit is one its wake rules
-    cannot carry out, rather than saved to show one thing and do another."""
+    cannot carry out, rather than saved to show one thing and do another. With `c`, a rule that names a step its type
+    does not have is refused too, with the type's real steps; a rule that already named that missing step in `saved`
+    (the version it changes) is not, so an unrelated edit does not trip over a rule that is already flagged."""
     if not flow.get("wakes") or flow.get("readonly"):
         return
     try:
-        wake_rules_of("check", flow)
+        rows = wake_rules_of(aid or "check", flow)
     except ValueError as exc:
         raise Problem("invalid", f"A What wakes automation holds wake rules: {exc}", 422)
+    if c is None:
+        return
+    kept = set()
+    if saved and aid and saved.get("wakes"):
+        try:
+            kept = {(row["id"], value.lower()) for row in wake_rules_of(aid, saved)
+                    for value, _ in _missing_steps(c, saved["wakes"], _json(row["when_json"], {}))}
+        except ValueError:
+            kept = set()
+    for row in rows:
+        for value, names in _missing_steps(c, flow["wakes"], _json(row["when_json"], {})):
+            if (row["id"], value.lower()) not in kept:
+                raise Problem("invalid", _missing_why(value, names), 422)
+
+
+def wakes_naming(c, type_id, steps):
+    """The wake rules of a type's "What wakes" automations that name one of `steps` ([(id, name)], say the steps a save
+    deletes), as "<automation name>: <step>" strings. A rule names a step by its name or its id."""
+    named = {str(s).lower() for step in steps for s in step}
+    try:
+        found = _wakes_of(c, "type", type_id)
+    except Exception:   # sqlite3.OperationalError: a database from before the automations table
+        return []
+    out = []
+    for row, flow in found:
+        try:
+            rules = wake_rules_of(row["id"], flow)
+        except ValueError:      # not readable as wake rules: nothing it shows can run
+            continue
+        for rule in rules:
+            for value in _named(_json(rule["when_json"], {})) or []:
+                if value.lower() in named:
+                    out.append(f"{row['name']}: {value}")
+    return out
 
 
 def wake_rows(c, event=None):
@@ -1175,11 +1256,7 @@ def main(argv=None):
     database is never written: it is copied (sqlite backup), the copy is brought up to this version (schema and the
     cutover, as the server does at startup, with nothing scheduled), the report is read from the copy and the copy is
     deleted. Before an upgrade it is the dry run (what would move, stay or wait); after, the record of what did. It
-    needs no opt-in: only the copy moves.
-
-    `python -m backend.redesign_migration guard [--db PATH]` (default $TICO_DB): exit 1 with the refusal when the
-    database still holds what the cutover would change and TICO_MIGRATE_TO_AUTOMATIONS is not set; the container runs
-    it before anything else opens the database (docker/entrypoint.sh)."""
+    writes nothing: only the copy moves."""
     import argparse
     import os
     import sys
@@ -1188,19 +1265,12 @@ def main(argv=None):
     from .config import Settings
     from .store import Store
     parser = argparse.ArgumentParser(prog="python -m backend.redesign_migration")
-    parser.add_argument("command", choices=("report", "guard"))
+    parser.add_argument("command", choices=("report",))
     parser.add_argument("--db", default=os.environ.get("TICO_DB"), help="the install's database (only read)")
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
     args = parser.parse_args(argv)
     if not args.db:
         raise SystemExit("redesign_migration: name the database with --db (or TICO_DB)")
-    if args.command == "guard":
-        logging.basicConfig(format="%(message)s")
-        try:
-            guard(args.db)
-        except NotOptedIn:
-            raise SystemExit(1)
-        return {}
     source = Path(args.db).expanduser().resolve()
     if not source.is_file():
         raise SystemExit(f"redesign_migration: no database at {source}")
@@ -1227,38 +1297,20 @@ def main(argv=None):
         json.dump(found, sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")
     else:
-        starts = ("yes: nothing waits to move" if not waits else "no, it needs " + OPT_IN + "=1 (waiting to move: "
-                  + ", ".join(f"{k} {v}" for k, v in sorted(waits.items())) + ")")
-        print(f"Database: {source}\nStarts this version without {OPT_IN}: {starts}\n\n== As it is now ==\n"
+        moves = ("nothing to move" if not waits
+                 else "moves " + ", ".join(f"{k} {v}" for k, v in sorted(waits.items())))
+        print(f"Database: {source}\nOn the next start: {moves}\n\n== As it is now ==\n"
               f"{_text(before)}\n\n== After this version starts on it (rehearsed on a copy) ==\n{_text(after)}")
     return found
-
-
-# ---------------------------------------------------------------------------------------------------- the opt-in
-# An install moves once, when its operator chooses: a database that still holds what the cutover would change starts
-# only with TICO_MIGRATE_TO_AUTOMATIONS=1 (docs/updates.md, "Moving to Automations (one time)"). Before that the
-# server refuses to start without opening the database for writing, so the updater rolls back to the release before.
-OPT_IN = "TICO_MIGRATE_TO_AUTOMATIONS"
-REFUSAL = ("This release moves rules and routines to Automations once. Set TICO_MIGRATE_TO_AUTOMATIONS=1 to go ahead; "
-           "see docs/updates.md#moving-to-automations-one-time")
-
-
-class NotOptedIn(RuntimeError):
-    """The database holds old-system objects the cutover has not taken and the install has not opted in."""
-
-
-def opted_in(environ=None):
-    import os
-    return (environ if environ is not None else os.environ).get(OPT_IN, "").strip().lower() in ("1", "true", "yes")
 
 
 def pending(c):
     """What the cutover would still change in this database, counted by kind ({} for nothing). Read only, and from
     plain SQL so a database an older release wrote is read as it is: routines, wake rules (not Tico Team's notice
-    rules), inboxes, hourly spend limits, turn budgets below the guard, the stale review job when on, and the CEO
-    bot's rename. Nothing once the cutover started (the install opted in) or finished; read-only mirrors of jobs Tico
+    rules), inboxes, hourly spend limits, turn budgets below the guard, the stale review job when on, and the Strategy
+    bot's rename. Nothing once the cutover started or finished; read-only mirrors of jobs Tico
     keeps running count for nothing."""
-    from . import ceo_bot, team_rules, tico_notices, turn_budgets as TB, usage_limits
+    from . import strategy_bot, team_rules, tico_notices, turn_budgets as TB, usage_limits
     if not _table(c, "registry_metadata") or state(c):
         return {}
     done = ({(r[0], r[1]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
@@ -1293,11 +1345,12 @@ def pending(c):
         add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config_json FROM bot_config")))
     if team_rules.load(c).get("stale_review") and ("system_job", "job:stale_review") not in done:
         add("system_job", 1)
-    ceo = bots.get(ceo_bot.SLUG)
-    if ceo and ceo != "archived" and ("bot", "bot:" + ceo_bot.SLUG) not in done:
-        name = (c.execute("SELECT display_name FROM bots WHERE slug=?", (ceo_bot.SLUG,)).fetchone()[0] or "").strip() \
+    row = bots.get(strategy_bot.SLUG)
+    if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
+        name = (c.execute("SELECT "
+                          "display_name FROM bots WHERE slug=?", (strategy_bot.SLUG,)).fetchone()[0] or "").strip() \
             if "display_name" in _columns(c, "bots") else ""
-        add("bot", int(name in ("", ceo_bot.NAME, ceo_bot.OLD_NAME)))
+        add("bot", int(name in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)))
     return found
 
 
@@ -1321,23 +1374,12 @@ def waiting(path):
             return pending(c)
         finally:
             c.close()
-    with tempfile.TemporaryDirectory(prefix="tico-guard-") as directory:
+    with tempfile.TemporaryDirectory(prefix="tico-waiting-") as directory:
         copy = Path(directory) / "hub.db"
         shutil.copyfile(path, copy)
         shutil.copyfile(wal, str(copy) + "-wal")
         with sqlite_ro(copy) as c:
             return pending(c)
-
-
-def guard(path, allowed=None):
-    """Refuse to start (NotOptedIn) when the database at `path` still holds what the cutover would change and the
-    install has not opted in. Reads only: a refused start leaves the database byte for byte as it was."""
-    if allowed if allowed is not None else opted_in():
-        return
-    found = waiting(path)
-    if found:
-        log.error("%s (waiting to move: %s)", REFUSAL, ", ".join(f"{k} {v}" for k, v in sorted(found.items())))
-        raise NotOptedIn(REFUSAL)
 
 
 class sqlite_ro:

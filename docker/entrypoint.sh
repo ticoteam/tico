@@ -383,9 +383,6 @@ prepare() {  # everything `server` does before it starts serving: also what the 
   done
   aws_identity
   seed
-  # Before anything writes to the database: one that still holds routines and rules starts only once this install
-  # opts in to moving them to Automations (TICO_MIGRATE_TO_AUTOMATIONS=1, docs/updates.md). Refused, it is untouched.
-  python -m backend.redesign_migration guard || die "not starting: see the line above"
   environment_identity
   tunnel_config
   caddy_config

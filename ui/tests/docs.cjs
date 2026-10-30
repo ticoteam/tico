@@ -1,7 +1,7 @@
 // The Docs page, against an in-memory stand-in for the docs API (fixtures only, no server): write a doc,
 // edit it (with the version-conflict message), read its history and restore an old version, lock it
 // (only owners and bot administrators), add, open, edit and remove a linked doc, search across both
-// kinds, and import a file. On a first visit to an empty Docs the Librarian asks where the docs are.
+// kinds, and import a file. On a first visit to an empty Docs it asks where the docs are.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (both themes, and a phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -84,7 +84,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(ui, p) : '';
       if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
       if (p === '/api/me') return json(me);
-      if (p === '/api/employees') return json([]);
+      if (p === '/api/employees') return json([{name: 'librarian', display_name: 'Librarian', status: 'active'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -251,71 +251,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
-
-    // Desktop rail stays open while reading, streams answers and preserves collapse per viewer.
-    assert.equal(await page.locator('[data-docs-ask]').getAttribute('role'), 'complementary');
-    assert.equal(await page.locator('.dask-backdrop').count(), 0);
-    const mainBox = await page.locator('#main').boundingBox(), railBox = await page.locator('[data-docs-ask]').boundingBox();
-    assert(mainBox.x + mainBox.width <= railBox.x + 1, 'rail has its own space');
-    await page.locator('.dask-form textarea').fill('What is the refund policy?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-cite').first().waitFor();
-    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
-    assert.equal(await page.locator('.dask-cite', {hasText: 'External · Refunds'}).getAttribute('href'), externalCitation);
-    assert.equal(await page.locator('.dask-a .md-card').count(), 0);
-    assert.equal(await page.locator('.dask-results a').textContent(), 'Refund policy');
-    await shot(page, 'rail-desktop');
-    // Archived personal conversations survive reload, restore sanitized answers and keep follow-ups in the same room.
-    await page.reload();
-    await page.locator('.docs-heading').waitFor();
-    await page.locator('.dask-history summary').click();
-    const oldChat = page.locator('[data-docs-conversation="docs-archived"]');
-    const findOldChat = async () => {
-      while (!await oldChat.count()) {
-        const shown = await page.locator('[data-docs-conversation]').count();
-        await page.locator('[data-conversations-more]').click();
-        await page.waitForFunction(count => document.querySelectorAll('[data-docs-conversation]').length > count, shown);
-      }
-    };
-    await findOldChat();
-    reopenBlocked = true;
-    await oldChat.click();
-    await page.locator('.toast', {hasText: 'Wait for this conversation'}).waitFor();
-    assert.equal(await page.locator('[data-docs-ask] [data-turn]').count(), 0, 'a busy response preserves the thread on screen');
-    reopenBlocked = false;
-    await oldChat.click();
-    await page.locator('[data-docs-ask] [data-answer]', {hasText: 'Refunds take 30 days'}).waitFor();
-    assert.equal(await page.locator('.dask-q').innerText(), 'How do refunds work?');
-    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
-    assert.equal(await page.evaluate(() => window.docsUnsafe), undefined);
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false);
-    await page.locator('.dask-form textarea').fill('And gift cards?');
-    await page.locator('.dask-form button').click();
-    await page.locator('[data-docs-ask] [data-turn]').nth(1).locator('[data-answer]').waitFor();
-    assert.deepEqual(requests.findLast(r => r.api === 'docs/ask').body, {question: 'And gift cards?', conversation_id: 'docs-archived'});
-    await page.locator('[data-new-chat]').click();
-    await page.locator('.dask-form textarea').fill('Who owns release checks?');
-    await page.locator('.dask-form button').click();
-    await page.locator('.dask-results a').waitFor();
-    assert.equal(requests.findLast(r => r.api === 'docs/ask').body.new_conversation, true);
-    await page.locator('.dask-history summary').click();
-    await findOldChat();
-    await shot(page, 'previous-conversations');
-    await page.locator('[data-docs-conversation="docs-earlier"]').click();
-    await page.locator('[data-docs-ask] .dask-err', {hasText: 'No reply saved'}).waitFor();
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false, 'an unanswered archived question does not block the composer');
-    assert.equal(await page.locator('[data-docs-ask] [data-thinking]').count(), 0);
-    // The rail is part of the page: Escape elsewhere leaves it open.
-    await page.locator('#docs-search').focus();
-    await page.keyboard.press('Escape');
-    assert.equal(await page.locator('[data-docs-ask]').count(), 1);
-    await page.locator('.dask-close').click();
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'docs-ask', 'hiding the rail focuses its button');
-    await page.reload();
-    await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('[data-docs-ask]').count(), 0);
-    await page.locator('#docs-ask').click();
-    await page.locator('[data-docs-ask]').waitFor();
+    // Ask opens the Ask panel with this page; nothing of the Librarian: no rail, settings link or sidebar gear.
+    assert.equal(await page.locator('#docs-ask').getAttribute('aria-label'), 'Ask');
+    assert.equal(await page.locator('#docs-ask').getAttribute('data-ask-open'), '');
+    assert.equal(await page.locator('[data-docs-ask], #docs-librarian-settings, #side .nav-librarian, #nav-strategy-librarian').count(), 0);
 
     // ---- read an internal doc, and its relative link to another doc stays in the app
     await page.locator('.docs-item', {hasText: 'Pricing and plans'}).click();
@@ -327,7 +266,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('.docs-reader-head h2', {hasText: 'Refund policy'}).waitFor();
     await shot(page, 'doc');
 
-    // Research: the Librarian adds what it finds on the web to the section chosen.
+    // Research adds what it finds on the web to the section chosen.
     await page.locator('#doc-more').click();
     await page.locator('#doc-research').click();
     const research = page.locator('form[data-research-form]');
@@ -342,9 +281,8 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await research.locator('button', {hasText: 'Close'}).click();
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
-    assert.equal(await page.locator('.dask-form textarea').getAttribute('placeholder'), 'Ask about your docs…');
 
-    // A narrow desktop still reserves space for the rail and lets a doc open.
+    // A narrow desktop lets a doc open without sideways scrolling.
     await page.setViewportSize({width: 1024, height: 860});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.locator('.docs-item', {hasText: 'Refund policy'}).click();
@@ -492,22 +430,6 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.equal(await page.locator('#docs-ask .docs-ask-word').isVisible(), false);
     await shot(page, 'phone-list');
-    assert.equal(await page.locator('[data-docs-ask]').count(), 0);
-    await page.locator('#docs-ask').click();
-    assert.equal(await page.locator('[data-docs-ask]').getAttribute('aria-modal'), 'true');
-    await shot(page, 'rail-phone');
-    // No AI provider: the question is saved and waits; the sheet says so, not that the Librarian is reading.
-    librarianQueued = true;
-    await page.locator('.dask-form textarea').fill('How do I add an AI provider?');
-    await page.locator('.dask-form button').click();
-    await page.locator('[data-no-provider]').waitFor();
-    assert.equal(await page.locator('[data-docs-ask] [data-thinking]').count(), 0);
-    assert.equal(await page.locator('[data-no-provider] a').getAttribute('data-gs-tab'), 'models');
-    assert.equal(await page.locator('.dask-form button').isDisabled(), false);
-    await shot(page, 'rail-phone-no-provider');
-    librarianQueued = false;
-    await page.locator('.dask-close').click();
-
     await page.locator('.docs-item').first().click();
     await page.locator('.docs-reader-head h2').waitFor();
     assert.equal(await page.locator('#docs-browser').isVisible(), false);
@@ -548,7 +470,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert(sourceHeading.y + sourceHeading.height < page.viewportSize().height);
     await page.close();
 
-    // ---- a first visit to an empty Docs: the Librarian asks where the docs are, takes the links as sources and
+    // ---- a first visit to an empty Docs: Docs asks where the docs are, takes the links as sources and
     // files one task; Skip for now is remembered, and the menu brings the question back
     page = await open('#/docs');
     assert.equal(await page.locator('[data-docs-setup]').count(), 0);         // Docs has docs: nothing is asked

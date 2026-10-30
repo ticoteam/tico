@@ -12,7 +12,7 @@ from dataclasses import replace
 from .settings_catalog import Setting as S
 
 SETTINGS_FILES = sorted(
-    ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-ceo-bot.js",
+    ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
      "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
@@ -25,13 +25,14 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, CEO = "Settings > Email & Phone", "Settings > CEO bot"
+INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
     "assistant_approvals": ("People may let their Assistant decide their approvals", "confirm", ""),
     "botops_direct": ("BotOps changes providers and limits without asking", "confirm", ""),
     "botops_manages_bots": ("BotOps manages every bot", "confirm", ""),
+    "managers_manage_reports": ("Managers change their reports' model, tasks, name and description", "confirm", ""),
     "admin_credentials": ("Admins store credentials", "confirm", ""),
     "members_store_credentials": ("Members store credentials for their bots", "confirm", ""),
     "admin_sql": ("Admins see SQL", "confirm", ""),
@@ -41,7 +42,7 @@ _RULE_NAMES = {
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
-    "stall_triage": ("Quiet task triage", "direct", ""),
+    "stall_triage": ("Stalled task check", "direct", ""),
 }
 _RULE_WHERE = {"health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
                "stale_review": (RULES + " > What Tico runs on its own", _card("system", "set-system-card")),
@@ -56,7 +57,13 @@ TEAM_RULES = [
     for key, (name, kind, why) in _RULE_NAMES.items()
 ] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", PEOPLE + " > Team rules", "owner",
        "confirm", "PUT", "access/rules", "go_ahead_days", "int", _card("people"), "access#rules.go_ahead_days",
-       words="wait days go ahead")]
+       words="wait days go ahead"),
+    S("team.rules.report_creates_per_week", "Reports a manager may create a week", PEOPLE + " > Team rules", "owner",
+      "confirm", "PUT", "access/rules", "report_creates_per_week", "int", _card("people"), "access#rules.report_creates_per_week",
+      words="report create limit week"),
+    S("team.rules.report_archives_per_week", "Reports a manager may archive or restore a week", PEOPLE + " > Team rules", "owner",
+      "confirm", "PUT", "access/rules", "report_archives_per_week", "int", _card("people"), "access#rules.report_archives_per_week",
+      words="report archive limit week")]
 
 _USD = "hourly_usd, daily_usd, weekly_usd, monthly_usd"
 
@@ -171,6 +178,9 @@ ENTRIES = TEAM_RULES + [
       card=_card("bots"), words="create hire"),
     S("bot.compact_at", "Compact at", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/compact-at",
       "compact_at", "int", _card("bots")),
+    S("bot.manages_reports", "Manages its reports", BOTS + " > Bot editor", "bot", "direct", "POST",
+      "bots/{bot}/manages-reports", "manages_reports", card=_card("bots"),
+      words="manager report model task name description"),
     S("bot.keep_tasks_going", "Keep tasks going", BOTS + " > Bot editor", "bot", "direct", "POST",
       "bots/{bot}/keep-tasks-going", "keep_tasks_going", card=_card("bots")),
     S("bot.turns_at_once", "Turns at once", BOTS + " > Bot editor", "bot", "direct", "POST",
@@ -206,11 +216,11 @@ ENTRIES = TEAM_RULES + [
       why="A Run workflows or Edit workflow files tick (a kept one coming back too), turning Create product "
           "repositories back on (the owner only), or taking access away needs a Confirm card: running or editing "
           "workflows starts CI, which uses the repository's secrets"),
-    # CEO bot
-    S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
-      card=_card("ceo")),
-    S("ceo.level", "How much the CEO bot does", CEO, "owner", "confirm", "POST", "ceo-bot/level", "level", "int",
-      _card("ceo")),
+    # Strategy bot
+    S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
+      "strategy-bot/checks", "on", card=_card("system", "set-strategy-bot-card")),
+    S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
+      "strategy-bot/level", "level", "int", _card("system", "set-strategy-bot-card")),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
       card=_card("repos", "set-repos")),
@@ -235,6 +245,14 @@ ENTRIES = TEAM_RULES + [
       "text", _card("system", "set-release-card"), "release-schedule#bot"),
     S("release.writer", "Release notes writer", RULES + " > Releases", "admin", "direct", "PATCH",
       "release-schedule", "writer", "text", _card("system", "set-release-card"), "release-schedule#writer"),
+    *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
+        source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
+        "screening#modes." + source, words="prompt injection screening")
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"))],
+    *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
+        layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
+        words="prompt injection screening detector")
+      for layer, name in (("patterns", "Patterns"), ("model", "Decision model"))],
     S("task_manager.on", "Task Manager", RULES + " > Task Manager", "owner", "direct", "POST", "task-manager/turn-on",
       value="json", card=_card("system", "set-task-manager-card")),
     S("task_manager.off", "Task Manager off", RULES + " > Task Manager", "owner", "direct", "POST",
@@ -307,7 +325,7 @@ ENTRIES = TEAM_RULES + [
 # changes them in Settings until it can, rather than BotOps changing them at once.
 NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
                "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
-               "bot.budget", "ceo.checks", "ceo.level",
+               "bot.budget", "strategy.checks", "strategy.level",
                "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
@@ -337,9 +355,10 @@ NOT_SETTINGS = {
     ("POST", "providers/gateway/check"): "checks the gateway connection",
     ("POST", "hosted-servers/{x}/start"): "starts one hosted server",
     ("POST", "settings/history/{x}/undo"): "undoes one past change; the owner does it from History",
-    ("POST", "ceo-bot/log/{x}/undo"): "undoes one CEO bot action",
+    ("POST", "strategy-bot/log/{x}/undo"): "undoes one Strategy bot action",
     ("POST", "repositories/refresh"): "re-reads the repositories from GitHub",
     ("POST", "release/now"): "starts one release (`hub release now`)",
+    ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",
     ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",

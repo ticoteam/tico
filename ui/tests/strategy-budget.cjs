@@ -192,9 +192,9 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
     {
       const tag = 'small desktop';
       const {page, errors, writes} = await open(browser);
-      assert.deepEqual(await keys(page), ['company', 'person:ana', 'bot:goal-manager', 'bot:release', 'group:eng', 'bot:eng-lead',
+      assert.deepEqual(await keys(page), ['company', 'person:ana', 'bot:release', 'group:eng', 'bot:eng-lead',
         'bot:builder', 'bot:reviewer', 'person:cara', 'group:web', 'bot:web-dev', 'group:sales', 'person:ben', 'bot:sales-lead', 'bot:sdr',
-        'group:outbound', 'bot:coo', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': the chart top down, helpers last');
+        'group:outbound', 'bot:coo', 'bot:botops', 'bot:librarian', 'bot:mail-sorter', 'bot:goal-manager'], tag + ': the chart top down, helpers (the Strategy Bot too) last');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
       assert.equal(await amount(page, 'bot:builder'), '$5.70 / $6 · 30m', tag + ': a bot by the window that binds');
       assert.equal(await amount(page, 'bot:goal-manager'), '$14 / $20 · day', tag + ': a day window binding says day');
@@ -204,7 +204,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.equal(await amount(page, 'group:sales'), '$18 · day', tag + ': a group with no pool, what it spent today');
       assert.equal(await amount(page, 'bot:sdr'), '$11 · day', tag + ': a bot with no limit, what it spent today');
       assert.equal(await amount(page, 'person:cara'), '', tag + ': a person with no reports has no spend of its own');
-      assert.equal(await amount(page, 'person:ana'), '$26 · day', tag + ': a person with reports adds them up (the Strategy Bot and Release Manager)');
+      assert.equal(await amount(page, 'person:ana'), '$12 · day', tag + ': a person with reports adds them up (Release Manager; the Strategy Bot is a helper)');
       assert.ok(await page.locator(row('bot:release') + ' .bt-paused').isVisible(), tag + ': a held bot says Paused');
       assert.ok(await page.locator(row('bot:release')).evaluate(el => el.classList.contains('bad')), tag + ': in the fail tone');
       assert.ok(await page.locator(row('bot:builder')).evaluate(el => el.classList.contains('warn')), tag + ': 95% warns');

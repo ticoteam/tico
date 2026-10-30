@@ -302,7 +302,7 @@ function taskBoardDrop(state, d) {
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
-  if (moving && step.name === 'Blocked') {
+  if (moving && step.status === 'waiting') {
     void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
       if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
     });

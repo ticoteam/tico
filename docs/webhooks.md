@@ -145,6 +145,11 @@ hub trigger delivery github <delivery> --part 2
 A bot may read a delivery only if it manages the webhook, a task made from the call is its own, or a notice from Tico naming the
 call went to it. People who manage the webhook read the whole body.
 
+Before a bot gets a task or turn from a call, Tico's [screening](permissions.md#screening) checks the call's text for a prompt
+injection. A possible one reaches the bot with a warning line on top. At Hold, a likely one is held: the task goes to a
+person titled `Held: ...`, and handing it to the bot releases it. Settings → System → Screening sets this per door
+(Warn by default); it fails open.
+
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
@@ -190,7 +195,8 @@ call. A rule can match only on these two things, never on a field inside the bod
   receiver knows which webhook it came through. It works only on `webhook.received`.
 - `create_task {owner, title, body}` files a task for the bot `owner`, in the rule maker's name. `title` and `body` are templates.
   The body ends with the call's content, fenced as data. Nothing is filed twice for one call, and the maker must be allowed to
-  give that bot tasks.
+  give that bot tasks. With [screening](permissions.md#screening) on, a long call's task opens a few seconds after the call is
+  answered, once the check is in, and a held one goes to the rule's maker.
 
 Rules also have the ordinary outcomes: *ignore*, *note*, *wake* and *ask*.
 
@@ -223,7 +229,7 @@ on the webhook still runs, and the failure is in History as `rule.event_error`.
 
 **Who may write them.** The owner and admins write team rules; a bot's owners, its operator and BotOps write that bot's rules.
 `wake_bot` needs rights over the bot it wakes. `send_webhook` is written by a person, or by a bot with its outbound send switch on.
-The CEO Bot never writes one. Tico checks this when the rule is saved: the endpoint must exist and its maker must be allowed to send
+The Strategy Bot never writes one. Tico checks this when the rule is saved: the endpoint must exist and its maker must be allowed to send
 to it (they own it, or are an admin), or the save is refused with the reason. When the rule runs, the same test is made again, and a
 bot's rule reaches only an endpoint that listens for the type.
 
@@ -431,7 +437,7 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
   call. The approver then owns the endpoint.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its **outbound send** switch is on (Settings → Bots → Mail sending, or
-  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The CEO Bot sends nothing.
+  `hub bot mail <slug> --send`), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
 - An endpoint hears about a task, approval or bot only if its owner could read it. Health, inbound and webhook events go only to
   owner and admin endpoints.
 - A person can have 50 endpoints.

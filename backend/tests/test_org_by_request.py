@@ -2,7 +2,7 @@
 only when the person in its chat asks, citing their message, with exactly their rights. On its own it changes nothing."""
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_ceo_bot_chat import ceo, turn
+from backend.tests.test_strategy_bot_chat import strategy_bot, turn
 from backend.tests.test_groups import group
 from backend.tests.test_groups_leads import as_bot
 
@@ -16,8 +16,8 @@ def cited(api, method, path, body, token, ref="turn", expected=200):
 
 
 def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
-    ceo(api)
-    _, attempt = turn(api, "goal-manager", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
+    strategy_bot(api)
+    _, attempt = turn(api, "coo", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
     token = attempt["token"]
     # Without citing what they said it changes nothing.
     refused = cited(api, "POST", "groups", {"name": "Research"}, token, ref=None, expected=403)
@@ -39,7 +39,7 @@ def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
 
 
 def test_on_its_own_the_strategy_bot_changes_no_group(api):
-    ceo(api)
+    strategy_bot(api)
     as_bot(api, "goal-manager", "gm-test")
     cited(api, "POST", "groups", {"name": "Research"}, "gm-test", ref=None, expected=403)
     assert "Research" not in {row["name"] for row in get(api, "groups")}

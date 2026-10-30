@@ -268,9 +268,9 @@ def test_a_release_approval_ready_past_the_setting_is_one_finding_counted_not_re
     assert scan_with(api, settings) == [] and finding(api, key)["present"] == 0
 
 
-@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.3.40", "warn")])
+@pytest.mark.parametrize("release,severity", [("0.0.9", "bad"), ("0.4.40", "warn")])
 def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch, release, severity):
-    monkeypatch.setenv("TICO_VERSION", "0.3.45")
+    monkeypatch.setenv("TICO_VERSION", "0.4.45")
     api, runner = built(environment)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner["runner_id"]))
@@ -656,3 +656,24 @@ def test_the_gateway_row_counts_as_a_fallback_only_under_the_gateway_choices(env
         found = [i for i in health_monitor.findings(c, api.app.state.store.settings)
                  if i["check_id"] == "limited_no_fallback"]
     assert [i["title"] for i in found] == [f"{SECRET_BOT} stopped on a usage limit and has no fallback model"]
+
+
+def test_the_scan_reads_its_findings_outside_the_write_lock(environment, monkeypatch):
+    # The hourly scan read every finding inside the write transaction: 7.2 s on TIDY (12:26 UTC, Oct 29, 2026), and each
+    # runner call waited behind it. The reads now run in a snapshot; only the changes take the lock.
+    api, runner = built(environment)
+    api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
+    store = api.app.state.store
+    holders = []
+    real = health_monitor.findings
+
+    def watched(c, settings):
+        holders.append(len(store.writer.queue))            # the write gate: holder plus waiters, 0 when none holds it
+        return real(c, settings)
+
+    monkeypatch.setattr(health_monitor, "findings", watched)
+    runner_errors(api, runner, STREAM)
+    key = "event_stream:" + runner["runner_id"]
+    assert health_monitor.check(store, api.app.state.auth, store.settings) == [key]
+    assert holders == [0]
+    assert health_monitor.check(store, api.app.state.auth, store.settings) == []

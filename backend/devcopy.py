@@ -43,11 +43,14 @@ EMPTY = (
     "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
+    # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
+    "task_reconnects", "google_signin_refusals",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
+    "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
     "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "compact_first", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
@@ -56,7 +59,7 @@ EMPTY = (
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
     # credentials
-    "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
+    "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
@@ -76,9 +79,12 @@ EMPTY = (
     # mail actions, effect keys, spend holds, held turn answers, daily counts and inbox send switches never; nor a
     # migration snapshot (restoring it would act).
     "automations", "automation_versions", "automation_runs", "automation_mail_actions", "automation_daily",
-    "automation_inboxes", "automation_effects", "automation_holds", "automation_turn_answers", "redesign_migrations",
+    "automation_inboxes", "automation_effects", "automation_holds", "automation_guard_holds", "automation_turn_answers",
+    "redesign_migrations",
     # Task cap counts are today's sends; the caps themselves are kept.
     "task_cap_sends", "task_cap_log",
+    # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
+    "blob_purges",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -92,14 +98,15 @@ KEEP = frozenset((
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
-    "bot_task_tabs", "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_actions",
-    "ask_ingest_items", "ask_ingest_settings", "ceo_merges", "changes", "chat_goals",
+    "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
+    "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
+    "ceo_actions", "ceo_merges",  # the names before the rename, kept, mirrored, for one release (hubdb.STRATEGY_TABLES)
     "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
-    "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
+    "document_versions", "documents", "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
     "flight_process", "flight_requests",
-    "flight_slow", "flight_sql", "provenance_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
-    "health_findings", "health_reports", "humans", "import_refs", "intake_items", "kpi_definitions", "kpi_readings",
+    "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
+    "health_findings", "health_reports", "humans", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
     "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
@@ -107,13 +114,13 @@ KEEP = frozenset((
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
-    "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
+    "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
 ))

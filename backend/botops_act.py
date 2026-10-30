@@ -231,6 +231,8 @@ DO = _routes(
     # checks); the computer removes it once the bot is idle.
     ("POST", rf"tasks/{_S}/worktrees(/attach)?"), ("DELETE", rf"tasks/{_S}/links/{_S}"),
     ("POST", r"docs"), ("PATCH", rf"docs/{_S}"), ("POST", rf"docs/{_S}/restore"),
+    # A page's cadence, data date, replacement, archive or restore: the route checks the person may manage its bot.
+    ("PATCH", rf"pages/{_S}"),
     ("POST", r"linked-docs"), ("PATCH", rf"linked-docs/{_S}"),
     ("POST", rf"meetings/{_S}/delete"), ("POST", "meetings/granola/sync"),
     ("POST", rf"meetings/{_S}/review"), ("POST", "meetings/review"), ("POST", "meetings/settings"),
@@ -266,11 +268,12 @@ DO = _routes(
     # BotOps' own right to manage every trigger while it works for someone.
     ("POST", r"triggers"), ("POST", rf"triggers/{_S}"), ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
     ("POST", rf"triggers/{_S}/deliveries/.+/replay"), ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
-    # Task types and tags (movers, a tag's owner), the release schedule and Release now, the team's run budget and
-    # Tico's own jobs (an owner or an admin): each route checks the person.
+    # Task types and tags (movers, a tag's owner), the release schedule and Release now, screening's modes and Test,
+    # the team's run budget and Tico's own jobs (an owner or an admin): each route checks the person.
     ("POST", r"task-types"), ("POST", rf"task-types/{_S}(/delete)?"), ("DELETE", rf"task-types/{_S}"),
     ("POST", r"tags"), ("POST", rf"tags/{_S}(/instances)?"),
     ("PATCH", r"release-schedule"), ("POST", r"release/now"),
+    ("PUT", r"screening"), ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
 )
@@ -292,6 +295,8 @@ CONFIRM = _routes(
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
+    # Deleting a file for good removes its bytes: always the owner's own tap.
+    ("DELETE", rf"files/{_S}"),
     ("PUT", r"directory"), ("POST", r"directory/sync"), ("POST", r"directory/preview"),
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
@@ -313,9 +318,9 @@ ADMIN_ONLY = _routes(
 # Tico, and a computer's one-time code (shown on the card once they tap, never in BotOps' answer).
 ALWAYS = _routes(("POST", r"access/owner"), ("POST", r"system/update"), ("POST", r"enrollments"))
 # Owner-only: a member or an admin is told so at once, not handed a card that fails (the Gateway connection included).
-OWNER_ONLY = _routes(("POST", r"access/owner")) + GATEWAY
+OWNER_ONLY = _routes(("POST", r"access/owner"), ("DELETE", rf"files/{_S}")) + GATEWAY
 # Team rules that set BotOps' own powers: a change to one of them is always the person's own tap.
-OWN_POWER_RULES = ("botops_direct", "botops_manages_bots")
+OWN_POWER_RULES = ("botops_direct", "botops_manages_bots", "managers_manage_reports")
 RULES = re.compile(API + r"access/rules")
 
 # Hand a secret's value back to whoever calls: BotOps acting for a person is refused, with where the person does it.
@@ -463,6 +468,16 @@ def carried_lends(method, path):
     """Whether a carried request makes this call with the person's rights (CARRIED)."""
     path, method = normalize(path), str(method).upper()
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in CARRIED)
+
+
+# A manager bot's report, made, archived or restored by BotOps on the manager's ask (backend/report_managers.py).
+LIFECYCLE = _routes(("POST", r"bots"), ("POST", rf"bots/{_S}/archive"), ("POST", rf"bots/{_S}/restore"))
+
+
+def lifecycle_call(method, path):
+    """Whether this call creates, archives or restores a bot: the routes a manager bot's ask may reach through BotOps."""
+    path, method = normalize(path), str(method).upper()
+    return bool(path) and any(m == method and p.fullmatch(path) for m, p in LIFECYCLE)
 
 
 def admin_only(method, path):

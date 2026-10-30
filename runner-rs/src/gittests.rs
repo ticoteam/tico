@@ -557,15 +557,16 @@ async fn a_bots_own_diverged_checkout_is_named_in_its_prompt() {
     assert_eq!(problem, "it has 1 commits `origin/main` doesn't, and `origin/main` has 2 it doesn't; conflicting files: AGENT.md");
     assert_eq!(sh(&mine, &["rev-parse", "HEAD"]), before, "nothing moved");
     let mut attempt = json!({"bot": "coo", "config": {}, "repo_sync_problem": sessions::own_sync_line(&mine, &problem)});
-    let mut lines = vec!["You are coo.".to_string()];
+    let mut lines = vec![(crate::prompt::Part::Standing, "You are coo.".to_string())];
     sessions::prompt_head(&attempt, &mut lines);
-    assert!(lines[0].starts_with(&format!("Before anything else: your repository `{}` has diverged", mine.display())), "{lines:?}");
-    assert!(lines[0].ends_with("keeping both sides' facts, and push."));
+    assert!(lines[0].1.starts_with(&format!("Before anything else: your repository `{}` has diverged", mine.display())), "{lines:?}");
+    assert!(lines[0].1.ends_with("keeping both sides' facts, and push."));
+    assert_eq!(lines[0].0, crate::prompt::Part::Turn, "a sync problem is the turn's own, never left out as standing");
     // A shared checkout says it its own way; an up-to-date one says nothing.
     attempt["config"] = json!({"shared": true});
     let mut lines = vec![];
     sessions::prompt_head(&attempt, &mut lines);
-    assert!(!lines.iter().any(|l| l.contains("has diverged")));
+    assert!(!lines.iter().any(|(_, l)| l.contains("has diverged")));
     sh(&mine, &["reset", "-q", "--hard", "origin/main"]);
     assert_eq!(sessions::divergence(&mine, &env).await, "");
 }

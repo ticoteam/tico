@@ -101,7 +101,8 @@ def charge(state, ref, cost):
 
 
 def advance(flow, state, services):
-    """Run every ready thread (and every batch wait whose time has come) until it ends or waits."""
+    """Run every ready thread (and every batch wait whose time has come) until it ends or waits, or until the run
+    guard puts its automation on hold (`services.on_hold`, asked before each step): then the rest stays ready."""
     now = services.now()
     for thread in state["threads"]:
         wait = thread.get("wait") or {}
@@ -110,6 +111,8 @@ def advance(flow, state, services):
     threads, n = state["threads"], 0
     while n < len(threads):   # a find puts its items' threads in the place of its own
         if threads[n]["state"] == READY:
+            if services.on_hold():
+                break
             _step(flow, state, threads[n], services)
             services.checkpoint(state)
         else:
@@ -120,6 +123,8 @@ def advance(flow, state, services):
 
 def _status(state):
     states = {t["state"] for t in state["threads"]}
+    if READY in states:   # stopped by a hold with steps still to run
+        return "running"
     if WAITING in states:
         return "waiting"
     if FAILED in states:
@@ -230,14 +235,21 @@ def _turn(flow, state, thread, step, services, who, prompt, wait):
     # effect key: a resumed run whose turn already started gets that turn back, never its own hold's refusal.
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
+    # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
+    run_model = ({k: step[k] for k in ("model", "effort", "harness") if step.get(k)}
+                 if step.get("type") == "bot_turn" else {})
     started = services.start_turn(who, F.render_prompt(prompt, values, cap=F.MAX_PROMPT), {
         "values": values, "step": step["id"], "key": str(len(state["steps"])), "cost": state["cost"],
-        "cap": None if cap is None else float(cap), "label": _turn_label(thread)}, wait)
+        "cap": None if cap is None else float(cap), "label": _turn_label(thread), "run_model": run_model or None}, wait)
     if started is None:
         # The cap stops spending, not the run: later filters, decisions and actions still go.
         _record(state, thread, step, "spend_cap")
         return
     ref = started["ref"]
+    if started.get("held"):
+        # Screening held the webhook's text for a person (backend/screening.py): no turn, and the run goes on.
+        _record(state, thread, step, "held", {"ref": ref})
+        return
     outputs = {"ref": ref, **({"turn": started["turn"]} if started.get("turn") else {})}
     if not wait:
         _record(state, thread, step, "ok", outputs)

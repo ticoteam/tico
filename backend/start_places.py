@@ -1,6 +1,7 @@
 """Short computer reservations, separate from a worker's renewable delivery lease."""
 
 from types import MappingProxyType
+from typing import Any
 
 from .store import H
 
@@ -230,7 +231,8 @@ def summaries(c, runner_ids, settings, default=None):
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
-    out = {rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids}
+    out: dict[str, dict[str, Any]] = {rid: dict(running=0, starting=0, waiting=0, queued=0,
+                                                start_seconds=START_SECONDS) for rid in runner_ids}
     groups = {rid: {} for rid in runner_ids}
     if not runner_ids:
         return out
@@ -274,7 +276,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         if not why and runner and classify:
             refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
                                        default=default)
-            why = reasons.get(refused, 'pre-start requirements' if refused else '')
+            why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why and overloaded[rid]:
             why = 'computer busy'
         if why:
@@ -290,7 +292,8 @@ def describe(counts):
     parts = [f"{counts['running']} running", f"{counts['starting']} starting"]
     now = H.parse_ts(H.now())
     for wait in counts['waits']:
-        minutes = max(0, int((now - H.parse_ts(wait['oldest'])).total_seconds() / 60))
+        since = H.parse_ts(wait['oldest'])
+        minutes = max(0, int((now - since).total_seconds() / 60)) if now is not None and since is not None else 0
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
         reason = ("waiting: computer busy" if wait['reason'] == 'computer busy' else
                   "waiting: " + wait['reason'] if wait['reason'].startswith('at ') else "waiting for " + wait['reason'])

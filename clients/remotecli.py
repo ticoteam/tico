@@ -35,6 +35,12 @@ def visuals_from_args(args):
     return out
 
 
+def _delivery(args):
+    """The request's delivery fields from the command's --steer, --queue or --defer (clients/hubcli.py)."""
+    from clients.hubcli import delivery_of
+    return delivery_of(args)
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
@@ -82,10 +88,15 @@ def automation(client, args):
             raise APIError("input", "--input must be JSON") from None
     elif args.sub == "runs":
         fields.update({k: getattr(args, k) for k in ("limit", "before") if getattr(args, k) is not None})
+    elif args.sub in ("recent-runs", "stats"):
+        fields.update({k: getattr(args, k) for k in ("range", "status", "trigger", "owner", "limit", "before")
+                       if getattr(args, k, None) is not None})
     elif args.sub == "versions" and args.pending:
         fields["status"] = "pending"
     elif args.sub in ("restore", "discard"):
         fields["n"] = args.n
+    elif args.sub == "held":
+        fields["action"] = args.action
     return run(tool_name(args.fn), fields)
 
 
@@ -161,6 +172,8 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd in ("card", "pin"):
+        return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
         return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
@@ -230,7 +243,7 @@ def run(args, who=None):
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
               "seat list", "seat create", "seat update", "seat close", "seat draft"):
-        if fn == "seat draft" and args.file:      # the CEO Bot's draft, from a file beside it
+        if fn == "seat draft" and args.file:      # the Strategy Bot's draft, from a file beside it
             return via_tool(client, args, text=Path(args.file).read_text())
         return via_tool(client, args)
     if fn == "run export":
@@ -239,7 +252,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
         found = hubtools.run_export_full(client, args.attempt)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk"):
+    if fn in ("task child create", "task tree", "task bulk", "task model"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -322,6 +335,13 @@ def run(args, who=None):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
+        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
+    if args.cmd == "page":
+        from clients import hubtools
+        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        if fn == "page publish":
+            return hubtools.pages_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
@@ -415,7 +435,7 @@ def run(args, who=None):
         return hubtools.BY_NAME["hub_message_send"]["fn"](client, {
             "to": args.to, "text": args.text, "fyi": args.fyi, "conversation_id": args.conversation,
             "refs": args.ref or [], "steer": getattr(args, "steer", False),
-            "needs_action": getattr(args, "needs_action", False), "operation_id": key,
+            "needs_action": getattr(args, "needs_action", False), "operation_id": key, **_delivery(args),
             **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {})})
     if fn == "question answer":
         return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
@@ -433,7 +453,8 @@ def run(args, who=None):
         return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
-        payload = {"to": target(args.to), "text": text}
+        payload = {"to": target(args.to), "text": text,
+                   **({"defer_for": args.defer_for} if getattr(args, "defer_for", None) else {})}
         links = s3links.apply(client, payload, ("text",))
         return s3links.annotate(post("notes", payload)["note"], links)
     if fn == "note list":
@@ -498,8 +519,12 @@ def run(args, who=None):
                 payload["links"] = list(args.link)
             if getattr(args, "next_run", False):
                 payload["next_run"] = True
+            payload.update(_delivery(args))
             if getattr(args, "request_id", None):
                 payload["request_id"] = args.request_id
+            for field in ("model", "effort", "harness"):
+                if getattr(args, field, None):
+                    payload[field] = getattr(args, field)
             links = s3links.apply(client, payload, ("body",))
             return s3links.annotate(post("tasks", payload), links)
         if sub == "show":
@@ -510,8 +535,8 @@ def run(args, who=None):
             return client.get("tasks/" + ids[0])
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
-        if sub == "defer":
-            return post(f"tasks/{args.id}/defer", {"after": args.after, "at": args.at,
+        if sub in ("later", "defer"):           # `defer` is the older name
+            return post(f"tasks/{args.id}/later", {"after": args.after, "at": args.at,
                                                    "next_run": bool(args.next_run), "handled": bool(args.handled)})
         if sub == "waive-qa":
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
@@ -542,6 +567,7 @@ def run(args, who=None):
                 body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
+            body.update(_delivery(args))
             if getattr(args, "public", None):
                 body["public"] = True
             if getattr(args, "approval_id", None):
@@ -576,7 +602,8 @@ def run(args, who=None):
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "wait":
-            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove})
+            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove,
+                                                   **({"note": args.note} if getattr(args, "note", None) else {})})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]
@@ -624,7 +651,7 @@ def run(args, who=None):
             for field in ("verdict", "verdict_head"):
                 if getattr(args, field, None) is not None:
                     body[field] = getattr(args, field)
-            if getattr(args, "quiet", False):
+            if getattr(args, "brief", False):
                 body["quiet"] = True
             if sub == "close":
                 body["close"] = True
@@ -858,7 +885,8 @@ def bots(client, args):
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
     if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
-                   "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile") or (args.fn == "bot create" and args.record_only):
+                   "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile",
+                   "bot task-model") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()
                   if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])}

@@ -41,7 +41,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Start fresh when the topic changes**, **Quiet task triage** | Owner or admin | On or off |
+| **Start fresh when the topic changes**, **Stalled task check** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
 A department tag on a built-in does not grant permission to change it. Task rules have no separate view-only role within their department. People outside that department can read the list without gaining editing rights.
@@ -61,7 +61,7 @@ Choose from the presets offered on the row:
 
 Daily times use Pacific time. Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
-**Run now** appears only on the seven scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Quiet task triage** have no **Run now** button.
+**Run now** appears only on the seven scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
 
 Nightly learnings runs once per night. A failed, capped, or unconfigured night waits until the next night unless an authorized person uses **Run now**.
 
@@ -94,7 +94,7 @@ Only the done-and-untouched trigger and close action are available for task rule
 
 ## Which AI answered
 
-Three jobs ask Decide, Tico's question-answering model: **Stale ticket review**, **Nightly learnings** and **Quiet task triage**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
+Three jobs ask Decide, Tico's question-answering model: **Stale ticket review**, **Nightly learnings** and **Stalled task check**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
 
 | Pill | Meaning |
 |---|---|
@@ -126,13 +126,13 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Still wanted?** | Asks a task's person once whether a task idle for a week is still wanted. | Daily at 09:00 |
 | **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |
 | **Health scan** | Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have. | Hourly |
-| **Task Manager report** | Looks for quiet tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |
+| **Task Manager report** | Looks for stalled tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
 | **Unanswered questions** | On weekday mornings, sends questions unanswered for two business days back to their bots. | Hourly |
-| **Quiet task triage** (AI) | Before a stall check stays silent on a quiet task nothing has changed on, Decide reads its last six messages: it sets the wait the messages name, closes the task if it is finished, or lets one stall wake through if it is stuck; unsure changes nothing and shows in the Task Manager's report. On by default; see [Stalled tasks](tasks.md). | When it happens |
+| **Stalled task check** (AI) | Before a stall check stays silent on a stalled task nothing has changed on, Decide reads its last six messages: it sets the wait the messages name, closes the task if it is finished, or lets one stall wake through if it is stuck; unsure changes nothing and shows in the Task Manager's report. On by default; see [Stalled tasks](tasks.md). | When it happens |
 | **Stall checks** | Wakes the bot on a task nothing is moving, never one with a live session or a recorded wait, no sooner than 30 minutes after the last check and doubling to 8 hours while the task stays unchanged (only other people's comments, status, step, owner, waiting-on and related tasks count as change), and drops queued work its bot can no longer read. | Every minute |
 | **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
 | **Waiting checks** | Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task. | Hourly |
@@ -152,7 +152,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Document sync** | Refreshes linked documents from their sources. | Every few seconds |
 | **Start fresh when the topic changes** | Starts a fresh session, like Clear, when a direct-chat message changes the topic. | When it happens |
 
-**Last run** on **Meeting notes sync** and **Document sync** says "Each connection shows its own", because each connection keeps its own last run. **Start assigned tasks** has no shared run record. **Start fresh when the topic changes** and **Quiet task triage** say "Runs when it happens".
+**Last run** on **Meeting notes sync** and **Document sync** says "Each connection shows its own", because each connection keeps its own last run. **Start assigned tasks** has no shared run record. **Start fresh when the topic changes** and **Stalled task check** say "Runs when it happens".
 
 ## If a row looks wrong
 

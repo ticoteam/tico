@@ -6,6 +6,7 @@ import contextlib
 import io
 import errno
 import json
+import logging
 import time
 import hashlib
 import os
@@ -18,10 +19,19 @@ from .store import H, Problem
 from . import blob_s3
 
 
+log = logging.getLogger("tico.storage")
+
 # How long an unreachable earlier place is skipped (Blobs._open_earlier).
 EARLIER_RETRY = 300
+# A refused upload starts a fresh write check when the last one began longer ago than this (Blobs._heal).
+HEAL_AFTER = 60
 # The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
 Target = collections.namedtuple("Target", "generation settings sources s3")
+
+
+# Bytes written here this recently are never purged (backend/file_library.py `drain`): every writer stores the bytes
+# first and adds their `blobs` row in a later write, and a copy or a move lands them again after a purge looked.
+FRESH_SECONDS = 120
 
 
 class Blobs:
@@ -38,10 +48,14 @@ class Blobs:
             self._sources.selected = self._sources.kind
         self._write_failed = False
         self._write_error = ""
+        # digest -> when this server last wrote or found those bytes (FRESH_SECONDS); `purging` holds the same lock.
+        self._fresh, self._fresh_lock = {}, threading.Lock()
         self._write_lock = threading.Lock()
         self._health_lock = threading.RLock()
         self._probe_lock = threading.Lock()
         self._probe_task = None
+        # When the last write check began (monotonic), and whether a refused upload's re-check is running (`_heal`).
+        self._checked, self._healing = None, False
         self._s3_failed = set()
         self.copy_status = {"done": 0, "total": 0, "running": False, "error": "", "failed": 0}
         # The server's own storage; `configure` may put a company bucket in its place.
@@ -53,7 +67,7 @@ class Blobs:
         self._earlier_down = {}
         # Bumped by `configure`, so a copy or probe begun for one target never records against another.
         self._generation = 0
-        self._loop = None
+        self._loop = self._store = None
         # Whether this disk's files are copied to a new place on their own, and why an upload is refused when the
         # place can't take it (`configure`).
         self._copy_disk, self._paused = True, ""
@@ -157,6 +171,21 @@ class Blobs:
     def location(self):
         return self.bucket + ("/" + self.settings.blob_prefix if self.settings.blob_prefix else "")
 
+    def touch(self, digest):
+        """Mark `digest` as just written: a purge waits for it (FRESH_SECONDS)."""
+        now = time.monotonic()
+        with self._fresh_lock:
+            if len(self._fresh) > 50_000:
+                self._fresh = {d: t for d, t in self._fresh.items() if now - t < FRESH_SECONDS}
+            self._fresh[digest] = now
+
+    @contextlib.contextmanager
+    def purging(self, digest):
+        """While held, no write marks bytes as fresh: yields whether `digest` was written too recently to purge."""
+        with self._fresh_lock:
+            seen = self._fresh.get(digest)
+            yield seen is not None and time.monotonic() - seen < FRESH_SECONDS
+
     def put_staged(self, stream, digest, size, content_type="application/octet-stream"):
         """The multipart parser already hashed and spooled this stream."""
         with self._refused():
@@ -234,11 +263,19 @@ class Blobs:
         # on receipt and keeps that checksum (`holds_whole`).
         # Reads may use an unselected source; writes must wait for the probe.
         # Keep one identity for every part and cleanup even if a later check switches it.
+        self.touch(digest)
+        try:
+            self._upload_once(stream, digest, size, content_type, small_body, rate_limit, stop, at, whole)
+        finally:
+            self.touch(digest)
+
+    def _upload_once(self, stream, digest, size, content_type, small_body, rate_limit, stop, at, whole):
         with self._write_lock:
             if at is not None and at.generation != self._generation:
                 raise Problem("storage_changed", "Where new files go changed; the file was not copied", 409)
             if self._write_failed or self._sources.selected is None:
                 detail = self._write_error or "S3 storage write check is still pending"
+                self._heal()
                 raise Problem("blob_storage", detail + "; retry without discarding your file", 503, True)
             s3, kind, sources = self._s3, self._sources.kind, self._sources
             settings, bucket = self.settings, self.bucket
@@ -330,6 +367,13 @@ class Blobs:
                 and head.get("ChecksumSHA256") == base64.b64encode(bytes.fromhex(digest)).decode())
 
     def _local(self, source, digest):
+        self.touch(digest)
+        try:
+            return self._local_once(source, digest)
+        finally:
+            self.touch(digest)
+
+    def _local_once(self, source, digest):
         path = self.directory / self.key(digest)
         path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".upload-", dir=path.parent)
@@ -437,13 +481,41 @@ class Blobs:
         except OSError as exc:
             raise Problem("blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True) from exc
 
-    def storage_loop(self, store, stop, retry_interval=30 * 60):
-        # `configure` starts a fresh loop for a new target; this one ends when the target changes.
-        self._loop = stop
-        generation = self._generation
-        self.copy_local(store, stop)
-        while self._write_failed and not stop.wait(retry_interval) and generation == self._generation:
-            self.copy_local(store, stop)
+    def storage_loop(self, store, stop, retry_interval=30 * 60, first_retry=30):
+        # `configure` starts a fresh loop for a new target; this one ends when the target changes. While writes fail,
+        # or a pass ends on an error, it checks again after `first_retry` seconds, twice as long each time after,
+        # up to `retry_interval`. An error never ends it: uploads stay refused until a check passes.
+        self._loop, self._store = stop, store
+        generation, wait = self._generation, first_retry
+        while True:
+            failed = False
+            try:
+                self.copy_local(store, stop)
+            except Exception:
+                failed = True
+                log.exception("File storage check or copy failed; trying again in %s s", wait)
+            if not (failed or self._write_failed) or stop.wait(wait) or generation != self._generation:
+                return
+            wait = min(wait * 2, retry_interval)
+
+    def _heal(self):
+        """Start one write check in the background for an upload refused because the last one failed, unless one is
+        running or began within HEAL_AFTER seconds: a server heals on its next upload, not the storage loop's next try."""
+        store, stop = self._store, self._loop
+        if store is None or stop is None or stop.is_set():
+            return
+        with self._probe_lock:
+            if self._healing or (self._checked is not None and time.monotonic() - self._checked < HEAL_AFTER):
+                return
+            self._healing, self._checked = True, time.monotonic()
+        def heal():
+            try:
+                self.check_write(store, stop)
+            except Exception:
+                log.exception("File storage write check failed")
+            finally:
+                self._healing = False
+        threading.Thread(target=heal, name="tico-storage-heal", daemon=True).start()
 
     def copy_local(self, store, stop, interval=0.25):
         if not self.bucket or self.rehearsal or stop.is_set() or not self._copy_disk:
@@ -462,6 +534,8 @@ class Blobs:
                 break
             try:
                 path = self.directory / self.key(row["digest"])
+                if not path.is_file():            # a deleted file's bytes, removed since the list was read
+                    continue
                 with path.open("rb") as source:
                     if hashlib.file_digest(source, "sha256").hexdigest() != row["digest"]:
                         raise Problem("blob_integrity", "Local file failed its integrity check", 503)
@@ -499,6 +573,7 @@ class Blobs:
                     self._probe_task[2].set()
                 done, errors, cancel = threading.Event(), [], threading.Event()
                 self._probe_task = done, errors, cancel, self._generation
+                self._checked = time.monotonic()
                 class ProbeStop:
                     def is_set(self):
                         return cancel.is_set() or (stop is not None and stop.is_set())
@@ -572,8 +647,9 @@ class Blobs:
                 key = self.s3_key(hashlib.sha256(b"Tico storage write check").hexdigest(), settings)
                 result = client.create_multipart_upload(Bucket=bucket, Key=key, ServerSideEncryption="AES256")
                 pending = {"bucket": bucket, "key": key, "upload_id": result["UploadId"]}
-                self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
-                if stop is not None and stop.is_set():
+                # Recorded so a later check can abort it if this one stops here; unrecorded, it is aborted now.
+                recorded = self._write_health(store, pending, self._write_error or "S3 storage write check is still pending", location, sources)
+                if recorded and stop is not None and stop.is_set():
                     return
                 client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=pending["upload_id"])
                 pending = {}
@@ -600,11 +676,18 @@ class Blobs:
         self._write_health(store, pending, error, location, sources)
 
     def _write_health(self, store, pending, error, location=None, sources=None):
+        """Record the write check's state; whether it was recorded. Best effort: a busy database must neither count as
+        an S3 failure nor stop the check, whose result lives in memory (`_write_failed`) either way."""
         detail = {**pending, "location": location or self.location, "error": error, "credentials": (sources or self._sources).kind}
-        with self._health_lock, store.transaction() as c:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
-                      ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        try:
+            with self._health_lock, store.transaction() as c:
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,?,?) "
+                          "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                          ("blob-s3", H.now() if not error else None, H.now() if error else None, json.dumps(detail)))
+        except Exception as exc:
+            log.warning("File storage check result not recorded: %s", type(exc).__name__)
+            return False
+        return True
 
     def _copy_health(self, store):
         with store.transaction() as c:
@@ -621,6 +704,37 @@ class Blobs:
             if hashlib.sha256(data).hexdigest() != digest:
                 raise Problem("blob_integrity", "Stored file failed its integrity check", 503)
         return data
+
+
+    def purge(self, digest, kind=None):
+        """Remove `digest`'s bytes from every place this server reads them from: this computer's disk, the place new
+        files go to and each earlier place, with Tico file hosting's cleaned copy of a page or SVG (`kind`). Only for
+        bytes no row needs any more (backend/file_library.py `drain`). Raises, naming each place that refused, so the
+        caller tries again; a place that does not hold them is fine."""
+        key = self.key(digest)
+        (self.directory / key).unlink(missing_ok=True)
+        with self._write_lock:
+            places = [(self.settings, self._sources, self._s3), *((p, s, None) for p, s in self._earlier)]
+        failed = []
+        for place, sources, client in places:
+            if not place.blob_bucket:
+                continue
+            keys = [self.s3_key(digest, place)]
+            found = self.edge
+            if kind and found and location_of(place) == found["location"] \
+                    and getattr(self, "visual_ancestors", None) is not None:
+                from .tico_storage import _visual, _visual_key
+                path = _visual(digest, kind, self.visual_ancestors)[0]
+                keys.append(_visual_key(place, path))
+                self._edge_seen.pop((found["location"], path), None)
+            try:
+                s3 = client if client is not None else sources.client_for(sources.kind)
+                for each in keys:
+                    s3.delete_object(Bucket=place.blob_bucket, Key=each)
+            except Exception as exc:
+                failed.append(f"{location_of(place)}: {type(exc).__name__}")
+        if failed:
+            raise RuntimeError("could not remove the bytes from " + ", ".join(failed))
 
 
 def register(c, who, digest, size, name, content_type="application/octet-stream"):

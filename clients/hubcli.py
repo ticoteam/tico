@@ -7,8 +7,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
 `hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
 
     hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer] [--needs-action]
-                                           --fyi: expects no reply, takes no conversation or references
+    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer | --queue |
+                    --defer [30m|4h|2d|never]] [--needs-action]
+                                           --fyi: expects no reply, takes no conversation or references; to a bot,
+                                           --steer goes into its running turn, --queue right after it, --defer with
+                                           its next turn (at the latest after the time given)
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
     hub message redact <message-id> [--label L]   take a secret (read from stdin) out of a message
@@ -18,12 +21,17 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            its next_before reads it. The run's prompt names it
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
-    hub note create <bot> "<text>" [--text-file f]  a quiet note: wakes nobody; the bot's next run reads it
+    hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
+                                           run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
     hub note delete <id>                   take back a note no run has carried yet
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
-                    [--goal ID] [--dry-run] the checks a create would fail, nothing written
-                    [--next-run]           for a bot: no wake; its next run carries the task
+                    [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
+                    nothing written
+    hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
+                                           the model this task's runs use; --clear puts it back on the bot's task model
+                    [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
+                                           one starts by the time given (24h when none; --next-run is the old name)
                                            blocked on a person? --owner <person> --parent <your task>
                                            for a person, the body's first paragraph is the ask (as --note below)
     hub task ask <id> "<question>"
@@ -37,7 +45,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
-    hub task comment <id> "<text>"         on the record with your name
+    hub task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
+                                           with your name. --steer goes into its bot's running turn, --queue right
+                                           after it, --defer with its next turn on the task (at the latest 24h, or
+                                           the time given), --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
     hub task ask-resolve <id> <question-id> [--quote "<their words>"]
@@ -64,9 +75,13 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
                                            blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
-    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
                                            wait on a task, a PR merging or a release; one wake when it happens
-    hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
+    hub task snooze <id> --until DATE [--note "..."]
+                                           set it aside until DATE: off the lists and quiet until then
+    hub task later <id> --after ID|--at DATE|--next-run|--handled
+                                           a deferred task this run carried and will not do now: when to pick it up
+                                           (`hub task defer` is the old name)
     hub task unsnooze <id>                 bring a snoozed task back now
     hub task waive-qa <id> --head SHA --reason "..."
                                            a person waives a Dev ticket's In QA step for that exact head; a waiver,
@@ -84,6 +99,24 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub file touch <file-id|url>           you edited a linked document again: it moves to the top
     hub file import s3://bucket/key [--title T] [--task ID]  copy an object with this computer's credentials
     hub file list [--bot X] [--limit N]    what is on the page, newest activity first
+    hub file search "<words>" [--limit N]  every file you may read, by title and text, with an excerpt
+    hub file delete <id>                   the owner deletes a file for good: its bytes leave storage
+    hub page publish <file.html> [--title T] [--cadence none|daily|weekly|monthly] [--as-of YYYY-MM-DD]
+                  [--task ID] [--replaces PAGE]
+                                           a page people see with an updated line; again adds a version
+                                           (docs/pages.md)
+    hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
+    hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
+    hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
+    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug> or task:<id>
+    hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+                                           tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
+                                           latest_pages; a bot pins to its own sidebar or task
+    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
+    hub card remove <id>
+    hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
+    hub pin update <pin-id> [--size S] [--position N]
+    hub pin remove <pin-id>
     hub doc list [--prefix sales/]         the company's internal docs by path
     hub doc read <id|path|external:id|manual:name>  one doc in full, with its revision and provenance
     hub doc search "<words>" [--manual] [--market]
@@ -111,7 +144,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            (task actions, approval decisions, answers to bots' questions)
     hub assistant learn "<line>" [--company]
                                            in a person's own chat: save what they taught you, in their own
-                                           layer (--company: the CEO Bot, about the company, owner's chat only)
+                                           layer (--company: the Strategy Bot, about the company, owner's chat only)
     hub assistant learned                  what a person's chat bot has learned (What it has learned)
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
@@ -124,20 +157,24 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
-    hub goal status <id> auto              let the CEO Bot set the colour again (ends a colour set by hand)
-    hub goal refresh [--goal ID ...]       the CEO Bot's status pass: work automatic colours out again
+    hub goal status <id> auto              let the Strategy Bot set the colour again (ends a colour set by hand)
+    hub goal refresh [--goal ID ...]       the Strategy Bot's status pass: work automatic colours out again
     hub goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     hub goal checkin-list <id>             a goal's check-ins, newest first
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     hub goal company                       the company's Vision and Description (read-only)
-    hub goal ceo-bot                       the CEO Bot: its level (1 Passive to 3), regular checks and today's Needs you count
-    hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
-                                           the CEO Bot at level 2+: one item for several bots' same ask of a person
-    hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
-    hub goal ceo-bot-decide "<reason>" '<changes json>' [--goal-id ID]
-                                           the CEO Bot at level 3: one decision alone on bot tasks, logged with Undo
-    hub goal ceo-bot-log [--before CURSOR] the CEO Bot log (the owner only): what it decided alone, proposed instead
+    hub goal strategy-bot                       the Strategy Bot: its level (1 Passive to 3), regular checks and today's
+                                                Needs you count
+    hub goal strategy-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
+                                           the Strategy Bot at level 2+: one item for several bots' same ask of a person
+    hub goal strategy-bot-level3-offer          the Strategy Bot: record the level-3 offer its Monday note made (when
+                                                is due)
+    hub goal strategy-bot-decide "<reason>" '<changes json>' [--goal-id ID]
+                                           the Strategy Bot at level 3: one decision alone on bot tasks, logged with
+                                           Undo
+    hub goal strategy-bot-log [--before CURSOR] the Strategy Bot log (the owner only): what it decided alone, proposed
+                                                instead
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top] [--bet ID|--bet ""]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
@@ -169,7 +206,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
     hub strategy diff --from N --to N      what changed between two versions
-    hub strategy guides                    deprecated: the CEO Bot's drafting questions; the exercises are lenses
+    hub strategy guides                    deprecated: the Strategy Bot's drafting questions; the exercises are lenses
     hub strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
     hub strategy publish [--note "..."] [--revision N]
     hub strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
@@ -181,8 +218,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            proposal create --kind strategy_draft
     hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
     hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
-                                           run one (the owner, the CEO Bot; a market lens also the Librarian); waits up
-                                           to 60 s and prints the run with its summary; --draft: the owner's draft
+                                           run one (the owner, the Strategy Bot; a market lens also the Librarian);
+                                           waits up to 60 s and prints the run with its summary; --draft: the owner's
+                                           draft
     hub lens show <run-id>                 one run: answers, result, changes
     hub lens runs [--lens ID]              runs, newest first, with their summaries
     hub approval request --kind send|spend|publish|merge|support|task_cap|spend_limit --payload-file f.json [--task ID] [--supersedes ID]
@@ -230,6 +268,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub automation delete <id>
     hub automation run <id> [--input JSON] run now with a sample trigger output; prints the run
     hub automation runs <id> [--limit N] [--before RUN]
+    hub automation held <id> release|drop  end a run-guard hold: queue its held runs, or skip them
+    hub automation recent-runs [--range 5m|1h|24h|7d] [--status S] [--trigger T] [--owner O] [--limit N] [--before B]
+                                           runs across every automation you may see, newest first
+    hub automation stats [--range 5m|1h|24h|7d]
+                                           runs, failures and cost per automation over the range
     hub automation versions <id> [--pending]
     hub automation restore <id> <n>        make version n current (a pending one keeps its number)
     hub automation discard <id> <n>        drop a pending version (a proposal); the automation stays as it is
@@ -291,7 +334,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub seat create <title> [--description D] [--reports-to R] [--team G]
                                            add a seat under you or someone below you; update <seat> / close <seat>
     hub seat draft <seat> (--text T | --file F)
-                                           CEO Bot: draft the job description of a seat the owner opened
+                                           Strategy Bot: draft the job description of a seat the owner opened
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
     hub org reports-to <bot:slug|human:id> <manager> [--on-behalf-of turn]
@@ -369,6 +412,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            to get its repository and finishes by itself (`--help`: the file's shape)
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
+    hub bot task-model <bot> [<model>] [--effort E] [--harness H] [--clear]
+                                           the model the bot's tasks run on; --clear puts them back on its own
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
     hub bot budget <bot> [--hour N] [--day N] | release
                                            read or set a bot's runs per hour and per day (0 no limit, default follows the
@@ -438,7 +483,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            when the report runs (business = hourly, weekdays 08:00 to 18:00)
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
-    hub stall-triage [--on|--off]          quiet task triage: Decide reads a quiet task's last messages before its stall check
+    hub stall-triage [--on|--off]          stalled task check: Decide reads a stalled task's last messages before its stall check
                                            stays silent (the owner or an admin; on by default)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
@@ -469,6 +514,7 @@ then that person (docs/how-it-works.md, "Calling the API from a script").
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -603,6 +649,40 @@ def cmd_task_dry_run(args, who):
 
 
 # ----------------------------------------------------------------------------- parser
+DEFER_FOR = re.compile(r"^(never|[1-9][0-9]{0,5}[mhd])$")
+
+
+def defer_for(word):
+    """A defer's deadline (backend/delivery.py): 30m, 4h, 2d or never. Empty is the default deadline."""
+    if word and not DEFER_FOR.match(word):
+        raise argparse.ArgumentTypeError("a defer is 30m, 4h, 2d or never")
+    return word
+
+
+def delivery_flags(s, *, steer=True, goal=False, steer_help=None):
+    """How a send reaches its bot (backend/delivery.py): --steer, --queue or --defer [time], at most one. --defer sets
+    `defer_for` ('' for the default deadline); the others set `delivery`."""
+    ways = s.add_mutually_exclusive_group()
+    if steer:
+        ways.add_argument("--steer", dest="delivery", action="store_const", const="steer",
+                          help=steer_help or "into the bot's running turn now (right after it if its harness can't steer)")
+    ways.add_argument("--queue", dest="delivery", action="store_const", const="queue",
+                      help="right after the bot's current turn there, or now if it is idle")
+    ways.add_argument("--defer", dest="defer_for", nargs="?", const="", type=defer_for, metavar="30m|4h|2d|never",
+                      help="wake nobody: it goes in with the bot's next turn there, at the latest after this time")
+    if goal:
+        ways.add_argument("--goal", dest="delivery", action="store_const", const="goal",
+                          help="make the text the goal of the task's bot session (plain text, no files)")
+    return ways
+
+
+def delivery_of(args):
+    """{delivery, defer_for} for a request body from delivery_flags' arguments; {} when none was given."""
+    if getattr(args, "defer_for", None) is not None:
+        return {"delivery": "defer", **({"defer_for": args.defer_for} if args.defer_for else {})}
+    return {"delivery": args.delivery} if getattr(args, "delivery", None) else {}
+
+
 def quiet_hours(word):
     """0 to 24, whole hours."""
     try:
@@ -707,8 +787,10 @@ def parser():
     s.add_argument("--fyi", action="store_true", help="an fyi: it expects no reply, and takes no conversation or references")
     s.add_argument("--conversation")
     s.add_argument("--ref", action="append")
-    s.add_argument("--steer", action="store_true",
-                   help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
+    ways = delivery_flags(s, steer=False)
+    ways.add_argument("--steer", action="store_true",
+                      help="into the bot's running turn now; with --ref task:<id> you requested, into its owner's "
+                           "running turn on that task")
     s.add_argument("--visual", action="append", metavar="PATH",
                    help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
                         "already in Tico); repeat for more")
@@ -743,13 +825,15 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="question answer")
 
-    note = sub.add_parser("note", help="a quiet note for a bot: no run now, its next run reads it").add_subparsers(dest="sub")
-    s = note.add_parser("create", help="leave a bot a quiet note: no run now, its next run reads it")
+    note = sub.add_parser("note", help="a deferred message for a bot: no run now, its next run reads it").add_subparsers(dest="sub")
+    s = note.add_parser("create", help="leave a bot a deferred message: no run now, its next run reads it")
     s.add_argument("to")
     s.add_argument("text", nargs="?", default="")
     s.add_argument("--text-file", dest="text_file")
+    s.add_argument("--defer", dest="defer_for", type=defer_for, metavar="30m|4h|2d|never",
+                   help="start a run by this time if none carried it (never when omitted)")
     s.set_defaults(fn="note create")
-    s = note.add_parser("list", help="quiet notes, newest first: left for you and by you")
+    s = note.add_parser("list", help="deferred messages (notes), newest first: left for you and by you")
     s.add_argument("--to")
     s.add_argument("--from", dest="sender")
     s.add_argument("--since", help="an ISO time, or 24h / 3d")
@@ -789,6 +873,71 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--task")
     s.set_defaults(fn="file import")
+    s = files.add_parser("search", help="every file you may read, by title and text")
+    s.add_argument("q")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="file search")
+    s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
+    s.add_argument("id")
+    s.set_defaults(fn="file delete")
+    page = sub.add_parser("page", help="pages: HTML a bot keeps up to date, with Tico's updated line").add_subparsers(dest="sub")
+    s = page.add_parser("publish", help="publish an .html file from this checkout; again adds a version")
+    s.add_argument("path")
+    s.add_argument("--title")
+    s.add_argument("--cadence", choices=["none", "daily", "weekly", "monthly"])
+    s.add_argument("--as-of", dest="as_of", help="the date the data is from, YYYY-MM-DD")
+    s.add_argument("--task", help="the task it is for; it shows at the top of that task")
+    s.add_argument("--replaces", help="the id of an older page this one takes the place of")
+    s.add_argument("--scope", choices=["task", "bot"])
+    s.set_defaults(fn="page publish")
+    s = page.add_parser("list", help="pages you may read, newest first")
+    s.add_argument("--bot")
+    s.add_argument("--task")
+    s.add_argument("--archived", action="store_true", default=None)
+    s.add_argument("--limit", type=int)
+    s.add_argument("--cursor")
+    s.set_defaults(fn="page list")
+    s = page.add_parser("show", help="one page's status")
+    s.add_argument("id")
+    s.set_defaults(fn="page show")
+    s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
+    s.add_argument("id")
+    s.add_argument("--restore", action="store_true", default=None)
+    s.set_defaults(fn="page archive")
+    cards = sub.add_parser("card", help="Tico's built-in cards on the Dashboard, team pages, sidebars and tasks").add_subparsers(dest="sub")
+    s = cards.add_parser("list", help="what is pinned at a place, with what each card shows you")
+    s.add_argument("--place")
+    s.set_defaults(fn="card list")
+    for name, helptext in (("add", "add a built-in card, pinned at --place"), ("update", "change a card's heading or settings")):
+        s = cards.add_parser(name, help=helptext)
+        s.add_argument("template" if name == "add" else "card")
+        s.add_argument("--title")
+        s.add_argument("--team")
+        s.add_argument("--weeks", type=int)
+        s.add_argument("--count", type=int)
+        s.add_argument("--kpi")
+        if name == "add":
+            s.add_argument("--place")
+            s.add_argument("--size", choices=["small", "medium", "large"])
+        s.set_defaults(fn="card " + name)
+    s = cards.add_parser("remove", help="remove a card and its pins")
+    s.add_argument("card")
+    s.set_defaults(fn="card remove")
+    pins = sub.add_parser("pin", help="pin a page or a card at a place").add_subparsers(dest="sub")
+    s = pins.add_parser("add", help="pin page:<file id> or card:<id> at a place")
+    s.add_argument("place")
+    s.add_argument("item")
+    s.add_argument("--size", choices=["small", "medium", "large"])
+    s.add_argument("--position", type=int)
+    s.set_defaults(fn="pin add")
+    s = pins.add_parser("update", help="resize or move a pin")
+    s.add_argument("pin")
+    s.add_argument("--size", choices=["small", "medium", "large"])
+    s.add_argument("--position", type=int)
+    s.set_defaults(fn="pin update")
+    s = pins.add_parser("remove", help="unpin")
+    s.add_argument("pin")
+    s.set_defaults(fn="pin remove")
     docs = sub.add_parser("doc", help="read and search team docs and external sources, write internal docs, ask the Librarian").add_subparsers(dest="sub")
     s = docs.add_parser("archive", help="archive an internal Doc with your rights")
     s.add_argument("ref")
@@ -834,6 +983,7 @@ def parser():
     s.add_argument("text")
     s.add_argument("--conversation", dest="conversation_id")
     s.add_argument("--command", action="store_true")
+    delivery_flags(s)
     s.add_argument("--visual", action="append", metavar="PATH",
                    help="a picture, SVG, HTML page, video or audio to show with it (a file in your checkout, or ID@VERSION "
                         "already in Tico); repeat for more")
@@ -854,7 +1004,7 @@ def parser():
     s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
     s.add_argument("text", help="one short line, in their words")
     s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
-                   help="the CEO Bot in the owner's chat: about the company, not how they like things")
+                   help="the Strategy Bot in the owner's chat: about the company, not how they like things")
     s.set_defaults(fn="assistant learn")
     assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
         .set_defaults(fn="assistant learned")
@@ -943,8 +1093,10 @@ def parser():
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
-    s.add_argument("--next-run", "--quiet", dest="next_run", action="store_true",
-                   help="for a bot: do not wake it; its next run, whatever starts it, carries this task")
+    ways = delivery_flags(s, steer=False)
+    # The older words for --defer, kept: a deferred task with the default deadline.
+    ways.add_argument("--next-run", dest="next_run", action="store_true", help="the older name for --defer")
+    ways.add_argument("--quiet", dest="next_run", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--dry-run", dest="dry_run", action="store_true",
                    help="print the checks a create would fail and write nothing")
     s.add_argument("--request-id", dest="request_id",
@@ -953,6 +1105,10 @@ def parser():
     s.add_argument("--type", help="task type id or name; defaults to General")
     s.add_argument("--step", help="step id or name in the type")
     s.add_argument("--number", type=int, help="movers: keep an imported ticket's number")
+    s.add_argument("--model", help="the model this bot-owned task's runs use, from `hub bot model`'s list; leave out "
+                                   "for the bot's task model")
+    s.add_argument("--effort", help="the reasoning effort that model takes")
+    s.add_argument("--harness", help="the harness that runs that model")
     s.set_defaults(fn="task create")
     types = task.add_parser("type", help="manage task types (movers only)").add_subparsers(dest="type_sub")
     bots_help = ("what every bot may do with the type's tasks: parties (only the bots on each task), "
@@ -1037,7 +1193,8 @@ def parser():
                         "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
                         "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
-    s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--brief", action="store_true", help="keep the note on the task; chat hears only the title and status")
+    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)     # brief's older name
     s.add_argument("--type", help="task type id or name")
     s.add_argument("--step", help="step id or name; sets status; an empty string clears it")
     s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
@@ -1054,7 +1211,8 @@ def parser():
     s.add_argument("--note", help="the result, in a few plain sentences")
     s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"])
     s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
-    s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--brief", action="store_true", help="keep the note on the task; chat hears only the title and status")
+    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)     # brief's older name
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task done")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
@@ -1074,6 +1232,7 @@ def parser():
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
                                            "person needs the what-happens line)")
+    delivery_flags(s, goal=True)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
@@ -1159,6 +1318,7 @@ def parser():
     s.add_argument("--on", dest="wait_on", required=True,
                    help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
                         "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--note", help="what to check when the pr: or release: wait fires, in the wake; one or two sentences")
     s.add_argument("--remove", action="store_true", help="take the wait off instead")
     s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
@@ -1234,13 +1394,26 @@ def parser():
     s = task.add_parser("run", help="start a bot's task now, as the task")
     s.add_argument("id")
     s.set_defaults(fn="task run")
+    s = task.add_parser("model", help="the model this task's runs use, with its effort and harness; --clear puts it "
+                                      "back on the bot's task model")
+    s.add_argument("id")
+    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
+    s.add_argument("--effort")
+    s.add_argument("--harness")
+    s.add_argument("--clear", action="store_true",
+                   help="clear the task's own model: its runs use the bot's task model again")
+    s.set_defaults(fn="task model")
     s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")
     s.add_argument("--until", required=True,
                    help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
+    s.add_argument("--note", help="what to check when the snooze ends, in the owner's wake: what you are waiting for and "
+                                  "where to look (at most 500 characters)")
     s.set_defaults(fn="task snooze")
-    s = task.add_parser("defer", help="a quiet task carried into this run that you will not do now: say when it is "
+    # `defer` is its older name: a date makes it a snooze-like hold, not a delivery (backend/delivery.py).
+    s = task.add_parser("later", aliases=["defer"],
+                        help="a deferred task carried into this run that you will not do now: say when it is "
                         "picked up again (it gets one run of its own then); with none, your next run is handed it again")
     s.add_argument("id")
     when = s.add_mutually_exclusive_group(required=True)
@@ -1248,7 +1421,7 @@ def parser():
     when.add_argument("--at", help="at this time: ISO-8601 date-time with a zone, or a date (start of day, Pacific)")
     when.add_argument("--next-run", action="store_true", help="with your next run, whatever starts it")
     when.add_argument("--handled", action="store_true", help="this run is done with it for now (nothing to resume)")
-    s.set_defaults(fn="task defer")
+    s.set_defaults(fn="task later")
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")
@@ -1269,7 +1442,8 @@ def parser():
     scope.add_argument("--team", help="only what involves this team")
     s.set_defaults(fn="replay show")
     goal = sub.add_parser("goal", help="goals: list, read-back, create and edit",
-                          description="Read back goal changes in the owner's CEO Bot chat. Saves nothing without a plain yes; "
+                          description="Read back goal changes in the owner's Strategy Bot chat. "
+                                      "Saves nothing without a plain yes; "
                                       "cite that yes with --on-behalf-of turn (or its message id) on each save.").add_subparsers(dest="sub")
     s = goal.add_parser("read-back", help="Tico writes the draft; saves nothing without a plain yes",
                         description="Post 1 to 20 changes as Tico's read-back. Saves nothing without a plain yes. "
@@ -1322,7 +1496,7 @@ def parser():
     s.add_argument("--bet", dest="bet_id", help='the strategy bet it serves; "" unlinks it')
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="goal update")
-    s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
+    s = goal.add_parser("refresh", help="the Strategy Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
     s.set_defaults(fn="goal refresh")
     s = goal.add_parser("checkin", help="how the owner says the goal is going, in their words")
@@ -1339,27 +1513,32 @@ def parser():
     s.set_defaults(fn="goal needs-you")
     s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
     s.set_defaults(fn="goal company")
-    s = goal.add_parser("ceo-bot", help="the CEO Bot: its level, regular checks and today's Needs you count per person")
-    s.set_defaults(fn="goal ceo-bot")
-    s = goal.add_parser("ceo-bot-merge", help="the CEO Bot at level 2+: one item for several bots' same ask of a person")
+    s = goal.add_parser("strategy-bot", help="the Strategy Bot: its level, "
+                                             "regular checks and today's Needs you count per person")
+    s.set_defaults(fn="goal strategy-bot")
+    s = goal.add_parser("strategy-bot-merge", help="the Strategy Bot at level 2+: "
+                                                   "one item for several bots' same ask of a person")
     s.add_argument("person", help="the person they all wait on (a person id)")
     s.add_argument("title")
     s.add_argument("question", help="the one question that answers them all")
     s.add_argument("tasks", nargs="+", help="2 to 10 task ids waiting on that person")
-    s.set_defaults(fn="goal ceo-bot-merge")
-    s = goal.add_parser("ceo-bot-level3-offer", help="the CEO Bot: record the level-3 offer its Monday note made")
-    s.set_defaults(fn="goal ceo-bot-level3-offer")
-    s = goal.add_parser("ceo-bot-decide", help="the CEO Bot at level 3: one decision alone on bot tasks, with Undo")
+    s.set_defaults(fn="goal strategy-bot-merge")
+    s = goal.add_parser("strategy-bot-level3-offer", help="the Strategy Bot: "
+                                                          "record the level-3 offer its Monday note made")
+    s.set_defaults(fn="goal strategy-bot-level3-offer")
+    s = goal.add_parser("strategy-bot-decide", help="the Strategy Bot at level 3: "
+                                                    "one decision alone on bot tasks, with Undo")
     s.add_argument("reason", help="why, in one sentence the owner reads in the log")
     s.add_argument("changes", help='a JSON list of 1 to 10 changes: {"do": "create", "owner": "<bot>", "title": "..."}, '
                                    '{"do": "reorder"|"close", "task_id": "..."}, {"do": "reassign", "task_id": "...", '
                                    '"owner": "<bot>"}')
     s.add_argument("--goal-id", dest="goal_id", help="the goal this serves")
-    s.set_defaults(fn="goal ceo-bot-decide")
-    s = goal.add_parser("ceo-bot-log", help="the CEO Bot log (the owner only): what it decided alone and what it "
+    s.set_defaults(fn="goal strategy-bot-decide")
+    s = goal.add_parser("strategy-bot-log", help="the Strategy Bot log (the owner only): "
+                                                 "what it decided alone and what it "
                                             "proposed instead")
     s.add_argument("--before", help="next_before from the previous page")
-    s.set_defaults(fn="goal ceo-bot-log")
+    s.set_defaults(fn="goal strategy-bot-log")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")
@@ -1484,7 +1663,8 @@ def parser():
     s.add_argument("--from", dest="from_n", type=int, required=True)
     s.add_argument("--to", dest="to_n", type=int, required=True)
     s.set_defaults(fn="strategy diff")
-    s = strategy.add_parser("guides", help="deprecated: the CEO Bot's drafting questions; the exercises are lenses")
+    s = strategy.add_parser("guides", help="deprecated: the Strategy Bot's drafting "
+                                           "questions; the exercises are lenses")
     s.set_defaults(fn="strategy guides")
     bet = strategy.add_parser("bet", help="owner only: add, change or retire a bet").add_subparsers(dest="subsub")
 
@@ -1820,6 +2000,21 @@ def parser():
     s.add_argument("--limit", type=int)
     s.add_argument("--before", help="`next` from the page before")
     s.set_defaults(fn="automation runs")
+    s = auto.add_parser("held", help="end a run-guard hold: release queues its held runs, drop skips them")
+    s.add_argument("id")
+    s.add_argument("action", choices=["release", "drop"])
+    s.set_defaults(fn="automation held")
+    s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
+    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
+    s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
+    s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event or system")
+    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--before", help="`next` from the page before")
+    s.set_defaults(fn="automation recent-runs")
+    s = auto.add_parser("stats", help="runs, failures and cost per automation over a range")
+    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
+    s.set_defaults(fn="automation stats")
     s = auto.add_parser("versions")
     s.add_argument("id")
     s.add_argument("--pending", action="store_true", help="proposals only")
@@ -2164,7 +2359,7 @@ def parser():
     s.add_argument("--reports-to", dest="reports_to")
     s.add_argument("--team")
     s.set_defaults(fn="seat update")
-    s = seat.add_parser("draft", help="the CEO Bot's draft of a seat's job description, on the task asking for it")
+    s = seat.add_parser("draft", help="the Strategy Bot's draft of a seat's job description, on the task asking for it")
     s.add_argument("seat")
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--text", help="the job description")
@@ -2379,7 +2574,7 @@ def parser():
     s.add_argument("--capture-stream", choices=("on", "off"),
                    help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not")
     s.add_argument("--subscribe-updates", metavar="templates,tico|none",
-                   help="Subscribe to updates, as quiet notes for its next run: templates (its template's changes), "
+                   help="Subscribe to updates, as deferred messages for its next run: templates (its template's changes), "
                         "tico (Tico releases), both, or none")
     s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
     s.set_defaults(fn="bot update")
@@ -2468,6 +2663,15 @@ def parser():
     s.add_argument("--effort")
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
+    s = bot.add_parser("task-model", help="the model the bot's tasks run on, with its effort and harness; --clear puts "
+                                          "them back on the bot's own model")
+    s.add_argument("bot")
+    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
+    s.add_argument("--effort")
+    s.add_argument("--harness")
+    s.add_argument("--clear", action="store_true", help="the bot's tasks run on its own model again")
+    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+    s.set_defaults(fn="bot task-model")
     for verb in ("pause", "resume"):
         s = bot.add_parser(verb, help=f"{verb} a bot (BotOps)")
         s.add_argument("bot")
@@ -2703,7 +2907,7 @@ def parser():
     s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
-    s = sub.add_parser("stall-triage", help="quiet task triage: Decide reads a quiet task before its stall check stays silent (docs/tasks.md)")
+    s = sub.add_parser("stall-triage", help="stalled task check: Decide reads a stalled task before its stall check stays silent (docs/tasks.md)")
     on = s.add_mutually_exclusive_group()
     on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
     on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")

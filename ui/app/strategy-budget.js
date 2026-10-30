@@ -62,9 +62,9 @@ function budgetFigure(row, rollup) {
 }
 
 // ----------------------------------------------------------------- the tree
-// Org's chart (orgTreeByParent: groups, reports_to, the Strategy Bot's place) without recruiting seats, as nodes
-// {key, kind, id, ref, name, kids, parent, depth}. Helpers are off the chart but spend, so they get a branch of their own;
-// a bot the hub lists that the chart leaves out (a branch, a bot this person hides) goes under Other.
+// Org's chart (orgTreeByParent: groups, reports_to) without recruiting seats, as nodes {key, kind, id, ref, name, kids,
+// parent, depth}. Helpers (the Strategy Bot too) are off the chart but spend, so they get a branch of their own; a bot
+// the hub lists that the chart leaves out (a branch, a bot this person hides) goes under Other.
 function budgetTree(limits) {
   const by = orgTreeWithHelpers(orgTreeByParent()), nodes = new Map();
   const groupOf = id => (S.orgGroups || []).find(g => g.id === id);

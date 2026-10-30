@@ -22,7 +22,6 @@ const lensRunId = () => {
   return rest.startsWith('/') ? decodeURIComponent(rest.slice(1)) : '';
 };
 const lensRunHref = id => LENSES_ROUTE + '/' + encodeURIComponent(id);
-const lensCeo = () => { const n = typeof ceoBotName === 'function' ? ceoBotName() : 'CEO Bot'; return n === 'CEO Bot' || n === 'Strategy Bot' ? 'the ' + n : n; };
 const lensErrorCode = error => error?.body?.error?.code || '';
 const lensFirstLine = text => String(text || '').split('\n').find(line => line.trim()) || '';
 
@@ -184,7 +183,7 @@ function lensFlowRender() {
       <p class="lens-note" data-lens-error hidden></p>
       <div class="goal-actions lens-actions"><button class="ghost" type="button" data-lens-back${flow.i === 0 ? ' disabled' : ''}>Back</button><span class="spacer"></span>
         <button class="primary" type="submit" data-lens-next>${last ? 'Run' : 'Next'}</button></div>
-      ${step ? `<button class="linkish lens-skip" type="button" data-lens-skip>Skip, let ${esc(lensCeo())} assume</button>` : ''}
+      ${step ? `<button class="linkish lens-skip" type="button" data-lens-skip>Skip, let the Assistant assume</button>` : ''}
     </form>`;
   lensFlowBind(dlg, flow, step, last);
   (dlg.querySelector('.lens-rows input, textarea, .lens-scores input, .lens-pill input') || dlg.querySelector('[data-lens-next]'))?.focus();
@@ -341,7 +340,7 @@ function lensResultHtml(run, result, owner) {
   const sharpen = (result.sharpen || []).map((s, i) => {
     const text = typeof s === 'string' ? s : s?.text || '', task = tasks[String(i)];
     return `<li class="lens-change" data-lens-sharpen-row="${i}"><span class="lens-ctext">${esc(text)}</span>${
-      task ? `<span class="lens-done muted">Asked · <a href="#/task/${encodeURIComponent(task)}">task</a></span>` : owner ? `<button class="ghost strat-mini" type="button" data-lens-sharpen="${i}">Ask the Librarian</button>` : ''}</li>`;
+      task ? `<span class="lens-done muted">Asked · <a href="#/task/${encodeURIComponent(task)}">task</a></span>` : owner ? `<button class="ghost strat-mini" type="button" data-lens-sharpen="${i}">Ask</button>` : ''}</li>`;
   }).join('');
   const proposal = run.proposal_id ? `<p class="lens-proposal muted" data-lens-proposal>${owner ? `Sent to you as a <a href="${NEEDS_YOU}">proposal</a>` : 'Sent to the owner as a proposal'}</p>` : '';
   return `${stratText(result.summary) ? `<p class="lens-summary">${esc(result.summary)}</p>` : ''}

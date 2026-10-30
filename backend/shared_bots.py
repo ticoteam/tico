@@ -78,6 +78,13 @@ def refuse_copy(c, bot):
                       f"change {source} instead", 409)
 
 
+def model_bot(c, bot):
+    """The bot whose model decides who may choose a model its tasks run on: a branch's is its original's, since it
+    follows the original's model (FOLLOWED). Its tasks' own choices are still the task's, so only the rights come from
+    the original."""
+    return source_of(declared(c, bot)) or bot
+
+
 def copy_slug(source, person):
     slug = re.sub(r"[^a-z0-9]+", "-", f"{source}-{person}".lower()).strip("-")
     if len(slug) > 80:
@@ -303,4 +310,6 @@ def retire_assignments(c):
                 except H.Refused:
                     pass
             c.execute("UPDATE tasks SET owner=?,updated=? WHERE id=?", (owner, H.now(), task_id))
+            from . import task_run_models
+            task_run_models.moved(c, H.KEEPER, task_id)
             H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})

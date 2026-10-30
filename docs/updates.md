@@ -341,7 +341,7 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 ## The built-in bots' instructions
 
-The Assistant, BotOps, the Librarian and the CEO Bot keep their instructions and playbooks in a repository on the computer that
+The Assistant, BotOps, the Librarian and the Strategy Bot keep their instructions and playbooks in a repository on the computer that
 runs them. When a release changes one of those files in its template (`AGENT.md`, `playbooks/`, `skills/`), the computer brings that file up
 before the bot's next run, once per start of the runner; a file the release did not change keeps whatever the bot improved since. What the
 bot had before is kept in the repository's history. The bot's own notes, knowledge, state and playbooks it wrote are never touched
@@ -351,15 +351,11 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 
 ### Moving to Automations (one time)
 
-This release runs routines and wake rules as Automations. The first start moves them, once: each routine, wake rule,
-inbox, hourly spend limit and low turn budget becomes its Automations equivalent, one write per object, and a restart
-part way goes on where it stopped. What cannot move stays as it was and is listed once in a task for the owner;
-otherwise the owner gets one notice. The old tables keep their rows.
-
-An install whose database still holds any of these starts only when it opts in. Without the setting the server logs
-`This release moves rules and routines to Automations once. Set TICO_MIGRATE_TO_AUTOMATIONS=1 to go ahead` and exits
-before it writes anything, so the updater rolls back to the release before (above). A new install, or one with nothing
-to move, starts without it; so does one that has already moved, with or without it.
+This release runs routines and wake rules as Automations. The first start of v0.5.0 moves them by itself, once: each
+routine, wake rule, inbox, hourly spend limit and low turn budget becomes its Automations equivalent, one write per
+object, and a restart part way goes on where it stopped. What cannot move stays as it was and is listed once in a task
+for the owner; otherwise the owner gets one notice. The old tables keep their rows. No setting is needed. A new install,
+or one with nothing to move, does nothing extra.
 
 1. Before updating, see what will move, with the new release's image (the old one has no report). It reads a copy and
    never writes to the database, so it can run beside the running server:
@@ -371,12 +367,13 @@ to move, starts without it; so does one that has already moved, with or without 
    ```
 
    (A checkout: the same command from the new release's code, `--db` set to `TICO_DB` from its `server.env`.) It says
-   whether the start needs the setting, and lists every routine, rule and system job, what each becomes, and anything
-   that stays, with the reason.
-2. Add `TICO_MIGRATE_TO_AUTOMATIONS=1` to `.env` (a checkout: its `server.env`), then update.
+   what the next start moves, and lists every routine, rule and system job, what each becomes, and anything that stays,
+   with the reason.
+2. Update as usual.
 3. After the start, check the log for `redesign cutover ...: N moved to automations`, run the report again (every
-   object shows `moved`, `runs as before`, `kept` or `unchanged`; none `pending`), and open Automations. The setting can
-   stay; it does nothing once the move is done.
+   object shows `moved`, `runs as before`, `kept` or `unchanged`; none `pending`), and open Automations.
+
+To go back, restore the snapshot taken before the update and run v0.4.17 again ([Rolling back](#rolling-back)).
 
 ### You're on 0.2: update to get one-tap support
 

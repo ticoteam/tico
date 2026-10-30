@@ -23,7 +23,8 @@ const TASKS = [
   base('t-deck', 'Review the launch deck', {requester: 'human:sam'}),
   base('t-call', 'Call Murphy back about the lease', {requester: 'bot:support'}),
   base('t-vendor', 'Switch the payroll vendor', {owner: 'bot:analyst', requester: 'human:ana', status: 'waiting', note: 'Waiting on Ana to pick the vendor.'}),
-  // A bot's question the CEO Bot merged into an item of its own: the server leaves it out of Needs you, so the page does.
+  // A bot's question the Strategy Bot merged into an item of its own: the server leaves it out of Needs you, so the
+  // page does.
   base('t-merged', 'Which pricing page first?', {requester: 'bot:ops',
     ask: {id: 'q-merged', body: 'Which pricing page launches first?', from_actor: 'bot:ops', to_actor: 'human:ana'}}),
   // Bots' own tasks with a question to Ana over three days old: one merged, which stays out of Older questions too.
@@ -120,7 +121,7 @@ async function shot(target, name) {
     await page.waitForFunction(() => !document.querySelector('#task-body [data-group="need:decide"] [data-recommend]'));
 
     // Overview: the count and what went away on its own.
-    await page.evaluate(() => { location.hash = '#/overview'; });
+    await page.evaluate(() => { location.hash = '#/overview/campus'; });
     const strip = page.locator('#overview-needs');
     await strip.waitFor();
     assert.equal(await strip.locator('strong').textContent(), 'Needs you 6');

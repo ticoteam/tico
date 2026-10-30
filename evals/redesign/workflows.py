@@ -1544,14 +1544,14 @@ HEALTH_BOT = "health-monitor"   # migration_fixture.HEALTH
 def handler(org, f, actor):
     """The name a teammate is counted under, or None when it is left out (the Health Monitor, a built-in off the
     chart). The Inbox Managers retire and the person's Assistant handles the mail; the CEO Bot is the Strategy Bot."""
-    from .cases.migration_fixture import CEO, HEALTH, INBOXES
+    from .cases.migration_fixture import HEALTH, INBOXES, STRATEGY
     slug = str(actor or "").split(":", 1)[-1]
     if slug == HEALTH or "health" in slug:
         return None
     for person, (bot, _mailbox) in INBOXES.items():
         if slug == bot or f["assistants"].get(slug) == person:
             return "inbox handler for " + person
-    if slug in (CEO, "strategy-bot", "strategy"):
+    if slug in (STRATEGY, "strategy-bot", "strategy"):
         return "strategy"
     return slug
 

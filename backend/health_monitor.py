@@ -652,7 +652,7 @@ def _session_checks(c):
 
 
 def _quiet_work_checks(c):
-    """A quiet task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
+    """A deferred task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
     (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
     from . import quiet_work
     out = []
@@ -661,11 +661,11 @@ def _quiet_work_checks(c):
         # A private task's title stays out of a finding other people read; its number or short id names it.
         name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
         out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
-                            f"{bot} was handed a quiet task and has not worked it",
+                            f"{bot} was handed a deferred task and has not worked it",
                             f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
                             f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
                             "up again.",
-                            f"{bot}: work it, or say when to pick it up (hub task defer {task['id']} --after <task> | "
+                            f"{bot}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
                             "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
@@ -725,16 +725,33 @@ def _open_task(c, key):
     return task if task and task["status"] not in ("done", "closed", "declined") else None
 
 
-def scan(c, auth, settings):
-    """One pass. Returns the keys that opened or woke a task; nothing when the Health Monitor is off.
+def check(store, auth, settings):
+    """The scheduler's pass: `scan` in two steps. The findings are read in one read snapshot, outside the write lock,
+    and only the changes are written after it, in a short transaction. Read under the lock, the hourly scan held every
+    runner call for seven seconds on TIDY (12:26 UTC, Oct 29, 2026). Same shape as invariants.sweep."""
+    with store.read() as r:
+        if not active(r):
+            return []
+        found = findings(r, settings)
+    with store.transaction() as c:
+        return apply(c, auth, found)
 
-    Every finding seen counts once a scan. Only a new finding, one whose severity rose, or one back after its task was
-    finished wakes the bot; seeing it again otherwise moves its count and last-seen time and starts no run."""
+
+def scan(c, auth, settings):
+    """One pass in one transaction. Returns the keys that opened or woke a task; nothing when the Health Monitor is off."""
+    if not active(c):
+        return []
+    return apply(c, auth, findings(c, settings))
+
+
+def apply(c, auth, found):
+    """Records what `findings` found and wakes the bot for what is new. Every finding seen counts once a scan. Only a new
+    finding, one whose severity rose, or one back after its task was finished wakes the bot; seeing it again otherwise
+    moves its count and last-seen time and starts no run."""
     if not active(c):
         return []
     from .watchers import deliver
     now, woke = H.now(), []
-    found = findings(c, settings)
     keys = {item["key"] for item in found}
     for item in found:
         row = c.execute("SELECT * FROM health_findings WHERE key=?", (item["key"],)).fetchone()

@@ -118,6 +118,9 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("sendAssistantMessage", "post", "/api/v2/assistant/messages", json={"text": "what's waiting on me"})
     call("getNeedsYou", "get", "/api/v2/needs-you")
     call("getNeedsYou", "get", "/api/v2/needs-you", params={"count": "true"})
+    call("getPlace", "get", "/api/v2/places/dashboard")
+    call("savePlace", "put", "/api/v2/places/dashboard", json={})
+    call("listCards", "get", "/api/v2/cards")
     call("searchMeetings", "get", "/api/v2/meetings/search")
     call("searchDocs", "get", "/api/v2/context/search", params={"q": "plan"})
     doc = call("createInternalDoc", "post", "/api/v2/docs", json={"title": "Refund policy", "body": "Refund in 30 days."})["doc"]
@@ -169,6 +172,10 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("listGoalProposals", "get", "/api/v2/goal-proposals")
     call("getGoalsNeedsYou", "get", "/api/v2/goals/needs-you")
     call("decideGoalProposal", "post", "/api/v2/goal-proposals/%s/decide" % proposal["id"], json={"decision": "confirm"})
+    turned = call("createGoalProposal", "post", "/api/v2/goal-proposals", json={
+        "kind": "kpi_definition", "kpi_id": kpi["id"], "payload": {"unit": "percent"}, "reason": "Spell it out"})["proposal"]
+    call("decideGoalProposal", "post", "/api/v2/goal-proposals/%s/decide" % turned["id"], json={"decision": "reject"})
+    call("addGoalProposalReason", "post", "/api/v2/goal-proposals/%s/note" % turned["id"], json={"note": "pct is fine"})
     call("getUsage", "get", "/api/v2/usage")
     call("getUsageLimits", "get", "/api/v2/usage/limits")
     call("setUsageDefault", "put", "/api/v2/usage/limits", json={"monthly_usd": 500, "count_subscription": False})

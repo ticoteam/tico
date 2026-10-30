@@ -230,10 +230,11 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
         assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
-    # A person owns the task and the bot that asked it answers them.
+    # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
+    # (backend/delivery.py); one that names the bot wakes it.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET owner='human:ana', requester='bot:ops' WHERE id=?", (tid,))
-    said = post(api, f"tasks/{tid}/comments", {"text": "Which app is still open?"})
+    said = post(api, f"tasks/{tid}/comments", {"text": "@ops which app is still open?"})
     assert said["woke"] and said["comment"]["to_actor"] == "bot:ops"
     queued = get(api, f"tasks/{tid}")["execution"] or {}
     assert (queued["message_id"], queued["bot"], queued["state"], queued["from_person"]) == (
@@ -242,7 +243,8 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
     assert (working["attempt_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
-    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": True, "mention": []}
+    # The next plain comment waits for the bot; the box offers @ops to wake it.
+    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": False, "mention": ["ops"]}
     # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
     # the composer offers none, and one sent anyway wakes nobody.
     assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": "ops", "wakes": False, "mention": []}

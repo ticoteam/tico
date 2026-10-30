@@ -106,8 +106,9 @@ AWAITED_EVENTS = {
     "subtask": ("subtask_finished", "a subtask moved or finished"),
     "worktree": ("worktree", "the worktree the task waited for is ready"),
     "watcher": ("watcher", "something the bot watches moved or ended"),
-    "resume": ("resume", "a quiet task's stored resume condition came true"),
+    "resume": ("resume", "a deferred task's stored resume condition came true"),
     "milestone": ("milestone", "a pull request it waits for merged or a release it waits for was published"),
+    "reconnected": ("reconnected", "the account or credential its reconnect card waited for works again"),
 }
 # Events that wake under a rule of the same name. Another builder's new event names a `refs.wake` and lands here.
 WAKE_EVENTS = {
@@ -1107,6 +1108,13 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     title = " ".join(templating.render(str(params.get("title") or ""), values, cap=300).split()) \
         or _default_text(event, values)
     body = _wake_text({"text": params.get("body")}, values, ctx, _default_text(event, values))
+    if event == "webhook.received":
+        # A call from outside is screened for prompt injection first (backend/screening.py): long text waits for the
+        # model after this write, short text gets the patterns' warning line now.
+        from . import screening
+        waits, body = screening.rule_task(conn, rule_id, by, slug, title, body, ctx)
+        if waits:
+            return {**result, "ok": True, "detail": waits}
     conn.execute("SAVEPOINT rule_task")
     try:
         options = {}

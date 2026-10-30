@@ -1,38 +1,47 @@
-// Journey 2 on a real hub (redesign TESTING.md §L3): Dana's Automations list, open one, switch it off and on, run it
+// Journey 2 on a real hub (redesign TESTING.md §L3): Dana's Automations list, open one, switch it off and on from its header, run it
 // with a sample message (⋯ Test run), and the run lands open in Runs with each step's real output: the Filter's rule,
 // the Decide's answer from the hub's judge (a steady stand-in, no model), the note. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
 const enabled = async page => (await automationNamed(page, 'Inbox triage')).enabled;
+// The hub's answer, once the switch's write has landed (or after about three seconds).
+const settled = async (page, want) => { for (let i = 0; i < 20 && await enabled(page) !== want; i++) await page.waitForTimeout(150); return enabled(page); };
 
 run('redesign-e2e-automations', ['org', 'toured', 'automations'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-  await page.locator('.au-row').first().waitFor({timeout: t(15000)});
-  const names = await page.locator('.au-row').allInnerTexts();
+  await page.locator('tr.au-row').first().waitFor({timeout: t(15000)});
+  const names = await page.locator('tr.au-row').allInnerTexts();
   for (const n of ['What wakes bots', 'Inbox triage', 'Route mail', 'Weekly digest', 'Standup notes'])
     assert.ok(names.some(x => x.includes(n)), `${tag}: ${n} listed: ${names}`);
   const triage = await automationNamed(page, 'Inbox triage');
   const wakes = await automationNamed(page, 'What wakes bots');
-  // The top of the org may pause the read-only built-in: its row has a switch.
-  assert.equal(wakes.can_edit, false);
-  assert.equal(wakes.can_pause, true);
-  assert.equal(await page.locator(`.au-row[data-row="${wakes.id}"] .au-sw`).count(), 1, `${tag}: the built-in has a switch`);
+  assert.equal(await page.locator('tr.au-row .au-sw').count(), 0, `${tag}: no switches in the list`);
   assert.equal(await sideways(page), false);
   await shot(page, `${tag}-01-list`);
 
-  // Off and on again from the list row: the hub agrees each time.
-  const sw = page.locator(`.au-row[data-row="${triage.id}"] .au-sw`);
+  // The top of the org may pause the read-only built-in: its header has the switch, and says it is fixed.
+  assert.equal(wakes.can_edit, false);
+  assert.equal(wakes.can_pause, true);
+  await page.locator(`tr.au-row[data-row="${wakes.id}"] a`).click();
+  await page.locator('.au-hd .au-name:text("What wakes bots")').waitFor();
+  assert.equal(await page.locator('.au-hd [data-on-cur]').count(), 1, `${tag}: the built-in has a switch`);
+  assert.match(await page.locator('.au-pane').innerText(), /Built-in: can’t be edited or deleted/);
+  await page.locator('.au-crumb .au-up').click();
+
+  // Open it, then off and on again from its header: the hub agrees each time.
+  await page.locator(`tr.au-row[data-row="${triage.id}"] a`).click();
+  await page.locator('.au-hd [data-on-cur]').waitFor();
+  const sw = page.locator('.au-hd [data-on-cur]');
   await sw.click();
-  await page.waitForFunction(id => document.querySelector(`.au-row[data-row="${id}"]`).classList.contains('off'), triage.id);
-  assert.equal(await enabled(page), false, `${tag}: off on the hub`);
+  await page.waitForFunction(() => !document.querySelector('.au-hd [data-on-cur]').checked);
+  assert.equal(await settled(page, false), false, `${tag}: off on the hub`);
   await shot(page, `${tag}-02-off`);
   await sw.click();
-  await page.waitForFunction(id => !document.querySelector(`.au-row[data-row="${id}"]`).classList.contains('off'), triage.id);
-  assert.equal(await enabled(page), true, `${tag}: on again`);
+  await page.waitForFunction(() => document.querySelector('.au-hd [data-on-cur]').checked);
+  assert.equal(await settled(page, true), true, `${tag}: on again`);
 
-  // Open it: the trigger and the three steps.
-  await page.locator(`.au-row[data-row="${triage.id}"] a`).click();
+  // The trigger and the three steps.
   await page.locator('.au-hd .au-name:text("Inbox triage")').waitFor();
   await page.locator('.au-card[data-open="sort"]').waitFor();
   assert.match(await page.locator('.au-trig').innerText(), /dana@acme\.example/);
@@ -83,7 +92,8 @@ run('redesign-e2e-automations', ['org', 'toured', 'automations'], async ({hub, b
   await page.locator('.au-rx .au-sl').first().waitFor();
   const promo = await page.locator('.au-rx .au-sl').allInnerTexts();
   assert.match(promo[0], /promo.*Archive · waiting/, `${tag}: the rule archived it, queued: ${promo}`);
-  assert.equal(await page.locator('.au-rr').first().locator('.au-ro').innerText(), 'Waiting');
+  // The hub's clock is frozen, so both runs start at the same instant and their order is a tie: read the open one.
+  assert.equal(await page.locator('.au-rr[aria-expanded="true"]').locator('.au-ro').innerText(), 'Waiting');
   await shot(page, `${tag}-06-run-promo`);
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();

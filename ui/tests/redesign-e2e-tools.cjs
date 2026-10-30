@@ -15,7 +15,9 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   assert.match(await row.innerText(), /acme|billing/i);
   assert.equal(await row.locator('.lc-n').innerText(), '1', `${tag}: one teammate has it`);
   assert.match((await page.locator('.lc-gh').allInnerTexts())[0], /IN USE/);
-  assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, `${tag}: Tools is current`);
+  // The rail marks the page once config has rearranged it (redesign.js), which may land after the list.
+  await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached', timeout: t(5000)})
+    .catch(() => assert.fail(`${tag}: Tools is current (${JSON.stringify(page.errors)})`));
   const h = await row.evaluate(el => el.getBoundingClientRect().height);
   assert.ok(h < 64, `${tag}: one dense row (${h}px)`);
   assert.equal(await sideways(page), false);

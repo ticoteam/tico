@@ -1,7 +1,7 @@
 # Weekly market briefing
 
 Once a week the Librarian writes one short page on what changed in your market, and the server works out which of your
-bets it touches. The CEO Bot looks only at those.
+bets it touches. The Strategy Bot looks only at those.
 
 [Strategy](strategy.md) · [Librarian](librarian.md) · [Market watch](market-watch.md) · [Routines](routines.md)
 
@@ -41,15 +41,15 @@ chip for each bet it touches. **Read** opens the page. With no briefing the line
 
 ## What follows
 
-When a briefing is posted the server emits `market.briefing` for that week. The CEO Bot has a routine on it, **Market
+When a briefing is posted the server emits `market.briefing` for that week. The Strategy Bot has a routine on it, **Market
 briefing**, which opens a task only when the briefing touches a bet. For each touched bet it asks whether the bet is
-still right. Most weeks the answer is yes and nothing more happens. When it is not, the CEO Bot files one
+still right. Most weeks the answer is yes and nothing more happens. When it is not, the Strategy Bot files one
 `strategy_draft` proposal in your Needs you, marked as from the weekly briefing. Publishing stays your click.
 
 A replacement that touches different bets than before opens one more task for them.
 
-A new CEO Bot starts with this routine. A CEO Bot that already exists keeps the routines it has: add this one as an
-automation on the event `market.briefing` with a CEO Bot turn that follows `playbooks/market-briefing.md`
+A new Strategy Bot starts with this routine. A Strategy Bot that already exists keeps the routines it has: add this one as an
+automation on the event `market.briefing` with a Strategy Bot turn that follows `playbooks/market-briefing.md`
 ([Routines](routines.md)).
 
 ## Commands

@@ -12,7 +12,7 @@ from . import goals as G
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
-from .store import H, encode, sweep_deltas, sweep_idempotency, sweep_mail
+from .store import H, encode, sweep_deltas, sweep_events, sweep_idempotency, sweep_mail
 
 
 def stamp(at):
@@ -68,8 +68,7 @@ def run_health_scan(store, auth, at, failures=None):
     # finding the last scan did not have.
     with SR.recording(store, "health_scan", failures, "health_monitor") as run:
         from . import health_monitor
-        with store.transaction() as c:
-            woke = health_monitor.scan(c, auth, store.settings)
+        woke = health_monitor.check(store, auth, store.settings)
         run.did(SR.words_of(woke, "new finding", "No new findings"))
 
 
@@ -100,6 +99,26 @@ def run_engineering_exceptions(store, auth, at, failures=None):
         with store.transaction() as c:
             woke = pipeline_exceptions.deliver(c, stamp(at))
         run.did(SR.words_of(woke, "manager woken", "No new exceptions"), quiet=not woke)
+
+
+def run_invariants(store, auth, at, failures=None):
+    # Plain SQL over the hub (backend/invariants.py): no model. Reads take no write lock; a run is recorded only when a
+    # check changed, inside the one write transaction that changes it. A quiet sweep writes nothing.
+    from . import invariants
+    run = SR.Run("invariant_checks")
+
+    def record(c, counts):
+        firing = [key for key, n in counts.items() if n]
+        SR.keep(c, run.did(f"{len(firing)} failing: {', '.join(firing)}" if firing else "All checks pass"))
+
+    try:
+        invariants.sweep(store, auth, store.settings, at, record=record)
+    except Exception as exc:
+        run.error = SR.failure_words(exc)
+        if failures is None:
+            raise
+        failures.append({"invariants": type(exc).__name__})
+        SR.write(store, run)
 
 
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
@@ -147,8 +166,10 @@ class Scheduler:
         self.go_lives_checked = None
         self.gateway_checked = None
         self.billing_checked = None
+        self.cloud_checked = None
         self.stale_checked = None
         self.hosted_checked = None
+        self.invariants_checked = None
         self.marks = {}             # a controlled job's last start in this process, if its record could not be written
 
     def due(self, key, at, cfgs, last):
@@ -250,11 +271,16 @@ class Scheduler:
         from . import quiet_work
         with locked("quiet_work") as c:
             quiet_work.due(c, stamp(at), failures)
+        # Deferred items whose deadline came: one run per session carries them (backend/delivery.py).
+        from . import delivery
+        with locked("deferred") as c:
+            delivery.due(c, stamp(at), failures)
         from . import assigned_start
         if not self.store.settings.rehearsal:
             unstarted = []
             try:
-                with self.store.read() as c:
+                # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
+                with self.store.read_transaction() as c:
                     saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
                                       (assigned_start.CURSOR_KEY,)).fetchone()
                     cursor = [H._json(saved[0], "") if saved else ""]
@@ -269,7 +295,8 @@ class Scheduler:
                     with isolated(c, "assigned_start", task_id, failures):
                         assigned_start.sweep(c, stamp(at), [task_id])
             from . import queue_refusals
-            with self.store.read() as c:
+            # One snapshot for the whole scan, so the bots' shared reads (runners, providers, holds) are read once.
+            with self.store.read_transaction() as c:
                 observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
             for change in observations:
                 with locked("queue_refusals:" + change[0]) as c:
@@ -376,6 +403,11 @@ class Scheduler:
         except Exception as exc:
             failures.append({"automations": type(exc).__name__})
         try:
+            from . import screening
+            screening.tick(self.store)                         # outside text a restart left waiting for its check
+        except Exception as exc:
+            failures.append({"screening": type(exc).__name__})
+        try:
             from . import webhook_delivery
             webhook_delivery.ensure()                          # a delivery worker that died comes back on the next tick
         except Exception as exc:
@@ -400,7 +432,8 @@ class Scheduler:
                     webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
                 sweep_idempotency(self.store, stamp(at))
                 sweep_mail(self.store, stamp(at))
-                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep two weeks
+                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
+                sweep_events(self.store, stamp(at))            # bookkeeping events keep 30 days (store.EVENT_SWEEP_ACTIONS)
                 from . import events
                 events.sweep(self.store, stamp(at))            # live events keep a day
                 from . import triggers
@@ -411,6 +444,8 @@ class Scheduler:
                 performance.sweep(self.store, at.timestamp())  # computers' minutes become ten-minute points
                 from . import support_triage
                 support_triage.sweep(self.store, stamp(at))    # a support ticket waits here at most an hour
+                from . import screening
+                screening.sweep(self.store, stamp(at))         # a screened item waits at most an hour; verdicts keep 30 days
                 run.did("Done")
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
@@ -424,17 +459,22 @@ class Scheduler:
                         G.refresh(c, [goal_id])
                 run.did("Done")
             try:
-                # The CEO Bot's Monday note: started once above Passive, paused at Passive (backend/ceo_bot.py `reconcile`).
-                from . import ceo_bot
+                # The Strategy Bot's Monday note: started once above Passive, paused at Passive (backend/strategy_bot.py
+                # `reconcile`).
+                from . import strategy_bot
                 with self.store.transaction() as c:
-                    ceo_bot.reconcile(c)
+                    strategy_bot.reconcile(c)
             except Exception as exc:
-                failures.append({"ceo_bot": type(exc).__name__})
+                failures.append({"strategy_bot": type(exc).__name__})
         # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
         # (hourly by default), Still wanted? (daily) and ask go-ahead.
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
+        # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
+        if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
+            self.invariants_checked = at
+            run_invariants(self.store, self.execution.auth, at, failures)
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
@@ -455,6 +495,17 @@ class Scheduler:
                     from . import tico_storage
                     tico_storage.sync_later(self.store, report=True)
                 run.did("Checked" if due else "No Gateway key set")
+        from . import cloud_access
+        if cloud_access.due(self.store, at, self.cloud_checked):
+            # A Tico Cloud company's access (open, frozen or locked) from HQ: every minute while it is a cloud company,
+            # hourly otherwise (backend/cloud_access.py). On its own thread; nothing at all without a gateway key.
+            self.cloud_checked = at
+            from . import gateway_connection
+            from .credentials import Vault
+            with self.store.read() as c:
+                linked = gateway_connection.connected(c, self.store.settings)
+            if linked:
+                cloud_access.sync_later(self.store, Vault(self.store), self.store.settings)
         # Tico file hosting's keys last an hour: HQ is asked again every 5 minutes while the company has it, and
         # before they end (backend/tico_storage.py `_plan`). On its own thread; nothing at all without it.
         from . import tico_storage

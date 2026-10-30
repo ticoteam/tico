@@ -34,7 +34,7 @@ function system(role) {
     job('due_reminders', 'Due reminders', {schedule: 'Every 10 seconds', group: 'reminders', when: ['every 10 seconds'], then: ['tell a bot when one of its tasks reaches its due time']}),
     job('approval_expiry', 'Approval expiry', {group: 'reminders', then: ['take approvals and asks nobody will act on out of Needs you']}),
     job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']}),
-    job('stall_triage', 'Quiet task triage', ctl({ai: true, group: 'checks', records: false, schedule: 'When it happens',
+    job('stall_triage', 'Stalled task check', ctl({ai: true, group: 'checks', records: false, schedule: 'When it happens',
       when: ['a quiet task nothing has changed on'], then: ['set its wait, close it, or let one wake through']})),
     job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, records: false, group: 'chat', schedule: 'When it happens',
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
@@ -165,7 +165,7 @@ const saved = async (page, writes, count, key) => {
         assert.equal(await row(page, 'still_wanted').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
-        // Quiet task triage runs on a happening: a switch, no schedule choice, no Run now (the server has nothing to run).
+        // Stalled task check runs on a happening: a switch, no schedule choice, no Run now (the server has nothing to run).
         assert.equal(await row(page, 'stall_triage').locator('[data-sysr-on]').count(), 1);
         assert.equal(await row(page, 'stall_triage').locator('[data-sysr-run], [data-sysr-preset]').count(), 0);
         // Health scan: the owner changes it; an admin reads it and is told why.

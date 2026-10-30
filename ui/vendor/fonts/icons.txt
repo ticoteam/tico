@@ -28,6 +28,7 @@ check
 check_circle
 chevron_left
 chevron_right
+close
 co_present
 code
 code_blocks
@@ -81,6 +82,7 @@ lightbulb
 link
 local_library
 local_shipping
+lock
 logout
 loyalty
 mail

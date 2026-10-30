@@ -5,7 +5,7 @@ import collections
 import json
 
 from backend import (auto_tasks, agents, execution, lifecycle, pipeline_stats, profiles, rooms, start_places,
-                     update_feeds, views, task_models, wake_presets)
+                     report_managers, update_feeds, views, task_models, wake_presets)
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -64,6 +64,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
+                    "manages_reports": report_managers.switch_on(declared),
                     "wake": wake_presets.effective(declared),
                     "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
@@ -231,3 +232,101 @@ def test_hot_reads_do_not_grow_with_bots(tmp_path, monkeypatch):
     few, many = measured
     assert all(few[k] > 0 and many[k] > 0 for k in few), (few, many)
     assert all(many[k] - few[k] <= 4 for k in few), (few, many)
+
+
+def open_work(api, slugs):
+    """Each bot owns two open tasks, one private, and has a status line, a goal and a claim limited to its task."""
+    with api.app.state.store.transaction() as c:
+        for slug in slugs:
+            first = None
+            for k in range(2):
+                task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 1)
+                first = first or task
+            H.status_set(c, "bot:" + slug, slug, state="idle", focus="Working", task_id=first["id"])
+            c.execute("INSERT INTO bot_control(bot,draining,claim_task) VALUES(?,?,?)", (slug, 0, task["id"]))
+            c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
+                      "SELECT ?,conversation_id,?,'Ship it','active','human:ana',?,? FROM tasks WHERE id=?",
+                      ("g-" + slug, slug, H.now(), H.now(), first["id"]))
+
+
+def list_statements(api, monkeypatch, token="ana-test"):
+    """The bot list as `token` gets it, and the statements it took. Each request starts from cold roster and row caches."""
+    import contextlib
+    store, seen = api.app.state.store, []
+    store.roster_rows = {}
+    store.row_cache = type(store.row_cache)()
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(seen.append)
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+                return borrowed()
+            patched.setattr(store, name, traced)
+        response = api.get("/api/v2/bots", headers=T.headers(token))
+    assert response.status_code == 200, response.text
+    return response.json(), len(seen)
+
+
+def test_bot_list_statements_do_not_grow_with_bots_that_have_open_tasks(api, monkeypatch):
+    """Five bots and forty bots, each with open tasks, asks and a private task: the list reads each table once for all
+    of them, so the forty cost what the five do. Per bot, the waiting checks and the step names were read one bot at a time."""
+    small = [f"s{n:02d}" for n in range(5)]
+    add_bots(api, {slug: {} for slug in small})
+    open_work(api, small)
+    few_rows, few = list_statements(api, monkeypatch)
+    big = [f"b{n:02d}" for n in range(35)]
+    add_bots(api, {slug: {} for slug in big})
+    open_work(api, big)
+    many_rows, many = list_statements(api, monkeypatch)
+    assert len(many_rows) == len(few_rows) + 35 and {row["slug"] for row in many_rows} >= set(small + big)
+    assert few > 0 and many <= few + 2, (few, many)
+
+
+def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
+    """A long task history must not make the planner scan every task for the bots' `owner IN (...)` and
+    `requester IN (...)` parts (on TIDY v0.5.1, which has no covering task indexes, that scan took 33 ms a read)."""
+    from backend.task_privacy import status_tasks_sql
+    store = api.app.state.store
+    bots = [f"t{n:02d}" for n in range(60)]
+    add_bots(api, {slug: {} for slug in bots})
+    with store.transaction() as c:
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
+                        "done" if n % 9 else "open", H.now(), H.now(), 0) for n in range(4000)])
+        c.execute("ANALYZE")
+    marks = ",".join("?" * len(bots))
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"),
+                                            [*("bot:" + b for b in bots)] * 4)]
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status" in line for line in plan), plan
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status" in line for line in plan), plan
+    assert not [line for line in plan if line.startswith("SCAN tasks") and "tasks_private_" not in line], plan
+
+
+def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
+    """The private tasks of a bot's status rows come from tasks_private_status, which holds the columns status reads
+    (status, waiting_on). On tasks_private_parties each private row was a table read for them, its body's pages
+    included: on a multi-GB hub that was most of a status page's time, as random reads."""
+    from backend.task_privacy import status_tasks_sql
+    store = api.app.state.store
+    bots = [f"t{n:02d}" for n in range(60)]
+    add_bots(api, {slug: {} for slug in bots})
+    with store.transaction() as c:
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,private) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
+                        "done" if n % 9 else "open", H.now(), H.now(), int(n % 5 == 0)) for n in range(4000)])
+        c.execute("ANALYZE")
+    marks = ",".join("?" * len(bots))
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"),
+                                            [*("bot:" + b for b in bots)] * 4)]
+    assert any("COVERING INDEX tasks_private_status" in line for line in plan), plan
+    assert not any("tasks_private_parties" in line for line in plan), plan

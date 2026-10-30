@@ -2,13 +2,13 @@
 
 An endpoint belongs to a person (`created_by`), who sees through it what they could see in Tico: `publish` builds one
 message per distinct owner, and a task they cannot read produces nothing for them. A bot cannot make an endpoint. It
-asks, a person approves, and the person owns what is made (`requested_by` names the bot). The CEO Bot sends nothing.
+asks, a person approves, and the person owns what is made (`requested_by` names the bot). The Strategy Bot sends
+nothing.
 
 `publish` runs in the caller's write transaction and only inserts: one `webhook_events` row for the event and one
 `webhook_sends` row for each endpoint that should hear of it, so a rolled-back change tells nobody. The workers in
 backend/webhook_delivery.py post them after the commit. A producer calls it with one line and it never raises on that
-path: a failure is rolled back to a savepoint, logged, and the producer's own write goes on.
-"""
+path: a failure is rolled back to a savepoint, logged, and the producer's own write goes on."""
 import base64
 import hashlib
 import json
@@ -240,9 +240,9 @@ def listening(c):
     return c.execute("SELECT 1 FROM webhooks WHERE deleted_at IS NULL LIMIT 1").fetchone() is not None
 
 
-def _is_ceo(actor):
-    from . import ceo_bot
-    return actor == H.bot_actor(ceo_bot.SLUG)
+def _is_strategy_bot(actor):
+    from . import strategy_bot
+    return actor == H.bot_actor(strategy_bot.SLUG)
 
 
 def _refresh(c):
@@ -283,7 +283,7 @@ def publish(c, type, subject, data, actor, *, only=None, revision=None):
     journal while any endpoint exists (paused ones too, for "Send missed"), and every enabled endpoint subscribed to
     `type` gets a message built through its owner's read view, at most MAX_PER_EVENT of them. With
     `only` (an endpoint id) it sends to that one and raises Refused when it cannot: the endpoint is missing, paused
-    or deleted, the sender is the CEO Bot or a bot whose send switch is off, or the endpoint's owner may not read
+    or deleted, the sender is the Strategy Bot or a bot whose send switch is off, or the endpoint's owner may not read
     the subject. `revision` makes the event id repeatable, so a retried write queues nothing twice."""
     if only is not None:
         return _publish_only(c, str(type), str(subject), data or {}, actor, only, revision)
@@ -291,7 +291,7 @@ def publish(c, type, subject, data, actor, *, only=None, revision=None):
         name = canonical(type)
         # One indexed query when nobody listens, which is nearly always.
         every = c.execute("SELECT * FROM webhooks WHERE deleted_at IS NULL ORDER BY created, id").fetchall()
-        if not name or not every or _is_ceo(actor):
+        if not name or not every or _is_strategy_bot(actor):
             return 0
         hooks = [h for h in every if h["enabled"] and subscribed(json.loads(h["events_json"]), name)]
         c.execute("SAVEPOINT webhook_publish")
@@ -332,8 +332,8 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
         raise Refused("That endpoint does not exist")
     if not hook["enabled"]:
         raise Refused("That endpoint is paused")
-    if _is_ceo(actor):
-        raise Refused("The CEO Bot does not send webhooks")
+    if _is_strategy_bot(actor):
+        raise Refused("The Strategy Bot does not send webhooks")
     if H.is_bot(actor):
         from . import mail_settings
         if not (mail_settings.stored(c, H.actor_id(actor)) or {}).get("outbound_send"):
@@ -558,11 +558,11 @@ def may_manage(who, hook=None):
 
 def may_send(c, who, hook, name):
     """Who may send a custom event to an endpoint: a person who manages it; a bot only with its send switch on, and
-    only to an endpoint that listens for that name; never the CEO Bot."""
+    only to an endpoint that listens for that name; never the Strategy Bot."""
     if is_person(who):
         may_manage(who, hook)
         return
-    if who.role != "bot" or _is_ceo(who.actor):
+    if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots with sending switched on send webhooks", 403)
     from . import mail_settings
     if not (mail_settings.stored(c, H.actor_id(who.actor)) or {}).get("outbound_send"):
@@ -763,7 +763,7 @@ def create(c, vault, who, body):
     if is_person(who):
         owner_only_http(who, spec["allow_http"])
         return _insert(c, vault, who, spec, who.actor, headers=body.headers)
-    if who.role != "bot" or _is_ceo(who.actor):
+    if who.role != "bot" or _is_strategy_bot(who.actor):
         raise Problem("forbidden", "Only people and bots ask for webhook endpoints", 403)
     if body.headers:
         raise Problem("forbidden", "A person sets custom headers; a bot asks without them", 403)
@@ -1040,7 +1040,7 @@ def _working(c, who, hook_id):
 def recover_failed(c, who, hook_id, since):
     """Every send that gave up since `since` goes out again, same ids and bodies (a receiver that kept the first one
     still drops the repeat). At most REPLAY_BATCH at a time; `more` says run it again."""
-    hook = _working(c, who, hook_id)
+    _working(c, who, hook_id)
     at = _since(since)
     ids = [r["id"] for r in c.execute("SELECT id FROM webhook_sends WHERE webhook_id=? AND state='failed' AND next_attempt>=? "
                                       "ORDER BY next_attempt LIMIT ?", (hook_id, at, REPLAY_BATCH + 1))]

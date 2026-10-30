@@ -714,7 +714,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         key: Arc::new(key),
         python: Arc::new(python.trim_end_matches('/').into()),
         trusted_proxies: Arc::new(gateway::trusted_proxies(
-            &std::env::var("TICO_TRUSTED_PROXIES").unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
+            &std::env::var("TICO_TRUSTED_PROXIES")
+                .unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
         )?),
         // The backend closes a keep-alive connection after 5 s idle (backend/server.py). Dropping ours first means no
         // request is sent on a connection the backend is closing, which would come back as a bare 502.
@@ -758,7 +759,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Some(public) = public {
         let gateway = gateway::routes(app.clone());
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(public, gateway.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+            if let Err(error) = axum::serve(
+                public,
+                gateway.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 eprintln!("screen gateway stopped: {error}");
                 std::process::exit(1);
             }

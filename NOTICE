@@ -23,6 +23,10 @@ It includes third-party software, kept under its own license:
       BSD-style notice in its header. Includes pako (ui/vendor/novnc/vendor/pako/), MIT License.
       License text: licenses/MPL-2.0.txt, ui/vendor/novnc/LICENSE.txt and ui/vendor/novnc/vendor/pako/LICENSE
 
+  ui/vendor/fonts/inter-variable.woff2 (a subset of Inter 4.1 built by scripts/build-text-font.py)
+      Inter, Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter), SIL Open Font
+      License 1.1. License text: ui/vendor/fonts/LICENSE-inter.txt
+
   ui/vendor/fonts/material-symbols-outlined.woff2 (a subset built by scripts/build-icon-font.py)
   ui/assets/bot-symbols/
       Material Symbols (Google), Apache License 2.0.

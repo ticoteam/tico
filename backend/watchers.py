@@ -19,7 +19,7 @@ from fastapi import Request
 from pydantic import Field
 
 from clients.watchers import LIMITS, MAX_EVENTS
-from . import rooms, run_triggers, support_triage
+from . import rooms, run_triggers, screening, support_triage
 from .models import Contract, Slug
 from .store import H, Problem
 
@@ -99,7 +99,8 @@ def _note(c, task, text):
 def deliver(c, auth, bot, event, triage=None):
     """Apply one event. Returns the id of the task it touched, or None when it changed nothing.
 
-    `triage(c, event)` is True when the event waits for support triage instead (backend/support_triage.py)."""
+    `triage(c, event)` is True when the event waits for support triage or screening instead (backend/support_triage.py,
+    backend/screening.py); screening may instead give back the event to apply, with a warning line on its body."""
     item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (bot, event.key)).fetchone()
     task = H.task(c, item["task_id"]) if item else None
     if event.ref and c.execute("SELECT 1 FROM watcher_refs WHERE bot=? AND key=? AND ref=?",
@@ -110,13 +111,18 @@ def deliver(c, auth, bot, event, triage=None):
     if support_triage.pending(c, bot, event.key):
         support_triage.later(c, bot, event)            # a note on its task once triage opens it
         return None
+    if screening.waiting(c, "watcher", bot, event.key):
+        screening.later(c, "watcher", bot, event)      # a note on its task once screening opens it
+        return None
     if event.op != "task" and support_triage.held(c, bot, event.key, task):
         return _note(c, task, event.text or event.note) if live(task) else None
     if event.op == "task":
         if item:
             return None
-        if triage and triage(c, event):
+        waits = triage(c, event) if triage else False
+        if waits is True:
             return None
+        event = waits or event
         task = _open(c, auth, bot, event.title or event.key, event.body, incident=event.incident)
     elif event.op == "comment":
         if live(task):
@@ -135,14 +141,16 @@ def deliver(c, auth, bot, event, triage=None):
 
 def report(c, auth, runner, body, triage=None):
     """A run of a watcher: its events, then the run itself. `triage(c, event)` holds a new HQ ticket for support
-    triage (backend/support_triage.py); without it every event applies at once."""
+    triage (backend/support_triage.py); every other new task is screened for prompt injection (backend/screening.py).
+    Without `triage` every event applies at once."""
     hosted = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
                        "WHERE a.bot=? AND a.runner_id=? AND b.state='active'", (body.bot, runner["id"])).fetchone()
     if not hosted:
         raise Problem("forbidden", "That bot is not active on this computer", 403)
     touched = {}
     for event in body.events:
-        waits = triage if triage and support_triage.applies(body.name, event) else None
+        waits = (triage if support_triage.applies(body.name, event) else
+                 (lambda c, e: screening.watcher_check(c, body.bot, e))) if triage and event.op == "task" else None
         touched[event.key] = deliver(c, auth, body.bot, event, waits) or touched.get(event.key)
     c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,timed_out,every,output,events) "
               "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(bot,name) DO UPDATE SET runner_id=excluded.runner_id,"

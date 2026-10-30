@@ -20,6 +20,7 @@ class FakeHQ:
 
     def __init__(self):
         self.tickets, self.seen, self.down, self.status_override = {}, [], False, None
+        self.read_status = None      # answers every ticket read with this status (429: HQ asking us to slow down)
         self.fields = None           # an older HQ: refuses a ticket carrying a field beyond these
         self.refuse_field = None     # refuses every ticket, naming this field as the wrong one
 
@@ -43,6 +44,8 @@ class FakeHQ:
         ticket = self.tickets.get(parts[2]) if len(parts) > 2 else None
         if not ticket or ticket["secret"] != secret:
             return httpx.Response(404, json={"error": "not_found"})
+        if request.method == "GET" and self.read_status:
+            return httpx.Response(self.read_status, json={"error": "rate_limited"})
         if request.method == "GET":
             return httpx.Response(200, json={"ticket_id": parts[2], "status": ticket["status"], "created": "x",
                                              "updated": "y", "messages": ticket["messages"]})
@@ -184,6 +187,54 @@ def test_a_person_sees_their_own_tickets_and_no_one_elses(environment, hq):
     hq.seen.clear()
     api.post("/api/v2/support/tickets/refresh", headers=signed_in())
     assert [r.url.path for r in hq.seen] == ["/v1/support/TK-00000001"]
+
+
+def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(environment, hq):
+    """HQ counts every ask from an install together, so a ticket written on in the last hour is asked about every
+    30 s, a quiet open one every 5 minutes, a closed one every 6 hours, and the one a person has open every 30 s
+    whatever it is; the most recently written on first, and a 429 ends the round like HQ being down."""
+    api = environment()
+    ids = {name: file(api, message=name).json()["id"] for name in ("busy", "quiet", "stale", "closed")}
+    hq_of = dict(zip(ids, hq.tickets))
+    now = support.H.now()
+    ago = lambda seconds: support.H.shift(now, seconds=-seconds)
+    hq_stamp = lambda seconds: ago(seconds)[:19] + "Z"             # HQ's own format
+    old = ago(2 * 86400)
+    rows = {  # name: (status, created, checked, newest message)
+        "busy": ("answered", old, ago(60), hq_stamp(600)),        # the person wrote 10 minutes ago
+        "quiet": ("answered", old, ago(60), hq_stamp(86400)),     # nothing for a day, asked a minute ago
+        "stale": ("open", old, ago(400), hq_stamp(86400)),        # nothing for a day, asked 6+ minutes ago
+        "closed": ("closed", old, ago(3600), hq_stamp(86400)),
+    }
+    with api.app.state.store.transaction() as c:
+        for name, (status, created, checked, said) in rows.items():
+            hq.tickets[hq_of[name]]["status"] = status
+            hq.tickets[hq_of[name]]["messages"] = [{"id": 1, "created": said, "from": "person", "body": "hi"}]
+            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages_json=? WHERE id=?",
+                      (status, created, checked, json.dumps([{"id": 1, "created": said, "from": "person", "body": "hi",
+                                                              "has_diagnostics": False}]), ids[name]))
+
+    def asked(body=None):
+        hq.seen.clear()
+        r = api.post("/api/v2/support/tickets/refresh", headers=signed_in(), **({"json": body} if body else {}))
+        assert r.status_code == 200, r.text
+        return [request.url.path.rsplit("/", 1)[1] for request in hq.seen], r.json()["refresh_failed"]
+
+    # Busy is due at 30 s and asked first; quiet waits 5 minutes; stale is due; closed waits 6 hours.
+    assert asked() == ([hq_of["busy"], hq_of["stale"]], False)
+    # The one in view is asked about first, even closed, and every 30 s; another person's ticket is not.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET checked=? WHERE id IN (?,?)", (ago(60), ids["busy"], ids["closed"]))
+    assert asked({"ticket": ids["closed"]}) == ([hq_of["closed"], hq_of["busy"]], False)
+    riley = file(api, headers=as_person(api, "riley"), message="Riley's").json()["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET checked=?", (now,))
+    assert asked({"ticket": riley}) == ([], False)
+    # HQ answering 429 ends the round after the first ask, the most recent first, and keeps what was known.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET checked=?", (ago(400),))
+    hq.read_status = 429
+    assert asked() == ([hq_of["busy"]], True)
 
 
 ROOT = Path(__file__).resolve().parents[2]

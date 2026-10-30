@@ -90,9 +90,9 @@ def table(c, name):
 
 def routine_times(c, at):
     """When the server next has something to do on a clock, soonest first: each switched-on schedule automation (an
-    overdue one is due now), the controlled system jobs that run at a fixed time, the daily release hours, and the later
-    tries of waiting sends. Jobs that repeat on an interval are housekeeping that catches up after a wake, so they are
-    left out: a 15-minute job would otherwise keep the server up for good."""
+    overdue one is due now), the controlled system jobs that run at a fixed time, the daily release hours, the later
+    tries of waiting sends and the next deferred item's deadline. Jobs that repeat on an interval are housekeeping that
+    catches up after a wake, so they are left out: a 15-minute job would otherwise keep the server up for good."""
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
@@ -102,6 +102,10 @@ def routine_times(c, at):
                 out.append(due)
     out.extend(t for t in fixed_times(c, when) if t > at)      # one already past is being run by the scheduler now
     out.extend(later_sends(c, at))
+    # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
+    from . import delivery
+    if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
+        out.append(max(due, at))
     return sorted(out)
 
 

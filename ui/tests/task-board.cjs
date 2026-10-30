@@ -359,9 +359,12 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-modal [data-prop-row="parent"] .prop-v.ro').count(), 1, 'shown, read-only');
     assert.equal(await page.locator('#task-modal').getByRole('textbox', {name: 'Message'}).count(), 1);
     await page.locator('#task-modal [data-modal-close]').click();
+    // Reopened on the server, not through the page: a read already on its way shares its answer with a load that
+    // joins it (api.js GET_INFLIGHT), so the change waits until no read is out, and the list waits until it is open.
+    await page.waitForFunction(() => GET_INFLIGHT.size === 0);
     tasks.find(t => t.id === 'Approve the budget').status = 'open';
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => TASKS_ST.tasks.some(t => t.id === 'Approve the budget'));
+    await page.waitForFunction(() => TASKS_ST.tasks.some(t => t.id === 'Approve the budget' && t.status === 'open'));
 
     await page.setViewportSize({width: 375, height: 844});
     // the sidebar's drawer transition has started and ended (two frames, then no finite animation running)
@@ -377,6 +380,32 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     });
     assert(Math.max(...mobile.top) - Math.min(...mobile.top) <= 8, 'phone type selector and search share a line');
     assert(mobile.strip > mobile.top[0] && mobile.right <= mobile.edge + 1, 'phone view switch is on its own line');
+    // An empty search is its icon at the row's end, so the type keeps its words; tapped, it takes the row; words keep it open.
+    const searchRow = () => page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      return {box: Math.round(r('.tl-search').width), row: Math.round(r('.tl-type-search').width), end: Math.round(r('.tl-type-search').right - r('.tl-search').right),
+        cut: [...document.querySelectorAll('#task-type button')].filter(b => b.scrollWidth > b.clientWidth + 1).length};
+    });
+    let row = await searchRow();
+    assert(row.box <= 34 && row.end <= 1 && row.cut === 0, `an empty search is an icon on a phone: ${JSON.stringify(row)}`);
+    await page.locator('.tl-search').click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-q');
+    row = await searchRow();
+    assert(Math.abs(row.box - row.row) <= 1, `tapped, the search takes the row: ${JSON.stringify(row)}`);
+    await page.locator('#task-q').fill('budget');
+    await page.locator('.tl-head h1').click();
+    row = await searchRow();
+    assert(Math.abs(row.box - row.row) <= 1, 'a search with words stays open');
+    await page.locator('#task-q').fill('');
+    await page.locator('.tl-head h1').click();
+    assert((await searchRow()).box <= 34, 'emptied, it is an icon again');
+    // The filter bar scrolls sideways on a narrow phone: its edge fades while more is to the right, not at the end.
+    await page.setViewportSize({width: 330, height: 844});
+    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'));
+    await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = bar.scrollWidth; });
+    await page.waitForFunction(() => !document.querySelector('#task-bar').classList.contains('more'));
+    await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = 0; });
+    await page.setViewportSize({width: 375, height: 844});
     await page.locator('#task-filter').click();
     await page.waitForFunction(() => document.querySelector('#task-filter-pop').matches(':popover-open'));
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => Math.round(el.getBoundingClientRect().bottom)), 844, 'filter is a bottom sheet');
@@ -528,6 +557,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       return form;
     };
     let form = await newTag();
+    // The pane's refresh can land after Advanced is opened; it stays open.
+    await page.evaluate(() => renderTags($('#settings-tags')));
+    assert.equal(await form.locator('.tag-advanced').evaluate(d => d.open), true);
     assert.equal(await form.locator('input[name="key"]').getAttribute('maxlength'), '40');
     assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: made from the name');
     await form.locator('input[name="label"]').fill('Quarterly roadmap review for the platform team now');

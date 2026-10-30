@@ -72,8 +72,6 @@ def claim(c):
     # ...and its check steps their pools of reviewers and QA (backend/check_pools.py), once.
     from .check_pools import seed as seed_pools
     seed_pools(c)
-    from .task_blocked import ensure_steps
-    ensure_steps(c)
 
 
 def ensure(c):

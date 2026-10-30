@@ -177,7 +177,7 @@ The strategy and the market stay apart, and each reads the other. A task with no
 `hub strategy show`: if it names the team's website, that is the first address, and the summary and *What we sell* stand in for
 the owner's description (finishing setup with a website files "Set up the market map" from it). The other
 way round, when an insight contradicts an active bet, the daily curate routine says so in one line of its sweep report and
-sends the CEO Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
+sends the Strategy Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
 cited entity then trips the bet's wrong-if. The Librarian applies the insight on its own evidence, never writes the strategy,
 and never judges whether the bet should change ([Strategy](strategy.md#the-fit-check)).
 
@@ -195,7 +195,7 @@ asking for, complaining about and objecting to, each with a count, the date last
 routine runs on `meeting.ready`, so it reads only live team meetings; a private, pending or dismissed meeting never reaches it
 ([Meetings](meetings.md)). For each meeting it files a piece of evidence per theme (source kind `meeting`, a quote of 200
 characters or fewer, no personal or company names) and rewrites the page. A meeting counts once for a theme. A theme seen in
-three or more meetings is marked **Thesis**, which the CEO Bot can cite in a bet. It reads mail only if a mailbox is granted to
+three or more meetings is marked **Thesis**, which the Strategy Bot can cite in a bet. It reads mail only if a mailbox is granted to
 it. A new team gets the routine with the Librarian; an existing install gets it when the Librarian's template is next applied
 (or add an automation on the event `meeting.ready` with a Librarian Bot turn, as in [Routines](routines.md)).
 

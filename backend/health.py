@@ -595,7 +595,12 @@ def _waiting(c, online_ids, settings=None, limits=None):
     orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     # The whole queue, not the next three jobs: queued_reasons reads every queued message.
-    prime_claimables(c, [slug for slug in queued if slug in assigned], first=None)
+    aged_bots = [slug for slug in queued if slug in assigned]
+    prime_claimables(c, aged_bots, first=None)
+    # Which queued tasks a wait might hold, for every bot's queue at once: one read a table, not one a bot.
+    from .execution import _queue_suspects, queued_jobs_sql
+    every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
+    suspect = _queue_suspects(c, every_job)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
@@ -653,7 +658,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
             # Counts belong to the individual job's task, not the representative oldest job.
             groups = {}
-            for job, why in queued_reasons(c, settings, where[0], slug, limits):
+            for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect):
                 key = why or "slow"
                 group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
                 group["queued"] += 1
@@ -752,7 +757,11 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 # where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
+BILLING = ("Open Billing", "#/settings", "billing")
 HELD = {
+    # A Tico Cloud company's access (backend/cloud_access.py): out of credit, or locked behind Pay to continue.
+    "out_of_credit": ("Out of credit: its Tico model turns start once credit is added", BILLING),
+    "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its assigned task waits for a snooze, prerequisite, person, check or an owner's 60-minute queue return", RUNS),
     "task_next_run": ("Its assigned task is deferred to its next run, held by a run that carried it, or waiting on a stored resume condition", RUNS),
@@ -1401,6 +1410,16 @@ def storage_view(c, settings):
             "copy": {key: detail.get(key, 0) for key in ("done", "total", "failed")}}
 
 
+def review_children_sql(visible):
+    """The review subtasks of a PR's task that the viewer may see (`visible`, from Auth.task_sql). It starts from the
+    parent's children (task_relations_to), not a scan of every task: a parent has a handful, and the scan read
+    every task's row, bodies' pages included, on each waiting PR's check."""
+    return ("SELECT tasks.owner FROM task_relations r JOIN tasks ON tasks.id=r.from_task "
+            "WHERE r.kind='parent' AND r.to_task=? AND tasks.status IN ('open','doing','waiting','review','ready') "
+            "AND tasks.title LIKE 'Review %' "
+            f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created LIMIT 3")
+
+
 def _aged_pr_checks(c, who, auth, full, kind):
     """Name visible bot PRs waiting over twelve hours, without contacting GitHub."""
     if not full and kind != "bot":
@@ -1427,12 +1446,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
         actor = link["owner"] if reason == "conflict" else "reviewer (not assigned)"
         if reason == "review":
             # Review subtasks, like task roles, say whose move it is. Never expose a hidden child's owner.
-            reviewers = c.execute(
-                "SELECT tasks.owner FROM tasks WHERE tasks.status IN ('open','doing','waiting','review','ready') "
-                "AND tasks.title LIKE 'Review %' "
-                "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.kind='parent' AND r.from_task=tasks.id AND r.to_task=?) "
-                f"AND coalesce(tasks.private,1)=0 AND ({auth.task_sql(c, who)}) ORDER BY tasks.created LIMIT 3",
-                (link["task_id"],)).fetchall()
+            reviewers = c.execute(review_children_sql(auth.task_sql(c, who)), (link["task_id"],)).fetchall()
             role = auth.settings.github_review_role or "reviewer"
             roles = c.execute("SELECT actor FROM task_roles WHERE task_id=? AND role=? ORDER BY actor LIMIT 3",
                               (link["task_id"], role)).fetchall()
@@ -1481,11 +1495,16 @@ def _unreviewed_runs(c, who, auth):
     for slug in slugs:
         if not readable.get(slug, auth.FULL)["read"]:
             continue
-        count, oldest = 0, None
+        count, oldest, seen = 0, None, set()
         for row in held.get(slug, []):
             if not (privacy.message_readable(c, privacy.actor(who), row)
                     and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
                 continue
+            # Per stopped run: requests folded into one run share its attempt.
+            key = row["attempt_id"] or row["id"]
+            if key in seen:
+                continue
+            seen.add(key)
             count += 1
             oldest = oldest or row["since"]
         hours = int((H.parse_ts(H.now()) - H.parse_ts(oldest)).total_seconds() // 3600) if oldest else 0
@@ -1544,10 +1563,12 @@ def view(c, who, settings, auth, github, config):
     checks = []
     from . import assigned_start
     assigned = []
-    for row in assigned_start.overdue(c, visible=auth.task_sql(c, who)):
-        if not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({auth.task_sql(c, who)})", (row['id'],)).fetchone():
-            continue
-        why = assigned_start.reason(c, row, settings)
+    # Each bot's checks and each task's waits are read once for all the overdue tasks, not once per task.
+    from . import auto_tasks
+    overdue = list(assigned_start.overdue(c, visible=auth.task_sql(c, who)))   # visibility is in its page query
+    suspect, shared = auto_tasks.maybe_waiting(c, overdue), {}
+    for row in overdue:
+        why = assigned_start.reason(c, row, settings, shared, suspect)
         text = assigned_start.description(c, row, settings, why)
         assigned.append({'task': row['id'], 'bot': H.actor_id(row['owner']), 'name': row['title'],
                          'reason': why, 'text': text,
@@ -1631,6 +1652,10 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("version", "Version", "info",
                                  f"Tico will update this server to {_v(notice['scheduled'])} when idle.",
                                  [_fix("What is new", "#/changelog")]))
+        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (docs/cell.md)
+            checks.append(_check("version", "Version", "info",
+                                 f"{_v(notice.get('latest'))} is out. You are on {_v(releases.version())}. "
+                                 "Tico updates this server.", [_fix("What is new", "#/changelog")]))
         elif notice.get("available"):
             checks.append(_check("version", "Version", "warn",
                                  f"{_v(notice.get('latest'))} is available. You are on {_v(releases.version())}.",
@@ -2050,6 +2075,9 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    if full:
+        from . import invariants
+        checks.extend(invariants.health_checks(c))
     from . import run_diagnostics
     stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
     checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",

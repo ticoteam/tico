@@ -17,8 +17,14 @@ use crate::gitcred::{CredentialSocket, TokenCache};
 use crate::readiness;
 use crate::state::State;
 use crate::util::{log, mark, text_of};
+use crate::wire::{decode, ClaimAnswer, EventsAnswer, HeartbeatAnswer};
 
+/// The protocol and source version: what the shim matches against runner/version.py and what Health checks (a
+/// semver). Not the release; see RUNNER_RELEASE.
 pub const RUNNER_VERSION: &str = "0.5.4";
+/// The release this binary was built for: build.rs stamps TICO_VERSION ("dev" for a source build). Used where the
+/// runner reports what it is: the startup log, `--release`, and panic reports.
+pub const RUNNER_RELEASE: &str = env!("TICO_RUNNER_RELEASE");
 const CLAIM_EVERY: f64 = 0.25;
 const CLAIM_IDLE_MAX: f64 = 2.0;
 const CLAIM_HINT_S: f64 = 150.0;
@@ -259,7 +265,7 @@ impl Runner {
             if had_text && self.first_posted.lock().unwrap().insert(aid.to_string()) {
                 mark("first_delta_posted", aid);
             }
-            let ack = result["ack_seq"].as_i64().unwrap_or(0);
+            let ack = decode::<EventsAnswer>(result)?.ack_seq;
             let id = aid.to_string();
             self.state.off(move |s| s.ack(&id, ack)).await.map_err(|e| ApiError::new("state", e, 0, false))?;
         }
@@ -465,18 +471,18 @@ impl Runner {
             let beat = beat?;
             *self.beat.lock().unwrap() = Some((printed, Instant::now()));
             self.published.lock().unwrap().extend(versions);
-            let actions = beat["worktree_actions"].as_array().cloned().unwrap_or_default();
-            note_skipped_actions(beat["worktree_actions_skipped"].as_u64().unwrap_or(0));
+            let actions = beat.worktree_actions.unwrap_or_default();
+            note_skipped_actions(beat.worktree_actions_skipped.unwrap_or(0));
             if full || !actions.is_empty() {
                 self.worktrees.poll(host, &actions);
             }
-            self.start_places.store(beat["start_places"] == true, Ordering::SeqCst);
-            self.worktree_stamp.store(beat["worktree_record_stamp"] == true, Ordering::SeqCst);
-            self.credential_source.store(beat["runtime_credential_source"] == true, Ordering::SeqCst);
-            self.accounts.store(beat["subscription_accounts"] == true, Ordering::SeqCst);
+            self.start_places.store(beat.start_places == Some(true), Ordering::SeqCst);
+            self.worktree_stamp.store(beat.worktree_record_stamp == Some(true), Ordering::SeqCst);
+            self.credential_source.store(beat.runtime_credential_source == Some(true), Ordering::SeqCst);
+            self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
-            crate::perf::set_enabled(beat["performance"] == true);
-            if beat["restart"] == true && self.restart.lock().unwrap().is_none() {
+            crate::perf::set_enabled(beat.performance == Some(true));
+            if beat.restart == Some(true) && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {
                     if let Some(follower) = crate::follow::shared() {
@@ -514,7 +520,7 @@ impl Runner {
     /// Send the heartbeat `body`, and how many posts it took. A server older than this runner refuses what it doesn't
     /// know (422): only that comes out, held back for ten minutes, and the rest goes again, so a runner updated
     /// before its server still checks in and claims work (runners and servers update independently).
-    async fn post_heartbeat(&self, body: &mut Value) -> (Result<Value, ApiError>, u32) {
+    async fn post_heartbeat(&self, body: &mut Value) -> (Result<HeartbeatAnswer, ApiError>, u32) {
         let mut tries = 0;
         let beat = loop {
             tries += 1;
@@ -547,9 +553,10 @@ impl Runner {
                 break Err(e);
             }
         };
+        let beat = beat.and_then(decode::<HeartbeatAnswer>);
         if let Ok(reply) = &beat {
             // Absent or null is automatic: the machine's own capacity is the limit.
-            let owner = reply["turns_at_once"].as_u64().map(|n| n as usize);
+            let owner = reply.turns_at_once.map(|n| n as usize);
             self.turn_limit.store(crate::config::turn_limit(owner, self.capacity), Ordering::SeqCst);
         }
         (beat, tries)
@@ -557,7 +564,7 @@ impl Runner {
 
     /// Lease expiry does not mean this worker has stopped: every live worker's lane stays busy, and a bot whose
     /// worktrees are being maintained gets nothing (service.py _claim_next).
-    async fn claim_next(&self) -> Result<Value, ApiError> {
+    async fn claim_next(&self) -> Result<ClaimAnswer, ApiError> {
         let mut maintaining: Vec<String> = self.worktrees.maintaining.lock().unwrap().iter().cloned().collect();
         maintaining.sort();
         if !crate::lanes::held_back("busy_lanes") {
@@ -576,20 +583,20 @@ impl Runner {
         let active = self.active.lock().unwrap().clone();
         let mut bots: Vec<String> = active.iter().filter_map(|aid| self.state_bot(aid)).chain(maintaining).collect::<HashSet<_>>().into_iter().collect();
         bots.sort();
-        self.client.post("jobs/claim", &json!({"next_run": true, "busy_bots": bots}), None).await
+        self.client.post("jobs/claim", &json!({"next_run": true, "busy_bots": bots}), None).await.and_then(decode)
     }
 
     /// Sends this claim, or first the one whose answer was lost: the same key and body, which the server answers from
     /// its record if it leased a job (store.py is_poll). A slow server took 20-60 s per claim on Oct 27 against this
     /// client's 10 s timeout, and every claim it finished after the runner gave up stranded a lease.
-    async fn claim_again_or(&self, body: Value) -> Result<Value, ApiError> {
+    async fn claim_again_or(&self, body: Value) -> Result<ClaimAnswer, ApiError> {
         let pending = self.unanswered_claim.lock().unwrap().take().filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
         let (key, body, at) = pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
         }
-        result
+        result.and_then(decode)
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
@@ -921,14 +928,12 @@ impl Runner {
             {
                 let mut places = self.places.lock().unwrap();
                 places.remove("<claim>");
-                if let Ok(result) = &result {
-                    if let Some(attempt) = result.get("attempt").filter(|a| a.is_object()) {
-                        places.insert(text_of(&attempt["id"]));
-                    }
+                if let Some(attempt) = result.as_ref().ok().and_then(|r| r.attempt.as_ref()) {
+                    places.insert(text_of(&attempt["id"]));
                 }
             }
             let result = result?;
-            let attempt = result.get("attempt").cloned().filter(|a| a.is_object());
+            let attempt = result.attempt.map(Value::Object);
             let got = attempt.is_some();
             if let Some(attempt) = attempt {
                 let aid = text_of(&attempt["id"]);
@@ -948,7 +953,7 @@ impl Runner {
             }
             clock.next_claim = Some(Instant::now() + Duration::from_secs_f64(clock.claim_wait(got)));
             clock.claimed(got);
-            let paused = text_of(result.get("paused").unwrap_or(&Value::Null));
+            let paused = result.paused.unwrap_or_default();
             if !paused.is_empty() && paused != *paused_note {
                 log(&format!("Tico runner: the server is not giving this computer work: {paused}"));
                 *paused_note = paused;
@@ -987,9 +992,9 @@ mod tests {
                               "runtimes": {"pi": {"installed": true}}, "bots": {"ops": {"ready": true}}}});
         let (beat, tries) = runner.post_heartbeat(&mut body).await;
         crate::lanes::release("readiness.isolated");
-        assert_eq!((beat.map(|b| b["ok"] == true).ok(), tries), (Some(true), 2));
+        assert_eq!((beat.is_ok(), tries), (true, 2));
         let claimed = runner.claim_next().await.unwrap();
-        assert_eq!(claimed["attempt"]["id"], "att-1");
+        assert_eq!(claimed.attempt.unwrap()["id"], "att-1");
         let seen = seen.lock().unwrap();
         assert!(seen[0].contains("\"isolated\":true"), "{}", seen[0]);
         // The same check-in again, less the one field the older server doesn't know: then the claim.
@@ -1170,7 +1175,7 @@ mod tests {
         assert!(runner.claim_next().await.is_err());
         runner.start_places.store(true, Ordering::SeqCst);             // the next claim's own body differs
         let claimed = runner.claim_next().await.unwrap();
-        assert_eq!(claimed["attempt"]["id"], "a-late");
+        assert_eq!(claimed.attempt.unwrap()["id"], "a-late");
         runner.claim_next().await.unwrap();
         let requests = seen.lock().unwrap();
         let key = |r: &str| r.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("idempotency-key")).map(|(_, v)| v.trim().to_string()));

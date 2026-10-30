@@ -1,4 +1,4 @@
-/* The weekly market briefing read in full, in a side panel: the bets it touches, then the Librarian's page
+/* The weekly market briefing read in full, in a side panel: the bets it touches, then the briefing's page
    (backend/market_briefing.py, docs/market-briefing.md). Strategy › Market › Briefing's Read opens it (ui/app/redesign-market.js). */
 'use strict';
 const briefingStyle = document.createElement('style');

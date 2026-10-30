@@ -25,30 +25,47 @@ window.strategyHeadHtml = tab => redesignStrategyHead(tab);
 
 window.strategyStop = function strategyStop() {
   STRAT_LOAD++;
+  if (STRAT) S.lastRead.strategy = {data: STRAT.data, kpis: STRAT.kpis};   // the next visit paints it at once
   STRAT = null;
   const dlg = document.getElementById('strat-versions');
   if (dlg?.open) dlg.close();
 };
 
+// A return visit paints the strategy as last read, then reads it again and patches what changed; only the first visit
+// waits behind a skeleton.
 window.pageStrategy = async function pageStrategy() {
   const load = ++STRAT_LOAD;
   const main = $('#main');
   main.classList.add('strategy-layout');
-  main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${skelRows(6, {dot: false})}</div>`;
+  const kept = S.lastRead.strategy;
+  main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${kept ? '' : skelRows(6, {dot: false})}</div>`;
+  const open = (data, kpis) => {
+    STRAT = {data, kpis, load, editBet: '', editSection: '', addSection: false, publishing: false};
+    strategyRender();
+    // #/strategy?bet=<id> (a goal's bet chip) scrolls to that bet and flashes it.
+    const bet = new URLSearchParams(S.route.split('?')[1] || '').get('bet');
+    const row = bet && document.querySelector(`[data-bet="${CSS.escape(bet)}"]`);
+    if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
+  };
+  if (kept) open(kept.data, kept.kpis || []);
   let data, kpis;
   // The KPIs name a KPI-backed Wrong if and fill the bet form's KPI picker; the page never waits on them.
-  try { [data, kpis] = await Promise.all([get('/v2/strategy', {fresh: true}), v2Get('/v2/kpis').catch(() => null)]); }
+  try { [data, kpis] = await Promise.all([get('/v2/strategy'), v2Get('/v2/kpis').catch(() => null)]); }
   catch (error) {
-    if (load === STRAT_LOAD && $('#strat-body')) $('#strat-body').innerHTML = `<p class="err">${esc(error.message || 'Could not load the strategy')}</p>`;
+    if (load === STRAT_LOAD && !kept && $('#strat-body')) $('#strat-body').innerHTML = `<p class="err">${esc(error.message || 'Could not load the strategy')}</p>`;
     return;
   }
-  if (load !== STRAT_LOAD) return;
-  STRAT = {data, kpis: kpis?.kpis || [], load, editBet: '', editSection: '', addSection: false, publishing: false};
-  strategyRender();
-  // #/strategy?bet=<id> (a goal's bet chip) scrolls to that bet and flashes it.
-  const bet = new URLSearchParams(S.route.split('?')[1] || '').get('bet');
-  const row = bet && document.querySelector(`[data-bet="${CSS.escape(bet)}"]`);
-  if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
+  kpis = kpis?.kpis || [];
+  // A read that lands after the page was left is kept for the next visit when that visit has nothing yet.
+  if (load !== STRAT_LOAD) { S.lastRead.strategy ||= {data, kpis}; return; }
+  S.lastRead.strategy = {data, kpis};
+  if (!STRAT) { open(data, kpis); return; }
+  // Something opened for editing meanwhile keeps the page as drawn; the save reads the strategy again.
+  const state = STRAT;
+  if (state.editBet || state.editSection || state.addSection || state.publishing) return;
+  const same = sameData(data, state.data) && sameData(kpis, state.kpis);
+  state.data = data; state.kpis = kpis;
+  if (!same) strategyRender();
 };
 
 // Only the owner writes; the server says so (may_edit) and is the one that enforces it.
@@ -159,7 +176,8 @@ function strategyActionsHtml(data, view) {
   if (!view.owner) return versions;
   const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
   const why = refusal || (fresh ? '' : 'Nothing new to publish');
-  return `${versions}${refusal ? `<span class="strat-why-not" data-strat-why-not>${esc(refusal)}</span>` : ''}<button class="primary" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>`;
+  // Why Publish is off sits in a (?) beside it, not a line of its own.
+  return `${versions}<button class="primary" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
 }
 
 function strategyPublishHtml() {
@@ -318,20 +336,21 @@ function strategyRender() {
   const body = $('#strat-body');
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
-  $('#strat-actions').innerHTML = strategyActionsHtml(data, view);
-  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
+  patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
+  if (!view.owner && !data.current) { patchHTML(body, '<p class="strat-none">No strategy yet.</p>'); strategyBind(); return; }
   const blank = !data.current && strategyBlank(data.draft, data.bets || []);
   const v = view.version || {};
   // Words typed in Summary or Vision and not yet saved survive a redraw (their save is on its way).
   const typed = [...body.querySelectorAll('[data-strat-field]')].filter(f => f.value !== f.defaultValue).map(f => [f.dataset.stratField, f.value]);
-  body.innerHTML = `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}
+  // Patched, not replaced: a redraw after a read that changed one bet leaves the rest of the page where it is.
+  patchHTML(body, `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}
     <div class="strat-grid">${strategyTocHtml(view)}
       <article class="strat-doc" id="strat-doc">${blank ? '<p class="strat-none">No strategy yet.</p>' : ''}
         ${strategyFieldHtml('summary', 'Summary', v.summary, view.owner, 'What the team does, for whom, and how it wins')}
         ${strategyFieldHtml('vision', 'Vision', v.vision, view.owner, 'Where the team is going')}
         ${strategyBetsHtml(data, view)}
         ${strategySectionsHtml(view)}
-      </article></div>`;
+      </article></div>`);
   for (const [key, value] of typed) { const f = body.querySelector(`[data-strat-field="${key}"]`); if (f) f.value = value; }
   strategyBind();
 }

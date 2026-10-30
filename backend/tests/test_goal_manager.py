@@ -22,7 +22,8 @@ def with_goal_manager(api):
 
 
 def routines(api):
-    """The CEO Bot's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left out."""
+    """The Strategy Bot's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left
+    out."""
     with api.app.state.store.read() as c:
         rows = {r["id"]: R.row(c, r["id"]) for r in c.execute("SELECT id FROM schedules WHERE bot='goal-manager'")}
     return {sid: row for sid, row in rows.items() if row and row["automation"] and not row["deleted_at"]}

@@ -3,8 +3,9 @@
 let TASK_TYPES = [];
 let TASK_TYPES_LOADING = null;
 const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
-// A step's status is one of these: waiting is a tag on a task in its step, and declining goes to the closed step.
-const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
+// A step's status is one of these. Waiting is a tag on a task in its step, so a waiting step is a team's own column for
+// parked work that only a move by hand fills; declining goes to the closed step.
+const STEP_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed'];
 // The board shows a type's working steps; its done and closed tasks are under Done and Closed.
 const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';
@@ -230,13 +231,18 @@ function taskTypeEditor(type = null) {
       if (request === row._poolHintsRequest && target.isConnected) target.textContent = `Model details unavailable: ${error.message}`;
     }
   };
+  // A check step's model company rule (docs/tasks.md, Step flow): prefer another company's bot, or require it.
+  const companyRule = step => step?.flow?.check
+    ? `<select aria-label="Another model company" title="Prefer: a bot of another model company than the builder's goes first, and one of the builder's company takes the check only when no other is free. Require: only a bot of another company takes it, and the check waits when none is free.">${['prefer', 'require'].map(rule => `<option value="${rule}"${(step.flow.other_company || 'prefer') === rule ? ' selected' : ''}>Another model company: ${rule === 'prefer' ? 'Prefer' : 'Require'}</option>`).join('')}</select>`
+    : '';
   const addStep = step => {
-    const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || '';
+    const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || ''; row._flow = step?.flow || null;
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
       <input aria-label="Public step name" value="${esc(step?.public_name ?? '')}" placeholder="Public step (blank: not shown)" title="What a public roadmap shows for this step; blank shows none">
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
       <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
       <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
+      ${companyRule(step)}
       <small class="task-step-models muted" data-pool-models role="status">Enter bot slugs to see each configured model and provider.</small>
       <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
       <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
@@ -261,10 +267,21 @@ function taskTypeEditor(type = null) {
     event.preventDefault();
     // A public item on a type private by default shows its step's public name, never the internal one: the field is
     // always there, and a new step left blank gets the server's default (its name only on a type public by default).
+    // A step's flow replaces the whole flow when it is sent, and names what it points at by name: so a changed rule is
+    // sent with the flow's step references as ids (a name would not resolve once this save renames its step).
+    const ids = Object.fromEntries((type?.steps || []).map(step => [step.name, step.id]));
+    const flowFor = row => {
+      const select = row.querySelector('[aria-label="Another model company"]');
+      if (!select || select.value === (row._flow?.other_company || 'prefer')) return {};
+      const flow = Object.fromEntries(Object.entries(row._flow || {}).map(([key, value]) =>
+        [key, ['on_pass', 'on_fail', 'after_green'].includes(key) && ids[value] ? ids[value] : value]));
+      return {flow: {...flow, other_company: select.value}};
+    };
     const steps = [...rows.children].map((row, position) => {
       const shown = row.querySelector('[aria-label="Public step name"]').value.trim();
       return {...(row.dataset.stepId ? {id: row.dataset.stepId} : {}), name: row.querySelector('input').value,
-        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector('select').value, position,
+        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector('[aria-label="Step status"]').value, position,
+        ...flowFor(row),
         check_pool: row.querySelector('[aria-label="Check pool"]').value.split(',').map(slug => slug.trim()).filter(Boolean),
         check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector('[aria-label="Open checks each"]').value, 10) || 2))};
     });

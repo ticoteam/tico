@@ -17,7 +17,15 @@ in `automation_turn_answers`, which the run picks up when it is saved.
 
 Reading mail and Slack is the owner's: an automation hears and finds only what its owner may read (`may_read_inbox`),
 checked on save and again when a message arrives. A turn holds its bot's usual cost against the spend cap until it is
-priced (`automation_holds`). An automation that queues more than RUN_GUARD runs in RUN_GUARD_MINUTES is paused.
+priced (`automation_holds`).
+
+The run guard stops spending, never work. An automation whose runs keep coming over time (RUN_GUARD_SUSTAINED runs in
+RUN_GUARD_SPAN minutes spread over at least RUN_GUARD_SPREAD of those minutes) or flood in (RUN_GUARD_BURST runs in
+RUN_GUARD_MINUTES) is put on hold (`automation_guard_holds`): its queued runs and every new one are kept as `held`, which
+the drain never claims, up to RUN_GUARD_BURST of them (past that each is counted as dropped, on the hold too). No rate
+tells a slow catch-up from a loop, so a person decides: release the held runs to the queue, or drop them (skipped).
+Turning the automation off or deleting it skips them too. A burst of distinct events inside a minute or two is a
+backlog and simply queues.
 
 Mail actions are carried out by the computer that reads the mailbox: it claims them (a lease of MAIL_LEASE_MINUTES,
 MAIL_TRIES claims at most) and reports each result; their step and run wait until then (`settle_mail`).
@@ -40,8 +48,11 @@ from . import automation_actions as A
 from . import automation_engine as E
 from . import automation_flow as F
 from . import people as P
+from . import report_managers
+from . import task_models
+from . import task_run_models
 from .models import Contract
-from . import audit_log
+from . import audit_log, cloud_access
 from .store import H, Problem
 
 log = logging.getLogger(__name__)
@@ -60,6 +71,8 @@ SCHEMA = (
     "cost REAL NOT NULL DEFAULT 0, state_json TEXT, claimed_at TEXT, wake_at TEXT, chain_json TEXT NOT NULL DEFAULT '[]')",
     "CREATE INDEX IF NOT EXISTS automation_runs_of ON automation_runs(automation_id, started)",
     "CREATE INDEX IF NOT EXISTS automation_runs_queue ON automation_runs(status, started)",
+    # The overview reads every visible automation's runs over a time range (backend/automation_overview.py).
+    "CREATE INDEX IF NOT EXISTS automation_runs_started ON automation_runs(started)",
     "CREATE TABLE IF NOT EXISTS automation_daily(automation_id TEXT NOT NULL, day TEXT NOT NULL, "
     "runs INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(automation_id, day))",
     "CREATE TABLE IF NOT EXISTS automation_mail_actions(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT, "
@@ -79,13 +92,23 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS automation_holds(ref TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT NOT NULL, "
     "amount REAL NOT NULL, at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS automation_holds_of ON automation_holds(automation_id, at)",
+    # The run guard's hold on an automation, live while `cleared` is null; one row each, the last hold kept so the
+    # guard counts only runs since it was cleared. `arrivals`: runs triggered since it started (the one that tripped it
+    # included), at most RUN_GUARD_BURST held; `dropped`: triggers past that.
+    "CREATE TABLE IF NOT EXISTS automation_guard_holds(automation_id TEXT PRIMARY KEY, rule TEXT NOT NULL, "
+    "since TEXT NOT NULL, arrivals INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, task_id TEXT, "
+    "cleared TEXT)",
 )
 KEEP_DAYS = 30           # step detail; the daily counts and the run rows stay
 TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15       # a claimed run not saved by then was cut off: queued again, to go on from its last save
 MAX_RESUMES = 3          # a run cut off this often is failed: it may be what stops the server
 MAX_CHAIN = 3            # automations started by automations: at most this deep, never the same one twice
-RUN_GUARD, RUN_GUARD_MINUTES = 60, 10   # more runs queued than this in that time: the automation is paused
+RUN_GUARD_MINUTES = 10                  # the window a flood is counted in
+RUN_GUARD_BURST = 500                   # runs in RUN_GUARD_MINUTES, any refs: a flood, held; also the held runs kept
+RUN_GUARD_SPAN = 20                     # the minutes a sustained loop is watched over
+RUN_GUARD_SUSTAINED = 120               # runs in RUN_GUARD_SPAN that make it sustained...
+RUN_GUARD_SPREAD = 15                   # ...if they fall in at least this many distinct minutes (a burst does not)
 TURN_COST = 0.25         # what a turn holds against the spend cap when its bot has no priced turns
 TURN_COST_SAMPLE = 20    # its bot's recent priced turns averaged for the hold
 HOLD_STALE_HOURS = 24    # a hold whose turn never ended (its job lost) is swept then, and the sweep recorded
@@ -122,24 +145,44 @@ def flow_of(row):
     return json.loads(row["flow_json"])
 
 
-def view(c, row, who=None, detail=False):
+def view(c, row, who=None, detail=False, chart=None, jobs=None):
     """An automation as its readers get it: `can_edit` for `who`, and with `detail` each Decide step that names a set
-    carries that set's questions (read-only: a write sends `set` or `questions`, never both)."""
+    carries that set's questions (read-only: a write sends `set` or `questions`, never both). `kind` is the trigger as
+    the overview groups it (`system` for Tico's own jobs); a system job's mirror takes its last and next run from the
+    job (`jobs`, AO.system_jobs, read once for a list)."""
+    from . import automation_overview as AO
     flow = flow_of(row)
     if detail:
         flow["steps"] = _with_questions(flow["steps"])
     last = c.execute("SELECT id, status, started, finished FROM automation_runs WHERE automation_id=? "
                      "ORDER BY started DESC LIMIT 1", (row["id"],)).fetchone()
+    from . import redesign_migration
     out = {"id": row["id"], **flow, "version": row["version"], "created": row["created"],
-           "created_by": row["created_by"], "updated": row["updated"], "last_run": dict(last) if last else None}
+           "created_by": row["created_by"], "updated": row["updated"], "last_run": dict(last) if last else None,
+           "kind": AO.kind_of(flow),
+           # Wake rules that name a step their type does not have: they never fire until one is changed.
+           "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
+    if flow["trigger"]["type"] == "schedule":
+        out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
+    if flow.get("enabled") is False:
+        # Paused, not just off: the run guard turned it off and nobody has changed it since.
+        guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
+                          (row["id"],)).fetchone()[0]
+        out["paused"] = bool(guard and guard >= row["updated"])
+    if hold := hold_of(c, row["id"]):
+        out["hold"] = hold
+    job = AO.system_key(flow)
+    if job:
+        known = (jobs if jobs is not None else AO.system_jobs(c)).get(job) or {}
+        out["last_run"] = known.get("last") or out["last_run"]
+        out["next_run"] = known.get("next")
+        out["schedule"] = known.get("schedule") or (flow.get("controls") or {}).get("schedule")
     if detail:
         today = c.execute("SELECT runs, dropped FROM automation_daily WHERE automation_id=? AND day=?",
                           (row["id"], H.now()[:10])).fetchone()
         out["counts"] = {"today": {"runs": today["runs"] if today else 0, "dropped": today["dropped"] if today else 0}}
-        if flow["trigger"]["type"] == "schedule":
-            out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
     if who is not None:
-        out["can_edit"] = may_change(c, who, flow)
+        out["can_edit"] = may_change(c, who, flow, chart)
         out["can_pause"] = may_pause(c, who, flow, out["can_edit"])
     return out
 
@@ -206,6 +249,8 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
                   (*columns, aid, now, actor, "" if idle else now, due))
     if audit:
         audit_log.write(c, actor, "automation:" + aid, before, flow, via)
+    if before and before.get("enabled") and not flow["enabled"]:
+        _unhold(c, aid, actor, "drop", via)   # turned off, by whoever: what it held is skipped, as a delete skips it
     source = flow.get("source")
     if before and bool(before.get("enabled")) != bool(flow["enabled"]) and isinstance(source, dict) \
             and source.get("kind") == "routine" and source.get("id"):
@@ -264,10 +309,15 @@ class Chart:
 
     def __init__(self, c):
         from . import views
+        self.c = c
         self.roster, self.employees = views.roster(c), views.entries(c)
         self.archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
         self.groups = self.roster.get("org_groups") or {}
         self.bare = True                           # a bare person id in reports_to (backend/people.py org_parent)
+
+    def manages(self, slug):
+        """Whether the bot manages its direct reports now: the team rule and its own switch (report_managers.manages)."""
+        return report_managers.manages(self.c, slug)
 
     def up(self, key):
         head, _, rest = key.partition(":")
@@ -300,9 +350,17 @@ class Chart:
         return [lead for g in P.group_chain(gid, self.roster) for lead in [self.lead(g)] if lead]
 
 
+def _managers_down(chart, me, head):
+    """Whether bot `me` reaches `head` while every bot from the one above `head` up to `me`, `me` included, manages its
+    reports (report_managers.manages). People and groups on the way are passed over, as they were before the switch."""
+    path = chart.above(head)
+    return all(chart.manages(key[2:]) for key in path[:path.index(me) + 1] if key.startswith("b:"))
+
+
 def may_change(c, who, flow, chart=None):
     """The one rule for the UI, the CLI and MCP: the top of the org; the owner; anyone above the owner; the lead of the
     automation's group (or of a group it is in) and anyone above that lead. A peer is refused. Seeing follows it.
+    A bot above it changes it only while the bots between manage their reports (_managers_down).
     A `readonly` built-in (one the migration shows for work Tico still runs elsewhere) is changed by nobody."""
     if flow.get("readonly"):
         return False
@@ -314,7 +372,8 @@ def may_change(c, who, flow, chart=None):
     chart, owner = chart or Chart(c), _key(flow["owner"])
     gid = (flow.get("group") or "").partition(":")[2] or (owner[2:] if owner.startswith("g:") else "")
     heads = ([] if owner.startswith("g:") else [owner]) + (chart.leads(gid) if gid else [])
-    return any(me == head or me in chart.above(head) for head in heads)
+    return any(me == head or (me in chart.above(head) and (who.role != "bot" or _managers_down(chart, me, head)))
+               for head in heads)
 
 
 def may_pause(c, who, flow, can_edit=None):
@@ -361,6 +420,27 @@ def _require(c, who, flow, what="change this automation"):
         raise Problem("forbidden", f"Only its owner, the people above its owner or its group's lead may {what}", 403)
 
 
+def _approved(c, row):
+    """Whether the version the automation runs is approved (active). A draft's only version stays pending until someone
+    who may set its steps' models turns it on or restores it, and a proposal waits the same way."""
+    found = c.execute("SELECT status FROM automation_versions WHERE automation_id=? AND n=?",
+                      (row["id"], row["version"])).fetchone()
+    return bool(found) and found[0] == "active"
+
+
+def _stamp_blocked(c, auth, who, flow, before=None):
+    """The bot whose model a step of `flow` sets on its task, when `who` may not set that model
+    (task_run_models.may_set: whoever may change the bot's model, and never a bot), else None. Only what a save adds
+    or alters counts: a rename keeps the stamp it has. `before` is the approved flow whose stamps stand; None when
+    nothing is approved, as for a draft, so every stamp counts."""
+    kept = _stamps(before) if before else set()
+    for _, bot, *_ in sorted(_stamps(flow) - kept, key=str):
+        slug = H.actor_id(bot or "")
+        if not task_run_models.may_set(c, auth, who, slug):
+            return slug
+    return None
+
+
 def _by_botops(who):
     """Whether BotOps makes this call: for a person or a bot it acts for (the dispatcher lends their identity, via
     botops), or with its own rights."""
@@ -368,8 +448,9 @@ def _by_botops(who):
 
 
 def _bot_draft(c, who, flow):
-    """A new automation BotOps makes for a bot that may not make it: saved off, with version 1 pending, for a person
-    with the change rule to turn on (a bot's own call is refused, as before). Like a bot's other proposals it writes no audit row until then."""
+    """A new automation saved off, with version 1 pending, for a person with the change rule to turn on: what BotOps
+    makes for a bot that may not make it, and what anyone makes that sets a model its tasks run on which they may not
+    set (a bot's own call is refused, as before). Like a bot's other proposals it writes no audit row until then."""
     aid = "auto_" + H.new_id()
     row = _save(c, who.actor, aid, {**flow, "enabled": False}, None, audit=False)
     c.execute("UPDATE automation_versions SET status='pending' WHERE automation_id=? AND n=?", (aid, row["version"]))
@@ -387,16 +468,19 @@ def _owner_known(c, owner):
     return ident in (views.roster(c).get("org_groups") or {})
 
 
-def _checked(c, flow, settings=None, access=True):
+def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_steps=True):
     """The flow as saved: its shape, its owner and group on the team, and (with `access`) what it reads is its
-    owner's: the inbox it hears and the Assistant it runs on."""
+    owner's: the inbox it hears and the Assistant it runs on. `saved` is the flow a change is made to: its steps' models
+    are checked only where the change adds or alters them. `aid` is the automation it is saved as, and `wake_steps`
+    False leaves a converted wake rule's step names unchecked (the redesign's own writes move rules as they were)."""
     try:
         flow = F.check(flow)
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
     if flow.get("wakes"):   # a converted "What wakes" automation: only edits its wake rules can carry out
         from .redesign_migration import check_wakes
-        check_wakes(flow)
+        check_wakes(flow, c if wake_steps else None, saved, aid)
+    _checked_run_models(flow, _stamps(saved) if saved else frozenset())
     for ref in (flow["owner"], flow.get("group")):
         if ref and not _owner_known(c, ref):
             raise Problem("invalid", f"{ref} is not on the team", 422)
@@ -430,6 +514,48 @@ def _actions(steps):
         for path in step.get("paths") or []:
             yield from _actions(path.get("steps"))
         yield from _actions((step.get("otherwise") or {}).get("steps"))
+
+
+RUN_MODEL_KEYS = ("model", "effort", "harness")
+
+
+def _run_model_steps(steps):
+    """The bot_turn steps that stamp a model on the task they open (`model`, `effort`, `harness`), nested steps
+    included."""
+    for step in steps or []:
+        if step.get("type") == "bot_turn" and any(step.get(key) for key in RUN_MODEL_KEYS):
+            yield step
+        for path in step.get("paths") or []:
+            yield from _run_model_steps(path.get("steps"))
+        yield from _run_model_steps((step.get("otherwise") or {}).get("steps"))
+
+
+def _stamp(step):
+    """What one stamping step sets on its task: (step id, bot, model, effort, harness)."""
+    return (step.get("id"), step.get("bot"), step.get("model"), step.get("effort"), step.get("harness"))
+
+
+def _stamps(flow):
+    """What each stamping step sets on its task. A change to one is a change to the model its task runs on, so the
+    rights are checked on the ones a save adds or alters."""
+    return {_stamp(step) for step in _run_model_steps(flow.get("steps"))}
+
+
+def _checked_run_models(flow, kept=frozenset()):
+    """Each step's model, effort and harness are checked the way a bot's task model is (task_models.choice_of): a model
+    the catalog has and that is not retired, a harness that runs it, an effort it takes. An effort or harness needs a
+    model to be picked for. A stamp the saved flow already has (`kept`) is not checked again: its model may have been
+    retired or taken off the catalog since, and the routine still pauses, renames and saves its other changes."""
+    for step in _run_model_steps(flow.get("steps")):
+        if _stamp(step) in kept:
+            continue
+        where = f"Step {step.get('id')}"
+        if not step.get("model"):
+            raise Problem("invalid", f"{where} needs a model to pick an effort or harness for it", 422)
+        try:
+            task_models.choice_of(step["model"], step.get("effort"), step.get("harness"))
+        except Problem as exc:
+            raise Problem("invalid", f"{where}: {exc.detail}", 422)
 
 
 def _finds(steps):
@@ -651,28 +777,107 @@ def _ring(c):
 
 
 def _guard(c, row):
-    """The backstop for loops the chain cannot see (a webhook that calls back, a bot's own writes): an automation
-    that queued RUN_GUARD runs in the last RUN_GUARD_MINUTES is paused, with one task in its owner's Needs you and one
-    notice to the Health Monitor. Returns whether it tripped."""
-    since = H.shift(H.now(), minutes=-RUN_GUARD_MINUTES)
-    n = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=?", (row["id"], since)).fetchone()[0]
-    if n < RUN_GUARD:
-        return False
-    before = flow_of(row)
-    _save(c, H.KEEPER, row["id"], {**before, "enabled": False}, before, via="run_guard")
-    words = (f"Automation {before['name']} was paused: it queued more than {RUN_GUARD} runs in {RUN_GUARD_MINUTES} "
-             "minutes, which is most often a loop. Look at its runs, fix what starts it, then turn it back on.")
+    """The backstop for loops the chain cannot see (a webhook that calls back with a new id each time, a mail rule
+    answered by mail): the rule that holds now, with what it counted, or None. It counts the runs already started,
+    before the new one is added, so the run past each count is the one held: `flood`, more than RUN_GUARD_BURST in the
+    last RUN_GUARD_MINUTES; `sustained`, more than RUN_GUARD_SUSTAINED in the last RUN_GUARD_SPAN minutes, the ones
+    before it falling in at least RUN_GUARD_SPREAD distinct minutes of it (a loop keeps going over time; a backlog lands
+    in a minute or two and does not spread). Exact repeats are not counted here: redelivery is deduped per source, and a
+    bot's own writes are stopped by the chain. Manual runs are not counted. Only runs since its last hold was cleared
+    count, so runs a person released do not put it straight back on hold."""
+    now = H.now()
+    last = c.execute("SELECT cleared FROM automation_guard_holds WHERE automation_id=?", (row["id"],)).fetchone()
+    floor = (last and last["cleared"]) or ""
+    flood_since = max(H.shift(now, minutes=-RUN_GUARD_MINUTES), floor)
+    span_since = max(H.shift(now, minutes=-RUN_GUARD_SPAN), floor)
+    flood = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND started>=? "
+                      "AND trigger_ref<>'manual'", (row["id"], flood_since)).fetchone()[0]
+    span, minutes = c.execute("SELECT count(*), count(DISTINCT substr(started,1,16)) FROM automation_runs "
+                              "WHERE automation_id=? AND started>=? AND trigger_ref<>'manual'",
+                              (row["id"], span_since)).fetchone()
+    rule = ("flood" if flood >= RUN_GUARD_BURST else
+            "sustained" if span >= RUN_GUARD_SUSTAINED and minutes >= RUN_GUARD_SPREAD else "")
+    return (rule, {"runs": span, "minutes": minutes, "flood": flood}) if rule else None
+
+
+def _hold_row(c, aid):
+    return c.execute("SELECT * FROM automation_guard_holds WHERE automation_id=? AND cleared IS NULL", (aid,)).fetchone()
+
+
+# Where a run goes when it can run again (a wake comes, a turn answers, a step is ready, a cut-off run resumes):
+# `queued`, or `held` while its automation is on hold, its state kept so a release resumes it where it was.
+RUNNABLE = ("CASE WHEN EXISTS(SELECT 1 FROM automation_guard_holds g WHERE g.automation_id=automation_runs.automation_id "
+            "AND g.cleared IS NULL) THEN 'held' ELSE 'queued' END")
+
+
+def _runnable(c, aid):
+    return "held" if _hold_row(c, aid) else "queued"
+
+
+def hold_of(c, aid):
+    """The automation's live hold as its readers get it ({rule, since, held, dropped, task}), or None."""
+    row = _hold_row(c, aid)
+    if not row:
+        return None
+    held = c.execute("SELECT count(*) FROM automation_runs WHERE status='held' AND automation_id=?", (aid,)).fetchone()[0]
+    return {"rule": row["rule"], "since": row["since"], "held": held, "dropped": row["dropped"], "task": row["task_id"]}
+
+
+def _hold(c, row, rule):
+    """Put the automation on hold: what it has queued is held now, so a loop stops spending at once."""
+    c.execute("INSERT INTO automation_guard_holds(automation_id,rule,since) VALUES(?,?,?) ON CONFLICT(automation_id) "
+              "DO UPDATE SET rule=excluded.rule, since=excluded.since, arrivals=0, dropped=0, task_id=NULL, "
+              "cleared=NULL",
+              (row["id"], rule, H.now()))
+    c.execute("UPDATE automation_runs SET status='held' WHERE automation_id=? AND status='queued'", (row["id"],))
+
+
+def _hold_told(c, row, rule, counted, held):
+    """Once a hold: a task in its owner's Needs you (closed when the hold ends) and a notice to the Health Monitor."""
+    flow = flow_of(row)
+    why = {"flood": f"it queued {RUN_GUARD_BURST} runs in {RUN_GUARD_MINUTES} minutes",
+           "sustained": f"it kept queuing runs for {RUN_GUARD_SPAN} minutes"}[rule]
+    words = (f"Automation {flow['name']} is on hold: {why}. That is most often a loop. {held} runs are waiting. "
+             "Release them if this was real work, or drop them, after fixing what starts it.")
     refs = {"kind": "run_guard", "automation": row["id"]}
-    H.event(c, H.KEEPER, "automation.run_guard", row["id"], {"runs": n, "minutes": RUN_GUARD_MINUTES})
-    lead = A.acts_as(c, {"flow": before})
-    person = owner_person(c, before["owner"]) or (lead[6:] if lead.startswith("human:") else "")
+    H.event(c, H.KEEPER, "automation.run_guard", row["id"], {"rule": rule, **counted, "held": held})
+    lead = A.acts_as(c, {"flow": flow})
+    person = owner_person(c, flow["owner"]) or (lead[6:] if lead.startswith("human:") else "")
     if person:
-        H.task_create(c, H.KEEPER, f"Automation {before['name']} paused: too many runs"[:300], words,
-                      "human:" + person, lint=False, deduplicate=False)
+        task = H.task_create(c, H.KEEPER, f"Automation {flow['name']} on hold"[:300], words, "human:" + person,
+                             lint=False, deduplicate=False, wake_refs=refs)
+        c.execute("UPDATE automation_guard_holds SET task_id=? WHERE automation_id=?", (task["id"], row["id"]))
     from . import health_monitor
     if health_monitor.active(c):   # the optional Health Monitor, when it is on
         H.notice(c, H.KEEPER, "bot:" + health_monitor.SLUG, words, refs=refs)
-    return True
+
+
+def _unhold(c, aid, actor, how, via=None):
+    """End the hold: its held runs go back to the queue (`release`) or are skipped (`drop`, and a turn off or delete),
+    its Needs-you task is closed, and the change is on record. Returns how many runs it moved, or None with no hold."""
+    hold = _hold_row(c, aid)
+    if not hold:
+        return None
+    now = H.now()
+    if how == "release":
+        n = c.execute("UPDATE automation_runs SET status='queued' WHERE automation_id=? AND status='held'", (aid,)).rowcount
+        _ring(c)
+    else:
+        # A run mid-step is dropped too: it finishes that step (`HubServices.on_hold`) and nothing after it runs.
+        for run in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('held','running')",
+                             (aid,)).fetchall():
+            _cancel_mail(c, run["id"])
+        n = c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+                      "AND status IN ('held','running')", (now, aid)).rowcount
+    c.execute("UPDATE automation_guard_holds SET cleared=? WHERE automation_id=?", (now, aid))
+    task = H.task(c, hold["task_id"]) if hold["task_id"] else None
+    if task and task["status"] not in ("closed", "done", "declined"):
+        H.task_close(c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True)
+    before = {"hold": {"rule": hold["rule"], "since": hold["since"], "dropped": hold["dropped"]}}
+    H.event(c, actor, "automation.hold_" + ("released" if how == "release" else "dropped"), aid,
+            {"runs": n, "rule": hold["rule"], "dropped": hold["dropped"]})
+    audit_log.write(c, actor, "automation:" + aid, before, {"hold": None, how: n}, via)
+    return n
 
 
 def _absorbed(c, row):
@@ -708,8 +913,8 @@ def _bot_away(c, row):
 
 
 def _no_input(c, row, settings, at, zone):
-    """Why a converted routine's scheduled run would have nothing to work on (backend/routines.py `no_input`: the CEO
-    Bot's KPI pass with the regular checks off, the Librarian's curate run with nothing new), or None."""
+    """Why a converted routine's scheduled run would have nothing to work on (backend/routines.py `no_input`: the
+    Strategy Bot's KPI pass with the regular checks off, the Librarian's curate run with nothing new), or None."""
     flow = flow_of(row)
     source = flow.get("source")
     if not isinstance(source, dict) or source.get("kind") != "routine" or settings is None:
@@ -731,10 +936,12 @@ def _no_input(c, row, settings, at, zone):
 def queue(c, row, payload, ref="", *, manual=False, chain=()):
     """A queued run of this automation's current version, or None: an automation with a `find` runs one at a time (an
     occurrence while one is unfinished is passed over, counted as dropped), a schedule absorbs an occurrence
-    while its last task is open (`_absorbed`), and the run guard may pause it."""
+    while its last task is open (`_absorbed`), and on hold (the run guard's, `_guard`) the run is kept as `held`, the
+    one that trips it included; past RUN_GUARD_BURST runs since the hold started it is dropped (the queued runs moved
+    to held when it started do not count). A manual run never trips the guard and is refused while on hold."""
     if (not manual and _finds(flow_of(row)["steps"]) and c.execute(
-            "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting') LIMIT 1",
-            (row["id"],)).fetchone()):
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting','held') "
+            "LIMIT 1", (row["id"],)).fetchone()):
         _count(c, row["id"], "dropped")
         return None
     if not manual and _absorbed(c, row):
@@ -744,15 +951,32 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
             (row["id"], str(ref)[:200])).fetchone():
         # One Slack message, one run: a channel message offered once may come back as an `@Tico` event.
         return None
-    if _guard(c, row):
+    held = _hold_row(c, row["id"])
+    if held and manual:
         return None
-    rid = "run_" + H.new_id()
-    state = E.start(payload, manual=manual)
-    c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
-              "VALUES(?,?,?,?,?,'queued',?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
-                                                  json.dumps(state, default=str), json.dumps(list(chain))))
-    _count(c, row["id"], "runs")
-    _ring(c)
+    tripped = None if held or manual else _guard(c, row)
+    if tripped:
+        _hold(c, row, tripped[0])
+    on_hold = bool(held or tripped)
+    arrivals = held["arrivals"] if held else 0
+    rid = None
+    if on_hold and arrivals >= RUN_GUARD_BURST:
+        _count(c, row["id"], "dropped")
+        c.execute("UPDATE automation_guard_holds SET dropped=dropped+1 WHERE automation_id=?", (row["id"],))
+    else:
+        rid = "run_" + H.new_id()
+        state = E.start(payload, manual=manual)
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, row["id"], row["version"], str(ref or "")[:200], H.now(),
+                                              "held" if on_hold else "queued", json.dumps(state, default=str),
+                                              json.dumps(list(chain))))
+        _count(c, row["id"], "runs")
+        if on_hold:
+            c.execute("UPDATE automation_guard_holds SET arrivals=arrivals+1 WHERE automation_id=?", (row["id"],))
+        else:
+            _ring(c)
+    if tripped:
+        _hold_told(c, row, tripped[0], tripped[1], hold_of(c, row["id"])["held"])
     return rid
 
 
@@ -919,7 +1143,10 @@ def on_webhook(c, trigger_id, name, type_, delivery, payload, content):
     queued = fire(c, "webhook", {"webhook": {"id": trigger_id, "name": name, "type": type_, "delivery": delivery,
                                              "data": payload, "content": content}},
                   f"webhook:{trigger_id}:{delivery}", lambda t: t["id"] == trigger_id)
-    return [{"outcome": "automation", "target": rid, "ok": True, "detail": "run queued"} for rid in queued]
+    held = {r[0] for r in c.execute("SELECT id FROM automation_runs WHERE status='held' AND id IN "
+                                    "(SELECT value FROM json_each(?))", (json.dumps(queued),))} if queued else set()
+    return [{"outcome": "automation", "target": rid, "ok": True, "detail": "run held" if rid in held else "run queued"}
+            for rid in queued]
 
 
 def on_listening(c, intake, post):
@@ -945,7 +1172,8 @@ def turn_done(c, attempt, outcome, text):
     ref = refs.get("task") if refs.get("automation_step") else msg["id"]
     priced = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (attempt["id"],)).fetchone()
     cost, ok = float((priced and priced[0]) or 0), outcome == "completed"
-    if run["status"] == "running":
+    if run["status"] == "running" or (run["status"] == "skipped" and run["claimed_at"]):
+        # Still being worked (a run dropped mid-step is too, until its step is saved): the save takes the answer.
         c.execute("INSERT OR REPLACE INTO automation_turn_answers(run_id,ref,text,cost,ok,at) VALUES(?,?,?,?,?,?)",
                   (rid, ref, text or "", cost, int(ok), H.now()))
         return
@@ -955,11 +1183,24 @@ def turn_done(c, attempt, outcome, text):
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
         return
     answered = _take(state, ref, text, cost, ok)
-    status = "queued" if answered and run["status"] in ("waiting", "queued") else run["status"]
-    c.execute("UPDATE automation_runs SET status=?,state_json=?,cost=?,wake_at=CASE WHEN ?='queued' THEN NULL "
-              "ELSE wake_at END WHERE id=?", (status, json.dumps(state, default=str), state["cost"], status, rid))
+    status = (_runnable(c, run["automation_id"]) if answered and run["status"] in ("waiting", "queued")
+              else run["status"])
+    c.execute("UPDATE automation_runs SET status=?,state_json=?,cost=?,wake_at=CASE WHEN ? IN ('queued','held') "
+              "THEN NULL ELSE wake_at END WHERE id=?", (status, json.dumps(state, default=str), state["cost"], status, rid))
     if status == "queued":
         _ring(c)
+
+
+def _take_parked(c, rid, state):
+    """Turns that ended while the run was being worked: their answers and costs on its state, their spend holds
+    released."""
+    for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY at", (rid,)).fetchall():
+        if state.get("threads") is not None:
+            _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
+        else:
+            state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
+        c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
+    c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
 
 
 def _take(state, ref, text, cost, ok):
@@ -1089,7 +1330,7 @@ def _held(c, aid, rid):
     """The ids of items the automation's other unfinished runs are working on: a `find` leaves them to those runs."""
     out = set()
     for row in c.execute("SELECT state_json FROM automation_runs WHERE automation_id=? AND id<>? "
-                         "AND status IN ('queued','running','waiting')", (aid, rid)):
+                         "AND status IN ('queued','running','waiting','held')", (aid, rid)):
         for thread in (json.loads(row[0] or "{}").get("threads") or []):
             if thread.get("item") is not None and isinstance(thread.get("value"), dict):
                 out.add(str(thread["value"].get("id")))
@@ -1166,19 +1407,77 @@ class HubServices:
             **audit_detail(result), "answers": J.summary(result["answers"])}))
         return result
 
+    def _screened(self, bot, values):
+        """A webhook run's call, screened for prompt injection before a bot gets work from it (backend/screening.py);
+        None for any other run. Outside every transaction: it may wait on the decision model."""
+        if self.row.get("trigger_type") != "webhook" or not bot:
+            return None
+        from . import screening
+        return screening.automation_check(self.hub.store, self.hub.app.state.judge, values, bot)
+
     def act(self, do, args, ctx):
-        return self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        found = None
+        if do == "create_task":
+            owner = str(args.get("owner") or "")
+            bot = owner[4:] if owner.startswith("bot:") else "" if ":" in owner else owner
+            found = self._screened(bot, ctx["values"]) if bot else None
+            if found and found["action"] != "pass":
+                args = self._screened_task(found, bot, args, ctx["values"])
+        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
+            from . import screening
+            self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
+                                                 to=args.get("owner") if found["action"] == "hold" else None))
+        return result
+
+    def _screened_task(self, found, bot, args, values):
+        """A create_task step's arguments after screening: held for a person, or with the warning line first."""
+        from . import screening
+        body = str(args.get("body") or args.get("title") or "")
+        if found["action"] == "hold":
+            with self.hub.store.read() as c:
+                person = screening.automation_person(c, values, self.flow.get("owner"), bot)
+                name = screening._name(c, bot)
+            if person:
+                return {**args, "owner": person, "title": screening.held_title(args.get("title")),
+                        "body": screening.held_body(found, bot, name, body)}
+            found["action"] = "warn"
+        return {**args, "body": screening.warning_line(found) + "\n\n" + body}
 
     def start_turn(self, who, prompt, ctx, wait):
         """The cap check and the start in one write: the turns of runs going at once cannot each see room under the
-        cap. A started turn holds its bot's usual cost until it is priced."""
+        cap. A started turn holds its bot's usual cost until it is priced. On a webhook's run the call is screened
+        first: at `hold` the turn is not started and its prompt is a held task for a person (`held` in the answer)."""
         cap = (self.flow.get("spend_cap") or {}).get("per_30m")
+        bot = who[4:] if who.startswith("bot:") else ""
+        found = self._screened(bot, ctx["values"])
+        person = None
+        if found and found["action"] == "hold":
+            from . import screening
+            with self.hub.store.read() as c:
+                person = screening.automation_person(c, ctx["values"], self.flow.get("owner"), bot)
+            if not person:
+                found["action"] = "warn"
+        if found and found["action"] == "warn":
+            from . import screening
+            prompt = screening.warning_line(found) + "\n\n" + prompt
 
         def work(c):
+            if person:
+                from . import screening
+                name = str(self.flow.get("name") or self.row["id"])
+                task = H.task_create(c, A._actor(c, self.auto), screening.held_title(name),
+                                     screening.held_body(found, bot, screening._name(c, bot), prompt), person,
+                                     lint=False, deduplicate=False)
+                screening.note(c, found, "webhook", task["id"], bot=bot, to=person)
+                return {"ref": task["id"], "held": True}
             if cap is not None and _spent(c, self.row["id"], self.run_id) + float(ctx.get("cost") or 0) >= float(cap):
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
-                                   ctx["key"], label=ctx.get("label"))
+                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"))
+            if found and found["action"] == "warn":
+                from . import screening
+                screening.note(c, found, "webhook", started["ref"], bot=bot)
             c.execute("INSERT OR REPLACE INTO automation_holds(ref,automation_id,run_id,amount,at) VALUES(?,?,?,?,?)",
                       (started["ref"], self.row["id"], self.run_id, _usual_cost(c, started["turn"]["bot"]), H.now()))
             return started
@@ -1194,6 +1493,13 @@ class HubServices:
                           mailboxes=owner_mailboxes(c, self.flow["owner"]) if source == "mail" else (),
                           skip=_held(c, self.row["id"], self.run_id) | {ident for _, ident in mark["done"]},
                           idle_hours=idle_hours)
+
+    def on_hold(self):
+        """Whether no further step may start: the run guard put the automation on hold since this run was claimed, or
+        the run was dropped meanwhile (it is no longer `running`)."""
+        with self.hub.store.read() as c:
+            run = c.execute("SELECT status FROM automation_runs WHERE id=?", (self.run_id,)).fetchone()
+            return _hold_row(c, self.row["id"]) is not None or not run or run["status"] != "running"
 
     def checkpoint(self, state):
         """Save the run after a step that did something, before the next one starts."""
@@ -1256,27 +1562,30 @@ class Hub:
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
-            # Turns that ended while the run was being worked: their answers and costs, then it goes on.
-            for answer in c.execute("SELECT * FROM automation_turn_answers WHERE run_id=? ORDER BY at", (rid,)).fetchall():
-                if state.get("threads") is not None:
-                    _take(state, answer["ref"], answer["text"], answer["cost"], bool(answer["ok"]))
-                else:
-                    state["cost"] = round(state.get("cost", 0) + answer["cost"], 6)
-                c.execute("DELETE FROM automation_holds WHERE ref=?", (answer["ref"],))
-            c.execute("DELETE FROM automation_turn_answers WHERE run_id=?", (rid,))
+            _take_parked(c, rid, state)
             settle_mail(c, state)   # in the same write as the save, so a result reported meanwhile is not lost
+            if c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "skipped":
+                # Dropped (or its automation turned off or deleted) during the step: what the step did is saved (with
+                # the answers and costs of turns that ended meanwhile, taken above), the run stays skipped, and
+                # nothing it queued is sent.
+                state["status"] = "skipped"
+                _cancel_mail(c, rid, state)
+                c.execute("UPDATE automation_runs SET cost=?,state_json=?,claimed_at=NULL WHERE id=?",
+                          (state.get("cost", 0), json.dumps(state, default=str), rid))
+                return
             status = state["status"]
             if any(t.get("state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
-                status = state["status"] = "queued"
+                # Put on hold while a step ran: it finished that step and stopped, and waits held, not queued.
+                status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
                 _cancel_mail(c, rid, state)
-            _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued"))
+            _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued", "held"))
             waits = [t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"]
             if status == "waiting":
                 state["waiting_since"] = H.now()    # a turn's day to answer runs from here, not from the run's start
             c.execute("UPDATE automation_runs SET status=?,cost=?,state_json=?,finished=?,wake_at=?,claimed_at=NULL "
                       "WHERE id=?", (status, state.get("cost", 0), json.dumps(state, default=str),
-                                     None if status in ("waiting", "queued") else H.now(),
+                                     None if status in ("waiting", "queued", "held") else H.now(),
                                      min(waits) if waits and status == "waiting" else None, rid))
             if status == "queued":
                 _ring(c)
@@ -1343,10 +1652,15 @@ def _requeue(c, row):
 def _settle_run(c, run_id):
     """A mail action's result reached its run. A run being advanced settles as it is saved (Hub.go)."""
     run = c.execute("SELECT status, state_json, finished FROM automation_runs WHERE id=?", (run_id,)).fetchone()
-    if not run or not run["state_json"] or run["status"] in ("queued", "running"):
-        return
+    if not run or not run["state_json"] or run["status"] in ("queued", "running", "held"):
+        return   # a held run settles once it is released and runs
     state = json.loads(run["state_json"])
     status = settle_mail(c, state)
+    if run["status"] == "skipped":
+        # Dropped (or turned off) while an action was out: the result is on record, the run stays skipped.
+        state["status"] = "skipped"
+        c.execute("UPDATE automation_runs SET state_json=? WHERE id=?", (json.dumps(state, default=str), run_id))
+        return
     status = "failed" if run["status"] == "failed" else status   # the tick gave up on it: it stays failed
     if status == "failed":
         _cancel_mail(c, run_id, state)
@@ -1401,7 +1715,9 @@ def tick(store, at=None):
                 continue
             if row["next_due"] > now:
                 continue
-            if why := _bot_away(c, row) or _no_input(c, row, getattr(store, "settings", None), at, zone):
+            # A Tico Cloud company out of credit or locked passes its schedules over (backend/cloud_access.py).
+            if why := (cloud_access.routines_paused(c) or _bot_away(c, row)
+                       or _no_input(c, row, getattr(store, "settings", None), at, zone)):
                 # A converted built-in routine with nothing to work on is passed over, as the routine was.
                 _count(c, row["id"], "dropped")
                 H.event(c, H.KEEPER, "automation.skipped", row["id"], {"at": row["next_due"], "reason": why})
@@ -1410,7 +1726,8 @@ def tick(store, at=None):
                 fire(c, "schedule", {"schedule": {"at": row["next_due"], "cron": trigger["cron"], "tz": zone}},
                      f"schedule:{row['next_due']}", only=row["id"])
             c.execute("UPDATE automations SET next_due=? WHERE id=?", (_iso(next_due(trigger["cron"], at, zone)), row["id"]))
-        c.execute("UPDATE automation_runs SET status='queued',wake_at=NULL WHERE status='waiting' AND wake_at<=?", (now,))
+        c.execute(f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?",
+                  (now,))
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
         for run in c.execute("SELECT id, state_json FROM automation_runs WHERE status='running' AND claimed_at<?",
                              (H.shift(now, minutes=-STALE_MINUTES),)).fetchall():
@@ -1419,8 +1736,17 @@ def tick(store, at=None):
             if not state.get("threads") or state["resumes"] > MAX_RESUMES:
                 _fail(c, run["id"], state, now, "it was cut off more than %d times" % MAX_RESUMES)
             else:
-                c.execute("UPDATE automation_runs SET status='queued',claimed_at=NULL,state_json=? WHERE id=?",
+                c.execute(f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,state_json=? WHERE id=?",
                           (json.dumps(state, default=str), run["id"]))
+        # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
+        # turns cost meanwhile is charged to it and their holds released.
+        for run in c.execute("SELECT id, state_json FROM automation_runs WHERE status='skipped' "
+                             "AND claimed_at IS NOT NULL AND claimed_at<?",
+                             (H.shift(now, minutes=-STALE_MINUTES),)).fetchall():
+            state = {**json.loads(run["state_json"] or "{}"), "status": "skipped"}
+            _take_parked(c, run["id"], state)
+            c.execute("UPDATE automation_runs SET cost=?,state_json=?,claimed_at=NULL WHERE id=?",
+                      (state.get("cost", 0), json.dumps(state, default=str), run["id"]))
         # A turn (or a mail computer) that never answered would hold the run waiting for ever.
         cutoff = H.shift(now, days=-TURN_WAIT_DAYS)
         for run in c.execute("SELECT id, started, state_json FROM automation_runs WHERE status='waiting' "
@@ -1502,6 +1828,10 @@ class InboxSend(Contract):
     send: bool
 
 
+class HeldAction(Contract):
+    action: str = Field(pattern="^(release|drop)$")   # release: held runs are queued; drop: they are skipped
+
+
 class RunNow(Contract):
     input: dict = Field(default_factory=dict)   # shaped like the trigger's output: message, task, item, event, body
 
@@ -1565,6 +1895,7 @@ def _input_readable(c, owner, given):
 
 def install(app, store, auth, mutate):
     from fastapi import Request
+    from . import automation_overview as AO
 
     hub = Hub(app, store)
     store.automations = hub
@@ -1588,7 +1919,9 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/automations")
     def automations_list(request: Request, owner: str = "", limit: int = 50, cursor: int = 0):
-        """The automations the caller may change (the same rule decides what they see), newest first."""
+        """The automations the caller may change (the same rule decides what they see), newest first; up to 500 a page,
+        and `next` is the `cursor` for the page after."""
+        from . import automation_overview as AO
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
@@ -1597,9 +1930,11 @@ def install(app, store, auth, mutate):
                              ((F.owner_ref(owner),) if owner else ())).fetchall()
             pending = {r[0]: r[1] for r in c.execute("SELECT automation_id, COUNT(*) FROM automation_versions "
                                                      "WHERE status='pending' GROUP BY automation_id")}
-            visible = [{**view(c, dict(r), who), "pending": pending.get(r["id"], 0)}
-                       for r in rows if may_see(c, who, flow_of(r))]
-        shown, more = page(visible[max(cursor, 0):], max(1, min(limit, 200)), max(cursor, 0), LIST_BYTES)
+            chart = Chart(c) if who.role in ("human", "bot") else None   # one chart for every row's rule
+            jobs = AO.system_jobs(c, store.settings)
+            visible = [{**view(c, dict(r), who, chart=chart, jobs=jobs), "pending": pending.get(r["id"], 0)}
+                       for r in rows if may_change(c, who, {**flow_of(r), "readonly": False}, chart)]
+        shown, more = page(visible[max(cursor, 0):], max(1, min(limit, 500)), max(cursor, 0), LIST_BYTES)
         return {"automations": shown, "next": more}
 
     @app.get("/api/v2/automations/question-sets")
@@ -1637,11 +1972,16 @@ def install(app, store, auth, mutate):
             flow = _checked(c, fields, store.settings)
             if flow["builtin"]:
                 raise Problem("forbidden", "Built-in automations come with Tico; the hub makes them", 403)
-            if who.role == "bot" and _by_botops(who) and not may_change(c, who, flow):
+            # A step that sets its task's model is saved as a draft for a person who may set that model, as a bot's is.
+            blocked = _stamp_blocked(c, auth, who, flow)
+            if (who.role == "bot" and _by_botops(who) and not may_change(c, who, flow)) or (
+                    blocked and may_change(c, who, flow)):
                 return _bot_draft(c, who, flow)
             _require(c, who, flow, "make an automation for " + flow["owner"])
             return view(c, _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who)), who, detail=True)
         return mutate(request, body, work)
+
+    AO.install(app, store, auth)   # /runs and /stats, before /{aid} reads them as ids
 
     @app.get("/api/v2/automations/{aid}")
     def automations_get(request: Request, aid: str):
@@ -1680,7 +2020,8 @@ def install(app, store, auth, mutate):
             # What it reads is checked when that changes; pausing or renaming one whose owner lost access still works.
             merged = {**before_cap, **changes}
             flow = _checked(c, merged, store.settings,
-                            access=any(merged.get(k) != before.get(k) for k in ("trigger", "steps", "owner")))
+                            access=any(merged.get(k) != before.get(k) for k in ("trigger", "steps", "owner")),
+                            saved=before, aid=aid)
             if before.get("readonly"):
                 # Tico's own rules, shown read-only: the top of the org may pause or resume it, and nothing else.
                 if who.role != "owner" or set(changes) - {"enabled"}:
@@ -1691,10 +2032,24 @@ def install(app, store, auth, mutate):
                 warning = ("This is a built-in automation: the rules it shows are Tico's own and keep working while "
                            "it is paused.") if changes.get("enabled") is False else None
                 return {**view(c, row, who, detail=True), **({"warning": warning} if warning else {})}
-            if who.role == "bot" and not may_change(c, who, before):
+            # What a save makes live is checked against the steps already approved: a draft's are not, until someone who
+            # may set their models turns it on, so turning it on by anyone else is refused.
+            approved = _approved(c, row)
+            turns_on = changes.get("enabled") is True and not before.get("enabled")
+            versioned = bool(set(changes) & set(VERSIONED))
+            blocked = _stamp_blocked(c, auth, who, flow, before if approved else None) \
+                if versioned or turns_on else None
+            if blocked and turns_on and not versioned:
+                raise Problem("forbidden", f"Only whoever may change {blocked}'s model may turn on a routine that sets "
+                              "it", 403)
+            # A bot never sets the model a step's task runs on, and a person who may change the automation but not that
+            # model proposes it: either way the change is a pending version a person with the rights restores.
+            proposed = who.role == "bot" and not may_change(c, who, before)
+            if proposed or (blocked and may_change(c, who, before)):
                 if not changes or set(changes) - set(VERSIONED):
                     raise Problem("forbidden", "A bot may only propose a change to an automation's trigger, steps "
-                                  "or batch times", 403)
+                                  "or batch times" if proposed else "A change to the model a step's task runs on is "
+                                  "proposed as a version: send only its trigger, steps or batch times", 403)
                 n = _propose(c, who.actor, aid, flow, before, summary)
                 if may_see(c, who, before):
                     return {**view(c, row, who, detail=True), "pending": n}
@@ -1707,7 +2062,10 @@ def install(app, store, auth, mutate):
                     raise Problem("forbidden", "Only the top of the org pauses a built-in automation", 403)
                 warning = "This is a built-in automation: the work it does stops until it is turned back on."
             if flow != before:
-                row = _save(c, who.actor, aid, flow, before, summary=summary, via=_via(who))
+                # Turning a draft on is its approval, as restoring its version is: that version is active from now on.
+                approve = turns_on and not approved and _versioned(flow) == _versioned(before)
+                row = _save(c, who.actor, aid, flow, before, summary=summary, via=_via(who),
+                            current=row["version"] if approve else None)
             if changes.get("enabled") is True and flow.get("wakes"):
                 _resume_task_triggers(c, aid, flow)
             return {**view(c, row, who, detail=True), **({"warning": warning} if warning else {})}
@@ -1719,12 +2077,14 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             row = deletable(c, who, aid)
+            _unhold(c, aid, who.actor, "drop", _via(who))
             c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
             for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
-                                     "('queued','waiting')", (aid,)).fetchall():
+                                     "('queued','waiting','running')", (aid,)).fetchall():
                 _cancel_mail(c, dropped["id"])
+            # A run mid-step finishes that step and stops there (`HubServices.on_hold`).
             c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
-                      "AND status IN ('queued','waiting')", (H.now(), aid))
+                      "AND status IN ('queued','waiting','running')", (H.now(), aid))
             audit_log.write(c, who.actor, "automation:" + aid, flow_of(row), None, _via(who))
             return {"id": aid, "deleted": True}
         return mutate(request, body, work)
@@ -1750,6 +2110,11 @@ def install(app, store, auth, mutate):
             flow = flow_of(row)
             if flow.get("readonly"):
                 raise Problem("readonly", "This built-in shows work Tico runs itself; it has nothing to run", 409)
+            if _hold_row(c, aid):
+                raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
+            if not _approved(c, row) and (blocked := _stamp_blocked(c, auth, who, flow)):
+                raise Problem("forbidden", f"Only whoever may change {blocked}'s model may run a routine that sets it "
+                              "before it is turned on", 403)
             _input_readable(c, flow["owner"], body.input)
             if body.input and not F.all_hold(flow["trigger"].get("filters") or [], body.input):
                 # A sample the trigger's filters drop is dropped as the trigger would drop it: counted, no run row.
@@ -1757,7 +2122,7 @@ def install(app, store, auth, mutate):
                 return {"run": None, "dropped": True}
             rid = queue(c, row, {**body.input, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
             if not rid:
-                raise Problem("paused", "The automation queued too many runs and was paused", 409)
+                raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
             return {"run": rid}
         done = mutate(request, body, work)
         if done.get("dropped"):
@@ -1767,13 +2132,33 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return {"run": run_view(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())}
 
+    @app.post("/api/v2/automations/{aid}/held")
+    def automations_held(request: Request, aid: str, body: HeldAction):
+        """End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. Whoever may
+        change the automation may do either."""
+        who = request.state.identity
+
+        def work(c):
+            row = found(c, who, aid, "release or drop its held runs")
+            n = _unhold(c, aid, who.actor, body.action, _via(who))
+            if n is None:
+                raise Problem("not_on_hold", "The automation is not on hold", 409)
+            return {**view(c, row, who, detail=True), "moved": n}   # released runs drain after the commit (_ring)
+        return mutate(request, body, work)
+
     @app.get("/api/v2/automations/{aid}/runs")
     def automations_runs(request: Request, aid: str, limit: int = 25, before: str = ""):
         """Its runs, newest first, each with its steps' status, outputs and cost (kept 30 days); `next` is the `before`
-        for the page after. `daily` holds the counts, which include what the trigger's filters dropped."""
+        for the page after. `daily` holds the counts, which include what the trigger's filters dropped. A system job's
+        built-in shows the job's own runs (no steps; `count` the quiet runs folded into one)."""
         limit = max(1, min(limit, 100))
         with store.read() as c:
-            found(c, request.state.identity, aid, rule=may_see)
+            row = found(c, request.state.identity, aid, rule=may_see)
+            job = AO.system_key(flow_of(row))
+            if job:
+                rows, more = AO.system_runs_of(c, job, limit, before)
+                runs = [AO.system_run_view(r, aid) for r in rows]
+                return {"runs": runs, "next": runs[-1]["id"] if more and runs else None, "daily": []}
             at = c.execute("SELECT started, id FROM automation_runs WHERE id=? AND automation_id=?",
                            (before, aid)).fetchone() if before else None
             if before and not at:
@@ -1817,8 +2202,13 @@ def install(app, store, auth, mutate):
             draft = pending and not before["enabled"] and not c.execute(
                 "SELECT 1 FROM automation_versions WHERE automation_id=? AND status='active'", (aid,)).fetchone()
             flow = _checked(c, {**{k: v for k, v in before.items() if k not in VERSIONED}, **json.loads(old["flow_json"]),
-                                **({"enabled": True} if draft else {})}, store.settings)
+                                **({"enabled": True} if draft else {})}, store.settings, saved=before, aid=aid)
             _require(c, who, flow, "restore this version")
+            # A draft's row already holds the steps its pending version turns on, so nothing of it counts as kept.
+            blocked = _stamp_blocked(c, auth, who, flow, before if _approved(c, row) else None)
+            if blocked:
+                raise Problem("forbidden", f"Only whoever may change {blocked}'s model may restore a version that "
+                              "sets the model its tasks run on", 403)
             saved = _save(c, who.actor, aid, flow, before, current=n if pending else None, new_version=not pending,
                           via=_via(who))
             return view(c, saved, who, detail=True)

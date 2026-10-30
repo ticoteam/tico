@@ -39,9 +39,10 @@ The operation groups below are generated from the committed spec's tags. After r
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
+| Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
 | Assistant | The signed-in person's own private Assistant chat ([guide](assistant.md)): ask, and confirm what it proposes. |
-| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the CEO Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
+| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Strategy Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
 | KPIs | Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, evidence and a quality, never edited; a correction supersedes the old one. |
 | Usage | Estimated model spend per bot ([guide](usage.md)): tokens counted by each run's computer, priced at list price. |
 | Health | Whether the installation is working. |
@@ -55,8 +56,10 @@ The operation groups below are generated from the committed spec's tags. After r
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
 | Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
+| Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
 | Notices | Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release check. |
 | Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
+| Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
@@ -296,7 +299,9 @@ from agent tools; the server binds the actor to the signed-in owner/admin, not a
 `q`, `has_code`, `spam`, `after` and `before` (message sequence numbers). `next` is the `before`
 for the next older page. Bodies and revealed codes are excluded; previews mask an extracted code.
 `messages/{id}?offset=&max_chars=` reads untrusted text in parts of at most 32 KB; `next_offset`
-continues it. `messages/{id}/code` reads the extracted code. Neither action consumes the message.
+continues it. A bot's read carries `screening` (`action` pass or warn, `score`, `kinds`) from the
+[screening](permissions.md#screening) check, and at warn the first part starts with a warning line; a person's read is not
+checked. `messages/{id}/code` reads the extracted code. Neither action consumes the message.
 
 Capture `GET /api/v2/inbound/cursor` before starting a verification. `POST inbound/wait` with
 `{after,inbox_ids?,kind?,sender?,has_code?,timeout?,limit?}` waits for newer messages, oldest first.

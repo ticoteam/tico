@@ -2,7 +2,7 @@
 
 > **Beta**: the Live Meetings API and Recorder work today and may still change. See [Beta features](support.md#beta-features).
 
-This is Recorder wire contract revision 7 for the Tico Live Meetings API v2 server path in PR #92.
+This is Recorder wire contract revision 8 for the Tico Live Meetings API v2 server path in PR #92.
 It handles transcript text only. Raw audio is never sent to or stored by Tico. Request and response
 shapes below are part of the contract; change them only with a reviewed contract update.
 
@@ -59,7 +59,7 @@ fields are listed below.
 
 | Method and path | Access | Purpose |
 | --- | --- | --- |
-| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?,visibility?}`. `visibility` is `team` (default) or `private`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
+| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,client?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?,visibility?}`. `visibility` is `team` (default) or `private`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
 | `GET /api/v2/live-meetings` | Human | List live and paused meetings this person can see, newest first; ended meetings are excluded. |
 | `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots this human can see and contact with Write access are included; `bots` may be empty. |
 | `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, transcript-window traces, chat-route traces, named-bypass traces, and turn outcomes. |
@@ -84,11 +84,24 @@ event is committed with the state change it describes. Reconnect from the last f
 replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
-`state`, `owner_actor`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`, `created`,
+`state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`, `created`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, and `router`.
 The `router` object contains `windows`, `chat_routes`, `turns`, and `bypasses`. Each `chat_routes` item
 has `chat_id`, `status`, `outcome`, `started`, `finished`, and `trace`. Use the route-specific acknowledgments
 above for writes; the view is a snapshot, not an acknowledgment receipt.
+
+`client` is optional on connect: omit it (or send null) for an unnamed connector, or use
+`"tico-recorder"`. Any other value is a validation error. The meeting view always includes
+`client` as `"tico-recorder"` or null. It is fixed at creation: reconnecting with an existing
+`client_id` returns that meeting unchanged. Finalize carries it into the filed meeting's metadata.
+Live now and the filed meeting show "From Tico Recorder" for that client. Existing meetings
+have null provenance. Visibility still defaults to `team`; event schemas and all other routes
+are unchanged.
+
+The stable UI link for Open in Tico is `<instance-base>/#/meetings?live=<id>` (URL-encode the
+meeting id). It selects the meeting directly, including an ended meeting. The link grants no
+access: normal sign-in and meeting visibility checks still apply. The filed meeting link remains
+`<instance-base>/#/meetings?meeting=<imported_meeting_id>`.
 
 ## Events
 

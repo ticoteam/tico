@@ -8,13 +8,13 @@ from backend import recruiting
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_ceo_bot import as_bot
+from backend.tests.test_strategy_bot import as_bot
 
 
-def ceo_bot(api):
+def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','CEO Bot','fake','','','','keeper','active',?)", (H.now(),))
+                  "VALUES('goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES('goal-manager','{}','ana')")
     return as_bot(api, "goal-manager")
 
@@ -44,10 +44,10 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     assert "hub_org_models" in offered and "hub_assistant_propose" in offered
 
 
-def test_the_owner_opening_a_seat_gets_the_ceo_bots_draft_and_a_person_s_words_are_never_drafted_over(api):
-    ceo = ceo_bot(api)
+def test_the_owner_opening_a_seat_gets_the_strategy_bots_draft_and_a_person_s_words_are_never_drafted_over(api):
+    strategy_token = strategy_bot(api)
     seat = post(api, "seats", {"title": "Support lead", "reports_to": "human:ben"})
-    # Someone else opening it asks the CEO Bot nothing: it works for the owner alone.
+    # Someone else opening it asks the Strategy Bot nothing: it works for the owner alone.
     assert post(api, f"seats/{seat['id']}/open", {}, token="ben-test")["draft"]["state"] == "none"
     assert draft_tasks(api) == []
     opened = post(api, f"seats/{seat['id']}/open", {})
@@ -55,13 +55,13 @@ def test_the_owner_opening_a_seat_gets_the_ceo_bots_draft_and_a_person_s_words_a
     post(api, f"seats/{seat['id']}/open", {})                       # opening again asks once
     assert [t["status"] for t in draft_tasks(api)] == ["open"]
 
-    # Only the CEO Bot drafts, on its own credential.
+    # Only the Strategy Bot drafts, on its own credential.
     post(api, f"seats/{seat['id']}/draft", {"text": "Owns the support queue end to end."}, token="ben-test", expected=403)
-    drafted = api.post(f"/api/v2/seats/{seat['id']}/draft", headers=ceo,
+    drafted = api.post(f"/api/v2/seats/{seat['id']}/draft", headers=strategy_token,
                        json={"text": "Owns the support queue end to end and keeps answers kind and fast."})
     assert drafted.status_code == 200, drafted.text
     shown = get(api, f"seats/{seat['id']}")
-    assert shown["draft"]["state"] == "drafted" and shown["description_by"] == "ceo_bot"
+    assert shown["draft"]["state"] == "drafted" and shown["description_by"] == "strategy_bot"
     assert shown["description"].startswith("Owns the support queue")
     assert [t["status"] for t in draft_tasks(api)] == ["done"]
 
@@ -70,7 +70,7 @@ def test_the_owner_opening_a_seat_gets_the_ceo_bots_draft_and_a_person_s_words_a
                        headers=headers("ben-test"))
     assert edited.status_code == 200 and get(api, f"seats/{seat['id']}")["description_by"] == "person"
 
-    # A seat whose description a person wrote, or one they edit while the CEO Bot drafts, keeps their words.
+    # A seat whose description a person wrote, or one they edit while the Strategy Bot drafts, keeps their words.
     mine = post(api, "seats", {"title": "Bookkeeper", "description": "Keeps the books.", "reports_to": "coo"})
     assert post(api, f"seats/{mine['id']}/open", {})["draft"]["state"] == "none"
     chart = post(api, "seats", {"title": "Analyst", "reports_to": "coo"})
@@ -85,7 +85,7 @@ def test_the_owner_opening_a_seat_gets_the_ceo_bots_draft_and_a_person_s_words_a
 
 def test_an_upgrade_keeps_job_descriptions_people_wrote_before_authorship_was_recorded(api):
     from backend import lifecycle
-    ceo = ceo_bot(api)
+    strategy_token = strategy_bot(api)
     with api.app.state.store.transaction() as c:
         # The seats table as the release before recruiting left it, with a person's text, an edited one and an empty one.
         c.execute("DROP TABLE seats")
@@ -107,7 +107,8 @@ def test_an_upgrade_keeps_job_descriptions_people_wrote_before_authorship_was_re
     assert len(draft_tasks(api)) == 2
     with api.app.state.store.transaction() as c:      # even with a stray draft task, the old words stay
         c.execute("UPDATE seats SET draft_task=(SELECT draft_task FROM seats WHERE id='s-empty') WHERE id='s-old'")
-    refused = api.post("/api/v2/seats/s-old/draft", headers=ceo, json={"text": "A bookkeeper who closes every month on time."})
+    refused = api.post("/api/v2/seats/s-old/draft", headers=strategy_token,
+                       json={"text": "A bookkeeper who closes every month on time."})
     assert refused.status_code == 409 and get(api, "seats/s-old")["description"] == "Keeps the books."
 
 
@@ -132,10 +133,10 @@ def test_recruit_answers_at_once_with_one_recommended_candidate_each_with_a_reas
 
 def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_then_its_repo(api):
     providers(api, "anthropic", "openai")
-    ceo = ceo_bot(api)
+    strategy_token = strategy_bot(api)
     seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo"})
     assert post(api, f"seats/{seat['id']}/open", {})["draft"]["state"] == "drafting"
-    assert api.post(f"/api/v2/seats/{seat['id']}/draft", headers=ceo, json={
+    assert api.post(f"/api/v2/seats/{seat['id']}/draft", headers=strategy_token, json={
         "text": "Runs customer support and reports weekly on response times."}).status_code == 200
     found = post(api, f"seats/{seat['id']}/recruit", {})
     pick = found["candidates"][0]
@@ -178,7 +179,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
 
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):
     providers(api, "anthropic", "openai")
-    ceo = ceo_bot(api)
+    strategy_token = strategy_bot(api)
     seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers customer email."})
     pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]
     # A template that is not a starter: BotOps builds its repository, so a team with no BotOps cannot hire it.
@@ -195,7 +196,7 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
                     dict(c.execute("SELECT filled_by,closed_at,reports_to FROM seats WHERE id=?", (seat["id"],)).fetchone()),
                     c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Set up %'").fetchone()[0])
     before = state()
-    for caller in (ceo, headers("ana-assistant")):          # a bot; the Assistant's own turn for the owner
+    for caller in (strategy_token, headers("ana-assistant")):          # a bot; the Assistant's own turn for the owner
         assert api.post(f"/api/v2/seats/{seat['id']}/hire", headers=caller,
                         json={"template": pick["template"]}).status_code == 403
     # The pick's own rule, behind the route's: a bot, or anyone acting for a person without their confirmation.

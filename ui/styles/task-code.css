@@ -33,10 +33,10 @@
 .prop{display:grid;grid-template-columns:76px minmax(0,1fr);align-items:center;min-height:30px;gap:6px}
 .prop-k{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .prop-vwrap{position:relative;display:flex;align-items:center;gap:2px;min-width:0}
-.prop-v{display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:100%;height:26px;padding:0 6px;margin-left:-6px;border:0;border-radius:6px;background:none;color:var(--ink);font:500 var(--t-sm)/1 var(--sans);text-align:left;white-space:nowrap}
+.prop-v{display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:100%;height:26px;padding:0 6px;margin-left:-6px;border:0;border-radius:6px;background:none;color:var(--ink);font:500 var(--t-sm)/var(--lh-none) var(--sans);text-align:left;white-space:nowrap}
 button.prop-v{cursor:pointer}
 button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hover)}
-.prop-v:focus-visible,.prop-x:focus-visible,.prop-add:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.prop-v:focus-visible,.prop-x:focus-visible,.prop-add:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .prop-v.empty{color:var(--muted);font-weight:400}
 .prop-v .av{flex:none}
 .prop-txt{overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -44,7 +44,7 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 .prop-ic.late,.prop-txt.late{color:var(--fail)}
 .prop-x,.prop-add{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:pointer}
 .prop-x{opacity:0}
-.prop-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;height:26px;padding:0 2px 0 0;font:500 var(--t-sm)/1 var(--sans);color:var(--ink);white-space:nowrap}
+.prop-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;height:26px;padding:0 2px 0 0;font:500 var(--t-sm)/var(--lh-none) var(--sans);color:var(--ink);white-space:nowrap}
 .prop-chip .prop-x{opacity:0}
 .prop-chip:hover .prop-x,.prop-chip .prop-x:focus-visible{opacity:1}
 .prop:hover .prop-x,.prop-x:focus-visible{opacity:1}
@@ -70,10 +70,10 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 }
 /* Code: repo · branch · ↑2 ↓1 · 3 files, or #212 title and its state chips */
 .code-list,.sub-list{list-style:none;margin:0;padding:0}
-.code-line{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-height:24px;padding:2px 22px 2px 0;line-height:18px}
+.code-line{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-height:24px;padding:2px 22px 2px 0;line-height:var(--lh)}
 .code-main{display:flex;align-items:baseline;gap:5px;min-width:0;flex:1 1 10em;color:var(--ink);text-decoration:none;overflow:hidden;white-space:nowrap}
 a.code-main:hover .code-title,a.code-main:hover .code-repo{color:var(--accent);text-decoration:underline}
-.code-main:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.code-main:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .code-repo{font-weight:600}
 .code-repo.unknown{font-weight:400;color:var(--muted)}
 .code-branch{color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -102,11 +102,11 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-line{display:flex;align-items:center;gap:5px;min-height:24px}
 .sub-list .sub-list{margin-left:14px}
 .sub-chev,.sub-chev-pad{flex:none;width:12px}
-.sub-chev{display:grid;place-items:center;width:24px;height:24px;margin:0 -6px;border:0;background:none;padding:0;color:var(--muted);cursor:pointer;font-size:12px;line-height:1;transition:transform var(--dur-fast) var(--ease)}
-.sub-chev.open{transform:rotate(90deg)}
+.sub-chev{display:grid;place-items:center;width:24px;height:24px;margin:0 -6px;border:0;background:none;padding:0;color:var(--muted);cursor:pointer;font-size:12px;line-height:var(--lh-none);transition:transform var(--dur-fast) var(--ease)}
+.sub-chev.open{transform:var(--chev-open)}
 .sub-open{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;border:0;background:none;padding:2px 0;font:inherit;color:var(--ink);cursor:pointer;text-align:left}
 .sub-open:hover .sub-title{color:var(--accent)}
-.sub-open:focus-visible,.sub-chev:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}
+.sub-open:focus-visible,.sub-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .sub-who{display:inline-flex;flex:none}
 .sub-who .av{width:16px!important;height:16px!important;font-size:7px!important}
 .sub-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -117,7 +117,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-add select{width:auto;max-width:120px;font-size:var(--t-sm);padding:3px 4px}
 .code-state.err{color:var(--fail)}
 /* One small badge for a task's pull requests: the worst state across them */
-.pr-badge{flex:none;display:inline-block;font-size:var(--t-2xs);font-weight:600;line-height:14px;padding:0 4px;border-radius:7px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:.01em}
+.pr-badge{flex:none;display:inline-block;font-size:var(--t-2xs);font-weight:600;line-height:14px;padding:0 4px;border-radius:7px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:var(--track-normal)}
 .pr-badge.run{background:var(--run-bg);color:var(--run)}
 .pr-badge.ok{background:var(--ok-bg);color:var(--ok)}
 .pr-badge.fail{background:var(--fail-bg);color:var(--fail)}
@@ -131,6 +131,6 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .pr-badge{grid-area:pr}
 
 .prop[data-prop-row="owner"] .prop-vwrap,.prop[data-prop-row="private"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}
-.prop-vwrap>small{flex-basis:100%;font-size:var(--t-xs);color:var(--muted);line-height:1.4}
+.prop-vwrap>small{flex-basis:100%;font-size:var(--t-xs);color:var(--muted);line-height:var(--lh)}
 .prop[data-prop-row="private"] label{display:inline-flex;align-items:center;gap:5px}
 .prop[data-prop-row="private"] .nav-icon{font-size:16px;width:16px;height:16px}

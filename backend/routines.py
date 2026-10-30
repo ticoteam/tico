@@ -1,13 +1,12 @@
 """Routines are automations now (backend/automations.py). What is left here:
 
 - `create`, `row`, `update` and `remove` for what Tico still seeds the old way (a template's first routines, the
-  Librarian's market routines, the fleet's task sweep, the CEO Bot's passes): `create` writes the `schedules` row and,
-  once the install's cutover ran, moves it to a schedule or event automation in the same write
+  Librarian's market routines, the fleet's task sweep, the Strategy Bot's passes): `create` writes the `schedules` row
+  and, once the install's cutover ran, moves it to a schedule or event automation in the same write
   (backend/redesign_migration.py `adopt`). `row`, `update` and `remove` of a moved routine read and change its
   automation (on/off; removing deletes it). Nothing fires a `schedules` row any more.
 - `no_input`: why a built-in routine's occurrence has nothing to work on; a converted routine's automation skips it.
-- The message bots' mailboxes (`message_bot_mailboxes` and friends), which mail and the converter read.
-"""
+- The message bots' mailboxes (`message_bot_mailboxes` and friends), which mail and the converter read."""
 import json
 import re
 from datetime import datetime, timezone
@@ -94,8 +93,9 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
     at = _clock(at)
     entry = validate(fields)
-    from . import ceo_acts
-    ceo_acts.gate(c, actor, "cost", f"add a routine for {bot}: {entry['title']}")   # more runs cost more: the owner's
+    from . import strategy_acts
+    # more runs cost more: the owner's
+    strategy_acts.gate(c, actor, "cost", f"add a routine for {bot}: {entry['title']}")
     require_trigger(c, entry["on"])
     H._takes_tasks(c, actor, "bot:" + bot, routine=True)        # every run of a routine is a task
     if key is not None:
@@ -131,8 +131,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
             raise Problem("not_found", "Routine not found", 404)
         if changes.get("enabled") is not None and bool(changes["enabled"]) != bool(auto["enabled"]):
             if changes["enabled"]:
-                from . import ceo_acts
-                ceo_acts.gate(c, actor, "cost", f"start the automation \"{auto['name']}\"")
+                from . import strategy_acts
+                strategy_acts.gate(c, actor, "cost", f"start the automation \"{auto['name']}\"")
             _set_moved(c, actor, auto, changes["enabled"])        # its `routine.updated` event comes with it
         return row(c, sid)
     current = row(c, sid)
@@ -151,8 +151,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     # A new cadence or a routine started again can cost more: the owner's. Pausing it or rewording it costs nothing more.
     if any(changes.get(k) is not None for k in ("cron", "on", "timezone")) or restore and current["deleted_at"] \
             or changes.get("enabled") and not current["enabled"]:
-        from . import ceo_acts
-        ceo_acts.gate(c, actor, "cost", f"change when {current['bot']}'s routine \"{current['title']}\" runs")
+        from . import strategy_acts
+        strategy_acts.gate(c, actor, "cost", f"change when {current['bot']}'s routine \"{current['title']}\" runs")
     if (entry["on"] or None) != current["event_name"]:
         require_trigger(c, entry["on"])
     now = stamp(at)
@@ -193,9 +193,9 @@ def remove(c, actor, sid, *, at=None):
 def no_input(c, settings, schedule, local):
     """Why a built-in routine's run would have nothing to work on, or None: such a run is skipped rather than
     opening a task its bot can only close."""
-    from . import ceo_bot, market
-    if held := ceo_bot.held_routine(c, schedule):
-        return held                 # the CEO Bot's KPI pass, while the owner has its regular checks off
+    from . import strategy_bot, market
+    if held := strategy_bot.held_routine(c, schedule):
+        return held                 # the Strategy Bot's KPI pass, while the owner has its regular checks off
     # Only the routine as shipped: a team that changed its text may have given it other work.
     if (schedule["bot"] == market.CURATOR.split(":", 1)[1] and schedule["routine_key"] == "curate-the-market"
             and (schedule["playbook"] or "").strip() == market.CURATE_TEXT.strip()):

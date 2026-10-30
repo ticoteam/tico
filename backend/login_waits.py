@@ -147,7 +147,8 @@ def moved(c, aid, bot, who=None, auth=None):
     fallback = _named(payload.get("fallback"))
     if not fallback:
         return None
-    busy = payload.get("busy") if isinstance(payload.get("busy"), dict) else {}
+    busy = payload.get("busy")
+    busy = busy if isinstance(busy, dict) else {}
     login, holder = _named(busy.get("login")), _named(busy.get("holder"))
     if login and holder:
         login = login.removeprefix("this computer's ")

@@ -375,7 +375,7 @@ async function pageBot(slug, tab) {
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${keeper && !botSidebarLayout(slug) ? ' data-loading' : ''}>
     ${keeper && !limited ? `<button type="button" class="rail-ico bot-sidebar-edit" id="bot-sidebar-edit" aria-label="Edit sidebar" title="Edit"${botSidebarLayout(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">edit</span></button>
     <div class="bot-rail-editbar" hidden><span class="muted" id="bot-sidebar-status" role="status"></span><span class="spacer"></span>
-      <button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
+      <button type="button" class="ghost" id="bot-sidebar-add">Add</button><button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
     <div class="bot-rail-loading rail-empty"${keeper && !botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
     ${botWidgetsHTML(slug, {
       tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2></header>
@@ -400,8 +400,8 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
-    ${slug === GM && ceoBotLogShown() ? `<section class="card" id="ceo-bot-log-card"><header><h2>${esc(ceoBotName())} log</h2></header>
-      <div id="ceo-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
+    ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
+      <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
@@ -446,7 +446,7 @@ async function pageBot(slug, tab) {
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
       )((S.status?.recent_runs || []).filter(r => r.employee === slug).slice(0, 10))}</section>
 
-    ${S.me?.role === 'owner' ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
+    ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
@@ -471,7 +471,7 @@ async function pageBot(slug, tab) {
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
   bindChatSwipe($('#conv-thread'));
-  if (e.can_chat) {
+  if (e.can_chat && !isAssistantHelper(slug)) {
     $('#chat-composer').append(botPill(slug).el);
     chatDropZone($('#pane-chat'), BOT_PILL);
     // A restored draft sizes the box once it is on the page.
@@ -480,11 +480,10 @@ async function pageBot(slug, tab) {
   } else {
     if (BOT_PILL) chatDraftSave(BOT_PILL);
     if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    // The CEO Bot: of people, only the owner talks to it, in their menu tab; anyone's earlier chat here stays readable.
-    $('#chat-composer').innerHTML = slug === 'goal-manager' && e.my_access?.write
-      ? `<section class="card"><p class="muted">${meCeo()
-        ? `You talk to ${esc(ceoBotName())} in your own chat: <a href="${ASSISTANT}">open it</a>.`
-        : `Only the company's owner talks to ${esc(ceoBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.`}</p></section>`
+    // A helper (BotOps, the Strategy Bot, the Librarian): nobody chats with it, the Assistant hands it the work; any
+    // earlier chat here stays readable.
+    $('#chat-composer').innerHTML = isAssistantHelper(slug)
+      ? `<section class="card"><p class="muted">The Assistant hands ${esc(e.display_name || slug)} its work. <button class="linkish" type="button" data-ask-open>Ask</button></p></section>`
       : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
@@ -558,7 +557,7 @@ async function pageBot(slug, tab) {
   if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
   botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
   botSidebarApply(slug);
-  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); }
+  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); void botPinsLoad(slug); }
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   $('#pane-tasks').addEventListener('click', ev => {
@@ -674,7 +673,8 @@ function showBotTab(tab) {
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
-  if (view === 'info' && BOT.slug === GM && ceoBotLogShown()) once('ceo-log', () => renderCeoBotLog($('#ceo-bot-log')));
+  if (view === 'info' && BOT.slug === 'goal-manager' && strategyBotLogShown())
+    once('strategy-log', () => renderStrategyBotLog($('#strategy-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {
       if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);

@@ -3,7 +3,7 @@ acceptance tests 5 and 10 to 14."""
 from backend import automations
 from backend.store import H
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_ceo_bot import as_bot as bot_headers
+from backend.tests.test_strategy_bot import as_bot as bot_headers
 
 
 def as_bot(api, slug):

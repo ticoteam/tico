@@ -230,26 +230,81 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub.close()
 
 
-def test_sweep_deltas_drops_old_finished_runs_text_pieces_only(tmp_path):
+def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_path):
     from backend.store import H, sweep_deltas
     s = store(tmp_path)
     now = H.now()
-    old, recent = H.shift(now, days=-20), H.shift(now, days=-3)
+    day, hours = (lambda n: H.shift(now, days=-n)), (lambda n: H.shift(now, hours=-n))
+    # (created, finished, final_text, final message?, job state): what a run's pieces are kept beside
+    runs = {
+        "a-old": (day(4), day(3), "", True, None),              # finished 3 days ago, its final message holds the text
+        "b-recent": (day(3), hours(12), "", True, None),        # a long run finished 12 hours ago: a day has not passed
+        "c-open": (day(3), None, "", False, None),              # still running
+        "d-no-final": (day(4), day(3), "", False, None),        # only a partial message: its text is not whole anywhere
+        "e-review": (day(4), day(3), "", True, "uncertain"),    # held for review: the card and auto_reconcile read it
+        "f-final-text": (day(4), day(3), "Hello", False, None), # no message, but attempts.final_text holds the reply
+    }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT, final_text TEXT)")
+        c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
                   "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
-        for aid, created, finished in (("a-old", old, H.shift(old, hours=1)), ("b-recent", recent, recent),
-                                       ("c-open", old, None)):
-            c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
-            for seq, kind, payload in ((1, "delta", '{"text":"Hel","delta_kind":"text"}'), (2, "delta", '{"text":"lo"}'),
-                                       (3, "delta", '{"text":"hm","delta_kind":"thought"}'),
-                                       (4, "message", '{"text":"Hello","final":true}'), (5, "tool", '{"tool":"x"}')):
+        for aid, (created, finished, final_text, final_msg, job) in runs.items():
+            c.execute("INSERT INTO attempts VALUES(?,?,?,?)", (aid, created, finished, final_text))
+            if job:
+                c.execute("INSERT INTO jobs VALUES(?,?,?)", ("job-" + aid, aid, job))
+            events = [(1, "delta", '{"text":"Hel","delta_kind":"text"}'), (2, "delta", '{"text":"lo"}'),
+                      (3, "delta", '{"text":"hm","delta_kind":"thought"}'),
+                      (4, "message", '{"text":"Hello","final":true}' if final_msg else '{"text":"Hel"}'),
+                      (5, "tool", '{"tool":"x"}')]
+            for seq, kind, payload in events:
                 c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
-    assert sweep_deltas(s, now, batch=1) == 2
+    assert sweep_deltas(s, now, batch=1) == 4          # batch=1: one row per transaction, the pass still drains
     with s.read() as c:
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
-    assert left == {("a-old", 3), ("a-old", 4), ("a-old", 5)} | {(a, n) for a in ("b-recent", "c-open") for n in range(1, 6)}
+    everything = {(a, n) for a in runs for n in range(1, 6)}
+    # Only a-old and f-final-text lose their two text pieces; the thought, the message and the tool all stay.
+    assert left == everything - {("a-old", 1), ("a-old", 2), ("f-final-text", 1), ("f-final-text", 2)}
     assert sweep_deltas(s, now) == 0, "the mark moved past what was swept"
+
+
+def test_sweep_events_drops_only_old_bookkeeping_rows_in_bounded_passes(tmp_path):
+    from backend.store import EVENT_RETENTION_DAYS, EVENT_SWEEP_ACTIONS, H, sweep_events
+    s = store(tmp_path)
+    now = H.now()
+    old, recent = H.shift(now, days=-EVENT_RETENTION_DAYS - 5), H.shift(now, days=-2)
+    kept_old = ("task.create", "attempt.limited", "attempt.input.moved", "credential.revealed", "turn.outcome")
+    with s.transaction() as c:
+        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, target TEXT, "
+                  "detail_json TEXT)")
+        c.execute("CREATE INDEX events_ts ON events(ts)")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        rows = [(f"{action}-{when}", when, "keeper", action, "t", None)
+                for action in (*EVENT_SWEEP_ACTIONS, *kept_old) for when in (old, recent)]
+        rows += [(f"extra-{i}", old, "keeper", "message.delivered", "m", None) for i in range(12)]
+        c.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", rows)
+    # 19 old swept rows (7 + 12 extra): the first pass deletes at most `most`, the next one the rest.
+    assert sweep_events(s, now, batch=5, most=10) == 10
+    with s.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE ts=? AND action IN (%s)"
+                         % ",".join("?" * len(EVENT_SWEEP_ACTIONS)), (old, *EVENT_SWEEP_ACTIONS)).fetchone()[0] == 9
+    assert sweep_events(s, now, batch=5, most=10) == 9
+    assert sweep_events(s, now) == 0, "the mark moved past what was swept"
+    with s.read() as c:
+        left = {r[0] for r in c.execute("SELECT id FROM events")}
+    assert left == {f"{action}-{when}" for action in kept_old for when in (old, recent)} | \
+        {f"{action}-{recent}" for action in EVENT_SWEEP_ACTIONS}
+
+
+def test_hub_connections_cap_the_wal_file_after_a_checkpoint(tmp_path):
+    from backend import hubdb
+    from backend.store import H
+    s = store(tmp_path)
+    assert s.connect().execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
+    conn = hubdb.connect(str(tmp_path / "hub-open.sqlite"))
+    try:
+        assert conn.execute("PRAGMA journal_size_limit").fetchone()[0] == H.WAL_SIZE_LIMIT == 64 * 1024 * 1024
+    finally:
+        conn.close()

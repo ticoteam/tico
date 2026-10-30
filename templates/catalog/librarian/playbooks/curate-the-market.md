@@ -24,7 +24,7 @@ day that is not Monday, stop at once.
    A page that keeps changing for no reason is stopped (`hub market watch stop <id>`).
 5. Otherwise close it: `merged` into another insight, `rejected` with one sentence, or `needs-human` when two credible sources disagree and it matters.
    An insight that contradicts an active bet (`hub strategy show`: each bet's `why` and `wrong_if`) is still applied or closed on its
-   own evidence: you curate the market, not the strategy. Say so in one line of the sweep report, and send the CEO Bot one note naming
+   own evidence: you curate the market, not the strategy. Say so in one line of the sweep report, and send the Strategy Bot one note naming
    the bet and the entity, so it can add the entity to that bet's `cites`:
    `hub message send goal-manager "Bet <id> may be contradicted by <entity id>: <one line>. Worth citing."`
    You never write the strategy, and you do not judge whether the bet should change.
