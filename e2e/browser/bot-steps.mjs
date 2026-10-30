@@ -127,18 +127,20 @@ const fill = (tab, field, selector) => {
   const r = hub(args);
   return r.json || {ok: false, error: r.err};
 };
+// The name the step sent, exactly (JSON-quoted, so stray spaces show), with LABEL as this run received it. Names only.
+const sent = r => `sent ${JSON.stringify(credential)} (LABEL ${JSON.stringify(env.LABEL)}) ${r.error || ''}`.trim();
 
 async function logIn(tab) {
   await tab.go(practice + '/login');
   const user = fill(tab, 'username', 'input[name=username]');
-  check('login: username filled from Tico', user.ok === true, user.error || '');
+  check('login: username filled from Tico', user.ok === true, sent(user));
   const pass = fill(tab, 'password', 'input[name=password]');
-  check('login: password filled from Tico', pass.ok === true, pass.error || '');
+  check('login: password filled from Tico', pass.ok === true, sent(pass));
   await tab.click('button[type=submit]');
   await tab.waitFor('["/login/2fa", "/me"].includes(location.pathname) || document.body.innerText.includes("Wrong")');
   if ((await tab.path()) === '/login/2fa') {
     const code = fill(tab, 'totp', 'input[name=code]');
-    check('login: authenticator code filled from Tico', code.ok === true, code.error || '');
+    check('login: authenticator code filled from Tico', code.ok === true, sent(code));
     await tab.click('button[type=submit]');
     await tab.waitFor('location.pathname === "/me" || document.body.innerText.includes("That code is wrong")');
   }

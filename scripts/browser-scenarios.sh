@@ -123,15 +123,65 @@ sc_peers() {
   browser_phase peer-probe "PEER_PORT=$port" "PEER_PROFILE=$profile"
 }
 
+# The computer's log: the container's output and the log files the runner writes under its home.
+runner_log() {
+  { docker logs "$RUNNER" 2>&1; docker exec "$RUNNER" sh -c 'find /home/runner -name "*.log" -type f -exec cat {} + 2>/dev/null'; }
+}
+
+# Diagnostics, read only: the website logins the runner's list holds for the bot (runner-login-credentials filters the same
+# way): names and ids, never the values.
+login_names() {
+  say "logins granted to $BOT (names and ids as the database has them):"
+  dc exec -T server python -I - "bot:$BOT" <<'PY' 2>&1 | sed 's/^/    /' || say "logins: the database could not be read"
+import sqlite3, sys
+c = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True)
+rows = c.execute("SELECT c.id, c.name FROM credentials c WHERE c.kind='login' AND c.ciphertext IS NOT NULL AND EXISTS "
+                 "(SELECT 1 FROM credential_grants g WHERE g.credential_id=c.id AND g.subject=? AND g.revoked IS NULL) "
+                 "ORDER BY c.id", (sys.argv[1],)).fetchall()
+for r in rows:
+    print(f"login {r[0]} name={r[1]!r}")
+if not rows:
+    print("no active login grant for this bot")
+PY
+}
+
+# Epoch seconds of the last sign-in the practice site completed before the cut-off (epoch seconds, $1). A sign-in is a POST
+# to /login or /login/2fa that got a 303 and is followed by a GET /me that got a 200; the log lines carry Docker's timestamps.
+last_sign_in() {
+  dc logs -t practice 2>&1 | python3 -c '
+import calendar, re, sys, time
+cut, pending, session = float(sys.argv[1]), None, None
+for line in sys.stdin:
+    m = re.search(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z (POST|GET) (\S+) (\d{3})", line)
+    if not m:
+        continue
+    at = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S")) + float("0." + (m.group(2) or "0")[:9])
+    if at > cut:
+        break
+    if m.group(3) == "POST" and m.group(4) in ("/login", "/login/2fa") and m.group(5) == "303":
+        pending = at
+    elif m.group(3) == "GET" and m.group(4) == "/me" and m.group(5) == "200" and pending is not None:
+        session, pending = pending, None
+if session is not None:
+    print(f"{session:.3f}")
+' "$1"
+}
+
 # Scenario 5: Chrome is killed by its exact PID; the runner starts it again with the same profile.
 sc_crash() {  # the round, for the log
-  local pid
+  local pid killed signed gap
   say "profile before the kill, round ${1:-1}:"
   profile_facts
   pid="$(chrome_pid)" || { say "no Chrome for $BOT is running under its profile lock"; return 1; }
+  killed="$(python3 -c 'import time; print(f"{time.time():.3f}")')"
   docker exec "$RUNNER" sh -c "kill -KILL $pid" || { say "Chrome $pid could not be killed"; return 1; }
   sleep 2
   if docker exec "$RUNNER" test -d "/proc/$pid"; then say "Chrome $pid is still running after KILL"; return 1; fi
+  signed="$(last_sign_in "$killed")"
+  if [ -n "$signed" ]; then
+    gap="$(python3 -c 'import sys; print(f"{float(sys.argv[1]) - float(sys.argv[2]):.1f}")' "$killed" "$signed")"
+  fi
+  say "round ${1:-1}: SIGKILL to pid $pid at $killed; last sign-in the practice site completed at ${signed:-none}; seconds from sign-in to kill: ${gap:-n/a}"
   verdict "crash: Chrome (pid $pid, from the profile lock) was killed" 0
 }
 
@@ -170,7 +220,8 @@ sc_attach() {
 sc_captcha() {
   # The check's card waits on a person, so the phase runs on a task of the bot's, as the journey's needs-you does.
   grant_trail "before S7"
-  PHASE_ON=task browser_phase challenge || { grant_trail "after S7's sign-in failed"; return 1; }
+  login_names
+  PHASE_ON=task browser_phase challenge || { grant_trail "after S7's sign-in failed"; login_names; return 1; }
   local rid card id task key out="$WORK/captcha-person.json" person
   rid="$(runner_id)" || return 1
   send POST "/api/v2/runners/$rid/screen" '{"mode": "view"}' >/dev/null || { say "the screen could not be turned on"; return 1; }
@@ -215,16 +266,22 @@ print("    bot:", re.findall(r"\"[^\"]*turn[^\"]*\": ?[^,}\]]*", sys.stdin.read(
   japi GET /api/v2/operations | python3 -c 'import json,re,sys
 m = json.load(sys.stdin)["machines"][0]
 print("    computer:", re.findall(r"\"[^\"]*(?:turn|capacity)[^\"]*\": ?[^,}\]]*", json.dumps(m))[:8])' 2>&1
-  say "attempts of $BOT since $1 (server)"
-  dc exec -T server python -I - "$1" "$BOT" <<'PY' 2>&1 | sed 's/^/    /'
+  say "attempts of $BOT since $1 (server): the lane each run was given, and the job and thread it ran"
+  local rows ids
+  rows="$(dc exec -T server python -I - "$1" "$BOT" <<'PY' 2>&1
 import sqlite3, sys
 c = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True)
-for r in c.execute("SELECT id, runner_id, state, created, started, finished FROM attempts WHERE bot=? AND created>=? ORDER BY created",
-                   (sys.argv[2], sys.argv[1])):
-    print(f"attempt {r[0][:12]} runner={r[1][:12]} state={r[2]} created={r[3]} started={r[4]} finished={r[5]}")
+for r in c.execute("SELECT id, runner_id, lane, state, created, started, finished, job_id, thread_id FROM attempts "
+                   "WHERE bot=? AND created>=? ORDER BY created", (sys.argv[2], sys.argv[1])):
+    print(f"attempt {r[0]} lane={r[2]} runner={r[1][:12]} state={r[3]} created={r[4]} started={r[5]} finished={r[6]} "
+          f"job={r[7]} thread={r[8]}")
 PY
-  say "computer log about turns and claims"
-  docker logs "$RUNNER" 2>&1 | grep -iE 'claim|lane|turn|attempt|busy' | tail -n 40 | sed 's/^/    /'
+)"
+  printf '%s\n' "$rows" | sed 's/^/    /'
+  # Every id the rows name, as one pattern for the computer's log: the attempts', their jobs' and their threads'.
+  ids="$(printf '%s\n' "$rows" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | sort -u | paste -sd'|' -)"
+  say "computer log lines that name those ids, or a lane or a claim"
+  runner_log | grep -E "${ids:-^$}|lane|claim" | tail -n 60 | sed 's/^/    /'
 }
 
 sc_concurrent() {
@@ -259,7 +316,7 @@ sc_leaks() {
   dc exec -T server python -I -c 'import sqlite3; c = sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True); print("\n".join(c.iterdump()))' \
     > "$WORK/db.sql" 2>/dev/null
   dc logs --no-log-prefix server inbox > "$WORK/server.log" 2>&1
-  { docker logs "$RUNNER" 2>&1; docker exec "$RUNNER" sh -c 'find /home/runner -name "*.log" -type f -exec cat {} + 2>/dev/null'; } > "$WORK/runner.log"
+  runner_log > "$WORK/runner.log"
   dc logs --no-log-prefix practice > "$WORK/practice.log" 2>&1
   dc logs --no-log-prefix proxy > "$WORK/proxy.log" 2>&1
   cat "$WORK"/phase-*.json > "$WORK/phase-results.txt" 2>/dev/null
