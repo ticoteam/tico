@@ -8,7 +8,7 @@
 .team-add-dialog .tmodal-body{padding-top:16px}
 .team-add-choices{display:grid;gap:10px}
 .team-add-choices button{display:grid;gap:6px;text-align:left;white-space:normal;padding:14px;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:8px;cursor:pointer}
-.team-add-choices button:hover{border-color:var(--accent)}
+.team-add-choices button:hover{border-color:var(--muted)}
 .team-add-choices span{font-size:var(--t-sm);font-weight:400;color:var(--muted);line-height:var(--lh)}
 #team-add-human label{display:block;margin-bottom:14px}
 #team-add-human input{display:block;width:100%;margin-top:6px}
@@ -20,10 +20,10 @@
 .recruit-seat .tmodal-head{gap:8px;align-items:center}
 .pill.recruiting{border:1px dashed var(--line);color:var(--muted);background:none}
 .recruit-candidates{display:grid;gap:10px;margin-top:8px}
-.recruit-candidates .cat-card.recommended{border-color:var(--accent)}
+.recruit-candidates .cat-card.recommended{border-color:var(--ink)}
 .recruit-candidates h3{display:flex;gap:8px;align-items:center;margin:0 0 6px}
 .recruit-candidates .recruit-reason{margin:0 0 6px}
 .recruit-candidates label{display:block;margin:8px 0}
-.recruit-spin{display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:recruit-spin 1s linear infinite;vertical-align:-1px}
+.recruit-spin{display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:recruit-spin 1s linear infinite;vertical-align:-1px}
 @keyframes recruit-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.recruit-spin{animation:none}}

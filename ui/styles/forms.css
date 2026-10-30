@@ -3,13 +3,13 @@
 /* Form controls. One base rule for every text-like control (any type, or no type at all), wrapped in :where() so it
    has no specificity of its own: every component rule below (bot editor, compact search fields, pill composers) still wins.
    color-scheme is set per theme on :root, so date pickers, spinners, dropdowns and scrollbars follow the theme. */
-:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select){box-sizing:border-box;width:100%;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 9px;font:inherit;line-height:20px;accent-color:var(--accent)}
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select){box-sizing:border-box;width:100%;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 9px;font:inherit;line-height:20px;accent-color:var(--ink)}
 :where(textarea){resize:vertical;line-height:var(--lh)}
 :where(select){cursor:pointer;text-overflow:ellipsis}
 /* a drop-down and a date field ignore line-height (Chrome lays out its own line), so they take the buttons' height outright */
 :where(select:not([multiple]):not([size]),input:is([type=date],[type=time],[type=datetime-local],[type=month],[type=week])){height:var(--ctl)}
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line))}
-:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):focus{border-color:var(--accent);outline:var(--focus-halo);outline-offset:0}
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):focus{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):disabled{background:var(--surface2);color:var(--muted);cursor:not-allowed;opacity:.7}
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea)[readonly]{background:var(--surface2);color:var(--muted)}
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):user-invalid{border-color:var(--fail);outline-color:color-mix(in srgb,var(--fail) 28%,transparent)}
@@ -33,19 +33,22 @@ input[type=file]{box-sizing:border-box;max-width:100%;padding:5px;border:1px sol
 input[type=file]::file-selector-button{margin:0 10px 0 0;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
 input[type=file]:hover::file-selector-button{background:var(--surface2)}
 input[type=file]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-/* checkboxes and radios: one size, the accent colour, centred on their label's first line */
-:where(input[type=checkbox],input[type=radio]){accent-color:var(--accent);width:16px;height:16px;margin:0 4px 0 0;vertical-align:-3px;cursor:pointer;flex:none}
+/* checkboxes and radios: one size, ink (not the accent), centred on their label's first line */
+:where(input[type=checkbox],input[type=radio]){accent-color:var(--ink);width:16px;height:16px;margin:0 4px 0 0;vertical-align:-3px;cursor:pointer;flex:none}
 :where(input[type=checkbox],input[type=radio]):disabled{cursor:not-allowed}
 input[type=checkbox]:focus-visible,input[type=radio]:focus-visible,input[type=range]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 button:focus-visible,a:focus-visible,summary:focus-visible,[role="button"]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:5px}
-button.primary{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600;cursor:pointer}
+/* A link that says primary (Download, View task, Open billing) is the primary button: links are ink, so without its
+   own colours it would vanish on an ink surface like the update banner. */
+:is(button,a).primary{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600;cursor:pointer}
+a.primary{display:inline-block;text-decoration:none}
 button.ghost{background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;cursor:pointer;color:var(--ink)}
 /* the small size: 28px (regular is 32px), for a row's own actions and a toolbar's secondary ones */
 :is(button,a).primary.small,:is(button,a).ghost.small{padding-top:3px;padding-bottom:3px}
 /* a link that only says ghost (Open chat, Bot settings, Fix) is a ghost button; links with their own class keep their look */
 a[class="ghost"]{display:inline-block;background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;color:var(--ink);text-decoration:none}
 :is(button.ghost,a[class="ghost"]):hover:not(:disabled){background:var(--surface2);text-decoration:none}
-button.primary:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 88%,var(--ink))}
+:is(button,a).primary:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 88%,var(--ink));text-decoration:none}
 button:disabled{opacity:.5;cursor:default}
 /* Window controls: the ✕ that closes a dialog, panel or meeting window, and the icon buttons beside it (…, back, open in
    its own window). Quiet, borderless and one size, so they read as the window's own controls and never as an action on

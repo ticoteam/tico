@@ -4,7 +4,7 @@
 
 /* ---- the page: the list, and the peek beside it when a task is open */
 #main.tasks-layout{max-width:none;padding:0;overflow:hidden;display:flex;flex-direction:column}
-.tasks-page{--peek-w:clamp(380px,42%,600px);--row-hover:var(--surface2);--row-sel:color-mix(in srgb,var(--accent) 11%,transparent);
+.tasks-page{--peek-w:clamp(380px,42%,600px);--row-hover:var(--surface2);--row-sel:color-mix(in srgb,var(--ink) 7%,transparent);
   flex:1 1 auto;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .tasks-page.peek-open{grid-template-columns:minmax(0,1fr) var(--peek-w)}
 .tasks-pane{min-width:0;min-height:0;overflow-y:auto;padding:8px 28px 56px;container-type:inline-size;container-name:tasks}
@@ -40,7 +40,7 @@
 .tl-types button:disabled{opacity:.45;cursor:default}
 #task-type-more span{max-width:130px;overflow:hidden;text-overflow:ellipsis}
 .tl-search{flex:1 1 150px;min-width:90px;max-width:180px;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
-.tl-search:focus-within{border-color:var(--accent);outline:var(--focus-halo);outline-offset:0}
+.tl-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .tl-search svg{flex:none}
 .tl-search input{flex:1;min-width:0;width:0;height:30px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
 .tl-search input:focus{outline:0;box-shadow:none}
@@ -90,7 +90,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-mi-n{margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
 .tl-mi-n+.tl-mi-on{margin-left:6px}
 .tl-who-more{color:var(--muted)}
-.tl-selmode[aria-pressed=true]{color:var(--accent);border-color:var(--line)}
+.tl-selmode[aria-pressed=true]{color:var(--ink);border-color:var(--line)}
 @media (min-width:761px){#task-select-mode{display:none!important}}
 
 /* ---- the list: groups, then one 32px line per task */
@@ -120,11 +120,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-row.sel{background:var(--row-sel)}
 .tl-row.peeked{background:var(--surface2)}
 .tl-row.peeked .tl-open{font-weight:600}   /* the open task: the house's current row */
-.tl-row:has(.tl-open:focus-visible)::before,.tl-row.is-cursor::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
+.tl-row:has(.tl-open:focus-visible)::before,.tl-row.is-cursor::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--ink)}
 .tl-row.is-cursor:not(:has(.tl-open:focus-visible))::before{opacity:.45}   /* the keyboard cursor (j/k) keeps its bar */
 .tl-row:has(.tl-open:focus-visible){background:var(--row-hover)}
 .tl-row.failed::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--fail)}
-.tl-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--accent);opacity:0;cursor:pointer}
+.tl-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--ink);opacity:0;cursor:pointer}
 .tl-check-pad{flex:none;width:2px}
 /* A Needs you row keeps the task rows' columns: room for their checkbox and status (needs-you.js needRowHTML). */
 .tl-check-room{width:14px}
@@ -153,10 +153,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ring{display:block}
 .ring-bg{fill:none;stroke:var(--line);stroke-width:2}
 .ring-fg{fill:none;stroke:var(--run);stroke-width:2;stroke-linecap:round}
-.tl-sub.all .ring-fg{stroke:var(--accent)}
+.tl-sub.all .ring-fg{stroke:var(--ink)}
 .tl-folded{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;padding:0 4px;border:1px solid var(--line);border-radius:999px}
-.tl-rec{flex:none;font-size:var(--t-sm);padding:1px 8px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap}
-.tl-rec:hover{background:var(--accent);color:var(--accent-ink)}
+.tl-rec{flex:none;font-size:var(--t-sm);padding:1px 8px;border-radius:999px;border:1px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;white-space:nowrap}
+.tl-rec:hover{background:var(--ink);color:var(--bg)}
 .need-rec>span{color:var(--muted);margin-right:4px}
 .need-folded ul{margin:4px 0 0;padding-left:18px}
 .tl-due{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
@@ -187,9 +187,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcol.is-empty>header h2{writing-mode:vertical-rl;overflow:visible}
 .bcard{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;cursor:pointer;min-width:0}
 .bcard:hover{border-color:var(--g4)}
-.bcard.peeked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.bcard.sel{background:color-mix(in srgb,var(--accent) 12%,var(--bg));border-color:color-mix(in srgb,var(--accent) 60%,var(--line))}
-.bcard.is-cursor:not(.peeked){border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.bcard.peeked{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.bcard.sel{background:color-mix(in srgb,var(--ink) 7%,var(--bg));border-color:color-mix(in srgb,var(--ink) 60%,var(--line))}
+.bcard.is-cursor:not(.peeked){border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
 .bcard:has(.bcard-open:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bcard-open{display:flex;align-items:flex-start;gap:7px;width:100%;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-sm)/var(--lh) var(--sans);text-align:left;cursor:pointer}
 .bcard-open:focus{outline:0}
@@ -245,9 +245,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-opt,.tl-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-opt:hover,.tl-mi:hover,.tl-mi:focus-visible,.tl-opt:focus-within{background:var(--surface2);outline:0}
 .tl-opt[hidden],.tl-mi[hidden]{display:none}
-.tl-opt input{flex:none;margin:0;width:14px;height:14px;accent-color:var(--accent)}
+.tl-opt input{flex:none;margin:0;width:14px;height:14px;accent-color:var(--ink)}
 .tl-opt-face{display:inline-flex}
-.tl-mi-on{margin-left:auto;color:var(--accent)}
+.tl-mi-on{margin-left:auto;color:var(--ink)}
 .tl-menu-none{padding:8px;color:var(--muted);font-size:var(--t-sm)}
 
 /* ---- the bulk bar: floats at the foot of the list while tasks are selected */
@@ -344,7 +344,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-opt,.tl-mi{min-height:44px}
   .tl-bulk{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
 }
-.tl-bulk .tl-bulk-undo{color:var(--accent);font-weight:600}
+.tl-bulk .tl-bulk-undo{color:var(--ink);font-weight:600}
 .task-outcome-title{margin:2px 0 6px;font-weight:600}
 .prop-txt.wake,.tl-due.wake{color:var(--muted)}
 
@@ -385,7 +385,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .rail-h .sub-sum{margin:0 0 0 auto;font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
 .rail-h .sub-bar{flex:none;width:48px}
 .sub-bar{flex:1;max-width:120px;height:3px;border-radius:2px;background:var(--line);overflow:hidden}
-.sub-bar>i{display:block;height:100%;background:var(--accent)}
+.sub-bar>i{display:block;height:100%;background:var(--ink)}
 .sub-add{grid-template-columns:minmax(0,1fr) auto}
 .sub-owner{display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
 .sub-owner:hover{background:var(--surface2)}
@@ -432,7 +432,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   transform:translate(-50%,var(--pull,0px))}
 .pull-spin span{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--muted);
   transform:rotate(var(--turn,0deg))}
-.pull-spin.armed span{border-top-color:var(--accent)}
+.pull-spin.armed span{border-top-color:var(--ink)}
 .pull-spin.spinning{transition:transform var(--dur) var(--ease)}
 .pull-spin.spinning span{animation:treespin .8s linear infinite}
-@media (prefers-reduced-motion:reduce){.pull-spin.spinning span{animation:none;border-color:var(--accent)}}
+@media (prefers-reduced-motion:reduce){.pull-spin.spinning span{animation:none;border-color:var(--ink)}}

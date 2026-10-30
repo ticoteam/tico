@@ -62,7 +62,7 @@ button.bt-main{cursor:pointer}
 .bt-who>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-x{width:32px;height:32px;padding:0}
 .bt-cap.removed .bt-who,.bt-cap.removed .bt-today{text-decoration:line-through;opacity:.5}
-.bt-cap.removed .bt-x{color:var(--accent)}
+.bt-cap.removed .bt-x{color:var(--ink)}
 .bt-add{margin:6px 0 2px;max-width:100%}
 
 @media (max-width:760px){

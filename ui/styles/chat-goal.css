@@ -4,7 +4,7 @@
 .chat-goal{flex:none;margin:0 0 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
 .chat-goal[hidden]{display:none}
 #main.bot-chat-layout #pane-chat>#chat-goal{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
-.chat-goal .cg-icon,.chat-goal-line .cg-icon{width:18px;height:18px;font-size:18px;color:var(--accent);flex:none}
+.chat-goal .cg-icon,.chat-goal-line .cg-icon{width:18px;height:18px;font-size:18px;color:var(--ink);flex:none}
 .cg-bar{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:10px;align-items:start;padding:8px 10px 8px 12px;cursor:pointer;border-radius:inherit}
 @media (hover:hover){.cg-bar:hover{background:var(--surface2)}}
 .cg-bar:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
@@ -19,7 +19,7 @@
 .cg-edit{display:grid;grid-template-columns:18px minmax(0,1fr);gap:6px 10px;align-items:start;padding:8px 10px 8px 12px}
 .cg-edit .cg-icon{margin-top:7px}
 .cg-edit textarea{width:100%;min-height:52px;max-height:30vh;resize:vertical;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:var(--t-base);line-height:var(--lh)}
-.cg-edit textarea:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--accent)}
+.cg-edit textarea:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--focus)}
 .cg-edit-go{grid-column:2;display:flex;justify-content:flex-end;gap:6px}
 .cg-edit-go button{height:30px;padding:0 12px;font-size:var(--t-base)}
 .cg-why{flex:1;align-self:center;min-width:0;font-size:var(--t-sm)}
@@ -37,13 +37,13 @@
 .p-goal[hidden]{display:none}
 .p-goal{width:34px;padding:0;justify-content:center}
 .p-goal .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}
-.p-goal.on{background:var(--accent);color:var(--accent-ink)}
-.p-goal.on:hover{background:var(--accent);color:var(--accent-ink);filter:brightness(1.08)}
+.p-goal.on{background:var(--ink);color:var(--bg)}
+.p-goal.on:hover{background:var(--ink);color:var(--bg);filter:brightness(1.08)}
 /* Goal mode: Send says "Set goal" in words, so the mode is never a surprise. */
 .p-send-icon.p-send-goal{width:auto;padding:0 12px;border-radius:17px;font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 
 /* The sidebar's mark on a bot with a pinned goal. */
-.tree a.node .tree-goal{width:14px;height:14px;font-size:var(--t-md);color:var(--accent);flex:none}
+.tree a.node .tree-goal{width:14px;height:14px;font-size:var(--t-md);color:var(--ink);flex:none}
 
 /* The "/" menu: just above the box, the picked row on a raised step. */
 #chat-composer .ask{position:relative}
