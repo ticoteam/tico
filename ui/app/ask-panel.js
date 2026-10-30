@@ -206,6 +206,10 @@ async function askLoad(chat) {
   const draw = () => {
     if (!current() || !info?.available) return;
     const ticket = askTicket(), only = !!chat.only && !!ticket, at = x => Date.parse(x || '') || 0;
+    // While the Assistant is replying, Ask's mark twinkles (styles/motion.css body.ask-replying), the panel open or not.
+    const replying = !only && (!!(execution && execution.state !== 'completed' && execution.text)
+      || (messages.length > 0 && !isReply(messages.at(-1))));
+    document.body.classList.toggle('ask-replying', replying);
     const rows = (only ? [] : messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})})))
       .concat(ticket ? askSupportRows(ticket) : [])
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);

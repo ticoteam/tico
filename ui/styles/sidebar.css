@@ -31,7 +31,7 @@
 .side-section{margin-top:6px}
 .section-toggle{width:100%;display:flex;align-items:center;gap:8px;background:none;border:0;border-radius:6px;padding:7px 8px 5px 10px;color:var(--muted);cursor:pointer;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-align:left;text-transform:uppercase}
 .section-toggle:hover{background:var(--surface2);color:var(--ink)}
-.section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);transition:transform var(--dur-fast) var(--ease)}
+.section-chev{margin-left:auto;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open)}
 .section-toggle[aria-expanded="false"] .section-chev{transform:none}
 .section-body[hidden]{display:none}
 .nav-row{display:flex;align-items:center;gap:2px}
@@ -168,7 +168,7 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree a.dept-label{text-decoration:none}
 .tree a.dept-label:hover,.tree a.dept-label.cur{color:var(--ink);text-decoration:none}
 .noderow{display:flex;align-items:center}
-.chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);transition:transform var(--dur-fast) var(--ease);flex:none;border-radius:4px}
+.chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:16px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);flex:none;border-radius:4px}
 .chev.col{transform:none}
 .chev:hover{color:var(--ink);background:var(--surface2)}
 .tree a.node{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
@@ -197,3 +197,14 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .org-bet-pop .org-bet-f select{height:32px;font-size:var(--t-base)}
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
+
+/* ---- The current row's bar (ui/app/motion.js navIndicator). Kept apart from the rules above: one 2px accent bar in
+   the scrolling list, moved onto whichever row is current (a page link, a teammate, a group, a mailbox) and sliding
+   there when the page changes. The row keeps its own background, so without the script it reads as before. Transform
+   only; it snaps (no slide) on first paint, when the list itself moves, and under reduced motion. The one bar the
+   house rules (components.css, "no bars") allow: a marker that travels shows where the page went, a tint cannot. */
+.side-scroll{position:relative}
+.nav-ind{position:absolute;top:0;left:0;z-index:1;width:2px;height:16px;border-radius:1px;background:var(--accent);
+  transform-origin:0 0;pointer-events:none}
+.nav-ind.slide{transition:transform var(--dur-fast) var(--ease)}
+@media (prefers-reduced-motion:reduce){.nav-ind.slide{transition:none}}

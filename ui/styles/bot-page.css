@@ -107,7 +107,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
 .rail-fold>summary{cursor:pointer;list-style:none;margin:0}
 .rail-fold>summary::-webkit-details-marker{display:none}
-.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
+.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
 .rail-fold[open]>summary::before{transform:var(--chev-open)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}

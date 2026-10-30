@@ -306,7 +306,10 @@ function taskBoardDrop(state, d) {
     void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
       if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
     });
-  } else taskBoardSave(state, t, body, fields, 'Not moved');
+  } else {
+    taskBoardSave(state, t, body, fields, 'Not moved');
+    if (body.status === 'done') taskDoneMotion(d.key);   // the card, now in its done column, draws its check
+  }
   return true;
 }
 // A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.

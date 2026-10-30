@@ -1,0 +1,93 @@
+/* ui/styles/motion.css — State changes that move: menus and panels arriving, counts ticking, a task's check, a card
+   lifting under the pointer, the Assistant's mark while it replies, and every fold chevron's turn (ui/app/motion.js
+   drives the parts a stylesheet cannot see). Linked last, so its few rules win over the files' own.
+   Rules: 200ms at most (--dur-fast 120ms for most, --dur 180ms for larger surfaces), opacity and transform only
+   (the individual translate and scale properties, so an element's own transform is kept), only on a change of state,
+   never on a page's first paint, and nothing waits on an animation. All of it is off under reduced motion (the block
+   at the end); base.css's reduced-motion rule still shortens what other files animate. The sidebar's sliding current
+   row bar is in sidebar.css (its last block), the shared skeleton shimmer in skeleton.css. */
+
+/* ---- menus and popovers: scale up from 96% at their anchor (motion.js sets transform-origin from the anchor for
+   the ones placed by script); a phone's menus are bottom sheets there and only fade (base.css). */
+@keyframes m-pop{from{opacity:0;scale:.96}}
+@media (min-width:761px){
+  :where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,.org-order-menu,
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover]:popover-open){animation:m-pop var(--dur-fast) var(--ease)}
+  :where(#account-status-pop){transform-origin:bottom left}
+  :where(.dash-menu,.org-order-menu,.pg-menu-list,.meet-src-menu){transform-origin:top right}
+  :where(.vcard-menu-list){transform-origin:bottom right}
+  :where(.ask-menu){transform-origin:top center}
+}
+
+/* ---- drawers: a side panel slides 8px in from its edge as it fades (a dialog's own fade is base.css's). */
+@keyframes m-from-right{from{opacity:0;translate:8px 0}}
+:where(dialog.gpanel[open]){animation:m-from-right var(--dur) var(--ease)}
+@media (min-width:761px){:where(#task-peek[open]){animation:m-from-right var(--dur) var(--ease)}}
+
+/* ---- Ask (ui/app/ask-panel.js): the panel rises 8px as it fades in and sinks back as it fades out; on a phone the
+   sheet comes up from the bottom. The panel keeps its box while it leaves (display waits for the fade), but takes no
+   press: what is under it is pressable at once. */
+@media (prefers-reduced-motion:no-preference){
+  .ask-panel{transition:opacity var(--dur-fast) var(--ease),translate var(--dur-fast) var(--ease),display var(--dur-fast) allow-discrete}
+  .ask-panel[hidden]{opacity:0;translate:0 8px;pointer-events:none}
+  @starting-style{.ask-panel:not([hidden]){opacity:0;translate:0 8px}}
+  @media (max-width:760px){
+    .ask-panel{transition-duration:var(--dur)}
+    .ask-panel[hidden]{translate:0 48px}
+    @starting-style{.ask-panel:not([hidden]){translate:0 48px}}
+  }
+}
+/* The Assistant replying: Ask's mark twinkles until the reply is in (body.ask-replying, ui/app/ask-panel.js). */
+@keyframes m-twinkle{50%{opacity:.55;scale:.88}}
+body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask[aria-expanded="false"] .mobile-nav-icon){animation:m-twinkle 1.4s var(--ease) infinite}
+
+/* ---- counts (motion.js countSet, countWatch): the old number slides up and out as the new one comes up from below.
+   The badge's box never changes: the old number is drawn over it, the new one is the badge's own text. */
+@keyframes m-count-out{to{opacity:0;translate:0 -60%}}
+@keyframes m-count-in{from{opacity:0;translate:0 60%}}
+.m-ticking.m-tick-rel{position:relative}
+.m-ticking::before{content:attr(data-tick-was);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;animation:m-count-out var(--dur-fast) var(--ease) forwards}
+.m-tick-in{display:inline-block;animation:m-count-in var(--dur-fast) var(--ease)}
+
+/* ---- a task marked done: its check draws, then the row settles to muted while the list catches up (motion.js
+   taskDoneMotion). A board's finished cards stay that quiet. */
+@keyframes m-check-draw{from{stroke-dashoffset:12}}
+.m-check path,.tmodal-act.m-checking svg path{stroke-dasharray:12;animation:m-check-draw var(--dur) var(--ease) both}
+.m-check{display:inline-block;flex:none;vertical-align:-2px;margin-right:3px;color:var(--ok)}
+@keyframes m-settle{from{opacity:1}}
+.m-task-done{opacity:.6;animation:m-settle var(--dur) var(--ease)}
+.bcard[data-done]{opacity:.6}
+.bcard.m-task-done{position:relative}
+.bcard>.m-check{position:absolute;top:7px;right:7px;margin:0}
+
+/* ---- clickable cards lift a pixel under a mouse, with a slightly stronger border; a touch screen has no hover.
+   The one exception to the house rule that hover never moves or borders anything (components.css): a card is a
+   whole target, and the lift says so where a row's tint would read as a selection. */
+:where(a.card,button.card,.bcard,.au-card,.meet-tile:not(:disabled),.rdo-card,.ob-tile){transition:translate var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
+@media (hover:hover){
+  :where(a.card,button.card,.bcard:not(.dragging),.au-card,.meet-tile:not(:disabled),.rdo-card,.ob-tile):hover{translate:0 -1px;border-color:var(--g4)}
+}
+
+/* ---- every fold chevron turns the same way (house rules, components.css): each file turns its chevron by
+   --chev-open when open, and this is the one transition for all of them, with the hover tint's colour and background.
+   The sidebar's, Needs you's, the task list's, a task's subtasks, Automations groups, Strategy's tabs, the bot rail's
+   and the summary folds' triangles, the docs tree and contents, Budget's, Learnings' and Updates' folds. */
+.chev,.section-chev,.req-arrow,.tl-gchev svg,.tl-chev svg,.sub-chev,.au-chev,.rdo-cx,.rail-fold>summary::before,
+.task-orig>summary::before,.chat-side>summary::before,.run-steps>summary::before,.run-fold>summary::before,
+.settings-more>summary::before,.docs-browser summary::before,.docs-toc summary::after,.bt-fold .nav-icon,
+.lrn-subj .more .nav-icon,.upd-kids .nav-icon{
+  transition:transform var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease),background-color var(--dur-fast) var(--ease)}
+
+@media (prefers-reduced-motion:reduce){
+  :is(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,.org-order-menu,
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover],dialog.gpanel,#task-peek,
+    .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before,
+  body.ask-replying :is(.ask-fab .nav-icon,.ask-head .ask-mark,.mobile-ask .mobile-nav-icon){animation:none!important}
+  :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile,.chev,.section-chev,.req-arrow,.tl-gchev svg,
+    .tl-chev svg,.sub-chev,.au-chev,.rdo-cx){transition:none!important}
+  .rail-fold>summary::before,.task-orig>summary::before,.chat-side>summary::before,.run-steps>summary::before,
+  .run-fold>summary::before,.settings-more>summary::before,.docs-browser summary::before,.docs-toc summary::after,
+  .bt-fold .nav-icon,.lrn-subj .more .nav-icon,.upd-kids .nav-icon{transition:none!important}
+  :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile):hover{translate:none}
+}

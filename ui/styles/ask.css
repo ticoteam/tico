@@ -95,5 +95,4 @@
   .ask-ib{width:44px;height:44px;flex-basis:44px}
   .ask-menu button{min-height:48px}
 }
-@media (prefers-reduced-motion:no-preference){.ask-panel:not([hidden]){animation:ask-in .14s cubic-bezier(.2,0,0,1)}}
-@keyframes ask-in{from{opacity:0;transform:translateY(8px)}}
+/* Opening and closing move in motion.css. */

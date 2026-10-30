@@ -111,7 +111,7 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 .docs-mini:hover{background:none;color:var(--ink)}
 .docs-browser details{min-width:0}
 .docs-browser summary{display:flex;align-items:center;gap:4px;min-width:0;padding:4px 6px 4px 2px;border-radius:5px;list-style:none;cursor:pointer;font-size:var(--t-sm);font-weight:600;line-height:var(--lh);color:var(--muted);user-select:none;overflow-wrap:anywhere}
-.docs-browser summary::-webkit-details-marker{display:none}.docs-browser summary::before{content:'›';width:12px;flex:none;text-align:center;font-size:14px;font-weight:400;line-height:var(--lh-none);transform-origin:center;transition:transform var(--dur-fast) var(--ease)}.docs-browser details[open]>summary::before{transform:var(--chev-open)}
+.docs-browser summary::-webkit-details-marker{display:none}.docs-browser summary::before{content:'›';width:12px;flex:none;text-align:center;font-size:14px;font-weight:400;line-height:var(--lh-none);transform-origin:center}.docs-browser details[open]>summary::before{transform:var(--chev-open)}
 .docs-browser summary:hover{background:var(--surface2);color:var(--ink)}.docs-browser summary .muted{margin-left:auto;font-size:var(--t-xs);font-weight:400;font-variant-numeric:tabular-nums}
 .docs-browser details>.docs-item{padding-left:20px}
 .docs-item{display:flex;align-items:center;gap:6px;margin:0;padding:4px 8px;border-radius:5px;color:var(--g7);text-decoration:none;font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
@@ -192,7 +192,7 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 .docs-toc{margin:0 0 20px;font-size:var(--t-sm)}
 .docs-toc summary{cursor:pointer;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;margin-bottom:6px;list-style:none}
 .docs-toc summary::-webkit-details-marker{display:none}
-.docs-toc summary::after{content:' ›';display:inline-block;margin-left:4px;transition:transform var(--dur-fast) var(--ease)}.docs-toc[open] summary::after{transform:var(--chev-open)}
+.docs-toc summary::after{content:' ›';display:inline-block;margin-left:4px}.docs-toc[open] summary::after{transform:var(--chev-open)}
 .docs-toc nav{display:flex;flex-direction:column;border-left:1px solid var(--line)}
 .docs-toc a{display:block;padding:3px 0 3px 12px;margin-left:-1px;border-left:1px solid transparent;color:var(--muted);text-decoration:none;line-height:var(--lh)}
 .docs-toc a:hover{color:var(--ink);text-decoration:none}

@@ -90,7 +90,6 @@
 .au-grp td{padding:6px 10px;background:var(--surface);font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .au-grp td>*{vertical-align:middle}
 .au-grp td>.nav-icon{font-size:17px;width:18px;height:18px;margin-right:6px;color:var(--muted)}
-.au-grp .au-chev{transition:transform var(--dur-fast) var(--ease)}
 .au-grp.closed .au-chev{transform:rotate(-90deg)}
 .au-grp .au-fn{margin-left:8px}
 .au-why{color:var(--g7)}

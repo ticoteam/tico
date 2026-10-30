@@ -58,7 +58,7 @@ td.tags .pill{margin-right:2px}
 /* A fold with no chevron icon of its own: one small triangle that turns --chev-open, never the browser's marker. */
 :is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary{list-style:none}
 :is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::-webkit-details-marker{display:none}
-:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::before{content:"";display:inline-block;flex:none;width:0;height:0;margin-right:var(--s2);vertical-align:middle;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
+:is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::before{content:"";display:inline-block;flex:none;width:0;height:0;margin-right:var(--s2);vertical-align:middle;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
 :is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)[open]>summary::before{transform:var(--chev-open)}
 /* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
    sets left and top to the thread's foot). */
