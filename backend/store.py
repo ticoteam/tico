@@ -1,6 +1,7 @@
 """Transactions and additive cloud schema over the existing Hub domain layer."""
 
 import hashlib
+import heapq
 import logging
 import json
 import os
@@ -599,6 +600,132 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
     with store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
                   "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+    return deleted
+
+
+# Credential use rows written before credentials.record_use kept one per run, not one per USE_WINDOW. This one-time
+# trim brings them to that grain: per (credential, actor, bot), in ts order, a row is kept when it is the pair's first
+# or USE_WINDOW after the last kept one, which is the rule record_use applies from now on. A row record_use always
+# writes (a reveal with no attempt, a computer send by a model key) is kept and counts as the pair's last write, as it
+# did then. Person reveals are never touched. Rows at or after the first pass's time are not walked: the deploy's rows
+# are already at the new grain. Passes resume from the credential after the last finished one (registry_metadata).
+TRIM_BATCH = 500           # deletes per write transaction
+TRIM_PAGE = 2000           # rows read per read transaction
+TRIM_MAX = 50_000          # deletes one hourly pass makes at most
+TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
+TRIM_MARK = "credential-use-trim"
+
+
+def _use_key(actor, detail_json):
+    """(bot, windowed) of one row, as credentials.record_use keys it and decides whether it writes."""
+    try:
+        detail = json.loads(detail_json) if detail_json else {}
+    except ValueError:
+        detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+    bot = str(detail.get("bot") or "") or (actor[4:] if actor.startswith("bot:") else "")
+    windowed = detail.get("use") == "watcher" or bool(detail.get("attempt"))
+    return bot, windowed
+
+
+def _trim_stream(store, action, target, before, page):
+    """One action's rows of one credential before `before`, oldest first, a page per read transaction. Keyset on ts
+    (events_action_target: action, target, ts); ids already yielded at the page's last ts are skipped on the next."""
+    last, seen = "", set()
+    while True:
+        limit = page + len(seen)
+        with store.read() as c:
+            rows = c.execute("SELECT rowid,id,ts,actor,detail_json FROM events WHERE action=? AND target=? "
+                             "AND ts>=? AND ts<? ORDER BY ts LIMIT ?", (action, target, last, before, limit)).fetchall()
+        fresh = [row for row in rows if not (row["ts"] == last and row["id"] in seen)]
+        yield from fresh
+        if len(rows) < limit or not fresh:
+            return
+        last = rows[-1]["ts"]
+        seen = {row["id"] for row in rows if row["ts"] == last}
+
+
+def _trim_target(store, target, before, batch, budget, page):
+    """Walk one credential's rows in ts order and delete the ones record_use would not have written. Returns
+    (deleted, finished). When `budget` runs out first the walk stops, and the next pass walks the credential again:
+    the rows it kept decide the same again, so nothing already passed is deleted twice."""
+    from .credentials import USE_WINDOW
+    last, doomed, deleted = {}, [], 0
+    streams = [_trim_stream(store, action, target, before, page) for action in TRIM_ACTIONS]
+    for row in heapq.merge(*streams, key=lambda row: (row["ts"], row["id"])):
+        actor = row["actor"] or ""
+        if actor.startswith("human:"):
+            continue
+        bot, windowed = _use_key(actor, row["detail_json"])
+        key = (actor, bot)
+        prev = last.get(key)
+        gap = None
+        if prev is not None and windowed:
+            at, was = H.parse_ts(row["ts"]), H.parse_ts(prev)
+            gap = (at - was).total_seconds() if at and was else None
+        if not windowed or prev is None or gap is None or gap >= USE_WINDOW:
+            last[key] = row["ts"]
+            continue
+        doomed.append(row["rowid"])
+        if len(doomed) >= min(batch, budget - deleted):
+            deleted += _trim_flush(store, doomed)
+            doomed = []
+            if deleted >= budget:
+                return deleted, False
+    if doomed:
+        deleted += _trim_flush(store, doomed)
+    return deleted, True
+
+
+def _trim_flush(store, rowids):
+    with store.transaction() as c:
+        return c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+
+
+def _trim_next_target(store, after):
+    """The next credential after `after` (in id order) with a row of a trimmed action, or None."""
+    found = []
+    for action in TRIM_ACTIONS:
+        with store.read() as c:
+            row = c.execute("SELECT target FROM events WHERE action=? AND target>? ORDER BY target LIMIT 1",
+                            (action, after)).fetchone()
+        if row:
+            found.append(row[0])
+    return min(found) if found else None
+
+
+def _trim_save(store, mark):
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (TRIM_MARK, json.dumps(mark)))
+
+
+def sweep_credential_uses(store, now=None, batch=TRIM_BATCH, most=TRIM_MAX, page=TRIM_PAGE):
+    """One pass of the credential-use trim (see TRIM_BATCH above): deletes at most `most` rows and returns the count.
+    The mark holds the pass's `before` (fixed at the first pass), the last finished credential, and `done` once every
+    credential is finished; a finished trim costs one read. Each pass is a few read transactions and one short write
+    per `batch` rows, so writers wait about as long as they do for sweep_events."""
+    with store.read() as c:
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (TRIM_MARK,)).fetchone()
+    mark = json.loads(saved[0]) if saved else None
+    if mark and mark.get("done"):
+        return 0
+    if mark is None:
+        mark = {"before": now or H.now(), "after": ""}
+        _trim_save(store, mark)
+    before, after, deleted = mark["before"], mark["after"], 0
+    while deleted < most:
+        target = _trim_next_target(store, after)
+        if target is None:
+            _trim_save(store, {"before": before, "after": after, "done": True})
+            break
+        count, finished = _trim_target(store, target, before, batch, most - deleted, page)
+        deleted += count
+        if not finished:
+            break
+        after = target
+        _trim_save(store, {"before": before, "after": after})
     return deleted
 
 

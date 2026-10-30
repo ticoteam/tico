@@ -12,7 +12,7 @@ from . import goals as G
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
-from .store import H, encode, sweep_deltas, sweep_events, sweep_idempotency, sweep_mail
+from .store import H, encode, sweep_credential_uses, sweep_deltas, sweep_events, sweep_idempotency, sweep_mail
 
 
 def stamp(at):
@@ -434,6 +434,7 @@ class Scheduler:
                 sweep_mail(self.store, stamp(at))
                 sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep a day (store.DELTA_RETENTION_DAYS)
                 sweep_events(self.store, stamp(at))            # bookkeeping events keep 30 days (store.EVENT_SWEEP_ACTIONS)
+                sweep_credential_uses(self.store, stamp(at))   # one-time: old credential use rows to one per USE_WINDOW (store.TRIM_MAX a pass)
                 from . import events
                 events.sweep(self.store, stamp(at))            # live events keep a day
                 from . import triggers
