@@ -64,6 +64,19 @@ no capabilities, where `sudo` can never work. The base step writes `/etc/sudoers
 The runner follows the server's release by itself, like any checkout runner (docs/updates.md), so a machine made from
 an older base updates on its first heartbeat. Refreshing the base per release only saves that first update.
 
+## What's on a machine
+
+The base step (below) installs these, so every machine made from the snapshot has them:
+
+- **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
+- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
+  so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
+- **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`) and **ffmpeg**.
+- **Node.js 22** and npm, from NodeSource's apt repository.
+- **Playwright's Chromium** for the sandbox user (`npx playwright@1.64.1 install chromium`, the version the repo pins).
+
+Re-running the step is safe. A failed install stops `base` with the step's output, and no marker is written.
+
 ## Build the base snapshot
 
 Once per release, from a computer with the boat CLI signed in to the account HQ uses. `--no-env` keeps the account's

@@ -156,11 +156,66 @@ def test_parse_reads_shell_assignments_without_running_them():
     assert cm.parse(text) == {"A": "x y", "B": "q", "D": "", "E": ""}
 
 
+def test_tools_get_google_chrome_on_x86_64_and_chromium_elsewhere(tmp_path):
+    x86 = cm.tool_commands("x86_64", tmp_path)
+    arm = cm.tool_commands("aarch64", tmp_path)
+    install_x86 = next(argv for _, argv in x86 if "xvfb" in argv)
+    install_arm = next(argv for _, argv in arm if "xvfb" in argv)
+    assert "google-chrome-stable" in install_x86 and "chromium" not in install_x86
+    assert "chromium" in install_arm and "google-chrome-stable" not in install_arm
+    shared = {*cm.DISPLAY_PACKAGES, *cm.FONT_PACKAGES, "ffmpeg", "nodejs"}
+    assert shared <= set(install_x86) and shared <= set(install_arm)
+    assert any("google-chrome.asc" in " ".join(argv) for _, argv in x86)
+    assert not any("google-chrome.asc" in " ".join(argv) for _, argv in arm)
+    assert cm.playwright_command() == ["npx", "-y", "playwright@1.64.1", "install", "chromium"]
+
+
+def test_tool_sources_add_google_only_on_x86_64(tmp_path):
+    chrome = tmp_path / "sources.list.d" / "google-chrome.sources"
+    node = tmp_path / "sources.list.d" / "nodesource.sources"
+    x86, arm = cm.tool_files("x86_64", tmp_path), cm.tool_files("aarch64", tmp_path)
+    assert "Architectures: amd64" in x86[chrome] and "https://dl.google.com/linux/chrome/deb/" in x86[chrome]
+    assert chrome not in arm
+    assert "node_22.x" in x86[node] and "node_22.x" in arm[node]
+
+
+def test_the_playwright_pin_is_the_repos_own():
+    package = json.loads((cm.ROOT / "package.json").read_text())
+    assert package["devDependencies"]["playwright"] == cm.PLAYWRIGHT
+
+
+def test_base_installs_the_tools_as_root_before_the_marker(machine, tmp_path):
+    m, fake = machine()
+    apt = tmp_path / "apt"
+    cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=apt, arch="aarch64")
+    installs = [i for i, c in enumerate(fake.calls) if "chromium" in c and "install" in c]
+    assert installs and max(installs) < fake.calls.index(["loginctl", "enable-linger", "user"])
+    assert fake.named("playwright@1.64.1") and not fake.named("google-chrome-stable")
+    assert (apt / "sources.list.d" / "nodesource.sources").exists()
+    assert not (apt / "sources.list.d" / "google-chrome.sources").exists()
+
+
+def test_a_failed_tool_step_refuses_the_base_and_writes_no_marker(machine, tmp_path):
+    m, fake = machine()
+
+    def run(command, **kw):
+        if "xvfb" in command:
+            return subprocess.CompletedProcess(command, 100, "", "E: Unable to locate package xvfb")
+        return fake(command, **kw)
+
+    m.run = run
+    with pytest.raises(cm.Refused, match="installing the package lists|xvfb|installing"):
+        cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units",
+                apt=tmp_path / "apt", arch="x86_64")
+    assert not cm.marker_path(machine.etc).exists() and not fake.named("loginctl")
+
+
 def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(machine, tmp_path):
     m, fake = machine()
     with pytest.raises(cm.Refused):
         cm.base(m, release="", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units")
-    cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units")
+    cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=tmp_path / "apt",
+            arch="x86_64")
     sudoers = tmp_path / "sudoers"
     assert "user ALL=(ALL) NOPASSWD:ALL" in sudoers.read_text() and oct(sudoers.stat().st_mode & 0o777) == "0o440"
     assert ["loginctl", "enable-linger", "user"] in fake.calls
@@ -174,4 +229,4 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     m.config.parent.mkdir(parents=True, exist_ok=True)
     m.config.write_text("{}")
     with pytest.raises(cm.Refused):
-        cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units")
+        cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=tmp_path / "apt")

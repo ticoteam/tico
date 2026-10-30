@@ -14,6 +14,10 @@ so no other computer gets it), turns on lingering so the user's systemd starts a
 /etc/tico/cloud-machine.json and enables tico-cloud-machine.service. It refuses a computer that is already enrolled:
 every machine made from the snapshot would be the same runner.
 
+`base` also installs the tools bots need, so they are in the snapshot and no boot waits for them (`tools()`): Google
+Chrome stable (Chromium on any other architecture), the computer screen's Xvfb, x11vnc and matchbox (the runner starts
+them on :99 and up when the screen is on), fonts, ffmpeg, Node.js 22 with npm, and Playwright's Chromium for the user.
+
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
 Not enrolled and both variables found: it enrolls once to that hub and runs `scripts/tico install` (the systemd user
 units, which then start at every boot by themselves). Enrolled: it starts those units. Not enrolled and no code (the
@@ -34,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import pwd
 import re
 import shlex
@@ -49,6 +54,14 @@ MARKER = Path("/etc/tico/cloud-machine.json")
 SUDOERS = Path("/etc/sudoers.d/tico-runner")
 UNIT = "tico-cloud-machine.service"
 UNIT_DIR = Path("/etc/systemd/system")
+APT = Path("/etc/apt")
+# The computer screen's programs (runner-rs/src/screen.rs, docs/install.md): the same packages, so one set of tools.
+DISPLAY_PACKAGES = ("xvfb", "x11vnc", "matchbox-window-manager")
+FONT_PACKAGES = ("fonts-liberation", "fonts-noto-color-emoji")
+NODE_MAJOR = 22
+PLAYWRIGHT = "1.64.1"                                       # the repo's pin (package.json devDependencies)
+CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
+NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico install's units (runner/systemd_units.py)
 DEFAULT_USER = "user"                                       # boat's sandbox user (docs.boat.dev/machines/tools)
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
@@ -315,12 +328,84 @@ def write_root_file(path: Path, text: str, mode: int) -> None:
     os.replace(tmp, path)
 
 
+def browser_package(arch: str) -> str:
+    """Google has no Linux arm64 Chrome, so every other architecture gets the distro's Chromium."""
+    return "google-chrome-stable" if arch == "x86_64" else "chromium"
+
+
+def tool_files(arch: str, apt: Path = APT) -> dict[Path, str]:
+    """The apt sources to write before the package lists are read. Chrome's only where Google builds it."""
+    sources, keyrings = apt / "sources.list.d", apt / "keyrings"
+    files = {sources / "nodesource.sources": (
+        "Types: deb\n"
+        f"URIs: https://deb.nodesource.com/node_{NODE_MAJOR}.x\n"
+        "Suites: nodistro\n"
+        "Components: main\n"
+        f"Signed-By: {keyrings / 'nodesource.asc'}\n")}
+    if arch == "x86_64":
+        files[sources / "google-chrome.sources"] = (
+            "Types: deb\n"
+            "URIs: https://dl.google.com/linux/chrome/deb/\n"
+            "Suites: stable\n"
+            "Components: main\n"
+            "Architectures: amd64\n"
+            f"Signed-By: {keyrings / 'google-chrome.asc'}\n")
+    return files
+
+
+def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str]]]:
+    """Root's steps, in order, as (what, argv). Each is safe to run again: installs of present packages do nothing."""
+    keyrings = apt / "keyrings"
+    get = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get"]
+    install = [*get, "install", "-y", "-q", "--no-install-recommends"]
+    keys = [("NodeSource's signing key", ["curl", "-fsSL", NODE_KEY_URL, "-o", str(keyrings / "nodesource.asc")])]
+    if arch == "x86_64":
+        keys.insert(0, ("Google's signing key",
+                        ["curl", "-fsSL", CHROME_KEY_URL, "-o", str(keyrings / "google-chrome.asc")]))
+    packages = [browser_package(arch), *DISPLAY_PACKAGES, *FONT_PACKAGES, "ffmpeg", "nodejs"]
+    return [
+        ("the package lists", [*get, "update", "-qq"]),
+        ("curl and ca-certificates", [*install, "ca-certificates", "curl"]),
+        ("the apt keyring directory", ["install", "-d", "-m", "0755", str(keyrings)]),
+        *keys,
+        ("the package lists with the new repositories", [*get, "update", "-qq"]),
+        (" ".join(packages), [*install, *packages]),
+        (f"Node.js {NODE_MAJOR}", ["node", "-e",
+                                   f"process.exit(process.versions.node.split('.')[0] === '{NODE_MAJOR}' ? 0 : 1)"]),
+        ("npm", ["npm", "--version"]),
+    ]
+
+
+def playwright_command() -> list[str]:
+    """Run as the sandbox user, so the browser lands in that user's cache, where bot tools look for it."""
+    return ["npx", "-y", f"playwright@{PLAYWRIGHT}", "install", "chromium"]
+
+
+def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
+    """The tools bots need, installed as root by `base` (see the module docstring). A failed step refuses the base."""
+    m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, ffmpeg, Node.js {NODE_MAJOR}")
+    for path, text in tool_files(arch, apt).items():
+        write_root_file(path, text, 0o644)
+    for what, argv in tool_commands(arch, apt):
+        m.say(f"installing {what}")
+        done = m.system(*argv, timeout=1800)
+        if done.returncode:
+            for line in ((done.stdout or "") + (done.stderr or "")).splitlines()[-20:]:
+                if line.strip():
+                    m.say("  " + line)
+            raise Refused(f"installing {what} failed (above)")
+    m.say(f"installing Playwright's Chromium for {m.user}")
+    if m.as_user(*playwright_command(), timeout=1800).returncode:
+        raise Refused("installing Playwright's Chromium failed (above)")
+
+
 def checkout_release(root: Path, run=subprocess.run) -> str:
     from runner import release_update
     return release_update.checkout_release(root, run=run)
 
 
-def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = UNIT_DIR) -> None:
+def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = UNIT_DIR, apt: Path = APT,
+         arch: str | None = None) -> None:
     if m.config.exists():
         raise Refused(f"{m.config} exists: this computer is enrolled, and every machine made from its snapshot would "
                       "be that same runner. Build the base on a new sandbox.")
@@ -338,6 +423,7 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
         m.say(f"installing {what}")
         if m.as_user(*command).returncode:
             raise Refused(f"installing {what} failed (above)")
+    tools(m, arch=arch or platform.machine(), apt=apt)
     fd, tmp = tempfile.mkstemp(prefix="tico-sudoers.")
     with os.fdopen(fd, "w") as handle:
         handle.write(sudoers_text(m.user))
