@@ -14,6 +14,7 @@ TEMPLATE = Path(__file__).resolve().parents[2] / "templates/catalog/video-produc
 loader = importlib.machinery.SourceFileLoader("pipeline", str(TEMPLATE / "software/pipeline.py"))
 pipeline = importlib.util.module_from_spec(importlib.util.spec_from_loader("pipeline", loader))
 loader.exec_module(pipeline)
+REAL_APPROVAL = pipeline.approval           # the fixture swaps it for a fake; the --by test calls the real one
 
 
 @pytest.fixture
@@ -25,7 +26,7 @@ def repo(tmp_path, monkeypatch):
     (root / "pipeline.yaml").write_text((TEMPLATE / "pipeline.yaml").read_text())
     approved = set()
 
-    def hub_approved(asset):              # stands in for `hub file approved`: (approved, detail)
+    def hub_approved(asset, mover="owner"):   # stands in for `hub file approved --by`: (approved, detail)
         rel = asset.relative_to(root).as_posix()
         return rel in approved, ({"by": "Ana"} if rel in approved else {})
 
@@ -127,6 +128,25 @@ def test_going_over_budget_asks_the_owner_for_a_raise_and_an_approved_raise_lets
     pipeline.main(["raise", str(repo.project), "--usd", "10", "--approval", "spend-42"])   # the same approval counts once
     assert json.loads((repo.project / "budget.json").read_text())["extra_usd"] == 10.0
     assert pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee").startswith("self: proceed with cut")
+
+
+def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review(repo, monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    intro = put(repo, "script", "intro.md")
+    assert REAL_APPROVAL(intro, "bot:reviewer") == (True, {})
+    assert calls[-1][-2:] == ["--by", "bot:reviewer"]
+    assert REAL_APPROVAL(intro, "owner")[0] is True and calls[-1][-2:] == ["--by", "human"]
+    hand_off = pipeline.request(repo.project, cfg(repo), {"id": "script", "mover": "bot:reviewer"}, [intro], "T-1", "")
+    assert "hub task create --owner bot:reviewer --parent T-1" in hand_off
+    assert hand_off.splitlines()[0] == "1. hub file publish projects/launch/script/intro.md"
+    assert "<FILE@N>" in hand_off and "hub file review <FILE@N> --approve|--changes --task <this task>" in hand_off
+    assert "projects/launch/script/intro.md" not in hand_off.split("\n", 1)[1].replace("intro.md: <FILE@N>", "")
 
 
 def test_gate_lets_a_file_through_only_when_approved_or_self_moved(repo):
