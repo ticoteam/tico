@@ -23,8 +23,9 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
 `next` for the one step. Pass `--owner NAME` when `pipeline.yaml` has no `owner`.
 - **Mover is `owner` or `person:<name>`**: `next` prints `hub task question`, with the reviewed files attached. It is
   its own task under the project task. Start the next stage only after its files come back approved.
-- **Mover is `bot:<slug>`**: `next` prints a `hub task create` hand-off to that bot, with the files listed. A bot's
-  answer does not approve a file; `gate` still needs a person's approval for the next stage.
+- **Mover is `bot:<slug>`**: `next` prints a `hub task create` hand-off to that bot, with the files listed and the
+  `hub file review <path> --approve|--changes --task <project task>` command for each. Only that bot's verdict counts
+  for its stage; a person's verdict does not.
 - **Mover is `self`**: work on the stage. Touch `.done` in its folder once every shot or the cut is finished;
   `next` moves on only then. The project's spend is the sum of `cost_usd` over the self-moved stages, and it may not
   pass `budget_usd` plus any raise the owner approved. Over it, `next` prints the owner question with a

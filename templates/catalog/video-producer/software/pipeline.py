@@ -154,10 +154,16 @@ def rel(path):
         raise Problem(f"{path} is outside this repository")
 
 
-def approval(asset):
-    """(approved, detail) from `hub file approved`: exit 0 approved, 1 not approved, anything else is a failure."""
+def approved_by(mover):
+    """Whose approval counts for a mover: a person's for owner and person:<name>, that bot's for bot:<slug>."""
+    return mover if mover.startswith("bot:") else "human"
+
+
+def approval(asset, mover="owner"):
+    """(approved, detail) from `hub file approved --by`: exit 0 approved, 1 not approved, anything else is a failure."""
+    command = ["hub", "file", "approved", rel(asset), "--by", approved_by(mover)]
     try:
-        done = subprocess.run(["hub", "file", "approved", rel(asset)], cwd=REPO, capture_output=True, text=True, timeout=60)
+        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
         raise Problem(f"hub file approved could not run: {exc}")
     if done.returncode == 0:
@@ -186,7 +192,10 @@ def request(project, cfg, stage, files, task, owner):
     if mover == "owner" and not owner:
         return NO_OWNER
     if mover.startswith("bot:"):
-        body = "Review these files and answer on this task: " + ", ".join(rel(f) for f in files)
+        # The verdict is recorded with `hub file review`, against the project task the files belong to.
+        lines = [f"Review each file for the {stage['id']} stage of {project.name}. Run, for each one:"]
+        lines += [f"hub file review {rel(f)} --approve|--changes --task {task} [--note TEXT]" for f in files]
+        body = "\n".join(lines)
         return shlex.join(["hub", "task", "create", "--owner", mover, "--parent", task,
                            "--title", f"Review {stage['id']} files for {project.name}", "--body", body])
     person = owner if mover == "owner" else mover.split(":", 1)[1]
@@ -223,7 +232,7 @@ def next_step(project, cfg, task="TASK-ID", owner=None):
         files = assets(folder)
         if not files:
             return f"waiting: make the {stage['id']} files in {rel(folder)}, then run next again"
-        pending = [f for f in files if not approval(f)[0]]
+        pending = [f for f in files if not approval(f, stage["mover"])[0]]
         if pending:
             return request(project, cfg, stage, pending, task, owner)
     return "nothing to do: every stage is done or approved"
@@ -244,7 +253,7 @@ def gate(asset):
     if stage["mover"] == "self":
         print(f"self: {stage['id']} needs no review")
         return 0
-    ok, detail = approval(Path(asset).resolve())
+    ok, detail = approval(Path(asset).resolve(), stage["mover"])
     if ok:
         print(f"approved: {rel(asset)}" + (f" by {detail['by']}" if detail.get("by") else ""))
         return 0
@@ -266,7 +275,7 @@ def status(project, cfg, task="TASK-ID", owner=None):
         if not files:
             lines.append(f"{stage['id']:<11} {stage['mover']:<16} (no files yet)")
         for f in files:
-            state = "approved" if approval(f)[0] else "not approved"
+            state = "approved" if approval(f, stage["mover"])[0] else "not approved"
             lines.append(f"{stage['id']:<11} {stage['mover']:<16} {f.name:<28} {state:<12} {cost(f):.2f} USD")
     record = budget_record(project)
     lines.append(f"budget {cfg['budget']:.2f} USD + {record['extra_usd']:.2f} raised, {spent(project, cfg):.2f} USD spent "

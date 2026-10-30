@@ -10,7 +10,7 @@
 # mover says who moves a stage's files on:
 #   owner           the owner approves them on the project's task (a hub task question under it)
 #   person:<name>   that person approves them, by the name they have in Tico
-#   bot:<slug>      that bot is handed the files as a task to review; `hub file approved` counts only people's answers
+#   bot:<slug>      that bot is handed the files as a task; its `hub file review` verdict is what counts
 #   self            this bot moves them itself, with no approval; the stage is done when its folder has a .done file
 owner: ""
 budget_usd: 10
