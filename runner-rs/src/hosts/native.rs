@@ -31,6 +31,7 @@ impl Host {
     pub async fn start_command(&self, thread: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
         match self {
             Host::Codex(h) => h.start_command(thread, text, effort).await,
+            Host::Pi(h) if text.trim() == "/compact" => h.compact(thread, effort).await,
             #[allow(unreachable_patterns)]
             _ => self.start_turn(thread, text, effort).await,
         }
@@ -43,15 +44,15 @@ impl Host {
         match self {
             Host::Codex(h) => h.compact(thread).await,
             Host::Claude(h) => h.start_turn(thread, "/compact", effort),
+            Host::Pi(h) => h.compact(thread, effort).await,
             #[allow(unreachable_patterns)]
             _ => Err(failed("this harness cannot compact a session")),
         }
     }
 
-    /// Whether `compact` works on this host now (`compact_first` needs it; a harness with `compaction` but no `/compact`
-    /// to run first, pi, has none).
+    /// Whether `compact` works on this host now (`compact_first` needs it; pi's is its RPC `compact`).
     pub fn can_compact(&self) -> bool {
-        matches!(self, Host::Codex(_) | Host::Claude(_))
+        matches!(self, Host::Codex(_) | Host::Claude(_) | Host::Pi(_))
     }
 
     /// Goal records the harness keeps outside its event stream (Claude's transcript).

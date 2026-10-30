@@ -1,27 +1,39 @@
-//! The Pi coding-agent host: one `pi --mode json -p` per turn, for the models with no CLI
-//! of their own, through OpenRouter. The session id is the thread id and the sessions live in the workspace:
+//! The Pi coding-agent host: `pi --mode rpc`, for the models with no CLI of their own, through OpenRouter. One
+//! process serves a thread's turns and stays up between them (`Pool`); the session id is the thread id and the
+//! sessions live in the workspace:
 //!
-//!     pi --mode json -p --provider openrouter --model deepseek/deepseek-v4.1-flash --thinking low
+//!     pi --mode rpc --provider openrouter --model deepseek/deepseek-v4.1-flash --thinking low
 //!        --tools read,bash,edit,write,grep,find,ls --session-id <uuid> --session-dir <dir> --approve
+//!
+//! A turn is a `prompt` command and ends at pi's `agent_settled`; a message for a running turn is a `steer`, which pi
+//! writes in after the turn's tool calls and before its next model call; `compact_first` is a `compact`. A turn that
+//! would start pi differently (its model, environment, granted secrets or agent directory) starts it again on the same
+//! session file; a new effort is a `set_thinking_level`, as `--thinking` would set it.
 //!
 //! The turn's MCP servers (the hub, the bot's streamable HTTP servers and the repository's `.mcp.json`) are its agent
 //! directory's `mcp.json` (`mcp_json`), with `--tools` naming no `mcp__` entry so they stay callable. There are no
-//! permission prompts (the bot also reaches Tico with the hub CLI over bash); `steer` is refused.
-//! OPENROUTER_API_KEY reaches the process from the bot's granted credential.
+//! permission prompts (the bot also reaches Tico with the hub CLI over bash). OPENROUTER_API_KEY reaches the process
+//! from the bot's granted credential.
 //!
 //! The Tico AI Gateway's models (a department tier such as `tico-marketing-medium-1.0`, or an old id such as
 //! `tico-mid-1.0`) run on pi too, as pi's custom provider `tico` over the Gateway's OpenAI-chat endpoint: the server hands a run on one the gateway key and URL
 //! (TICOAI_GATEWAY_KEY / TICOAI_GATEWAY_URL, backend/gateway_connection.py), and the turn's pi reads a `models.json`
 //! naming that URL and the key's variable, never the key itself.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::{mpsc, oneshot, watch};
 
-use super::oneshot::{base_env, int_of, OneShot, Thread, Turn, Wire};
-use super::{hub_mcp_server, Settings};
+use super::oneshot::{base_env, int_of, Thread, Turn, Wire};
+use super::{event, failed, hub_mcp_server, is_limit, Events, HostError, Settings};
 use crate::env::Env;
-use crate::util::{text_of, truthy};
+use crate::util::{log, text_of, truthy};
 
 pub const PROVIDER: &str = "openrouter";
 /// Catalog id -> OpenRouter model id (clients/openrouter.py MODELS, shared with the server's decision model).
@@ -418,7 +430,7 @@ impl Wire for Pi {
         let model = if gateway { s.model.clone().unwrap_or_default().trim().to_string() } else { model_for(s.model.as_deref()) };
         argv.extend(
             [
-                "--mode", "json", "-p", "--provider", if gateway { GATEWAY_PROVIDER } else { PROVIDER }, "--model", &model,
+                "--mode", "rpc", "--provider", if gateway { GATEWAY_PROVIDER } else { PROVIDER }, "--model", &model,
                 "--thinking", effort_for(effort.or(s.effort.as_deref())), "--tools", TOOLS, "--session-id", thread_id,
                 "--session-dir", &session_dir(&t.bot, s).display().to_string(), "--approve",
             ]
@@ -534,9 +546,388 @@ impl Wire for Pi {
     }
 }
 
-pub type PiHost = OneShot<Pi>;
+/// SIGTERM, then SIGKILL this long after, for a pi that is stopped.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+/// How long an interrupted turn has to settle after its `abort` before its pi is stopped.
+const ABORT_GRACE: Duration = Duration::from_secs(10);
+/// How long a command's own reply (`steer`) is waited for.
+const ASK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// pi processes kept between turns (Runner::pi), one per thread, each with a folder of its own under `dir` for the
+/// token file it reads HUB_TOKEN from (`tico-file:`, crate::warm): written with each attempt's token, blanked when the
+/// attempt ends. A host takes a thread's process for its attempt and gives it back at `release`. A process is stopped
+/// after IDLE unused, when more than `limit` are kept (oldest first), and when the runner stops.
+pub struct Pool {
+    dir: PathBuf,
+    limit: usize,
+    idle: Duration,
+    kept: Mutex<HashMap<String, (Arc<Proc>, Instant)>>,
+}
+
+impl Pool {
+    pub fn new(dir: PathBuf, limit: usize) -> Pool {
+        Pool { dir, limit, idle: crate::warm::IDLE, kept: Mutex::new(HashMap::new()) }
+    }
+
+    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Arc<Proc>, Instant)>> {
+        self.kept.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn take(&self, thread: &str) -> Option<Arc<Proc>> {
+        self.kept().remove(thread).map(|(p, _)| p)
+    }
+
+    async fn keep(&self, thread: String, proc: Arc<Proc>) {
+        proc.token("");
+        // Another attempt on the thread gave its own back first: the newer one stays.
+        let old = self.kept().insert(thread, (proc, Instant::now()));
+        if let Some((old, _)) = old {
+            old.stop().await;
+        }
+        self.prune(false).await;
+    }
+
+    /// Stop the processes past their idle time, dead, or over the limit (oldest first); every one with `close`.
+    pub async fn prune(&self, close: bool) {
+        let stopping: Vec<Arc<Proc>> = {
+            let mut kept = self.kept();
+            let mut idle: Vec<(String, Instant)> = kept.iter().map(|(k, (_, used))| (k.clone(), *used)).collect();
+            idle.sort_by_key(|(_, used)| *used);
+            let mut out = vec![];
+            for (thread, used) in idle {
+                if close || kept.len() > self.limit || used.elapsed() >= self.idle || !kept[&thread].0.alive() {
+                    out.extend(kept.remove(&thread).map(|(p, _)| p));
+                }
+            }
+            out
+        };
+        for p in stopping {
+            p.stop().await;
+        }
+    }
+
+    /// A new folder for one process's token file: the bot may traverse it, never write it (crate::warm).
+    fn home(&self) -> Result<PathBuf, String> {
+        use std::os::unix::fs::PermissionsExt;
+        let home = self.dir.join(uuid::Uuid::new_v4().simple().to_string());
+        std::fs::create_dir_all(&home).map_err(|e| format!("could not make pi's token folder: {e}"))?;
+        let mode = if crate::isolation::enabled() { 0o711 } else { 0o700 };
+        for path in [&self.dir, &home] {
+            if !std::fs::symlink_metadata(path).map_err(|e| e.to_string())?.is_dir() {
+                return Err("pi's token folders must not be symbolic links".into());
+            }
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| format!("could not prepare pi's token folder: {e}"))?;
+        }
+        Ok(home)
+    }
+}
+
+/// A running `pi --mode rpc`: its stdin, how to stop it, and what its lines have said (`Live`).
+struct Proc {
+    /// What it was started with (`fingerprint`): a turn that would start it differently starts a new one.
+    key: String,
+    stdin: mpsc::UnboundedSender<String>,
+    stopper: super::Stopper,
+    exited: watch::Receiver<bool>,
+    /// Its token file's folder; None for a process that reads its attempt's token itself (a leased turn user's, never
+    /// kept past its attempt).
+    home: Option<PathBuf>,
+    /// The running turn's host's events, for the process's stderr.
+    sink: Arc<Mutex<Option<Events>>>,
+    live: Mutex<Live>,
+}
+
+#[derive(Default)]
+struct Live {
+    run: Option<Run>,
+    asks: HashMap<String, oneshot::Sender<Value>>,
+    /// The steering and follow-up messages pi holds (its last `queue_update`).
+    queued: Vec<String>,
+    thinking: String,
+    /// The process has exited and given up its turn: none starts on it.
+    dead: bool,
+}
+
+/// The Tico turn a process runs: a prompt (and what was steered in after its last model call), or a compaction.
+struct Run {
+    host: PiHost,
+    thread: String,
+    turn: String,
+    /// The id of the command that started it, whose reply says whether it did.
+    ask: String,
+    state: Turn,
+    compact: bool,
+    confirmed: bool,
+    aborted: bool,
+}
+
+impl Proc {
+    fn live(&self) -> std::sync::MutexGuard<'_, Live> {
+        self.live.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn alive(&self) -> bool {
+        !*self.exited.borrow() && !self.live().dead
+    }
+
+    fn send(&self, command: Value) -> bool {
+        self.stdin.send(command.to_string() + "\n").is_ok()
+    }
+
+    fn token(&self, token: &str) {
+        if let Some(home) = &self.home {
+            crate::warm::write_token(&home.join("lease-token"), token);
+        }
+    }
+
+    /// `command` with an id of its own, and pi's reply to it.
+    async fn ask(&self, mut command: Value) -> Result<Value, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        command["id"] = json!(id);
+        let (tx, rx) = oneshot::channel();
+        self.live().asks.insert(id.clone(), tx);
+        if !self.send(command) {
+            self.live().asks.remove(&id);
+            return Err("pi is not running".into());
+        }
+        match tokio::time::timeout(ASK_TIMEOUT, rx).await {
+            Ok(Ok(reply)) => Ok(reply),
+            Ok(Err(_)) => Err("pi exited".into()),
+            Err(_) => {
+                self.live().asks.remove(&id);
+                Err("pi did not answer".into())
+            }
+        }
+    }
+
+    /// SIGTERM (pi ends the tools it started), SIGKILL after STOP_GRACE.
+    async fn stop(&self) {
+        if self.alive() {
+            self.stopper.terminate(STOP_GRACE);
+            let mut exited = self.exited.clone();
+            let _ = tokio::time::timeout(STOP_GRACE + Duration::from_secs(1), exited.wait_for(|e| *e)).await;
+        }
+    }
+
+    async fn read(me: Weak<Proc>, stdout: Option<tokio::process::ChildStdout>, exited: oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+                  stderr: crate::run_diagnostics::Stderr, done: watch::Sender<bool>) {
+        if let Some(stdout) = stdout {
+            // Records end at LF only: pi's JSON strings may hold other line separators.
+            let mut lines = BufReader::new(stdout);
+            let mut buf = Vec::new();
+            while matches!(lines.read_until(b'\n', &mut buf).await, Ok(n) if n > 0) {
+                let Some(proc) = me.upgrade() else { break };
+                if let Ok(msg) = serde_json::from_slice::<Value>(buf.trim_ascii()) {
+                    proc.on_line(&msg);
+                }
+                buf.clear();
+            }
+        }
+        let rc = match exited.await {
+            Ok(status) => super::return_code(&status),
+            Err(_) => -1,
+        };
+        stderr.drained().await;
+        if let Some(proc) = me.upgrade() {
+            let run = {
+                let mut live = proc.live();
+                live.asks.clear();
+                live.dead = true;
+                live.run.take()
+            };
+            if let Some(run) = run {
+                run.host.clone().finish(run, Some((rc, stderr.tail())));
+            }
+        }
+        let _ = done.send(true);
+    }
+
+    fn on_line(&self, msg: &Value) {
+        let kind = msg["type"].as_str().unwrap_or_default();
+        let mut live = self.live();
+        match kind {
+            "response" => {
+                let id = text_of(&msg["id"]);
+                if let Some(tx) = live.asks.remove(&id) {
+                    let _ = tx.send(msg.clone());
+                    return;
+                }
+                let Some(run) = live.run.as_mut().filter(|r| !id.is_empty() && r.ask == id) else {
+                    if msg["success"] == false {
+                        log(&format!("pi: {} failed: {}", text_of(&msg["command"]), text_of(&msg["error"])));
+                    }
+                    return;
+                };
+                if msg["success"] != true {
+                    let error = text_of(&msg["error"]);
+                    run.state.error = if error.is_empty() { format!("pi refused the {}", text_of(&msg["command"])) } else { error };
+                    return self.settle(live);
+                }
+                // A compaction ends at its `compaction_end`; a prompt pi handled itself starts no run.
+                if !run.compact {
+                    if msg["data"]["disposition"] == "handled" {
+                        return self.settle(live);
+                    }
+                    run.state.session = true;
+                }
+            }
+            // A dialog from an extension waits for its answer: none comes from a turn.
+            "extension_ui_request" => {
+                if matches!(msg["method"].as_str(), Some("select" | "confirm" | "input" | "editor")) {
+                    self.send(json!({"type": "extension_ui_response", "id": msg["id"], "cancelled": true}));
+                }
+                return;
+            }
+            "queue_update" => {
+                live.queued = ["steering", "followUp"].iter().flat_map(|k| msg[*k].as_array().cloned().unwrap_or_default()).map(|m| text_of(&m)).filter(|m| !m.is_empty()).collect();
+                return;
+            }
+            "agent_settled" => {
+                let queued = std::mem::take(&mut live.queued);
+                let Some(run) = live.run.as_mut().filter(|r| !r.compact) else { return };
+                if msg["aborted"] != true && !queued.is_empty() && !run.host.interrupted(&run.turn) {
+                    // What was steered in after the run's last model call is still pi's: it runs on, in this turn.
+                    run.ask = uuid::Uuid::new_v4().to_string();
+                    self.send(json!({"type": "clear_queue"}));
+                    self.send(json!({"type": "prompt", "id": run.ask, "message": queued.join("\n\n")}));
+                    return;
+                }
+                run.aborted = msg["aborted"] == true;
+                return self.settle(live);
+            }
+            "compaction_end" if msg["reason"] == "manual" && live.run.as_ref().is_some_and(|r| r.compact) => {
+                let run = live.run.as_mut().unwrap();
+                let (result, error) = (&msg["result"], text_of(&msg["errorMessage"]));
+                if result.is_object() || error.contains("Already compacted") {
+                    if result["usage"].is_object() {
+                        let (input, output, total) = usage_tokens(&result["usage"]);
+                        run.state.emit("tokens", json!({"input": input, "output": output, "total": total, "usage": usage_increment(&result["usage"])}));
+                    }
+                    run.state.context = Some(int_of(&result["estimatedTokensAfter"])).filter(|c| *c > 0);
+                    (run.state.compacted, run.state.session) = (true, true);
+                } else if msg["aborted"] == true {
+                    run.aborted = true;
+                } else {
+                    run.state.error = if error.is_empty() { "pi could not compact the session".into() } else { error };
+                }
+                return self.settle(live);
+            }
+            // RPC mode has no session header; a stray one is not this turn's confirmation.
+            "session" => return,
+            _ => {}
+        }
+        if let Some(run) = live.run.as_mut() {
+            if kind != "response" {
+                Pi::on_event(msg, &mut run.state);
+            }
+            run.host.clone().flush(run);
+        }
+    }
+
+    /// The running turn is over: its last events go out from its host.
+    fn settle(&self, mut live: std::sync::MutexGuard<'_, Live>) {
+        let run = live.run.take();
+        drop(live);
+        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        if let Some(run) = run {
+            run.host.clone().finish(run, None);
+        }
+    }
+}
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        if let Some(home) = &self.home {
+            let _ = std::fs::remove_dir_all(home);
+        }
+    }
+}
+
+/// What a process for this turn would be started with, its effort aside: its command line, environment (HUB_TOKEN
+/// aside, which is the token file's), user and folder, and what its agent directory holds.
+fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
+    let mut argv = argv.to_vec();
+    if let Some(at) = argv.iter().position(|a| a == "--thinking") {
+        argv.drain(at..(at + 2).min(argv.len()));
+    }
+    let rest: Env = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), v.clone())).collect();
+    let text = json!([argv, rest, s.cwd, s.identity, mcp_json(s, env), s.compact_at, s.gateway_inputs]).to_string();
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[derive(Default)]
+struct Inner {
+    up: bool,
+    threads: HashMap<String, Thread>,
+    /// The processes this host's attempt holds, by thread.
+    procs: HashMap<String, Arc<Proc>>,
+    turn: Option<(String, String)>,
+    interrupted: HashSet<String>,
+    compacted: HashSet<String>,
+    context: HashMap<String, i64>,
+}
+
+struct Shared {
+    bot: String,
+    cmd: Vec<String>,
+    tx: Events,
+    pool: Arc<Pool>,
+    inner: Mutex<Inner>,
+}
+
+/// One attempt's pi: its threads, and the processes it took from the pool for them.
+#[derive(Clone)]
+pub struct PiHost(Arc<Shared>);
 
 impl PiHost {
+    pub fn new(bot: &str, cmd: Vec<String>, tx: Events, pool: Arc<Pool>) -> Self {
+        PiHost(Arc::new(Shared { bot: bot.into(), cmd, tx, pool, inner: Mutex::new(Inner::default()) }))
+    }
+
+    fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.0.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn emit(&self, ev: Value) {
+        let _ = self.0.tx.send(ev);
+    }
+
+    pub fn start(&self) {
+        self.inner().up = true;
+    }
+
+    pub fn alive(&self) -> bool {
+        self.inner().up
+    }
+
+    /// Stops every process this host holds; a turn still running ends as interrupted.
+    pub async fn stop(&self) {
+        let procs: Vec<Arc<Proc>> = {
+            let mut inner = self.inner();
+            inner.up = false;
+            if let Some((_, turn)) = inner.turn.clone() {
+                inner.interrupted.insert(turn);
+            }
+            inner.procs.drain().map(|(_, p)| p).collect()
+        };
+        for p in procs {
+            p.stop().await;
+        }
+    }
+
+    /// The attempt is over: after a turn that completed, each process that may outlive its attempt goes back to the
+    /// pool with its token blanked; any other is stopped.
+    pub async fn release(&self, completed: bool) {
+        let procs: Vec<(String, Arc<Proc>)> = self.inner().procs.drain().collect();
+        for (thread, p) in procs {
+            if completed && p.home.is_some() && p.alive() && p.live().run.is_none() {
+                self.0.pool.keep(thread, p).await;
+            } else {
+                p.stop().await;
+            }
+        }
+    }
+
     pub fn start_thread(&self, settings: &Settings) -> String {
         self.record(&uuid::Uuid::new_v4().to_string(), settings, false)
     }
@@ -544,42 +935,390 @@ impl PiHost {
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
         self.record(thread_id, settings, true)
     }
+
+    fn record(&self, thread_id: &str, settings: &Settings, started: bool) -> String {
+        let t = Thread { bot: settings.slug.clone(), settings: settings.clone(), started };
+        self.inner().threads.insert(thread_id.into(), t);
+        thread_id.into()
+    }
+
+    /// A thread this host started, once pi took its first prompt (a resumed one counts as confirmed).
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+    }
+
+    /// Whether pi compacted `thread_id`'s session in a turn since this was last asked.
+    pub fn compacted(&self, thread_id: &str) -> bool {
+        self.inner().compacted.remove(thread_id)
+    }
+
+    /// The session's size after `thread_id`'s last turn, once (Host::context_tokens).
+    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
+        self.inner().context.remove(thread_id)
+    }
+
+    pub fn active_turn(&self, thread_id: &str) -> Option<String> {
+        self.inner().turn.as_ref().filter(|(t, _)| t == thread_id).map(|(_, turn)| turn.clone())
+    }
+
+    fn interrupted(&self, turn: &str) -> bool {
+        self.inner().interrupted.contains(turn)
+    }
+
+    /// The pi command, its environment written (its agent directory), for `settings`.
+    fn command(&self, argv: &[String], settings: &Settings, env: &Env) -> std::io::Result<tokio::process::Command> {
+        if settings.identity.is_some() && is_gateway(settings.model.as_deref()) && !env.contains_key("PI_CODING_AGENT_DIR") {
+            return Err(std::io::Error::other("cannot prepare the private Gateway configuration"));
+        }
+        let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
+        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd).env_clear().envs(env);
+        Ok(command)
+    }
+
+    /// The process a turn's pi starts as, with its stderr going to this host (the Gateway isolation probe).
+    #[allow(dead_code)]
+    pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(tokio::process::Child, crate::run_diagnostics::Stderr)> {
+        let env = Pi::env(settings);
+        let mut child = self.command(argv, settings, &env)?.spawn()?;
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
+        Ok((child, stderr))
+    }
+
+    fn spawn(&self, argv: &[String], settings: &Settings, env: &Env, key: String, home: Option<PathBuf>, thinking: &str) -> std::io::Result<Arc<Proc>> {
+        let mut child = self.command(argv, settings, env)?.spawn()?;
+        let sink: Arc<Mutex<Option<Events>>> = Arc::default();
+        let to = sink.clone();
+        let stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
+            if let Some(tx) = to.lock().unwrap_or_else(|p| p.into_inner()).as_ref() { let _ = tx.send(value); }
+        }, env);
+        log(&format!("pi[{}]: started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
+        let stdout = child.stdout.take();
+        let mut stdin = child.stdin.take();
+        let (lines, mut rx) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(line) = rx.recv().await {
+                let Some(s) = stdin.as_mut() else { break };
+                if s.write_all(line.as_bytes()).await.is_err() || s.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+        let (stopper, exited) = super::own(child);
+        let (done, dead) = watch::channel(false);
+        let live = Live { thinking: thinking.into(), ..Default::default() };
+        let proc = Arc::new(Proc { key, stdin: lines, stopper, exited: dead, home, sink, live: Mutex::new(live) });
+        tokio::spawn(Proc::read(Arc::downgrade(&proc), stdout, exited, stderr, done));
+        Ok(proc)
+    }
+
+    /// The thread's process for this turn: the one this attempt or the pool holds when it was started as this turn
+    /// would start it, else a new one on the same session.
+    async fn process(&self, thread_id: &str, t: &Thread, thinking: &str) -> Result<Arc<Proc>, String> {
+        let argv = Pi::argv(&self.0.cmd, thread_id, t, Some(thinking));
+        let mut env = Pi::env(&t.settings);
+        let key = fingerprint(&argv, &env, &t.settings);
+        let token = env.get("HUB_TOKEN").cloned().unwrap_or_default();
+        let held = self.inner().procs.remove(thread_id).or_else(|| self.0.pool.take(thread_id));
+        if let Some(p) = held {
+            if p.key == key && p.alive() {
+                p.token(&token);
+                self.inner().procs.insert(thread_id.into(), p.clone());
+                return Ok(p);
+            }
+            p.stop().await;
+        }
+        // A leased turn user's process reads its own token and ends with its attempt (turn_users::Lease).
+        let home = if t.settings.identity.is_none() { Some(self.0.pool.home()?) } else { None };
+        if let Some(home) = &home {
+            let file = home.join("lease-token");
+            crate::warm::write_token(&file, &token);
+            env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
+        }
+        let proc = self.spawn(&argv, &t.settings, &env, key, home, thinking).map_err(|e| e.to_string())?;
+        self.inner().procs.insert(thread_id.into(), proc.clone());
+        Ok(proc)
+    }
+
+    pub async fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+        self.begin(thread_id, Some(text), effort).await
+    }
+
+    /// Compacts the thread's session (`compact_first`, `/compact`): a turn that ends at pi's `compaction_end`.
+    pub async fn compact(&self, thread_id: &str, effort: Option<&str>) -> Result<String, HostError> {
+        self.begin(thread_id, None, effort).await
+    }
+
+    async fn begin(&self, thread_id: &str, text: Option<&str>, effort: Option<&str>) -> Result<String, HostError> {
+        let turn = uuid::Uuid::new_v4().to_string();
+        let mut t = {
+            let mut inner = self.inner();
+            if !inner.up {
+                return Err(failed("pi host is not running"));
+            }
+            if inner.turn.is_some() {
+                return Err(failed("pi host already has a turn running"));
+            }
+            let t = inner.threads.get(thread_id).cloned().ok_or_else(|| failed(format!("unknown pi thread {thread_id}")))?;
+            inner.turn = Some((thread_id.into(), turn.clone()));
+            t
+        };
+        if t.bot.is_empty() {
+            t.bot = self.0.bot.clone();
+        }
+        let thinking = effort_for(effort.or(t.settings.effort.as_deref()));
+        let proc = match self.process(thread_id, &t, thinking).await {
+            Ok(p) => p,
+            Err(e) => {
+                self.inner().turn = None;
+                return Err(failed(format!("could not start pi: {e}")));
+            }
+        };
+        self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
+        let mut live = proc.live();
+        if live.thinking != thinking {
+            proc.send(json!({"type": "set_thinking_level", "level": thinking}));
+            live.thinking = thinking.into();
+        }
+        let ask = uuid::Uuid::new_v4().to_string();
+        *proc.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(self.0.tx.clone());
+        live.queued.clear();
+        let state = Turn { bot: self.0.bot.clone(), cmd: self.0.cmd.clone(), ..Default::default() };
+        live.run = Some(Run { host: self.clone(), thread: thread_id.into(), turn: turn.clone(), ask: ask.clone(), state, compact: text.is_none(), confirmed: false, aborted: false });
+        let command = match text {
+            Some(text) => json!({"type": "prompt", "id": ask, "message": text}),
+            None => json!({"type": "compact", "id": ask}),
+        };
+        // A process that has exited gives up no turn of its own: this one fails here.
+        if live.dead || !proc.send(command) {
+            if let Some(run) = live.run.take() {
+                drop(live);
+                self.finish(run, Some((-1, String::new())));
+            }
+        }
+        Ok(turn)
+    }
+
+    /// The running turn's new events, and its thread confirmed once pi took its prompt.
+    fn flush(&self, run: &mut Run) {
+        if std::mem::take(&mut run.state.session) && !std::mem::replace(&mut run.confirmed, true) {
+            if let Some(t) = self.inner().threads.get_mut(&run.thread) {
+                t.started = true;
+            }
+            // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+            self.emit(event("thread_confirmed", Some(&run.thread), Some(&run.turn), json!({})));
+        }
+        for (kind, fields) in run.state.out.drain(..) {
+            self.emit(event(kind, Some(&run.thread), Some(&run.turn), fields));
+        }
+    }
+
+    /// The turn's last events; `exit` is the process's return code and stderr when it ended the turn by exiting.
+    fn finish(&self, mut run: Run, exit: Option<(i32, String)>) {
+        self.flush(&mut run);
+        let (tid, turn, state) = (run.thread.as_str(), run.turn.as_str(), &run.state);
+        let interrupted = {
+            let mut inner = self.inner();
+            if inner.turn.as_ref().is_some_and(|(_, t)| t == turn) {
+                inner.turn = None;
+            }
+            if state.compacted {
+                inner.compacted.insert(tid.into());
+            }
+            if let Some(context) = state.context.filter(|c| *c > 0) {
+                inner.context.insert(tid.into(), context);
+            }
+            inner.interrupted.contains(turn)
+        };
+        let model_error = truthy(state.extra.get("model_error"));
+        if interrupted {
+            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
+        } else if let Some((rc, stderr)) = exit {
+            let error = if state.error.is_empty() { crate::run_diagnostics::process_reason(rc, &stderr) } else { state.error.clone() };
+            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error), "exit_code": rc, "process_exit": true})));
+        } else if !model_error && state.error.is_empty() && !run.aborted {
+            if !state.reply.is_empty() {
+                self.emit(event("message", Some(tid), Some(turn), json!({"text": state.reply, "final": true})));
+            }
+            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
+        } else {
+            let error = if state.error.is_empty() { "pi stopped the turn before it ended".to_string() } else { state.error.clone() };
+            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)})));
+        }
+        self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
+    }
+
+    /// `abort`, and the process stopped if the turn has not settled ABORT_GRACE later.
+    pub fn interrupt(&self, turn_id: &str) {
+        let proc = {
+            let mut inner = self.inner();
+            let Some((tid, _)) = inner.turn.clone().filter(|(_, t)| t == turn_id) else { return };
+            inner.interrupted.insert(turn_id.into());
+            inner.procs.get(&tid).cloned()
+        };
+        let Some(proc) = proc else { return };
+        proc.send(json!({"type": "abort"}));
+        let turn = turn_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(ABORT_GRACE).await;
+            if proc.live().run.as_ref().is_some_and(|r| r.turn == turn) {
+                proc.stopper.terminate(STOP_GRACE);
+            }
+        });
+    }
+
+    /// A message for the running turn, as pi's `steer`. Refused (the runner gives it the next turn) when the turn is
+    /// over, a compaction, or ended before pi read the message in, which is then taken back out of pi's queue.
+    pub async fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
+        let refused = || HostError::SteerRefused("the pi turn has ended".into());
+        let running = |p: &Proc| p.live().run.as_ref().is_some_and(|r| r.turn == turn_id && !r.compact);
+        // Never with the host's lock held: pi's reader takes the process's lock, then the host's.
+        let proc = self.inner().procs.get(thread_id).cloned();
+        let proc = proc.filter(|p| running(p)).ok_or_else(refused)?;
+        let reply = proc.ask(json!({"type": "steer", "message": text})).await.map_err(|e| failed(format!("pi took no steer: {e}")))?;
+        if reply["success"] != true {
+            return Err(failed(format!("pi refused the message: {}", text_of(&reply["error"]))));
+        }
+        if !running(&proc) {
+            // The turn ended as pi took it: still in pi's queue, it is the next turn's; gone from it, pi read it in.
+            let cleared = proc.ask(json!({"type": "clear_queue"})).await.unwrap_or_default();
+            if cleared["data"]["steering"].as_array().is_none_or(|q| q.iter().any(|m| text_of(m) == text)) {
+                return Err(refused());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub mod testing {
+    //! A fake `pi --mode rpc` for the Pi host and runner tests.
+    use std::path::Path;
+
+    use serde_json::Value;
+
+    /// Plays its fixture for each `prompt` (`WAIT` takes one command, once a process; `DELIVER` hands pi the steered
+    /// messages; `HANG` runs until an `abort`; `EXIT n` exits n), then `agent_settled`; compacts unless `compact-fail`
+    /// is in its folder. Logs there: starts.log (pid, HUB_TOKEN) and exits.log per process, in.jsonl (every command),
+    /// args.log (the command line, per prompt or compact), prompt-N, steer.log.
+    const FAKE: &str = r#"#!/usr/bin/env python3
+import json, os, signal, sys
+args, pre = sys.argv[1:], []
+while args and not args[0].startswith("--"):
+    pre.append(args.pop(0))
+fixture, logs = pre
+def log(name, text, mode="a"):
+    with open(os.path.join(logs, name), mode) as f: f.write(text)
+def bye(*_):
+    log("exits.log", "%d\n" % os.getpid())
+    os._exit(0)
+signal.signal(signal.SIGTERM, bye)
+log("starts.log", json.dumps({"pid": os.getpid(), "token": os.environ.get("HUB_TOKEN", "")}) + "\n")
+def say(m):
+    sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+def reply(c, data=None, error=None):
+    m = {"type": "response", "id": c.get("id"), "command": c["type"], "success": error is None}
+    if error is not None: m["error"] = error
+    elif data is not None: m["data"] = data
+    say(m)
+queue, waited = [], []
+def queued(): say({"type": "queue_update", "steering": list(queue), "followUp": []})
+def read():
+    line = sys.stdin.readline()
+    if not line: bye()
+    log("in.jsonl", line)
+    return json.loads(line)
+def handle(c):
+    kind = c["type"]
+    if kind in ("prompt", "compact"):
+        log("args.log", " ".join(args) + "\n")
+    if kind == "prompt":
+        log("prompt-%d" % len([f for f in os.listdir(logs) if f.startswith("prompt-")]), c["message"], "w")
+        reply(c, {"disposition": "started"})
+        aborted = False
+        for line in open(fixture).read().splitlines():
+            word = line.split() or [""]
+            if word[0] == "EXIT": os._exit(int(word[1]))
+            elif word[0] == "WAIT":
+                if not waited: waited.append(1); handle(read())
+            elif word[0] == "DELIVER":
+                for text in queue: say({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+                queue.clear(); queued()
+            elif word[0] == "HANG":
+                while not aborted:
+                    nxt = read(); handle(nxt); aborted = nxt["type"] == "abort"
+                break
+            elif line.strip():
+                sys.stdout.write(line + "\n"); sys.stdout.flush()
+        say({"type": "agent_settled", "aborted": aborted})
+    elif kind == "compact":
+        say({"type": "compaction_start", "reason": "manual"})
+        if os.path.exists(os.path.join(logs, "compact-fail")):
+            e = "Compaction failed: Nothing to compact (session too small)"
+            say({"type": "compaction_end", "reason": "manual", "aborted": False, "willRetry": False, "errorMessage": e})
+            reply(c, error=e)
+        else:
+            r = {"summary": "Earlier work.", "tokensBefore": 180000, "estimatedTokensAfter": 12000, "usage": {"input": 9000, "output": 700, "cacheRead": 0, "cacheWrite": 0}}
+            say({"type": "compaction_end", "reason": "manual", "aborted": False, "willRetry": False, "result": r})
+            reply(c, r)
+    elif kind == "steer":
+        log("steer.log", c["message"] + "\n"); queue.append(c["message"]); reply(c, {"disposition": "queued"}); queued()
+    elif kind == "clear_queue":
+        reply(c, {"steering": list(queue), "followUp": []}); queue.clear(); queued()
+    else:
+        reply(c)
+while True:
+    handle(read())
+"#;
+
+    /// The command for a fake pi in `dir` that plays `fixture` and logs into `dir`.
+    pub fn fake(dir: &Path, fixture: &Path) -> Vec<String> {
+        let path = dir.join("pi");
+        crate::util::write_script(&path, FAKE);
+        vec![path.display().to_string(), fixture.display().to_string(), dir.display().to_string()]
+    }
+
+    /// The records of one of its JSON-lines logs.
+    pub fn logged(dir: &Path, name: &str) -> Vec<Value> {
+        std::fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::oneshot::testing::{fake, turn_events};
+    use super::super::oneshot::testing::turn_events;
+    use super::testing::{fake, logged};
     use super::*;
     use tokio::sync::mpsc;
+
+    fn pool(dir: &std::path::Path) -> Arc<Pool> {
+        Arc::new(Pool::new(dir.join("pool"), 4))
+    }
 
     #[tokio::test]
     async fn every_pi_fixture_gives_the_python_hosts_events_and_its_command_line() {
         let dir = std::env::temp_dir().join(format!("fake-pi-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cmd = fake(&dir, "pi");
         for (path, expected) in crate::hosts::fixtures::cases("pi") {
             let (tx, mut rx) = mpsc::unbounded_channel();
-            let host = PiHost::new("acme", vec![cmd.clone()], tx);
+            let host = PiHost::new("acme", fake(&dir, &path), tx, pool(&dir));
             host.start();
             let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-            for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", " or-key ".into()), ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", path.display().to_string())] {
+            for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", " or-key ".into())] {
                 s.env.insert(k.into(), v);
             }
-            let rc = if path.file_stem().is_some_and(|n| n == "error") { "1" } else { "0" };
-            s.env.insert("RC".into(), rc.into());
             let thread = host.start_thread(&s);
-            host.start_turn(&thread, "hello", Some("xhigh")).unwrap();
+            host.start_turn(&thread, "hello", Some("xhigh")).await.unwrap();
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
             let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
             let sessions = dir.join("runtime/pi-sessions/acme");
             assert_eq!(
                 args.lines().last().unwrap(),
-                format!("--mode json -p --provider openrouter --model moonshotai/kimi-k3 --thinking max --tools {TOOLS} --session-id {thread} --session-dir {} --approve", sessions.display())
+                format!("--mode rpc --provider openrouter --model moonshotai/kimi-k3 --thinking max --tools {TOOLS} --session-id {thread} --session-dir {} --approve", sessions.display())
             );
             assert!(sessions.is_dir());
         }
-        assert_eq!(std::fs::read_to_string(dir.join("args.log.prompt")).unwrap(), "hello");
+        assert_eq!(std::fs::read_to_string(dir.join("prompt-0")).unwrap(), "hello");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -591,18 +1330,17 @@ mod tests {
     async fn gateway_turn_on(model: &str, lines: &[&str]) -> (Vec<Value>, PathBuf) {
         let dir = std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cmd = fake(&dir, "pi");
         let fixture = dir.join("gateway.jsonl");
         std::fs::write(&fixture, lines.join("\n")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = PiHost::new("acme", vec![cmd.clone()], tx);
+        let host = PiHost::new("acme", fake(&dir, &fixture), tx, pool(&dir));
         host.start();
         let mut s = Settings { cwd: dir.display().to_string(), model: Some(model.into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into()), ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string()), ("RC", "0".into())] {
+        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), (GATEWAY_KEY_ENV, "tgw-synthetic-fixture".into()), (GATEWAY_URL_ENV, "https://gw.example/v1/gateway/".into())] {
             s.env.insert(k.into(), v);
         }
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hello", Some("high")).unwrap();
+        host.start_turn(&thread, "hello", Some("high")).await.unwrap();
         let events = turn_events(&mut rx).await;
         host.stop().await;
         (events, dir)
@@ -628,7 +1366,7 @@ mod tests {
             json!({"kind": "status", "state": "idle"}),
         ]);
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
+        assert!(args.lines().last().unwrap().starts_with("--mode rpc --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
         // pi's models.json names the Gateway and the key's variable, never the key; pi itself never retries.
         let written = std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap();
         assert!(!written.contains("tgw-synthetic-fixture"));
@@ -667,7 +1405,7 @@ mod tests {
     async fn a_bot_still_on_retired_cheap_1_0_keeps_running_on_the_gateway() {
         let (_, dir) = gateway_turn_on("tico-cheap-1.0", &[SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"agent_end"}"#]).await;
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-cheap-1.0 "), "{args}");
+        assert!(args.lines().last().unwrap().starts_with("--mode rpc --provider tico --model tico-cheap-1.0 "), "{args}");
         let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap()).unwrap();
         let ids: Vec<&str> = models["providers"]["tico"]["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
         assert!(ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"), "{ids:?}");
@@ -918,21 +1656,15 @@ mod tests {
     async fn a_turn_that_compacts_the_session_is_recorded_for_its_thread_once() {
         let dir = std::env::temp_dir().join(format!("fake-pi-compact-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cmd = fake(&dir, "pi");
         let fixture = dir.join("compact.jsonl");
-        std::fs::write(&fixture, [SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"compaction_start","reason":"threshold"}"#,
+        std::fs::write(&fixture, [r#"{"type":"agent_start"}"#, r#"{"type":"compaction_start","reason":"threshold"}"#,
                                   r#"{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false,"result":{"summary":"Earlier work.","tokensBefore":180000}}"#,
                                   r#"{"type":"agent_end"}"#].join("\n")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = PiHost::new("acme", vec![cmd], tx);
+        let host = PiHost::new("acme", fake(&dir, &fixture), tx, pool(&dir));
         host.start();
-        let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
-        for (k, v) in [("PATH", "/usr/bin:/bin".to_string()), ("HUB_WORKSPACE", dir.display().to_string()), ("OPENROUTER_API_KEY", "or-synthetic".into()),
-                       ("ARGS_LOG", dir.join("args.log").display().to_string()), ("FIXTURE", fixture.display().to_string()), ("RC", "0".into())] {
-            s.env.insert(k.into(), v);
-        }
-        let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hello", None).unwrap();
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        host.start_turn(&thread, "hello", None).await.unwrap();
         turn_events(&mut rx).await;
         host.stop().await;
         // The turn that compacted is told once, and a turn with no assistant message says nothing about the context.
@@ -940,6 +1672,205 @@ mod tests {
         assert!(!host.compacted(&thread));
         assert_eq!(host.context_tokens(&thread), None);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn rpc_settings(dir: &std::path::Path, extra: &[(&str, &str)]) -> Settings {
+        let mut s = Settings { cwd: dir.display().to_string(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", dir.display().to_string().as_str()), ("OPENROUTER_API_KEY", "or-synthetic")].into_iter().chain(extra.iter().copied()) {
+            s.env.insert(k.into(), v.into());
+        }
+        s
+    }
+
+    /// A fake pi on `lines` in a new folder, a host on `pool` (or the folder's own), and the host's events.
+    fn rpc_host(lines: &[&str], pool: Option<Arc<Pool>>) -> (PathBuf, PiHost, mpsc::UnboundedReceiver<Value>) {
+        let dir = std::env::temp_dir().join(format!("fake-pi-rpc-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("turn.jsonl");
+        std::fs::write(&fixture, lines.join("\n")).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let host = PiHost::new("acme", fake(&dir, &fixture), tx, pool.unwrap_or_else(|| self::pool(&dir)));
+        host.start();
+        (dir, host, rx)
+    }
+
+    const REPLY: &str = r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"usage":{"input":120,"output":9,"cacheRead":40}}}"#;
+
+    fn kinds(events: &[Value]) -> Vec<String> {
+        events.iter().map(|e| text_of(&e["kind"])).collect()
+    }
+
+    fn sessions(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
+            .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id").nth(1).unwrap_or_default().to_string()).collect()
+    }
+
+    fn token_file(dir: &std::path::Path) -> PathBuf {
+        PathBuf::from(text_of(&logged(dir, "starts.log")[0]["token"]).strip_prefix("tico-file:").unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_threads_turns_share_one_pi_that_waits_in_the_pool_between_attempts_with_its_token_blanked() {
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-1")]));
+        for _ in 0..2 {
+            host.start_turn(&thread, "hello", None).await.unwrap();
+            let events = turn_events(&mut rx).await;
+            assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+            // Usage is still priced per message, and the newest request is the session's size.
+            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 169, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
+            assert_eq!(host.context_tokens(&thread), Some(169));
+        }
+        assert_eq!(logged(&dir, "starts.log").len(), 1);
+        // pi reads the attempt's token from a file of its own, never from its environment.
+        let file = token_file(&dir);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "synthetic-turn-1");
+        host.release(true).await;
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+        // The next attempt (a new host) takes the same process, with its own token.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let next = PiHost::new("acme", host.0.cmd.clone(), tx, host.0.pool.clone());
+        next.start();
+        next.resume_thread(&thread, &rpc_settings(&dir, &[("HUB_TOKEN", "synthetic-turn-2")]));
+        next.start_turn(&thread, "again", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert_eq!((logged(&dir, "starts.log").len(), std::fs::read_to_string(&file).unwrap()), (1, "synthetic-turn-2".to_string()));
+        assert_eq!(sessions(&dir), vec![thread.clone(); 3]);
+        next.release(true).await;
+        // The runner stopping stops it, and its token folder goes with it.
+        host.0.pool.prune(true).await;
+        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().trim(), text_of(&logged(&dir, "starts.log")[0]["pid"]));
+        assert!(!file.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_turn_started_differently_restarts_pi_on_the_same_session_and_a_new_effort_is_set_in_place() {
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        let turn = |effort: Option<&'static str>| {
+            let (host, thread) = (host.clone(), thread.clone());
+            async move { host.start_turn(&thread, "hello", effort).await.unwrap() }
+        };
+        turn(Some("high")).await;
+        turn_events(&mut rx).await;
+        turn(Some("max")).await;
+        turn_events(&mut rx).await;
+        assert_eq!(logged(&dir, "starts.log").len(), 1);
+        assert!(logged(&dir, "in.jsonl").contains(&json!({"type": "set_thinking_level", "level": "max"})));
+        // A new secret, then a new model: each starts pi again, the one before it stopped.
+        host.resume_thread(&thread, &rpc_settings(&dir, &[("LINEAR_API_KEY", "linear-synthetic")]));
+        turn(Some("max")).await;
+        turn_events(&mut rx).await;
+        let mut s = rpc_settings(&dir, &[("LINEAR_API_KEY", "linear-synthetic")]);
+        s.model = Some("qwen/qwen3-coder".into());
+        host.resume_thread(&thread, &s);
+        turn(Some("max")).await;
+        let events = turn_events(&mut rx).await;
+        assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+        let starts = logged(&dir, "starts.log");
+        assert_eq!(starts.len(), 3);
+        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().collect::<Vec<_>>(), vec![text_of(&starts[0]["pid"]), text_of(&starts[1]["pid"])]);
+        assert_eq!(sessions(&dir), vec![thread.clone(); 4]);
+        assert!(std::fs::read_to_string(dir.join("args.log")).unwrap().lines().last().unwrap().contains("--model qwen/qwen3-coder --thinking max"));
+        host.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_message_for_a_running_turn_is_a_steer_and_one_pi_had_not_used_runs_on_in_the_same_turn() {
+        for deliver in [true, false] {
+            let lines: &[&str] = if deliver { &["WAIT", "DELIVER", REPLY] } else { &["WAIT", REPLY] };
+            let (dir, host, mut rx) = rpc_host(lines, None);
+            let thread = host.start_thread(&rpc_settings(&dir, &[]));
+            let turn = host.start_turn(&thread, "hello", None).await.unwrap();
+            host.steer(&thread, &turn, "Also check the logs").await.unwrap();
+            let events = turn_events(&mut rx).await;
+            assert_eq!(kinds(&events).iter().filter(|k| *k == "turn_completed").count(), 1, "{events:?}");
+            assert!(logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "steer" && c["message"] == "Also check the logs"));
+            // Steered in after pi's last model call: pi is prompted with it, still in this turn.
+            let prompts: Vec<String> = (0..3).filter_map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).ok()).collect();
+            assert_eq!(prompts, if deliver { vec!["hello".to_string()] } else { vec!["hello".to_string(), "Also check the logs".into()] });
+            assert!(deliver || logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "clear_queue"));
+            // After the turn, a message is for the next one.
+            assert!(matches!(host.steer(&thread, &turn, "late").await, Err(HostError::SteerRefused(_))));
+            host.stop().await;
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_turn_is_aborted_and_its_pi_stays_up() {
+        let (dir, host, mut rx) = rpc_host(&["HANG"], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        let turn = host.start_turn(&thread, "hello", None).await.unwrap();
+        host.interrupt(&turn);
+        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "interrupted"})));
+        assert!(logged(&dir, "in.jsonl").contains(&json!({"type": "abort"})));
+        assert!(!dir.join("exits.log").exists());
+        host.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn compact_is_pis_compact_and_ends_at_its_compaction_end() {
+        let (dir, host, mut rx) = rpc_host(&[REPLY], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        host.compact(&thread, None).await.unwrap();
+        let events = turn_events(&mut rx).await;
+        assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
+        assert_eq!(kinds(&events).iter().rev().nth(1).unwrap(), "turn_completed");
+        assert!(logged(&dir, "in.jsonl").iter().any(|c| c["type"] == "compact"));
+        assert!(host.compacted(&thread));
+        assert_eq!(host.context_tokens(&thread), Some(12_000));
+        // One pi could not do fails as pi said, and nothing is marked compacted.
+        std::fs::write(dir.join("compact-fail"), "").unwrap();
+        host.compact(&thread, None).await.unwrap();
+        let events = turn_events(&mut rx).await;
+        assert!(events.contains(&json!({"kind": "turn_failed", "error": "Compaction failed: Nothing to compact (session too small)", "limit": false})), "{events:?}");
+        assert!(!host.compacted(&thread));
+        assert_eq!(logged(&dir, "starts.log").len(), 1);
+        host.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_pi_that_exits_fails_its_turn_and_the_next_turn_starts_it_again_on_the_same_session() {
+        let (dir, host, mut rx) = rpc_host(&["EXIT 3"], None);
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap_or_else(|| panic!("{events:?}"));
+        assert_eq!((&failed["exit_code"], &failed["process_exit"]), (&json!(3), &json!(true)));
+        std::fs::write(dir.join("turn.jsonl"), REPLY).unwrap();
+        host.start_turn(&thread, "again", None).await.unwrap();
+        assert!(turn_events(&mut rx).await.contains(&json!({"kind": "turn_completed", "status": "completed"})));
+        assert_eq!(logged(&dir, "starts.log").len(), 2);
+        assert_eq!(sessions(&dir), vec![thread.clone(); 2]);
+        host.stop().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_kept_pi_is_stopped_once_idle_and_one_whose_turn_failed_is_not_kept() {
+        let idle = Arc::new(Pool { dir: std::env::temp_dir().join(format!("fake-pi-idle-{}", uuid::Uuid::new_v4().simple())), limit: 4, idle: Duration::ZERO, kept: Mutex::default() });
+        let (dir, host, mut rx) = rpc_host(&[REPLY], Some(idle.clone()));
+        let thread = host.start_thread(&rpc_settings(&dir, &[]));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true).await;
+        assert!(idle.kept().is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count(), 1);
+        let (other, host, mut rx) = rpc_host(&[REPLY], None);
+        let thread = host.start_thread(&rpc_settings(&other, &[]));
+        host.start_turn(&thread, "hello", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(false).await;
+        assert!(host.0.pool.kept().is_empty());
+        assert_eq!(std::fs::read_to_string(other.join("exits.log")).unwrap().lines().count(), 1);
+        for d in [dir, other, idle.dir.clone()] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]

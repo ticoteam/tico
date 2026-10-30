@@ -891,7 +891,7 @@ git -C "$1" config credential.helper "!touch $4-credential"; git -C "$1" config 
         let tmp = std::path::Path::new("/tmp").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
         let shm = std::path::Path::new("/dev/shm").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = crate::hosts::pi::PiHost::new("fixture", vec![], tx);
+        let host = crate::hosts::pi::PiHost::new("fixture", vec![], tx, std::sync::Arc::new(crate::hosts::pi::Pool::new(user.dir.join("pi-pool"), 1)));
         let mut settings = crate::hosts::Settings { identity: Some(user.identity()), cwd: workspace.display().to_string(), model: Some("tico-mid-1.0".into()), ..Default::default() };
         settings.env = grant_env;
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
