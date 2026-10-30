@@ -179,16 +179,27 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
         servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
-    // settings.json) would reach it. An empty value in the server's own env overrides what it inherits.
-    for row in servers.values_mut() {
+    // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
+    // overrides what it inherits. A server's own env may still name a model key or the hub token (a declared server
+    // can need one), but never the Gateway key; the hub server keeps its `${HUB_TOKEN}`.
+    for (name, row) in servers.iter_mut() {
         if row.get("command").is_some() {
             let mut own = row["env"].as_object().cloned().unwrap_or_default();
+            for key in MCP_BLANKED_ENV.iter().copied().filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub") {
+                if !own.contains_key(key) {
+                    own.insert(key.into(), json!(""));
+                }
+            }
             own.insert(GATEWAY_KEY_ENV.into(), json!(""));
             row["env"] = Value::Object(own);
         }
     }
     json!({"mcpServers": servers})
 }
+
+/// The variables a stdio MCP server is started without: the model provider keys a pi turn may hold, and the hub's token
+/// (every server but the hub, which gets it through `${HUB_TOKEN}`). The Gateway key is blanked separately, always.
+const MCP_BLANKED_ENV: &[&str] = &["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "HUB_TOKEN"];
 
 /// Loopback hosts, added to NO_PROXY for a Gateway turn. pi sends every request through the environment's proxy
 /// (a CONNECT tunnel, even for plain http), so a proxy without a loopback bypass would carry a plain-http local
@@ -662,7 +673,7 @@ mod tests {
         let config: Value = serde_json::from_str(&written).unwrap();
         let servers = &config["mcpServers"];
         assert_eq!(servers["linear"], json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
-        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"TICOAI_GATEWAY_KEY": ""}}));
+        assert_eq!(servers["repo"], json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}}));
         assert!(servers.get("legacy").is_none(), "an SSE server of the repository is left out");
         assert_eq!(servers["hub"]["command"], crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]);
         assert_eq!((&servers["hub"]["env"]["HUB_TOKEN"], &servers["hub"]["exposure"]), (&json!("${HUB_TOKEN}"), &json!("direct")));
@@ -672,6 +683,30 @@ mod tests {
         }
         // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
         assert!(!TOOLS.split(',').any(|t| t.starts_with("mcp__")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_stdio_mcp_server_starts_without_the_model_keys_or_hub_token_unless_its_own_env_names_them() {
+        let dir = std::env::temp_dir().join(format!("pi-mcp-env-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "tool": {"command": "uvx", "args": ["y"], "env": {"ANTHROPIC_API_KEY": "anthropic-synthetic", "TICOAI_GATEWAY_KEY": "gateway-synthetic"}}}}"#).unwrap();
+        let ws = dir.display().to_string();
+        let mut s = Settings { cwd: ws.clone(), model: Some("kimi-k3".into()), slug: "acme".into(), ..Default::default() };
+        for (k, v) in [("PATH", "/usr/bin:/bin"), ("HUB_WORKSPACE", ws.as_str()), ("HUB_API_URL", "http://hub.invalid"), ("HUB_TOKEN", "hub-token-synthetic"),
+                       ("HUB_BOT", "acme"), ("OPENROUTER_API_KEY", "or-synthetic"), (GATEWAY_KEY_ENV, "gateway-synthetic")] {
+            s.env.insert(k.into(), v.into());
+        }
+        let env = s.env.clone();
+        let config = mcp_json(&s, &env);
+        let servers = &config["mcpServers"];
+        // A repository server that names nothing gets every blanked variable empty, the Gateway key included.
+        assert_eq!(servers["repo"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        // Its own env keeps the one it names, but never the Gateway key.
+        assert_eq!(servers["tool"]["env"], json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}));
+        // The hub keeps its token through `${HUB_TOKEN}`, and the model keys stay blank for it too.
+        assert_eq!(servers["hub"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
+        assert_eq!(servers["hub"]["env"]["OPENROUTER_API_KEY"], json!(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
