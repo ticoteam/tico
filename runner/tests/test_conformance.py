@@ -786,8 +786,9 @@ def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
     assert [s["runtime"] for s in made["segments"]] == segments
 
 
-# Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
-@pytest.mark.parametrize("harness", ["claude", "codex"])
+# Steering is a Claude Code, Codex and pi feature (steer in drive); subscription profiles are Claude Code and Codex
+# ones (runner-rs/src/profiles.rs).
+@pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_SLOW": "8"}}])
 def test_a_message_sent_mid_turn_is_steered_into_it_once(api, computer):
     computer.start()

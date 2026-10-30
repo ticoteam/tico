@@ -594,7 +594,7 @@ impl Host {
             Host::Gemini(h) => h.start_turn(thread_id, text, effort),
             Host::Antigravity(h) => h.start_turn(thread_id, text, effort),
             Host::MuseCode(h) => h.start_turn(thread_id, text, effort),
-            Host::Pi(h) => h.start_turn(thread_id, text, effort),
+            Host::Pi(h) => h.start_turn(thread_id, text, effort).await,
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),
             Host::Grok(h) => h.start_turn(thread_id, text).await,
             Host::AppDriver(h) => h.start_turn(thread_id, text, effort),
@@ -608,7 +608,7 @@ impl Host {
             Host::Gemini(_) => Err(failed("Gemini runtime cannot steer a running turn")),
             Host::Antigravity(h) => h.steer(),
             Host::MuseCode(_) => Err(HostError::SteerRefused("Muse Code cannot steer a running turn".into())),
-            Host::Pi(_) => Err(failed("Pi runtime cannot steer a running turn")),
+            Host::Pi(h) => h.steer(thread_id, turn_id, text).await,
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
             Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
             Host::AppDriver(_) => Err(failed("a turn in a Mac app cannot be steered")),
@@ -658,7 +658,7 @@ impl Host {
     }
 
     /// Whether this host says when a thread it started is up (a `thread_confirmed` event: Claude's system init,
-    /// Gemini's init, Pi's session line, Codex's first turn/started). A new thread on one is kept only then.
+    /// Gemini's init, pi's reply to its first prompt, Codex's first turn/started). A new thread on one is kept only then.
     pub fn confirms_threads(&self) -> bool {
         matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
     }

@@ -84,8 +84,8 @@ Meta's Llama models stay on pi through OpenRouter (`llama-4-maverick`, no longer
 Providers with no CLI of their own (DeepSeek, Kimi, Llama, Mistral, and whatever comes next) share one harness that
 takes an API key. Candidates:
 
-- **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): one non-interactive process per run (`pi -p --mode json`), a
-  JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
+- **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): a long-lived process driven over JSON on stdin and stdout
+  (`pi --mode rpc`), a JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
   reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
   for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
@@ -105,8 +105,28 @@ stdio server's environment names the Gateway key empty so it never inherits it. 
 kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
 No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
 result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
-where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one. pi has no
-`/compact` to run first in print mode, so `compact_first` starts a new session instead.
+where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
+`compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
+
+One pi process serves a conversation's turns (`persistent_session`). The session id is the thread id, so a process that
+starts again picks up the same session file. A turn is a `prompt` and ends at pi's `agent_settled`. After a turn that
+completed, the runner keeps the process (`Pool` in `hosts/pi.rs`, as many as the runner's capacity, at least 8). It
+stops it after 15 minutes unused, when the runner stops, or when its turn did not complete. pi reads `HUB_TOKEN` from a
+token file of its own (`tico-file:`), which holds the running attempt's token and is blanked between attempts. A turn
+that would start pi differently starts it again on the same session: a different model, a changed environment or granted
+secret (a new GitHub token too), a different agent folder (MCP servers, Compact at). A new effort is pi's
+`set_thinking_level`. A pi that exits fails its turn (`process_exit`); the next turn starts it again on the same
+session. A message sent while a turn runs is pi's `steer` (`steer`): pi writes it in after the turn's current tool
+calls, before its next model call. One steered in after the turn's last model call is sent as a new prompt within the
+same turn. One pi had not yet read when the turn ended is taken back out of its queue and waits for the next turn. A
+pi run as a leased turn user (a Tico model's turn on a Docker runner) is kept with that user and its Gateway relay, for
+the same bot's next turn in the same conversation, which takes them back before it would lease a user of its own. The
+relay keeps its URL and token and gets each attempt's key; between turns it refuses every call, and calls still open
+when the turn ends are cut off. The token file and granted credential files are readable by that user only, and the
+files sit at the same paths every attempt. A turn that finds every turn user busy stops the longest-idle kept pi and
+takes its user. A kept pi's relay is stopped and its user cleaned and returned when the pi goes (idle, eviction, a
+crash, a failed turn, the runner stopping); a pi started again for a changed start keeps both. A new GitHub token
+(the runner and the server hand out a new one about every 15 minutes) still restarts it.
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
@@ -148,7 +168,8 @@ preview of its first and last three characters. What the owner sees and does is 
 
 No bot gets the key. For a bot on a Tico model, or whose own fallback is one, the runner fetches it
 (`GET /api/v2/runner-gateway-credentials`, runner only) and starts a relay on 127.0.0.1 for that turn
-(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only, as
+(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only (a
+pi kept between turns keeps both, closed between its turns), as
 `TICOAI_GATEWAY_URL` and `TICOAI_GATEWAY_KEY`. pi reads them through a `tico` provider in the turn's own `models.json`
 (OpenAI chat completions, streamed), in a directory removed when the turn ends. A runner hands out the key only when
 it runs bot code as another user (Tico's Docker runner); elsewhere a Tico model's turn is refused once
@@ -434,8 +455,8 @@ another bot's home; all turns use the original login in its own home.
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
-| `steer` | A message sent while a turn runs is written into that turn (Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns | One process per turn |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
+| `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |

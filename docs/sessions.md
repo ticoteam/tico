@@ -69,8 +69,8 @@ When a turn runs on a fallback harness or model, it runs in a side session of it
 never replaces the saved session; the next turn on the usual harness resumes that one and is told a side session ran.
 
 When a run fails because the session ran out of room, the next claim for it carries `compact_first`: the saved session
-is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, other harnesses with
-the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
+is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, pi's RPC `compact`,
+other harnesses with the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
 session (`compact_failed`). If the compacted run still fails the same way, or an older runner ignores the flag, Tico
 clears the session for the next run. `/compact` keeps its session.
 

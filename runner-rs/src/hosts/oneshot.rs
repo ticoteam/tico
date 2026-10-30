@@ -190,12 +190,6 @@ impl<W: Wire> OneShot<W> {
         thread_id.into()
     }
 
-    /// A thread this host started, once its harness confirmed the session (Pi's `session` line; a resumed one
-    /// counts as confirmed).
-    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
-        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
-    }
-
     pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
         let env = W::env(settings);
         if settings.identity.is_some() && crate::hosts::pi::is_gateway(settings.model.as_deref()) && !env.contains_key("PI_CODING_AGENT_DIR") {

@@ -93,6 +93,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// Persistent Antigravity processes kept between a conversation's turns.
     pub warm: crate::warm::WarmSessions,
+    /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
+    pub pi: Arc<crate::hosts::pi::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -172,6 +174,7 @@ impl Runner {
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
+            pi: Arc::new(crate::hosts::pi::Pool::new(state.directory.join("pi"), capacity.max(8))),
             state,
             perbot: crate::perbot::PerBot::default(),
         }
@@ -824,6 +827,7 @@ impl Runner {
             m.abort();
         }
         self.warm.prune(true).await;
+        self.pi.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
@@ -865,6 +869,7 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.warm.prune(false).await;
+        self.pi.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!("Tico runner: heartbeat failed ({}); will retry", describe(&e)));

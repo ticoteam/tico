@@ -34,6 +34,10 @@ isolated_user = true
 # Compact at sets pi's compaction.reserveTokens (hosts/pi.rs reserve_tokens); pi's `compaction_end` marks the compaction.
 compaction = true
 compaction_events = true
+# `pi --mode rpc`: one process per conversation between turns (hosts/pi.rs Pool), a message for the running turn
+# goes in as pi's `steer`.
+persistent_session = true
+steer = true
 
 [capabilities.sign_in_status]
 check = "bot-key"
