@@ -382,6 +382,22 @@ def test_chunk_correction_versions_are_idempotent_and_final_transcript_uses_late
     assert [version[0] for version in versions] == [1, 2]
 
 
+def test_empty_correction_clears_a_streamed_chunk_from_the_transcript(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    chunk(live, mid, 1, 0, 1000, "Kept words")
+    chunk(live, mid, 2, 1000, 2000, "Uh")
+    cleared = post(live, f"live-meetings/{mid}/chunks/2/corrections",
+                   {"revision": 2, "speaker": "", "start_ms": 1000, "end_ms": 2000, "text": "  "})
+    assert cleared["revision"] == 2 and cleared["replayed"] is False
+    assert [row["seq"] for row in get(live, f"live-meetings/{mid}")["chunks"]] == [1]
+    post(live, f"live-meetings/{mid}/control", {"action": "end"})
+    finalized = post(live, f"live-meetings/{mid}/finalize", {})
+    with live.app.state.store.read() as c:
+        row = c.execute("SELECT transcript_original FROM meetings WHERE id=?", (finalized["meeting_id"],)).fetchone()
+    assert "Kept words" in row["transcript_original"] and "Uh" not in row["transcript_original"]
+
+
 def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     meeting = connect(live, title="Participant attachment")
     mid = meeting["id"]

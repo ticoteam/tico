@@ -74,13 +74,12 @@ class Correction(Contract):
     speaker: str = Field(default="", max_length=200)
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
-    text: StrictStr = Field(min_length=1, max_length=10_000)
+    # Empty text clears a chunk the final transcript has no words for.
+    text: StrictStr = Field(default="", max_length=10_000)
 
     @model_validator(mode="after")
     def valid_span(self):
         self.text = self.text.strip()
-        if not self.text:
-            raise ValueError("Correction text is required")
         if self.end_ms < self.start_ms:
             raise ValueError("end_ms must be at or after start_ms")
         return self
@@ -194,7 +193,8 @@ def _connector(c, auth, who, rid, *, states=None):
 def _view(c, auth, who, rid):
     row = _require_read(c, auth, who, rid)
     chunks = [dict(r) for r in c.execute(
-        "SELECT seq,revision,speaker,start_ms,end_ms,text,created FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+        "SELECT seq,revision,speaker,start_ms,end_ms,text,created FROM live_meeting_chunks WHERE meeting_id=? "
+        "AND text<>'' ORDER BY seq",
         (rid,))]
     chat = [dict(r) for r in c.execute(
         "SELECT id,actor,role,text,at_ms,transcript_seq,created FROM live_meeting_chat WHERE meeting_id=? ORDER BY created,id",
@@ -272,7 +272,7 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
     if first_seq is not None:
         prior_transcript = [dict(row) for row in c.execute(
             "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq<? "
-            "ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
+            "AND text<>'' ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
         prior_transcript.reverse()
     chat_before = c.execute("SELECT created FROM live_meeting_chat WHERE meeting_id=? AND id=?",
                             (rid, chat_id)).fetchone() if chat_id else None
@@ -324,7 +324,7 @@ def _turn_prompt(c, rid, turn_id, slug):
     turn = c.execute("SELECT transcript_seq,window_index,source_key FROM live_meeting_turns WHERE id=?", (turn_id,)).fetchone()
     transcript_seq = turn["transcript_seq"]
     chunks = c.execute("SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
-                       "AND (? IS NULL OR seq<=?) ORDER BY seq DESC LIMIT 20",
+                       "AND (? IS NULL OR seq<=?) AND text<>'' ORDER BY seq DESC LIMIT 20",
                        (rid, transcript_seq, transcript_seq)).fetchall()
     chat = c.execute("SELECT actor,role,text,at_ms,transcript_seq FROM live_meeting_chat WHERE meeting_id=? "
                      "ORDER BY created DESC,id DESC LIMIT 12", (rid,)).fetchall()
@@ -834,7 +834,7 @@ def _route_human_chat(app, rid, chat_id):
                          "display_name": (bot or {}).get("name") or row["bot"]})
         transcript = [dict(row) for row in c.execute(
             "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
-            "ORDER BY seq DESC LIMIT 20", (rid,))]
+            "AND text<>'' ORDER BY seq DESC LIMIT 20", (rid,))]
         transcript.reverse()
         decision_input = _decision_input(c, rid, source_key=source_key, source_kind="chat",
                                          window_index=None, transcript=transcript, bots=bots,
@@ -1572,7 +1572,8 @@ def install_live_meetings(app, store, auth, write):
                 return {"id": rid, "meeting_id": row["imported_meeting_id"], "existing": True,
                         "changed": False, "event_id": row["next_event_id"]}
             chunks = [dict(r) for r in c.execute(
-                "SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (rid,))]
+                "SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND text<>'' "
+                "ORDER BY seq", (rid,))]
             if not chunks:
                 raise Problem("transcript", "A live meeting needs transcript text before finalization", 409)
             duration_ms = max(chunk["end_ms"] for chunk in chunks)
