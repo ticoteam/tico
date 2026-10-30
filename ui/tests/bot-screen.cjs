@@ -81,7 +81,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const admin = await visit({id: 'ana', name: 'Ana', role: 'owner'});
     await admin.open('ready');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 1);
-    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Instructions', 'History', 'Settings']);
+    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Instructions', 'History', 'Rules', 'Settings']);
     assert.equal(await admin.page.locator('#sess-card').count(), 0);
     await admin.page.locator('[data-bot-detail-tab=settings]').click();
     await admin.page.locator('#bot-editor form').waitFor();
