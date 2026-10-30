@@ -5,6 +5,7 @@ client refuse early, with a reason, before any bytes are sent. See docs/files.md
 """
 
 import hashlib
+import io
 import os
 import posixpath
 import re
@@ -12,7 +13,10 @@ import subprocess
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-MAX_BYTES = 25 * 1024 * 1024
+MB = 1024 * 1024
+MAX_BYTES = 25 * MB                  # every kind but video and audio
+MEDIA_MAX_BYTES = 2048 * MB          # video and audio: the server's upload limit (TICO_UPLOAD_MAX_BYTES) by default
+MEDIA_KINDS = ("video", "audio")
 DEFAULT_FOLDERS = ("reports/", "artifacts/")
 
 TYPES = {
@@ -65,11 +69,41 @@ def check_name(name):
     return base, TYPES[suffix]
 
 
-def check_size(size):
+def is_media(name):
+    return kind_of(name) in MEDIA_KINDS
+
+
+# The first bytes each video and audio extension must have: a renamed file is refused, not published under a new name.
+MEDIA_SIGNATURES = {".mp4": "ftyp", ".m4v": "ftyp", ".mov": "ftyp", ".m4a": "ftyp", ".webm": "ebml",
+                    ".mp3": "mp3", ".wav": "riff", ".ogg": "ogg", ".aac": "adts"}
+
+
+def media_matches(name, head):
+    """True when the first bytes (at least 16 when the file has them) are the container the name says."""
+    head = bytes(head[:16])
+    kind = MEDIA_SIGNATURES.get(Path(str(name)).suffix.lower())
+    if kind is None:
+        return True
+    if kind == "ftyp":          # MP4, M4V, M4A and MOV start with a box whose type is ftyp (or an old QuickTime box)
+        return len(head) >= 8 and head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free")
+    if kind == "ebml":
+        return head[:4] == b"\x1a\x45\xdf\xa3"
+    if kind == "mp3":
+        return head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0)
+    if kind == "riff":
+        return head[:4] == b"RIFF" and head[8:12] == b"WAVE"
+    if kind == "ogg":
+        return head[:4] == b"OggS"
+    return len(head) >= 2 and head[0] == 0xFF and head[1] & 0xF6 == 0xF0      # ADTS (AAC)
+
+
+def check_size(size, name=""):
+    """Refuses an empty file, or one over the cap for its kind (video and audio have their own)."""
+    cap = MEDIA_MAX_BYTES if is_media(name) else MAX_BYTES
     if size <= 0:
         raise Refused("An empty file is not published")
-    if size > MAX_BYTES:
-        raise Refused(f"A file is at most {MAX_BYTES // (1024 * 1024)} MB; this one is {size // (1024 * 1024)} MB")
+    if size > cap:
+        raise Refused(f"A file is at most {cap // MB} MB; this one is {size // MB} MB")
 
 
 def local_file(root, rel, extra_types=()):
@@ -108,18 +142,30 @@ def local_file(root, rel, extra_types=()):
     info = walk.stat()
     if info.st_nlink > 1:
         raise Refused(f"{'/'.join(parts)} has more than one hard link, so it may be another file under a new name")
-    check_size(info.st_size)
+    check_size(info.st_size, walk.name)
     return walk, "/".join(parts)
 
 
 def read_local(root, rel):
-    """(name, content type, bytes, relative name) for a file `local_file` accepts; reads at most the cap."""
+    """(name, content type, bytes, relative name) for a file `local_file` accepts, read whole: the 25 MB cap
+    for every kind. Video and audio that are larger stream from the path (`hub file publish`)."""
     path, relative = local_file(root, rel)
     with open(path, "rb") as stream:
         data = stream.read(MAX_BYTES + 1)
-    check_size(len(data))
+    if len(data) > MAX_BYTES:
+        raise Refused(f"A file read whole is at most {MAX_BYTES // MB} MB; {path.name} is larger")
+    check_size(len(data), path.name)
     name, content_type = check_name(path.name)
+    if not media_matches(name, data):
+        raise Refused(f"{name} is not that kind of file: its first bytes do not match")
     return name, content_type, data, relative
+
+
+def check_media(path, name):
+    """Refuses a video or audio file whose first bytes are not the container its name says (a renamed file)."""
+    with open(path, "rb") as stream:
+        if not media_matches(name, stream.read(16)):
+            raise Refused(f"{name} is not that kind of file: its first bytes do not match")
 
 
 def sha256(data):
@@ -238,6 +284,49 @@ def fetch_s3(uri, client=None, run=subprocess.run):
     """
     bucket, key = parse_s3(uri)
     name, content_type = check_name(posixpath.basename(key))
+    if is_media(name):
+        raise Refused("Video and audio are copied to a file, not held in memory: use fetch_s3_file")
+    data = bytearray()
+
+    def take(body):
+        # Reads at most the cap plus one byte, so a larger object is refused without being held.
+        data.extend(body.read(MAX_BYTES + 1))
+    etag = _s3_etag(_s3_fetch(bucket, key, client, run, take))
+    check_size(len(data))
+    if not etag:
+        etag = "sha256:" + sha256(bytes(data))
+    return name, content_type, bytes(data), etag
+
+
+def fetch_s3_file(uri, workdir, client=None, run=subprocess.run):
+    """(name, content type, path, etag) of a video or audio S3 object, copied in chunks to a file inside `workdir`.
+
+    The file is never held whole in memory. The caller removes `workdir` once it has sent the bytes.
+    """
+    bucket, key = parse_s3(uri)
+    name, content_type = check_name(posixpath.basename(key))
+    path = Path(workdir) / ("object" + Path(name).suffix.lower())
+    with path.open("wb") as out:
+        def take(body):
+            copied = 0
+            while chunk := body.read(MB):
+                copied += len(chunk)
+                check_size(copied, name)
+                out.write(chunk)
+        head = _s3_fetch(bucket, key, client, run, take, path=path)
+    size = path.stat().st_size
+    check_size(size, name)
+    etag = _s3_etag(head)
+    if not etag:
+        etag = "sha256:" + file_sha256(path)
+    return name, content_type, path, etag
+
+
+def _s3_fetch(bucket, key, client, run, take, path=None):
+    """Checks the object's size, then hands its body to `take`. boto3 when it is installed, else the aws CLI.
+
+    The size is checked before any byte is read. With `path`, the aws CLI writes the object there.
+    """
     if client is None:
         try:
             import boto3
@@ -246,28 +335,37 @@ def fetch_s3(uri, client=None, run=subprocess.run):
             client = None
     if client is not None:
         head = client.head_object(Bucket=bucket, Key=key)
-        check_size(int(head.get("ContentLength") or 0))
+        check_size(int(head.get("ContentLength") or 0), posixpath.basename(key))
         version = head.get("VersionId")
         extra = {"VersionId": version} if version else {}
-        body = client.get_object(Bucket=bucket, Key=key, **extra)["Body"]
-        data = body.read(MAX_BYTES + 1)
-        etag = str(head.get("ETag") or "").strip('"')
-        if version and version != "null":
-            etag += "@" + version
+        take(client.get_object(Bucket=bucket, Key=key, **extra)["Body"])
     else:
+        import json
+
         def aws(*args):
-            done = run(["aws", *args], capture_output=True, timeout=300)
+            done = run(["aws", *args], capture_output=True, timeout=3600 if path else 300)
             if done.returncode != 0:
                 raise Refused("The aws CLI could not read that object: " + done.stderr.decode("utf-8", "replace")[-200:])
             return done.stdout
-        import json
         head = json.loads(aws("s3api", "head-object", "--bucket", bucket, "--key", key, "--output", "json") or b"{}")
-        check_size(int(head.get("ContentLength") or 0))
-        data = aws("s3", "cp", f"s3://{bucket}/{key}", "-")
-        etag = str(head.get("ETag") or "").strip('"')
-        if head.get("VersionId") and head["VersionId"] != "null":
-            etag += "@" + head["VersionId"]
-    check_size(len(data))
-    if not etag:
-        etag = "sha256:" + sha256(data)
-    return name, content_type, data, etag
+        check_size(int(head.get("ContentLength") or 0), posixpath.basename(key))
+        if path is None:
+            take(io.BytesIO(aws("s3", "cp", f"s3://{bucket}/{key}", "-")))
+        else:
+            aws("s3", "cp", f"s3://{bucket}/{key}", str(path))
+    return head
+
+
+def _s3_etag(head):
+    etag = str(head.get("ETag") or "").strip('"')
+    if head.get("VersionId") and head["VersionId"] != "null":
+        etag += "@" + head["VersionId"]
+    return etag
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(MB):
+            digest.update(chunk)
+    return digest.hexdigest()
