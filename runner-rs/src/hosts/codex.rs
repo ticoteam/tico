@@ -769,6 +769,19 @@ fn with_kind(err: &Value, msg: String) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_chrome_bot_thread_gets_the_devtools_server_beside_the_hub() {
+        crate::browser::set_devtools_ready_for_tests("node", "/opt/chrome-devtools-mcp/index.js");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        let mut settings = Settings::default();
+        settings.env.insert("TICO_BROWSER_URL".into(), "http://127.0.0.1:9222/devtools/browser/0123456789abcdef".into());
+        let params = host.thread_params(&settings);
+        let chrome = &params["config"]["mcp_servers"]["chrome-devtools"];
+        assert_eq!(chrome["command"], "node");
+        assert!(chrome["args"].to_string().contains("--browserUrl"), "{chrome}");
+    }
+
     #[tokio::test]
     async fn every_codex_fixture_gives_the_python_hosts_events() {
         for (path, mut expected) in crate::hosts::fixtures::cases("codex") {

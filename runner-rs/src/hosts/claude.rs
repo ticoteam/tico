@@ -1657,6 +1657,25 @@ mod tests {
     }
 
     #[test]
+    fn a_chrome_bot_turn_gets_the_devtools_server_beside_the_hub() {
+        crate::browser::set_devtools_ready_for_tests("node", "/opt/chrome-devtools-mcp/index.js");
+        let dir = std::env::temp_dir().join(format!("claude-chrome-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("TICO_BROWSER_URL".into(), "http://127.0.0.1:9222/devtools/browser/0123456789abcdef".into());
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
+        let chrome = &config["mcpServers"]["chrome-devtools"];
+        assert_eq!(chrome["command"], "node");
+        assert!(chrome["args"].to_string().contains("--browserUrl"), "{chrome}");
+        assert!(chrome["env"]["TICO_BROWSER_URL"].as_str().unwrap_or_default().starts_with("http://127.0.0.1:"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_turn_gets_only_hub_declared_and_project_mcp_servers() {
         let dir = std::env::temp_dir().join(format!("claude-mcp-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();

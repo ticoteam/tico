@@ -853,6 +853,17 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
+    #[test]
+    fn a_chrome_bot_run_gets_the_devtools_server_with_its_url_as_a_placeholder() {
+        crate::browser::set_devtools_ready_for_tests("node", "/opt/chrome-devtools-mcp/index.js");
+        let mut settings = Settings::default();
+        settings.env.insert("TICO_BROWSER_URL".into(), "http://127.0.0.1:9222/devtools/browser/0123456789abcdef".into());
+        let (args, _) = mcp_overrides(&settings);
+        let entry = args.iter().find(|a| a.starts_with("mcp_servers.chrome-devtools=")).expect("the chrome-devtools entry");
+        assert!(entry.contains("${TICO_BROWSER_URL}"), "{entry}");
+        assert!(!entry.contains("0123456789abcdef"), "the URL's secret stays off the command line: {entry}");
+    }
+
     #[tokio::test]
     async fn turn_launch_keeps_the_bot_identity_and_prompt_access() {
         if !super::super::isolationtests::child("hosts::musecode::tests::turn_launch_keeps_the_bot_identity_and_prompt_access") { return; }

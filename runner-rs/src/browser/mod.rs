@@ -432,6 +432,13 @@ async fn prepare(paths: Paths) -> Option<install::Chrome> {
     }
 }
 
+/// Host config tests: the chrome-devtools entry needs node and the package installed, which a test machine may not have,
+/// so the test marks them ready. Only the entry's command and arguments are checked, never that node runs.
+#[cfg(test)]
+pub fn set_devtools_ready_for_tests(node: &str, entry: &str) {
+    *shared().mcp.lock().unwrap() = Mcp::Ready(PathBuf::from(node), PathBuf::from(entry));
+}
+
 /// The chrome-devtools-mcp server a chrome bot's run gets, when node and the package are there.
 pub fn devtools_mcp_server(env: &crate::env::Env) -> Option<Value> {
     let url = env.get(URL_ENV).filter(|u| !u.is_empty())?;
