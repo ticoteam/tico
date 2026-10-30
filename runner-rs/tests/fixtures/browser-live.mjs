@@ -48,9 +48,12 @@ function totp(secret, at = Date.now() / 1000, period = 30, digits = 6) {
 
 const site = http.createServer((req, res) => {
   res.setHeader('content-type', 'text/html');
-  res.end('<!doctype html><title>Acme sign in</title><form><input id=email><input id=pw type=password><input id=code></form>');
+  // #trap hands focus to #email as it gets it: a fill must notice and type nowhere.
+  res.end('<!doctype html><title>Acme sign in</title><form><input id=email><input id=pw type=password><input id=code>'
+    + '<input id=trap onfocus="email.focus()"></form>');
 });
-await new Promise((r) => site.listen(0, '127.0.0.1', r));
+const lan = process.env.TICO_LIVE_LAN || '';
+await new Promise((r) => site.listen(0, lan ? '0.0.0.0' : '127.0.0.1', r));
 const port = site.address().port;
 const endpointPort = new URL(url).port;
 
@@ -99,6 +102,11 @@ await page.focus('#email');
 r = await fill({ credential: 'Acme', field: 'username' });
 check(r.json?.ok === true && (await page.inputValue('#email')) === 'ann@acme.example', 'fill the focused field of the focused tab', r.json);
 
+await page.evaluate(() => { email.value = ''; });
+r = await fill({ credential: 'Acme', field: 'password', selector: '#trap', target_id: target });
+check(r.json?.ok === false && r.json?.error === 'focus_changed', 'focus moved by the page is refused', r.json);
+check((await page.evaluate(() => email.value + trap.value)) === '', 'nothing typed where focus went', null);
+
 r = await fill({ credential: 'Other', field: 'password', target_id: target });
 check(r.json?.ok === false && r.json?.error === 'not_granted', 'an ungranted login is refused', r.json);
 r = await fill({ credential: 'Beta', field: 'totp', selector: '#code', target_id: target });
@@ -108,6 +116,16 @@ await other.goto(`http://localhost:${port}/login`);
 const otherTarget = (await (await context.newCDPSession(other)).send('Target.getTargetInfo')).targetInfo.targetId;
 r = await fill({ credential: 'Acme', field: 'password', selector: '#pw', target_id: otherTarget });
 check(r.json?.ok === false && r.json?.error === 'site_mismatch' && (await other.inputValue('#pw')) === '', 'another host is refused', r.json);
+if (lan) {
+  // Plain http off this machine: only a login whose site is written http:// fills it.
+  await other.goto(`http://${lan}:${port}/login`);
+  r = await fill({ credential: 'Network', field: 'password', selector: '#pw', target_id: otherTarget });
+  check(r.json?.ok === false && r.json?.error === 'insecure_page' && (await other.inputValue('#pw')) === '', 'a plain-http page is refused', r.json);
+  r = await fill({ credential: 'Network http', field: 'password', selector: '#pw', target_id: otherTarget });
+  check(r.json?.ok === true && (await other.inputValue('#pw')) === 'plain text 4', 'a login written http:// fills it', r.json);
+} else {
+  check(true, 'no network address here: the plain-http checks are left out');
+}
 r = await fill({ credential: 'Acme', field: 'password', selector: '#pw', target_id: target }, process.env.TICO_BROWSER_URL_STALE);
 check(r.json?.ok === false && r.json?.error === 'no_run', 'an ended attempt cannot fill', r.json);
 const dropped = await call(process.env.TICO_BROWSER_URL_DROPPED, 'GET', '/status');
