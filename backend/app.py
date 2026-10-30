@@ -357,6 +357,7 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            app.state.live_meeting_routing.stop()
             if inbound_task:
                 await inbound_task
             if hook_relay_task:

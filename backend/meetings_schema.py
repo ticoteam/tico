@@ -234,6 +234,13 @@ LIVE_MEETINGS_MODEL_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN meeting_model
 # meeting's turns continue one provider thread of their own, never the bot's shared thread or another meeting's.
 LIVE_MEETING_BOT_CONVERSATION_SCHEMA = "ALTER TABLE live_meeting_bots ADD COLUMN conversation_id TEXT;"
 
+# A meeting turn's retries after an empty reply, and the meeting model its latest run used (NULL: the bot's own), so
+# an empty reply is asked again at most once on that model and then on the bot's own (live_meetings.py _retry_empty).
+LIVE_MEETING_TURN_RETRY_SCHEMA = """
+ALTER TABLE live_meeting_turns ADD COLUMN retries INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE live_meeting_turns ADD COLUMN ran_model TEXT;
+"""
+
 # Ordinary human chat decisions are separate from the one-per-transcript-window router decision.
 # Keep their exact input and outcome durable so replay never has to call a model again.
 LIVE_MEETINGS_CHAT_ROUTING_SCHEMA = """

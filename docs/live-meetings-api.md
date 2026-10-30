@@ -85,7 +85,9 @@ replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
 `state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
-`meeting_model` (the meeting's own choice: `""` for the bot's own model, null to follow the company's), `created`,
+`meeting_model` (the meeting's own choice as stored: `""` for the bot's own model, null to follow the company's),
+`meeting_model_effective` (what replies are set to run on now: the meeting's own choice, else the company's meeting
+model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, and `router`.
 The `router` object contains `windows`, `chat_routes`, `turns`, and `bypasses`. Each `chat_routes` item
 has `chat_id`, `status`, `outcome`, `started`, `finished`, and `trace`. Use the route-specific acknowledgments
@@ -96,6 +98,11 @@ decisions, which call a model) runs after the response, one meeting at a time, s
 delays an upload and a window is never decided twice at once. A window left undecided by a restart is
 picked up by the scheduler within about ten seconds for meetings live in the last two hours. Read the
 outcome from the event stream or the `router` view.
+
+A window also closes by the wall clock: when no chunk has arrived for the window's length plus 2 seconds since
+the last one, the server routes the open window without waiting for the next words, so a question followed by
+silence is answered. Chunks that arrive later go to the next windows by their transcript time; a late chunk whose
+`start_ms` falls inside a window already closed this way is stored and shown but is not routed again.
 
 `client` is optional on connect: omit it (or send null) for an unnamed connector, or use
 `"tico-recorder"`. Any other value is a validation error. The meeting view always includes
@@ -129,6 +136,7 @@ schemas; nullable values are present as JSON `null` where noted:
 | `meeting.bot_turn_claimed` | `{turn_id:<turn-id>,bot:<slug>}` |
 | `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}`; `steered_into_turn` means the bot took the turn in as a follow-up to the reply it was giving, which answers it. |
 | `meeting.bot_turn_deferred` | `{turn_id:<turn-id>,bot:<slug>,reason:"replying_in_meeting"|"busy",behind:<turn-id|null>,source_key:<string>}`: a bot named while busy keeps its turn; it runs after the current work (see Router timing). |
+| `meeting.bot_turn_retried` | `{turn_id:<turn-id>,bot:<slug>,reason:"empty_bot_reply",retry:1|2,model:<meeting model|null>}`: an empty reply is asked again in the same conversation as a fresh run: once on the model that gave it (`model`), and, when that was a meeting model, once more on the bot's own (`model:null`). After that an empty reply is a hidden PASS (`empty_bot_reply`). |
 | `meeting.model` | `{model:<first choice>,bot:<slug>,turn_id:<turn-id|null>,fallback:"openrouter"|"bot_model",ran:<model>,reason:<first reason>,steps:[{model,reason},...]}`: the meeting model could not run on the bot's computer and the reply ran on `ran`; `steps` lists each model tried that could not. |
 | `meeting.router` named bypass | `{bypass:"named",source_key:<string>,targets:[<slug>,...],skipped:[{bot:<slug>,reason:<string>},...],trace:{decision:"bypassed",reason:"named mention"}}` |
 | `meeting.router` chat route | `{source_kind:"chat",source_key:"chat:<chat-id>",chat_id:<chat-id>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}` |
@@ -209,7 +217,10 @@ cannot reach the Gateway's meeting models), a Gateway meeting model falls back t
 the reply uses the bot's own model. `meeting.model` records each step.
 
 Each bot has one conversation per meeting, kept for the meeting's turns while the bot stays attached, and
-every turn runs on that conversation's own thread whatever the bot's session setting. So a bot's turns in
+every turn runs on that conversation's own thread whatever the bot's session setting. A private meeting's turn
+also tells the bot not to save anything from it to memory, knowledge, docs, tasks or any other shared place
+unless someone in the meeting explicitly asks. Known limit: that is an instruction to the bot, not enforced; a
+bot's memory and docs are read by its other meetings and chats. Team meetings get no such line. So a bot's turns in
 one meeting continue each other, and nothing said in a meeting (private or team) reaches the bot's other
 meetings or its ordinary chats through the harness thread. Removing and re-adding a bot starts a new one.
 

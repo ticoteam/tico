@@ -966,3 +966,129 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
         assert (payload["fallback"], payload["ran"]) == ("bot_model", "bots-own")
         assert [step["model"] for step in payload["steps"]] == [MEETING, "mercury-3"]
         assert payload["steps"][1]["reason"] == "OpenRouter is off for this company"
+
+
+def handed(api, attempt):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT handed_model FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+
+
+def retried(api, mid):
+    with api.app.state.store.read() as c:
+        return [json.loads(row[0]) for row in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_retried' "
+            "ORDER BY event_id", (mid,))]
+
+
+def test_an_empty_reply_on_the_meeting_model_is_asked_again_then_on_the_bots_own_model_and_then_given_up(
+        live, monkeypatch):
+    gateway_on(live, monkeypatch)
+    set_meeting_model(live, MEETING)
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, mid, 1, 0, 1000, "Ops, how is the rollout?")
+    runs = []
+    for _ in range(3):
+        attempt = claimed_turn(live, machine)
+        runs.append(attempt)
+        post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": " ", "last_seq": 0},
+             token=machine["token"])
+    assert [handed(live, run) for run in runs[:2]] == [MEETING, MEETING]
+    assert handed(live, runs[2]) != MEETING
+    assert len({run["conversation"]["id"] for run in runs}) == 1
+    assert len({run["message"]["refs"]["live_meeting"]["turn_id"] for run in runs}) == 1
+    assert [run["message"]["body"].startswith("Your last reply to this turn was empty") for run in runs] == [
+        False, True, True]
+    turn_id = runs[0]["message"]["refs"]["live_meeting"]["turn_id"]
+    assert retried(live, mid) == [
+        {"turn_id": turn_id, "bot": "ops", "reason": "empty_bot_reply", "retry": 1, "model": MEETING},
+        {"turn_id": turn_id, "bot": "ops", "reason": "empty_bot_reply", "retry": 2, "model": None}]
+    turn = next(t for t in get(live, f"live-meetings/{mid}")["router"]["turns"] if t["id"] == turn_id)
+    assert (turn["status"], turn["skip_reason"]) == ("skipped", "empty_bot_reply")
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+
+
+def test_an_empty_reply_on_the_bots_own_model_is_asked_once_more_and_an_answer_then_lands(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, mid, 1, 0, 1000, "Ops, how is the rollout?")
+    first = claimed_turn(live, machine)
+    post(live, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0},
+         token=machine["token"])
+    again = claimed_turn(live, machine)
+    post(live, f"attempts/{again['id']}/complete", {"outcome": "completed", "text": "On track.", "last_seq": 0},
+         token=machine["token"])
+    assert [(row["retry"], row["model"]) for row in retried(live, mid)] == [(1, None)]
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["router"]["turns"][0]["status"] == "replied"
+    assert [row["text"] for row in detail["chat"] if row["role"] == "bot"] == ["On track."]
+    # Its own model gave the empty one, so a second empty one is not asked a third time.
+    chunk(live, mid, 2, 1000, 2000, "Ops, and the rollback?")
+    for _ in range(2):
+        attempt = claimed_turn(live, machine)
+        post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0},
+             token=machine["token"])
+    assert len(retried(live, mid)) == 2
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+
+
+def test_a_question_followed_by_silence_is_routed_once_the_window_falls_quiet(live, monkeypatch):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    chunk(live, mid, 1, 0, 4000, "Can someone check the rollout?")
+    routing = live.app.state.live_meeting_routing
+    assert get(live, f"live-meetings/{mid}")["router"]["windows"] == []
+    window = meeting["window_ms"] / 1000
+    assert window + 1 < routing.timers[mid].interval <= window + 2     # the window and its grace (2 s), from the chunk
+    clock = {"at": H.now()}
+    monkeypatch.setattr(live_meetings_module, "_now", lambda: clock["at"])
+    clock["at"] = H.shift(H.now(), seconds=window + 1)
+    routing.later(mid)
+    assert settle(live) and get(live, f"live-meetings/{mid}")["router"]["windows"] == []
+    clock["at"] = H.shift(H.now(), seconds=window + 3)
+    routing.later(mid)
+    routing.later(mid)
+    assert settle(live)
+    windows = get(live, f"live-meetings/{mid}")["router"]["windows"]
+    assert [(window["window_index"], window["outcome"]) for window in windows] == [(0, "route")]
+    assert [turn["bot"] for turn in get(live, f"live-meetings/{mid}")["router"]["turns"]] == ["ops"]
+    routing.later(mid)                                   # routed once: going round again decides nothing new
+    assert settle(live) and len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 1
+
+
+def test_only_a_private_meetings_turn_tells_the_bot_to_keep_it_out_of_shared_memory(live):
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    prompts = {}
+    for visibility in ("private", "team"):
+        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
+        attach(live, meeting["id"], "ops")
+        chunk(live, meeting["id"], 1, 0, 1000, "Ops, remember the word Tangerine")
+        attempt = claimed_turn(live, machine)
+        prompts[visibility] = attempt["message"]["body"]
+        post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Noted.", "last_seq": 0},
+             token=machine["token"])
+    rule = "This meeting is private: do not save anything from it to memory, knowledge, docs, tasks"
+    assert rule in prompts["private"] and rule not in prompts["team"]
+
+
+def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):
+    plain = connect(live)
+    assert (plain["meeting_model"], plain["meeting_model_effective"]) == (None, "")
+    gateway_on(live, monkeypatch)
+    assert get(live, f"live-meetings/{plain['id']}")["meeting_model_effective"] == MEETING
+    own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
+    assert (own["meeting_model"], own["meeting_model_effective"]) == ("", "")
