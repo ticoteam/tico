@@ -46,8 +46,11 @@ class FakeHQ:
         self.calls.append(("create", key, size, enroll_token, hub_url))
         self._check("create")
         for machine in self.machines.values():
-            if machine["key"] == key and machine["state"] != "deleted":
+            if machine["key"] == key and machine["state"] not in ("deleted", "failed"):
                 return dict(machine)
+        for machine in self.machines.values():                  # as HQ: the dead one is kept under a renamed key
+            if machine["key"] == key:
+                machine["key"] = f"{key}:superseded:{machine['id']}"
         self.n += 1
         mid = f"m{self.n}"
         self.machines[mid] = {"id": mid, "key": key, "size": size, "state": "starting", "started_at": H.now(),
@@ -229,6 +232,19 @@ def test_decide_gives_a_machine_being_made_until_its_code_expires_then_makes_it_
     assert CM.decide({**gone, "enroll_fails": CM.ENROLL_TRIES}, facts(), 2000, 300) == (None, None)
 
 
+def test_decide_makes_a_failed_machine_again_and_never_starts_it():
+    # HQ marked it failed: its create never got a computer. A want makes a new one, as for a deleted one.
+    failed = machine_row(state="failed", enroll_by=None)
+    assert CM.decide(failed, facts(want="job:a"), 2000, 300) == ("create", None)
+    assert CM.decide({**failed, "state": "deleted"}, facts(want="job:a"), 2000, 300) == ("create", None)
+    assert CM.decide(failed, facts(), 2000, 300) == (None, None)
+    # Its code's deadline passing is not a delete at HQ: it is made again.
+    assert CM.decide({**failed, "enroll_by": 1960}, facts(want="job:a"), 1960, 300) == ("create", None)
+    # Its last machines never enrolled: nothing more is made until a person looks.
+    assert CM.decide({**failed, "enroll_fails": CM.ENROLL_TRIES}, facts(want="job:a"), 2000, 300) == (
+        None, "no_enroll")
+
+
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
 def test_off_cloud_nothing_changes(api):  # noqa: F811
     store, fake = api.app.state.store, FakeHQ()
@@ -398,11 +414,150 @@ def test_a_create_whose_answer_was_lost_is_not_taken_for_a_machine_that_never_en
     del cloud.hq.create
     post(cloud.api, "runners/enroll", {"code": first, "label": "boat-vm", "platform": "linux"})
     assert cloud.row()["enroll_by"] == 0
-    # The retry mints another code and gets the same machine back: it is enrolled, so no deadline.
-    assert cloud.tick(15) == ["create", "create"]
-    assert cloud.row()["machine_id"] == "m1" and cloud.row()["enroll_by"] == 0
+    # HQ's list is read before any retry and gives the machine back: it is enrolled, so no deadline and no second create.
+    assert cloud.tick(15) == ["create"]
+    assert cloud.row()["machine_id"] == "m1" and cloud.row()["enroll_by"] == 0 and cloud.row()["problem"] == ""
+    assert cloud.row()["active_at"]                             # its idle time counts from now, not from the old work
     cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE + 10)
     assert "delete" not in cloud.hq.actions()
+
+
+def test_a_machine_hq_marked_failed_is_made_again_not_started(cloud):
+    adopt(cloud)
+    work(cloud)
+    made = cloud.hq.create
+
+    def failed(*args):
+        made(*args)                                             # HQ made it; boat never gave it a computer
+        cloud.hq.machines["m1"]["state"] = "failed"
+        raise CM.Refused("boat_error", 502)
+    cloud.hq.create = failed
+    assert cloud.tick(10) == ["create"] and cloud.row()["machine_id"] is None
+    del cloud.hq.create
+    # HQ's list says it failed: the row keeps its id and state, and the next want makes a new one, never a start.
+    cloud.manager.synced = None
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["machine_id"] == "m1" and cloud.row()["state"] == "failed"
+    assert cloud.row()["enroll_fails"] == 1                     # counted once, not at every list
+    cloud.manager.synced = None
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["enroll_fails"] == 1
+    cloud.hq.calls.clear()
+    assert cloud.tick(20) == ["create"]
+    assert cloud.hq.calls[-1][0] == "create" and cloud.row()["machine_id"] == "m2"
+    assert cloud.row()["state"] == "starting" and cloud.row()["problem"] == ""
+    post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["enroll_by"] == 0 and cloud.row()["runner_id"] and cloud.row()["enroll_fails"] == 0
+
+
+def test_a_boat_that_keeps_failing_stops_being_asked(cloud):
+    adopt(cloud)
+    work(cloud)
+    made = cloud.hq.create
+
+    def failed(*args):
+        machine = made(*args)
+        cloud.hq.machines[machine["id"]]["state"] = "failed"
+        raise CM.Refused("boat_error", 502)
+    cloud.hq.create = failed
+    for _ in range(40):                                          # ordinary looks, 10 s apart: HQ is listed before each retry
+        cloud.tick(10)
+    assert cloud.hq.actions().count("create") == CM.ENROLL_TRIES     # then it waits for a person
+    assert cloud.row()["problem"] == "no_enroll" and cloud.row()["enroll_fails"] == CM.ENROLL_TRIES
+
+
+def test_an_hq_outage_never_uses_up_the_tries(cloud):
+    adopt(cloud)
+    work(cloud)
+    made = cloud.hq.create
+
+    def unreachable(*args):
+        raise CM.Refused("unreachable", 0)
+    cloud.hq.create = unreachable
+    for _ in range(CM.ENROLL_TRIES + 2):
+        cloud.tick(CM.BACKOFF_MAX)
+    assert cloud.row()["enroll_fails"] == 0 and cloud.row()["problem"] != "no_enroll"
+    cloud.hq.create = made
+    cloud.hq.calls.clear()
+    assert cloud.tick(CM.BACKOFF_MAX) == ["create"] and cloud.row()["machine_id"]
+
+
+def test_a_made_machine_boat_then_fails_is_made_again_for_the_same_work(cloud):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick(10) == ["create"] and cloud.row()["wake_key"]   # woken for this work
+    first = cloud.row()["machine_id"]
+    cloud.hq.machines[first]["state"] = "failed"                       # boat never gave it a computer
+    cloud.manager.synced = None
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["state"] == "failed" and cloud.row()["enroll_fails"] == 1 and not cloud.row()["wake_key"]
+    cloud.hq.calls.clear()
+    assert cloud.tick(20) == ["create"] and cloud.row()["machine_id"] != first
+
+
+def test_a_failure_already_counted_is_never_counted_again(cloud):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick(10) == ["create"]
+    mine = cloud.row()["machine_id"]
+    # Even if HQ listed an old failed machine beside this row's own deleted one under the same key, the row keeps its own.
+    cloud.hq.machines["old"] = dict(cloud.hq.machines[mine], id="old", state="failed")
+    cloud.hq.machines[mine]["state"] = "deleted"
+    with cloud.store.transaction() as c:
+        CM.save(c, cloud.row()["bot"], state="deleted", enroll_fails=2)
+    cloud.manager.synced = None
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert cloud.row()["machine_id"] == mine and cloud.row()["enroll_fails"] == 2
+
+
+def test_a_row_failed_before_this_release_is_not_stuck_on_its_old_wake(cloud):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick(10) == ["create"]
+    first = cloud.row()["machine_id"]
+    cloud.hq.machines[first]["state"] = "failed"
+    with cloud.store.transaction() as c:                         # as the old sync left it: failed, wake guard kept
+        CM.save(c, cloud.row()["bot"], state="failed", enroll_by=None)
+    assert cloud.row()["wake_key"]
+    cloud.hq.calls.clear()
+    assert cloud.tick(20) == ["create"] and cloud.row()["machine_id"] != first
+
+
+def test_no_create_follows_a_refused_one_until_hq_is_listed(cloud):
+    adopt(cloud)
+    work(cloud)
+    made, listed = cloud.hq.create, cloud.hq.list
+
+    def failed(*args):
+        machine = made(*args)
+        cloud.hq.machines[machine["id"]]["state"] = "failed"
+        raise CM.Refused("boat_error", 502)
+
+    def down():
+        raise CM.Refused("unreachable", 0)
+    cloud.hq.create, cloud.hq.list = failed, down
+    for _ in range(12):
+        cloud.tick(CM.BACKOFF_MAX)
+    assert cloud.hq.actions().count("create") == 1             # HQ's list never answered: never asked again
+    cloud.hq.list = listed
+    for _ in range(40):
+        cloud.tick(CM.BACKOFF_MAX)
+    assert cloud.hq.actions().count("create") == CM.ENROLL_TRIES
+
+
+def test_a_create_hq_answers_as_failed_counts_too(cloud):
+    adopt(cloud)
+    work(cloud)
+    made = cloud.hq.create
+
+    def failed(*args):
+        machine = made(*args)
+        cloud.hq.machines[machine["id"]]["state"] = "failed"
+        return dict(cloud.hq.machines[machine["id"]])
+    cloud.hq.create = failed
+    for _ in range(40):
+        cloud.tick(CM.BACKOFF_MAX)
+    assert cloud.hq.actions().count("create") == CM.ENROLL_TRIES and cloud.row()["problem"] == "no_enroll"
 
 
 def test_always_on_starts_with_no_work_and_never_idles(cloud):
