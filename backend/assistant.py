@@ -942,7 +942,7 @@ def ensure_room(c, actor, bot):
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
 # (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian")
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", "counsel")
 
 
 def strategy_on(c):

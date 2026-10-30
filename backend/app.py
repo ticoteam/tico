@@ -174,6 +174,7 @@ def create_app(settings=None):
                 onboarding.ensure_librarian(c)
                 onboarding.ensure_goal_manager(c)
                 onboarding.ensure_task_manager(c)
+                onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
         # The Librarian gets the market posts from Listening, once (Settings > Listening).
@@ -7230,7 +7231,8 @@ def create_app(settings=None):
     from . import audit_log
     audit_log.install(app, store, auth)
     task_caps.install(app, store, auth, mutate)
-    from . import org_rules
+    from . import counsel, org_rules
+    counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow

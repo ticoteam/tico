@@ -125,7 +125,8 @@ def _get(c, rule_id):
 
 def _core(row):
     """The stored fields an audit row keeps (the derived views are not stored)."""
-    keep = ("id", "kind", "text", "description", "source_id", "who", "with", "if_broken", "reviewer", "status", "version")
+    keep = ("id", "kind", "text", "description", "source_id", "cite", "who", "with", "if_broken", "reviewer", "status",
+            "version")
     return {k: row.get(k) for k in keep}
 
 
@@ -581,6 +582,11 @@ def add_rule(c, auth, who, body):
         source_id = _source_named(c, body["source_id"])
     elif body.get("source_id"):
         raise Problem("validation", "Only an external rule has a From (source_id)", 422)
+    cite = body.get("cite")
+    if cite and kind != "external":
+        raise Problem("validation", "Only an external rule cites a document", 422)
+    if cite and cite.get("file_id") is None:
+        raise Problem("validation", "A cite names its file", 422)
     ctx = _ctx(c)
     scope = _scope_checked(c, auth, who, body.get("who") or {})
     with_scope = scope_in(c, body.get("with") or {}, flags=False) if kind == "internal" else \
@@ -590,7 +596,7 @@ def add_rule(c, auth, who, body):
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
     now = H.now()
     row = {"id": H.new_id(), "kind": kind, "text": text, "description": description, "source_id": source_id,
-           "cite_json": None, "who_json": _json(scope), "with_json": _json(with_scope),
+           "cite_json": _json(cite) if cite else None, "who_json": _json(scope), "with_json": _json(with_scope),
            "if_broken": _if_broken(body.get("if_broken") or "block"), "reviewer": _reviewer(c, body.get("reviewer")),
            "status": status, "suggested_by": who.actor, "decided_by": who.actor if status == "active" else None,
            "decided_at": now if status == "active" else None, "via": _via(who), "version": 1,
@@ -946,6 +952,15 @@ class RuleScope(Contract):
     names: list[str] = Field(default_factory=list, max_length=100)
 
 
+class RuleCite(Contract):
+    """The part of a document a rule rests on: a Files version (`file_id`, `version`; the current one by default), the
+    section it is in, and the quote, which must appear in that version's text (backend/counsel.py `check_cite`)."""
+    file_id: str = Field(min_length=1, max_length=100)
+    version: int | None = Field(default=None, ge=1)
+    section: str = Field(default="", max_length=300)
+    quote: str = Field(min_length=1, max_length=2000)
+
+
 class RuleCreate(Contract):
     kind: Literal["internal", "external"]
     text: str = Field(min_length=1, max_length=TEXT_MAX)
@@ -953,6 +968,7 @@ class RuleCreate(Contract):
     who: RuleScope | None = None
     with_: RuleScope | None = Field(default=None, alias="with")
     source_id: str | None = Field(default=None, max_length=100)
+    cite: RuleCite | None = None
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
 
@@ -1043,13 +1059,24 @@ def install(app, store, auth, mutate):
     def rules_add(request: Request, body: RuleCreate):
         """Add a rule: internal (Who, optionally With) or external (Who and From). A bot's add lands as suggested; a
         person's lands active when they may manage the rule, and as a suggestion when they may not. Only the owner and
-        admins add an Everyone rule."""
+        admins add an Everyone rule. A cite is checked first: a quote that is not in its file is not stored, and the
+        answer says `dropped` instead of a rule (the drop is counted in the events)."""
+        from . import counsel
         who = request.state.identity
         data = with_scopes(body, "who", "with")
+        blobs = request.app.state.blobs
 
         def work(c):
-            return add_rule(c, auth, who, data)
-        return fresh(who, mutate(request, body, work)["id"])
+            if data.get("cite"):
+                cite = counsel.check_cite(c, auth, who, blobs, data["cite"])
+                if cite is None:
+                    return {"rule": None, "dropped": {"reason": "quote_not_in_source", "file_id": data["cite"]["file_id"]}}
+                data["cite"] = cite
+            return {"rule": add_rule(c, auth, who, data), "dropped": None}
+        result = mutate(request, body, work)
+        if result["dropped"] is not None:
+            return result
+        return fresh(who, result["rule"]["id"])
 
     @app.get("/api/v2/rule-due/{due_id}")
     def rule_due_show(request: Request, due_id: str):

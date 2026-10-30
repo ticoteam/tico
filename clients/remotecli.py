@@ -60,7 +60,11 @@ def _rules_args(args):
         with_scope = scope(getattr(args, "with_names", None))
         if with_scope is not None:
             setattr(args, "with", with_scope)
-    for flag in ("who_names", "with_names", "everyone", "all_bots"):
+    if args.fn == "rules add" and getattr(args, "quote", None):
+        if not getattr(args, "file_id", None):
+            raise SystemExit("hub rules add: a quote needs --file (the document it is in)")
+        args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
+    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote"):
         if hasattr(args, flag):
             delattr(args, flag)
     return args

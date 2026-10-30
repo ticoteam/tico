@@ -206,6 +206,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                    [--source N] [--bot N] [--mine] [--cursor C] [--limit N]
                                            the org rules in force; --mine: your bot's rules and its settings as sentences
     hub rules read <id>                    one rule: its sentence, Who and With, From, due dates, the quote it cites
+    hub rules read <file-id|url> --from F [--kind K] [--note "..."]   add a document: Counsel reads it and suggests rules
+    hub rules ask "<question>"             can I...? Counsel answers with the rules that apply, cited
     hub rules suggested                    the suggestions waiting for a person
     hub rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
                   [--from SOURCE] [--description "..."] [--if-broken block|escalate|warn] [--reviewer P]
@@ -1700,9 +1702,16 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="rules list")
-    s = rules.add_parser("read", help="one rule, with its due dates and the quote it cites where you can read it")
-    s.add_argument("id")
+    s = rules.add_parser("read", help="one rule, with its due dates and the quote it cites; with --from, add a document "
+                                      "for Counsel to read (a file id or a link)")
+    s.add_argument("id", help="a rule id, or with --from a file id or a link")
+    s.add_argument("--from", dest="source", metavar="SOURCE", help="document: the From, by name or id")
+    s.add_argument("--kind", choices=["vendor", "customer", "government", "other"], help="document: the kind, for a new From")
+    s.add_argument("--note", help="document: what the document is for")
     s.set_defaults(fn="rules read")
+    s = rules.add_parser("ask", help="a can-I question: the rules that apply, cited, and Counsel's answer on a task")
+    s.add_argument("question")
+    s.set_defaults(fn="rules ask")
     s = rules.add_parser("suggested", help="the suggestions waiting for a person to accept or skip")
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
@@ -1718,6 +1727,9 @@ def parser():
     s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME",
                    help="internal: a group, person or bot the rule is about; repeatable")
     s.add_argument("--from", dest="source_id", metavar="SOURCE", help="external: the From, by name or id")
+    s.add_argument("--file", dest="file_id", metavar="FILE_ID", help="external: the document the rule rests on")
+    s.add_argument("--section", help="external: the section of the document")
+    s.add_argument("--quote", help="external: the words of the document the rule rests on (must be in the file)")
     s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
     s.add_argument("--reviewer")
     s.set_defaults(fn="rules add")

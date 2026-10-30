@@ -5963,9 +5963,27 @@ def rules_suggested(api, args):
 
 
 @tool("hub_rules_read", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
-      "you can read that file.", {"id": _s("The rule's id")}, required=("id",))
+      "you can read that file. With `source` (a From), it adds a document instead: `id` is then a file id or a public "
+      "link, and Counsel reads it and suggests the rules in it, each with its quote, for a person to add or skip.",
+      {"id": _s("A rule's id; with source, a file id or a public link"),
+       "source": _s("With a document: the From, by name or id"),
+       "kind": {"type": "string", "enum": ["vendor", "customer", "government", "other"],
+                "description": "With a document: the kind, when the From is new"},
+       "note": _s("With a document: what it is for")}, required=("id",), writes=True)
 def rules_read(api, args):
-    return _as_person(api).get(f"rules/{args['id']}")
+    if not args.get("source"):
+        return _as_person(api).get(f"rules/{args['id']}")
+    link = args["id"].startswith(("http://", "https://"))
+    body = _present({"url" if link else "file_id": args["id"], "source_id": args["source"], "kind": args.get("kind"),
+                     "note": args.get("note")})
+    return _as_person(api).post("rules/read", body, key=_key(args))
+
+
+@tool("hub_rules_ask", "A can-I question about the company's rules: the active rules that share words with it, cited, "
+      "and Counsel's answer on a task. Counsel answers from the rules only, and says it is not legal advice.",
+      {"question": _s("The question, in one sentence")}, required=("question",), writes=True)
+def rules_ask(api, args):
+    return _as_person(api).post("rules/ask", {"question": args["question"]}, key=_key(args))
 
 
 @tool("hub_rules_add", "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
@@ -5975,12 +5993,17 @@ def rules_read(api, args):
        "text": _s("The rule in one sentence"), "description": _s("Optional, longer"),
        "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: who it is about"),
        "source_id": _s("External: the From, by name or id"),
+       "cite": {"type": "object", "additionalProperties": False, "description": "External: the words the rule rests on, "
+                "which must be in that file's version. A quote that is not there is dropped (the answer says so).",
+                "properties": {"file_id": _s("The document's file id"), "version": {"type": "integer", "minimum": 1},
+                               "section": _s("The section it is in"), "quote": _s("The exact words")},
+                "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
        "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text", "who"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "if_broken",
-                                              "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
+                                              "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
