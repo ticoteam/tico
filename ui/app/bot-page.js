@@ -33,6 +33,80 @@ function botStopped() {
   BOT?.settingsCleanup?.();
   BOT_CHAT_TASK_LOAD++; BOT_CHAT_TASKS = new Map(); BOT = null;
 }
+// The control API remains the sole authority; failed writes never change the shown state.
+function botPauseHTML(slug, state, error = '') {
+  const e = S.emps.find(x => x.name === slug), name = e?.display_name || slug;
+  if (!state) return error ? `<div role="alert">${esc(error)} <button type="button" data-bot-pause-retry>Retry</button></div>` : '<div class="bot-control-state" role="status">Loading bot state…</div>';
+  const paused = state.state === 'paused', label = paused ? 'Unpause' : 'Pause';
+  const record = state.paused_by;
+  const stamp = record && Number.isFinite(Date.parse(record.at))
+    ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+  const can = state.can_control && !state.company_paused && ['active', 'paused'].includes(state.state);
+  return `${state.company_paused ? '<div class="bot-company-pause" role="status"><strong>Company is paused for billing</strong><p>Add credit to resume company work. <a href="#/settings/billing">Add credit</a></p></div>' : ''}
+    <section class="bot-control-strip${paused ? ' is-paused' : ''}" aria-label="Bot controls">
+      <div class="bot-control-copy"><div class="bot-control-state" role="status" aria-live="polite" aria-atomic="true">
+        <span aria-hidden="true">${paused ? '<svg width="18" height="18" viewBox="0 0 18 18" focusable="false"><rect x="3" y="2" width="4" height="14" fill="currentColor"/><rect x="11" y="2" width="4" height="14" fill="currentColor"/></svg>' : state.state === 'active' ? '<span class="bot-running-dot"></span>' : ''}</span>
+        <strong>${paused ? `${esc(name)} is paused` : state.state === 'active' ? (stateOf(slug) === 'running' ? 'Running' : 'Idle') : esc(statusWord(state.state))}</strong></div>
+      ${paused ? `<p>It will not start tasks, answer messages or run routines until you unpause.</p>
+        <p>A turn in progress is interrupted when the computer receives the pause.</p>
+        <p class="bot-pause-record">${stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused'}</p>
+        ${state.open_tasks ? `<p><a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a></p>` : ''}
+        ${!state.can_control ? `<p>Ask ${esc(state.operator || 'its operator')} to unpause</p>` : ''}` : ''}
+      ${error ? `<p class="err" role="alert">${esc(error)} <button type="button" data-bot-pause-retry>Retry</button></p>` : ''}</div>
+      ${can ? `<button type="button" class="${paused ? 'primary' : 'ghost'}" data-bot-pause-action="${paused ? 'resume' : 'pause'}">${label}</button>` : ''}
+    </section>`;
+}
+function botPauseDraw() {
+  const host = $('#bot-control-host'); if (!host || !BOT) return;
+  const focus = host.contains(document.activeElement);
+  patchLiveHTML(host, botPauseHTML(BOT.slug, BOT.pauseState, BOT.pauseError));
+  const button = host.querySelector('[data-bot-pause-action]');
+  if (button) { button.disabled = !!BOT.pauseBusy; button.onclick = () => botPauseChange(BOT, button.dataset.botPauseAction); }
+  const retry = host.querySelector('[data-bot-pause-retry]');
+  if (retry) { retry.disabled = !!BOT.pauseBusy; retry.onclick = async () => { const view = BOT, action = view.pauseRetry; await botPauseLoad(); if (action && BOT === view) await botPauseChange(view, action); }; }
+  if (focus && !host.contains(document.activeElement)) (button || retry)?.focus();
+}
+async function botPauseLoad() {
+  const view = BOT;
+  if (!view || view.pauseLoading || view.pauseBusy) return;
+  view.pauseLoading = true;
+  const generation = view.pauseGeneration || 0;
+  try {
+    const value = await get(`/v2/bots/${encodeURIComponent(view.slug)}/pause-state`, {fresh: true});
+    if (BOT !== view || view.pauseBusy || generation !== (view.pauseGeneration || 0)) return;
+    view.pauseState = value;
+    if (!view.pauseRetry) view.pauseError = '';
+  } catch (error) {
+    if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
+  } finally {
+    view.pauseLoading = false;
+    if (BOT === view) {
+      botPauseDraw();
+      // The control may have finished while this older read waited on billing. Re-read its committed state.
+      if (generation !== (view.pauseGeneration || 0) && !view.pauseBusy && !view.pauseRetry) void botPauseLoad();
+    }
+  }
+}
+async function botPauseChange(view, action) {
+  if (BOT !== view || view.pauseBusy || !view.pauseState?.can_control || view.pauseState.company_paused) return;
+  // Invalidate any refresh already in flight, even if it arrives after the control finishes.
+  view.pauseGeneration = (view.pauseGeneration || 0) + 1;
+  view.pauseBusy = true; view.pauseError = ''; view.pauseRetry = null; botPauseDraw();
+  try {
+    const result = await post(`/v2/bots/${encodeURIComponent(view.slug)}/control`, {action, expected_revision: view.pauseState.revision});
+    if (BOT !== view) return;
+    view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
+      paused_by: null};
+    const name = S.emps.find(x => x.name === view.slug)?.display_name || view.slug;
+    toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
+      action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
+  } catch (error) {
+    if (BOT === view) { view.pauseError = `Could not ${action === 'pause' ? 'pause' : 'unpause'}: ${error.message}`; view.pauseRetry = action; }
+  } finally {
+    view.pauseBusy = false;
+    if (BOT === view) { botPauseDraw(); if (!view.pauseRetry) void botPauseLoad(); }
+  }
+}
 function botStatePill(slug) {
   const st = stateOf(slug);
   const act = (S.status?.active || []).find(a => a.employee === slug);
@@ -205,6 +279,7 @@ function botLimitHTML(slug) {
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
   if (!BOT) return;
+  void botPauseLoad();
   const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
   if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
@@ -265,6 +340,7 @@ async function pageBot(slug, tab) {
   // only when it is an alert. Configuration opens on Info.
   BOT?.settingsCleanup?.();
   $('#main').innerHTML = `
+  <div id="bot-control-host">${botPauseHTML(slug, null)}</div>
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
@@ -390,6 +466,7 @@ async function pageBot(slug, tab) {
   </div>`;
 
   BOT = {slug, tab: null, loaded: new Set(), limited};
+  void botPauseLoad();
   botScreenWire(slug);
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);

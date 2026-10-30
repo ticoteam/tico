@@ -6858,6 +6858,36 @@ def create_app(settings=None):
     def stop_turn(request: Request, bot: str, body: M.StopTurn):
         return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.attempt_id, body.redirect))
 
+    @app.get("/api/v2/bots/{bot}/pause-state")
+    def bot_pause_state(request: Request, bot: str):
+        """The public pause banner, without billing amounts or unreadable task counts."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            auth.require_see(c, who, bot)
+            row = H.bot(c, bot)
+            config = c.execute("SELECT operator,revision FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            operator = (H.human(c, config["operator"]) or {}) if config else {}
+            record = c.execute("SELECT actor,ts,action FROM events WHERE target=? "
+                               "AND action IN ('bot.pause','bot.resume') ORDER BY ts DESC,rowid DESC LIMIT 1", (bot,)).fetchone()
+            paused_by = None
+            if row["state"] == "paused" and record and record["action"] == "bot.pause":
+                person = H.human(c, H.actor_id(record["actor"])) if record["actor"].startswith("human:") else None
+                if person:
+                    paused_by = {"name": person["name"], "at": record["ts"]}
+            tasks = H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing','waiting')",
+                                     ('bot:' + bot,)))
+            count = sum(1 for task in tasks if privacy.task_readable(c, who, task))
+            value = {"state": row["state"], "revision": config["revision"] if config else None,
+                     "can_control": bool(auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)),
+                     "operator": operator.get("name") or (config["operator"] if config else "its operator"),
+                     "paused_by": paused_by, "open_tasks": count}
+            key, base = gateway_connection.target(c, app.state.vault, settings)[:2]
+        # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
+        billing = company_billing.read(key, base)
+        value["company_paused"] = billing.get("state") == "paused" and billing.get("record_only") is False
+        return value
+
     @app.post("/api/v2/bots/{bot}/control")
     def control(request: Request, bot: str, body: M.BotControl):
         who = request.state.identity

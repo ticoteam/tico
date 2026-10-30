@@ -3094,6 +3094,56 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/pause-state": {
+      "get": {
+        "summary": "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts",
+        "operationId": "getBotPauseState",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/profile": {
       "get": {
         "summary": "A bot's profile and the values it runs on",
