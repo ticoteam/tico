@@ -100,16 +100,16 @@ def cell_minutes():
 def effective(current):
     """`(minutes, source)`: how long the company may be idle before it sleeps, and where that comes from. `cell` is the
     listener's minutes, `owner` the owner's `hours`, `default` a setting nobody made (15 minutes on a cell, else off)."""
-    if cloud_access.cell() and (minutes := cell_minutes()) is not None:
+    if cloud_access.strict_cell() and (minutes := cell_minutes()) is not None:
         return minutes, "cell"
     if current["changed_at"] is not None:
         return current["hours"] * 60, "owner"
-    return (CELL_MINUTES if cloud_access.cell() else 0), "default"
+    return (CELL_MINUTES if cloud_access.strict_cell() else 0), "default"
 
 
 def every():
     """Seconds between looks for quiet: a cell looks every minute, everywhere else every five minutes."""
-    return CELL_EVERY if cloud_access.cell() else EVERY
+    return CELL_EVERY if cloud_access.strict_cell() else EVERY
 
 
 def iso(seconds):
@@ -206,7 +206,7 @@ def busy(c, at):
         return "task_session"
     if c.execute("SELECT 1 FROM runner_harness_actions WHERE state IN ('requested','running') LIMIT 1").fetchone():
         return "runner_job"
-    if cloud_access.cell() and online_computer(c):
+    if cloud_access.strict_cell() and online_computer(c):
         return "computer_online"
     for name, where in SENDS.items():
         if table(c, name) and c.execute(
@@ -280,7 +280,7 @@ class SleepIdle:
     def hosted(self, link, force=False):
         """HQ's word on whether Tico hosts this server, kept six hours; None when it cannot be asked. Raises Failed on
         a force that fails. A cell company is hosted by definition: HQ is not asked."""
-        if cloud_access.cell():
+        if cloud_access.strict_cell():
             return True
         with self.store.read() as c:
             current = state(c)
@@ -323,7 +323,7 @@ class SleepIdle:
             current = state(c)
             link = self.link(c)
         minutes, source = effective(current)           # a cell's listener is asked here, outside any transaction
-        if not minutes or (not link and not cloud_access.cell()):
+        if not minutes or (not link and not cloud_access.strict_cell()):
             return
         if not self.hosted(link):
             return
@@ -342,7 +342,7 @@ class SleepIdle:
         self.request(link, current, minutes, wake, quiet["since"])
 
     def request(self, link, current, minutes, wake, since):
-        cell = cloud_access.cell()
+        cell = cloud_access.strict_cell()
         body = {"wake_at": iso(wake), "reason": "idle"}
         if not cell:
             body["runners"] = bool(current["runners"])
@@ -397,7 +397,7 @@ class SleepIdle:
     def view(self, c, minutes, source):
         current = state(c)
         link = self.link(c)
-        cell = cloud_access.cell()
+        cell = cloud_access.strict_cell()
         hosted = True if cell else (None if current["hosted"] is None else bool(current["hosted"]))
         active = bool(minutes and hosted and (link or cell) and not self.off)
         quiet = self.quiet(c, minutes, now()) if minutes and hosted else None
@@ -429,7 +429,7 @@ class SleepIdle:
         with self.store.read() as c:
             current, link = state(c), self.link(c)
         target = current["hours"] if hours is None else hours
-        if target and not cloud_access.cell():      # turning it on needs HQ's word that this server is Tico's
+        if target and not cloud_access.strict_cell():      # turning it on needs HQ's word that this server is Tico's
             if not link:
                 raise Problem("gateway", NO_KEY, 409)
             try:
@@ -454,7 +454,7 @@ class SleepIdle:
 def health(c, settings=None):
     """Health's row, or None: Sleep when idle is on and Tico's last answer was neither success nor a plain 'not now'."""
     current = state(c)
-    hosted = cloud_access.cell() or current["hosted"]
+    hosted = cloud_access.strict_cell() or current["hosted"]
     if not effective(current)[0] or not hosted or not current["last_error"]:
         return None
     words = ("Tico does not accept this server's Gateway key" if current["last_error"] == "key_revoked"

@@ -464,6 +464,38 @@ def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api,
     assert len(cell.sleeps) == 1
 
 
+@pytest.fixture
+def managed_only(hq, monkeypatch):
+    """TICO_UPDATES=tico with no TICO_CELL: Tico updates this install from outside, but it is not a cell. Its updater
+    listener is never to be called."""
+    monkeypatch.delenv("TICO_CELL", raising=False)
+    monkeypatch.setenv("TICO_UPDATES", "tico")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://10.0.0.1:9001")
+    monkeypatch.setenv("TICO_UPDATER_TOKEN", "cell-token")
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(lambda request: pytest.fail("the updater was called")))
+    return hq
+
+
+def test_tico_updates_alone_is_not_a_cell_so_sleep_is_off_by_default(api, hq, managed_only):
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["managed"], state["active"]) == (0, "default", False, False)
+    assert sleep_idle.every() == sleep_idle.EVERY == 300
+    tick(api)
+    assert [call[:2] for call in hq.calls] == [("GET", "self")] and hq.sleeps == []   # only the hosted question
+
+
+def test_tico_updates_alone_asks_hq_with_runners_and_no_computer_blocker(api, hq, managed_only):
+    state = turn_on(api, 1, runners=False)
+    assert (state["minutes"], state["source"], state["managed"], state["active"]) == (60, "owner", False, True)
+    r = runner(api, "ana")
+    ready(api, r, [])                        # an online bot computer: only a cell counts it as a blocker
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+    tick(api)
+    assert len(hq.sleeps) == 1 and hq.sleeps[0]["runners"] is False and hq.sleeps[0]["reason"] == "idle"
+    assert get(api, "sleep")["sleep"]["last_request"]["result"] == "requested"
+
+
 def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_block(api, hq):
     state = get(api, "sleep")["sleep"]
     assert (state["minutes"], state["source"], state["managed"]) == (0, "default", False)
