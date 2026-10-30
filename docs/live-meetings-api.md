@@ -59,7 +59,7 @@ fields are listed below.
 
 | Method and path | Access | Purpose |
 | --- | --- | --- |
-| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,client?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?,visibility?}`. `visibility` is `team` (default) or `private`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
+| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,client?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?,visibility?}`. `visibility` is `team` (default) or `private`. `reply_cap` is 1–20 (default 5); `cooldown_seconds` is 0–3600 (default 60); `meeting_model` is `""` for the bot's own model or a model the company can run (default: the company's meeting model). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
 | `GET /api/v2/live-meetings` | Human | List live and paused meetings this person can see, newest first; ended meetings are excluded. |
 | `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots this human can see and contact with Write access are included; `bots` may be empty. |
 | `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, transcript-window traces, chat-route traces, named-bypass traces, and turn outcomes. |
@@ -138,7 +138,7 @@ should reconnect with the same identity after refreshing credentials. For a comp
 include recent chat, prior transcript context, attached bot descriptions and recent bot messages,
 including recent question/answer pairs. These traces are persisted for replay and do not trigger
 another decision on a retry. Fail-closed traces carry a `reason` such as
-`rehearsal_mode`, `daily_decision_budget`, `decisions service unconfigured`, or `decision_error`
+`rehearsal_mode`, `decisions service unconfigured`, or `decision_error`
 (the latter also includes the exception class in `error`). A bot response of exactly `PASS`
 (optionally followed by `.` or `!`) marks its existing turn skipped with reason `bot_pass`, emits the
 router trace, and creates no Chat message. Ending a meeting marks open turns skipped and suppresses
@@ -177,11 +177,19 @@ The server records the routing window start/end, model time, outcome, selected/b
 trace. Every elapsed window without transcript text gets a hidden PASS trace with reason
 `no_transcript_text`; it does not call the decisions service. Use the 15-second window when Jev is attached; without Jev use a configurable value between
 30 and 45 seconds. At most one meeting-route decision is made per window. Each meeting stores its
-reply cap (1–20, default 3) and cooldown (0–3600 seconds, default 60); bots with any pending/claimed
+reply cap (1–20, default 5) and cooldown (0–3600 seconds, default 60). Live meetings do not count against
+the daily decision budget; the monthly decision spend cap still stops them; bots with any pending/claimed
 live-meeting turn or an active ordinary runner job are skipped as busy across meetings. A speaker
 addressing a bot by name bypasses the decision provider. An ordinary human chat message gets one
 separate decision using the same service and bounded recent context; paused chat is never dispatched.
 PASS is persisted as a hidden router outcome.
+
+Meeting model: a live-meeting reply runs as a normal bot turn on the meeting's model at low effort, with the
+bot's instructions, memory and hub tools. The model is the meeting's own `meeting_model` when the connect
+body sets one, else the company's meeting model (Settings > Computers > Meeting model). That default is
+`tico-meeting-1.0` while the Tico AI Gateway is on and the bot's own model otherwise; `""` means the bot's own
+model. Other bot work is unaffected. If the meeting model cannot run on the bot's computer, the reply falls
+back to the bot's own model.
 
 Each selected bot gets a durable normal Tico runner job containing only that meeting's title,
 transcript (up to 20 latest chunks through the routed sequence), and recent chat (up to 12 messages);

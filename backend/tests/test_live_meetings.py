@@ -8,6 +8,7 @@ import pytest
 from starlette.requests import Request
 
 from backend import live_meetings as live_meetings_module
+from backend import gateway_connection, providers, task_models
 from backend.auth import Identity
 from backend.store import H, digest, encode
 from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
@@ -590,3 +591,139 @@ def test_a_held_notice_does_not_make_an_idle_bot_miss_its_meeting_turn(live):
     chunk(live, meeting["id"], 1, 0, 30_000, "The rollout needs a reliability review")
     turns = {turn["bot"]: turn for turn in get(live, f"live-meetings/{meeting['id']}")["router"]["turns"]}
     assert "ops" in turns and turns["ops"]["skip_reason"] != "busy"
+
+
+# A live meeting's reply runs on the company's meeting model (or its own, set at connect) at low effort; other turns and a
+# company with the Gateway off keep the bot's own model.
+MEETING = "tico-meeting-1.0"
+
+
+def gateway_on(api, monkeypatch):
+    monkeypatch.setattr(api.app.state.store.settings, "gateway_key", "synthetic-gateway-key", raising=False)
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+
+
+def set_meeting_model(api, model):
+    with api.app.state.store.transaction() as c:
+        providers.save(c, "human:ana", {"enabled": [], "meeting_model": model,
+                                        "expected_revision": providers.load(c)["revision"]}, H.now())
+
+
+def test_the_meeting_model_defaults_to_the_gateway_model_only_while_the_gateway_is_on(live, monkeypatch):
+    settings = live.app.state.store.settings
+    with live.app.state.store.read() as c:
+        assert providers.load(c, settings)["meeting_model"] == ""
+    gateway_on(live, monkeypatch)
+    with live.app.state.store.read() as c:
+        assert providers.load(c, settings)["meeting_model"] == providers.MEETING_MODEL
+    set_meeting_model(live, "")       # the bot's own model stays chosen even with the Gateway on
+    with live.app.state.store.read() as c:
+        assert providers.load(c, settings)["meeting_model"] == ""
+    with pytest.raises(providers.ProviderError):
+        set_meeting_model(live, "no-such-model")
+
+
+def test_a_meeting_reply_runs_on_the_meeting_model_and_other_turns_keep_the_bots_model(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    set_meeting_model(live, MEETING)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own", "reasoning_effort": "high",
+           "task_model": {"model": "some-task-model"}}
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+                  (H.now(), H.now(), H.now()))
+        turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-company", "")
+        assert (turn["runtime"], turn["harness"], turn["model"], turn["reasoning_effort"]) == ("pi", "pi", MEETING, "low")
+        assert "task_model" not in turn and own["model"] == "bots-own"
+        assert live_meetings_module.turn_config(c, settings, own, "ops", None, "") is own
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "missing", "") is own
+
+
+def test_the_per_meeting_model_wins_and_an_empty_one_keeps_the_bots_model(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    set_meeting_model(live, MEETING)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    post(live, "live-meetings", {"title": "Bad", "meeting_model": "no-such-model"}, expected=422)
+    own_meeting = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
+    picked = post(live, "live-meetings", {"title": "Picked", "meeting_model": MEETING})
+    with live.app.state.store.transaction() as c:
+        stored = c.execute("SELECT meeting_model FROM live_meetings WHERE id=?", (own_meeting["id"],)).fetchone()
+        assert stored[0] == ""
+        assert live_meetings_module.turn_config(c, settings, own, "ops", own_meeting["id"], "") is own
+        turn = live_meetings_module.turn_config(c, settings, own, "ops", picked["id"], "")
+        assert turn["model"] == MEETING and turn["runtime"] == "pi"
+
+
+def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    set_meeting_model(live, MEETING)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    monkeypatch.setattr(task_models, "why_not", lambda *args, **kwargs: "pi is not installed on this computer")
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+                  (H.now(), H.now(), H.now()))
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") is own
+        event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-fallback' AND type='meeting.model'").fetchone()
+        payload = json.loads(event[0])
+        assert payload["fallback"] == "bot_model" and payload["turn_id"] == "t-1"
+        assert "not installed" in payload["reason"]
+
+
+def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monkeypatch):
+    settings = live.app.state.store.settings
+    gateway_on(live, monkeypatch)
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
+                  (H.now(), H.now(), H.now()))
+        assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") is own
+        payload = json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-gone' "
+                                       "AND type='meeting.model'").fetchone()[0])
+        assert "not in the model catalog" in payload["reason"]
+
+
+def test_live_meetings_are_not_limited_by_the_daily_decision_budget_but_the_monthly_cap_still_stops_them(live, monkeypatch):
+    settings = live.app.state.store.settings
+    for role in ("owner", "human", "bot"):
+        monkeypatch.setattr(settings, f"decisions_daily_calls_{role}", 0, raising=False)
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 30_000, "The rollout needs a reliability review")
+    routed = get(live, f"live-meetings/{meeting['id']}")
+    assert [turn["bot"] for turn in routed["router"]["turns"]] == ["ops"]
+    monkeypatch.setattr(live_meetings_module, "over_spend_cap", lambda c, settings: True)
+    capped = connect(live, title="Capped")
+    attach(live, capped["id"], "ops")
+    chunk(live, capped["id"], 1, 0, 30_000, "The rollout needs a reliability review")
+    windows = get(live, f"live-meetings/{capped['id']}")["router"]["windows"]
+    assert "monthly_decision_spend_cap" in {window["trace"]["reason"] for window in windows}
+    assert get(live, f"live-meetings/{capped['id']}")["router"]["turns"] == []
+
+
+def test_a_routed_meeting_turn_is_claimed_on_the_meeting_model(live, monkeypatch):
+    gateway_on(live, monkeypatch)
+    set_meeting_model(live, MEETING)
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 30_000, "The rollout needs a reliability review")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    with live.app.state.store.read() as c:
+        handed = c.execute("SELECT handed_runtime,handed_model FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+    assert (handed[0], handed[1]) == ("pi", MEETING)

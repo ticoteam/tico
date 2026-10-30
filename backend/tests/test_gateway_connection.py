@@ -234,7 +234,8 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         assert view["default"] == {"runtime": "pi", "model": "tico-general-medium-1.0"} and "tico" in view["enabled"]
-        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
+        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")
+                and not m.get("meeting")}
         assert len(rows) == 60 and all(m.endswith("-1.0") for m in rows)
         assert (rows["tico-general-medium-1.0"]["label"], rows["tico-general-medium-1.0"]["description"]) == (
             "General · Medium 1.0", "Claude Sonnet 5.5 underneath")

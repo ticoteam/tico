@@ -3233,6 +3233,11 @@ class Execution:
         from .shared_bots import follow
         followed = follow(c, row["bot"], json.loads(
             c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
+        if isinstance(live_ref, dict):
+            # A live-meeting reply runs on its meeting's model (backend/live_meetings.py turn_config), not the bot's.
+            from .live_meetings import turn_config
+            followed = turn_config(c, self.store.settings, followed, row["bot"], live_ref.get("meeting_id"),
+                                   who.runner_id, row["id"], live_ref.get("turn_id"))
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
         released_notice = bool(task and auto_tasks.notice_releases(c, task, msg))

@@ -1971,6 +1971,8 @@ class ProvidersUpdate(Contract):
     preset: str | None = Field(default=None, max_length=40)
     # How hard the Tico AI Gateway thinks on a decision (low, medium, high); None keeps the saved one.
     decide_level: str | None = Field(default=None, max_length=10)
+    # The model live-meeting replies run on: '' for the bot's own model; None keeps the saved one.
+    meeting_model: str | None = Field(default=None, max_length=100)
 
 
 class GatewaySearch(Contract):
