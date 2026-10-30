@@ -1,0 +1,251 @@
+"""SQL for the books: settings, books, accounts, periods, entries, lines, line tags and daily rollups.
+
+Rollups (`fin_rollups`, day x account x tag set) change in the same transaction as every posting and every tag change,
+so reports read them and never scan lines."""
+import json
+import sqlite3
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
+from decimal import Decimal
+from typing import Any
+
+from ..core.ledger import Account, Book, Entry, Line, tagset
+
+
+def new_id() -> str:
+    """Core's id format."""
+    return str(uuid.uuid4())
+
+
+# ------------------------------------------------------------------------------------------------ settings
+def setting(c: sqlite3.Connection, key: str) -> Any:
+    row = c.execute("SELECT value_json FROM fin_settings WHERE key=?", (key,)).fetchone()
+    try:
+        return json.loads(row[0]) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_setting(c: sqlite3.Connection, key: str, value: object, by: str, at: str) -> None:
+    c.execute("INSERT INTO fin_settings(key, value_json, created_at, created_by, updated_at, updated_by) "
+              "VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, "
+              "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+              (key, json.dumps(value, sort_keys=True), at, by, at, by))
+
+
+# ------------------------------------------------------------------------------------------------ books and accounts
+def book(c: sqlite3.Connection) -> Book | None:
+    """The one book (v1)."""
+    row = c.execute("SELECT * FROM fin_books ORDER BY created_at, id LIMIT 1").fetchone()
+    if row is None:
+        return None
+    return Book(id=row["id"], name=row["name"], base_currency=row["base_currency"], basis=row["basis"],
+                fiscal_year_start=int(row["fiscal_year_start"]), mode=row["mode"])
+
+
+def insert_book(c: sqlite3.Connection, b: Book, by: str, at: str) -> None:
+    c.execute("INSERT INTO fin_books(id, name, base_currency, basis, fiscal_year_start, mode, created_at, created_by) "
+              "VALUES(?,?,?,?,?,?,?,?)", (b.id, b.name, b.base_currency, b.basis, b.fiscal_year_start, b.mode, at, by))
+
+
+def _account(row: Any) -> Account:
+    return Account(id=row["id"], book_id=row["book_id"], code=row["code"], name=row["name"], type=row["type"],
+                   subtype=row["subtype"] or "", parent_id=row["parent_id"] or "", active=bool(row["active"]))
+
+
+def accounts(c: sqlite3.Connection, book_id: str) -> dict[str, Account]:
+    return {r["id"]: _account(r) for r in c.execute("SELECT * FROM fin_accounts WHERE book_id=? ORDER BY code",
+                                                     (book_id,))}
+
+
+def insert_account(c: sqlite3.Connection, a: Account, by: str, at: str) -> None:
+    c.execute("INSERT INTO fin_accounts(id, book_id, code, name, type, subtype, parent_id, active, created_at, "
+              "created_by, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+              (a.id, a.book_id, a.code, a.name, a.type, a.subtype, a.parent_id or None, int(a.active), at, by, at))
+
+
+def update_account(c: sqlite3.Connection, a: Account, at: str) -> None:
+    c.execute("UPDATE fin_accounts SET code=?, name=?, subtype=?, parent_id=?, active=?, updated_at=? WHERE id=?",
+              (a.code, a.name, a.subtype, a.parent_id or None, int(a.active), at, a.id))
+
+
+def account_has_lines(c: sqlite3.Connection, account_id: str) -> bool:
+    return c.execute("SELECT 1 FROM fin_lines WHERE account_id=? LIMIT 1", (account_id,)).fetchone() is not None
+
+
+# ------------------------------------------------------------------------------------------------ periods
+def period(c: sqlite3.Connection, book_id: str, day: str) -> Any:
+    return c.execute("SELECT * FROM fin_periods WHERE book_id=? AND start_date<=? AND end_date>=?",
+                     (book_id, day, day)).fetchone()
+
+
+def period_by_start(c: sqlite3.Connection, book_id: str, start: str) -> Any:
+    return c.execute("SELECT * FROM fin_periods WHERE book_id=? AND start_date=?", (book_id, start)).fetchone()
+
+
+def insert_period(c: sqlite3.Connection, book_id: str, start: str, end: str, by: str, at: str) -> str:
+    pid = new_id()
+    c.execute("INSERT INTO fin_periods(id, book_id, start_date, end_date, status, created_at, created_by) "
+              "VALUES(?,?,?,?,'open',?,?) ON CONFLICT(book_id, start_date) DO NOTHING",
+              (pid, book_id, start, end, at, by))
+    row = period_by_start(c, book_id, start)
+    return str(row["id"])
+
+
+def set_period_status(c: sqlite3.Connection, period_id: str, status: str, by: str, at: str) -> None:
+    c.execute("UPDATE fin_periods SET status=?, closed_at=?, closed_by=? WHERE id=?",
+              (status, at if status == "closed" else None, by if status == "closed" else None, period_id))
+
+
+def closed_on(c: sqlite3.Connection, book_id: str, day: str) -> bool:
+    return c.execute("SELECT 1 FROM fin_periods WHERE book_id=? AND status='closed' AND start_date<=? AND end_date>=?",
+                     (book_id, day, day)).fetchone() is not None
+
+
+# ------------------------------------------------------------------------------------------------ entries and lines
+def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
+                 reverses_id: str, by: str, at: str) -> list[str]:
+    """The entry, its lines, their tags and the rollups they move. The ids of the lines, in order."""
+    c.execute("INSERT INTO fin_entries(id, book_id, entry_date, memo, source, source_id, status, reverses_id, "
+              "period_id, action_id, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?)",
+              (entry_id, e.book_id, e.entry_date, e.memo, e.source, e.source_id, reverses_id or None, period_id,
+               action_id or None, at, by))
+    ids: list[str] = []
+    for n, item in enumerate(e.lines):
+        lid = new_id()
+        ids.append(lid)
+        c.execute("INSERT INTO fin_lines(id, entry_id, book_id, line_no, entry_date, account_id, amount, currency, "
+                  "original_amount, fx_rate, contact_id, description, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (lid, entry_id, e.book_id, n, e.entry_date, item.account_id, item.amount, item.currency,
+                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, at, by))
+        for kind, value in item.tags.items():
+            c.execute("INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
+                      (lid, kind, value, at, by))
+        roll(c, e.book_id, e.entry_date, item.account_id, item.tags, item.contact_id, item.amount, 1)
+    return ids
+
+
+def roll(c: sqlite3.Connection, book_id: str, day: str, account_id: str, tags: Mapping[str, str], vendor: str,
+         amount: int, count: int) -> None:
+    """Add `amount` and `count` lines to one rollup row (an upsert both SQLite and Postgres take)."""
+    c.execute("INSERT INTO fin_rollups(book_id, day, account_id, tagset, team, teammate, vendor, amount, line_count) "
+              "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id, day, account_id, tagset) DO UPDATE SET "
+              "amount=fin_rollups.amount+excluded.amount, line_count=fin_rollups.line_count+excluded.line_count",
+              (book_id, day, account_id, tagset(tags, vendor), tags.get("team", ""), tags.get("teammate", ""),
+               vendor, amount, count))
+
+
+def mark_reversed(c: sqlite3.Connection, entry_id: str) -> int:
+    return c.execute("UPDATE fin_entries SET status='reversed' WHERE id=? AND status='posted'", (entry_id,)).rowcount
+
+
+def entry_row(c: sqlite3.Connection, entry_id: str) -> Any:
+    return c.execute("SELECT * FROM fin_entries WHERE id=?", (entry_id,)).fetchone()
+
+
+def entry_by_source(c: sqlite3.Connection, book_id: str, source: str, source_id: str) -> Any:
+    """The original entry a source already posted (not a reversal of it), so a re-sent posting posts once."""
+    return c.execute("SELECT * FROM fin_entries WHERE book_id=? AND source=? AND source_id=? AND reverses_id IS NULL "
+                     "ORDER BY created_at LIMIT 1", (book_id, source, source_id)).fetchone()
+
+
+def line_tags(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {lid: {} for lid in line_ids}
+    for chunk in _chunks(line_ids):
+        marks = ",".join("?" * len(chunk))
+        for r in c.execute(f"SELECT line_id, kind, value FROM fin_line_tags WHERE line_id IN ({marks})", chunk):
+            out[r["line_id"]][r["kind"]] = r["value"]
+    return out
+
+
+def lines(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, tuple[Any, Line]]:
+    """{line id: (row, Line)} with each line's current tags."""
+    tags = line_tags(c, line_ids)
+    out: dict[str, tuple[Any, Line]] = {}
+    for chunk in _chunks(line_ids):
+        marks = ",".join("?" * len(chunk))
+        for r in c.execute(f"SELECT * FROM fin_lines WHERE id IN ({marks})", chunk):
+            out[r["id"]] = (r, _line(r, tags.get(r["id"], {})))
+    return out
+
+
+def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
+    rows = c.execute("SELECT * FROM fin_lines WHERE entry_id=? ORDER BY line_no", (entry_id,)).fetchall()
+    tags = line_tags(c, [r["id"] for r in rows])
+    return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
+
+
+def _line(r: Any, tags: Mapping[str, str]) -> Line:
+    return Line(account_id=r["account_id"], amount=int(r["amount"]), currency=r["currency"],
+                original_amount=int(r["original_amount"]), fx_rate=Decimal(r["fx_rate"]), contact_id=r["contact_id"],
+                description=r["description"], tags=dict(tags))
+
+
+def set_line_tags(c: sqlite3.Connection, row: Any, old: Mapping[str, str], new: Mapping[str, str], by: str,
+                  at: str) -> None:
+    """Replace a posted line's tags and move its amount between rollup rows. The line itself never changes."""
+    if dict(old) == dict(new):
+        return
+    c.execute("DELETE FROM fin_line_tags WHERE line_id=?", (row["id"],))
+    for kind, value in new.items():
+        c.execute("INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
+                  (row["id"], kind, value, at, by))
+    amount = int(row["amount"])
+    roll(c, row["book_id"], row["entry_date"], row["account_id"], old, row["contact_id"], -amount, -1)
+    roll(c, row["book_id"], row["entry_date"], row["account_id"], new, row["contact_id"], amount, 1)
+    c.execute("DELETE FROM fin_rollups WHERE book_id=? AND day=? AND account_id=? AND tagset=? AND line_count=0 "
+              "AND amount=0", (row["book_id"], row["entry_date"], row["account_id"], tagset(old, row["contact_id"])))
+
+
+def _chunks(values: Sequence[str], size: int = 400) -> Iterable[list[str]]:
+    for i in range(0, len(values), size):
+        yield list(values[i:i + size])
+
+
+# ------------------------------------------------------------------------------------------------ rollup reads
+def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
+                account_ids: Iterable[str] | None = None) -> list[Any]:
+    """Every rollup row in the window (on `account_ids` when given): what reports and budget actuals sum."""
+    sql = ("SELECT day, account_id, tagset, team, teammate, vendor, amount, line_count FROM fin_rollups "
+           "WHERE book_id=? AND day>=? AND day<=?")
+    args: list[object] = [book_id, start, end]
+    ids = sorted(account_ids) if account_ids is not None else None
+    if ids is not None:
+        if not ids:
+            return []
+        sql += f" AND account_id IN ({','.join('?' * len(ids))})"
+        args += ids
+    return c.execute(sql, args).fetchall()
+
+
+def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str], *,
+               teams: Sequence[str] | None = None, teammate: str = "", vendor: str = "") -> int:
+    """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor."""
+    if not account_ids or teams is not None and not teams:
+        return 0
+    sql = (f"SELECT COALESCE(SUM(amount), 0) FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
+           f"AND account_id IN ({','.join('?' * len(account_ids))})")
+    args: list[object] = [book_id, start, end, *account_ids]
+    if teams is not None:
+        sql += f" AND team IN ({','.join('?' * len(teams))})"
+        args += list(teams)
+    if teammate:
+        sql += " AND teammate=?"
+        args.append(teammate)
+    if vendor:
+        sql += " AND vendor=?"
+        args.append(vendor)
+    return int(c.execute(sql, args).fetchone()[0])
+
+
+def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
+               most: int) -> list[Any]:
+    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries."""
+    if not account_ids:
+        return []
+    marks = ",".join("?" * len(account_ids))
+    return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
+                     f"l.description, e.memo, e.source FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                     f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=? "
+                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?", (book_id, *account_ids, start, end, most)).fetchall()
