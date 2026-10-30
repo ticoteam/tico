@@ -144,7 +144,9 @@ def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review
     assert REAL_APPROVAL(intro, "owner")[0] is True and calls[-1][-2:] == ["--by", "human"]
     hand_off = pipeline.request(repo.project, cfg(repo), {"id": "script", "mover": "bot:reviewer"}, [intro], "T-1", "")
     assert "hub task create --owner bot:reviewer --parent T-1" in hand_off
-    assert "hub file review projects/launch/script/intro.md --approve|--changes --task T-1" in hand_off
+    assert hand_off.splitlines()[0] == "1. hub file publish projects/launch/script/intro.md"
+    assert "<FILE@N>" in hand_off and "hub file review <FILE@N> --approve|--changes --task <this task>" in hand_off
+    assert "projects/launch/script/intro.md" not in hand_off.split("\n", 1)[1].replace("intro.md: <FILE@N>", "")
 
 
 def test_gate_lets_a_file_through_only_when_approved_or_self_moved(repo):

@@ -192,12 +192,16 @@ def request(project, cfg, stage, files, task, owner):
     if mover == "owner" and not owner:
         return NO_OWNER
     if mover.startswith("bot:"):
-        # The verdict is recorded with `hub file review`, against the project task the files belong to.
-        lines = [f"Review each file for the {stage['id']} stage of {project.name}. Run, for each one:"]
-        lines += [f"hub file review {rel(f)} --approve|--changes --task {task} [--note TEXT]" for f in files]
-        body = "\n".join(lines)
-        return shlex.join(["hub", "task", "create", "--owner", mover, "--parent", task,
-                           "--title", f"Review {stage['id']} files for {project.name}", "--body", body])
+        # The reviewer runs in its own repository, so it reviews by file id and version: this bot publishes each file
+        # first (step 1), then fills the <FILE@N> placeholders from that output into the hand-off (step 2).
+        steps = [f"1. {shlex.join(['hub', 'file', 'publish', rel(f)])}" for f in files]
+        lines = [f"Review each file for the {stage['id']} stage of {project.name}. Files, as <FILE@N> from step 1:"]
+        lines += [f"- {rel(f)}: <FILE@N>" for f in files]
+        lines.append("Run for each one: hub file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
+        create = ["hub", "task", "create", "--owner", mover, "--parent", task,
+                  "--title", f"Review {stage['id']} files for {project.name}", "--body", "\n".join(lines)]
+        steps.append(f"2. {shlex.join(create)}")
+        return "\n".join(steps)
     person = owner if mover == "owner" else mover.split(":", 1)[1]
     return question(task, person, f"Approve the {stage['id']} files for {project.name}?", files)
 
