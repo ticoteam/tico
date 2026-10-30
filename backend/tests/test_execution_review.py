@@ -503,6 +503,96 @@ def test_a_run_that_only_read_waits_out_a_lapsed_lease_for_the_runner_to_restore
     assert 'only read (Read)' in claim(api, machine)['message']['body']
 
 
+def hub_update(api, shift=0):
+    """The events Tico's own update writes (app.py, hosted_updates.py), at now; `shift` moves both that many seconds
+    into the past, as an update that finished before the run began."""
+    from backend.store import H
+    with api.app.state.store.transaction() as c:
+        H.event(c, H.KEEPER, 'system.update.started', '0.4.17', {'from': '0.4.16', 'to': '0.4.17'})
+        H.event(c, H.KEEPER, 'system.update.finished', '0.4.17',
+                {'outcome': 'succeeded', 'from': '0.4.16', 'to': '0.4.17', 'message': ''})
+        if shift:
+            for row in c.execute("SELECT id,ts FROM events WHERE action LIKE 'system.update.%'").fetchall():
+                c.execute("UPDATE events SET ts=? WHERE id=?", (H.shift(row[1], seconds=shift), row[0]))
+
+
+def lapsed_shell_run(api, summary='ls notes', update=None):
+    """A run that ran one shell command, then its lease lapsed. `update` is None for no update during the run, or
+    the seconds hub_update moves its events (0 for an update during the run)."""
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'updated'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'started', 'item_id': 'sh1',
+                                               'summary': summary}}]},
+        machine['token'])
+    if update is not None:
+        hub_update(api, shift=update)
+    expire(api, attempt['id'])
+    assert claim(api, machine) is None
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+    return machine, message, attempt
+
+
+def update_line(api):
+    """The run's own line, as Needs you lists it for its operator."""
+    from backend import execution
+    store = api.app.state.store
+    with store.read_transaction() as c:
+        [line], _ = execution.stopped_rows(c, store.settings.test_identities['ana-test'], api.app.state.auth, 'ops')
+    return line
+
+
+@pytest.mark.parametrize('update', [0, -300])
+def test_a_lapse_during_tico_s_update_is_named_and_grouped_but_not_retried_on_timing_alone(api, update):
+    """A lapse near an update is timing, not proof the update restarted the run's computer: one on a computer the
+    update never touched looks the same. The run is held like any lapse that used a shell, its line says it stopped
+    during the update, and it joins the update's one choice. The updater restarts the runners after it reports its
+    finish, so a run that began minutes after the update finished counts too."""
+    machine, message, attempt = lapsed_shell_run(api, update=update)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    [review] = get(api, 'bots/ops/execution-review')['jobs']
+    assert review['stopped'] != 'restarted' and 'restart' not in review['reason'].lower()
+    line = update_line(api)
+    assert (line['cause'], line['why'], line['update_group']) == ('update', "Stopped during Tico's update", True)
+    # The shell command is one Tico cannot check, so the group's row offers no Try all again for this run.
+    assert line['retry'] is False
+
+
+def test_a_restart_the_computer_reports_during_tico_s_update_is_retried_by_the_sweep(api):
+    """The computer's own restart report is the proof: with it, a run that used only a shell resumes at once."""
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'updated'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'started', 'item_id': 'sh1',
+                                               'summary': 'ls notes'}}]}, machine['token'])
+    hub_update(api)
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 2,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    [review] = get(api, 'bots/ops/execution-review')['jobs']
+    assert review['stopped'] == 'restarted'
+    assert "The computer reported a restart during Tico's update" in review['reason']
+    assert [d['state'] for d in sweep(api)] == ['queued']
+
+
+def test_a_lapse_during_tico_s_update_that_ran_a_named_outside_action_stays_out_of_the_group(api):
+    machine, message, attempt = lapsed_shell_run(api, summary='gh pr merge 12', update=0)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    line = update_line(api)
+    assert line['cause'] == 'update' and line['update_group'] is False
+
+
+@pytest.mark.parametrize('update', [None, -3600])
+def test_a_lapse_with_no_hub_update_during_the_run_stays_held(api, update):
+    """A lapsed lease is also what a computer that went offline looks like, so with no update during the run it is
+    held like any other run that acted (an update an hour before the run began is no cause for it either)."""
+    machine, message, attempt = lapsed_shell_run(api, update=update)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    [review] = get(api, 'bots/ops/execution-review')['jobs']
+    assert review['stopped'] == 'changed' and "Tico's update" not in review['reason']
+
+
 @pytest.mark.parametrize('writer', [('Bash', None), ('Write', 'call-1'), ('mcp__hub__hub_task_update', None)])
 def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls(api, writer):
     """Any call outside the reads, a subagent's included, holds the run for review; the card names every call."""
@@ -1260,8 +1350,9 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert issue['detail'] == ('Its computer stopped answering during this run, not a bug. '
                                '2 queued requests wait until you decide.')
     assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
-                              'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
-                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'decided': None}]
+                              'routine': True, 'retry': False, 'update_group': False, 'at': issue['runs'][0]['at'],
+                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'chosen': False,
+                              'decided': None}]
     assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
@@ -1300,7 +1391,7 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     issue = stopped_issue(api)
     assert issue['title'].endswith('has 1 stopped run holding up work')
     assert issue['detail'] == (f'Its computer interrupted this run at {H.parse_ts(finished):%H:%M} UTC, usually for a '
-                               'restart or update, not a bug. 1 queued request waits until you decide.')
+                               'restart, not a bug. 1 queued request waits until you decide.')
     [line] = issue['runs']
     assert (line['title'], line['cause'], line['why'], line['routine']) == (
         'Ship the receipts fix', 'interrupted', 'Interrupted on its computer', True)
@@ -1341,7 +1432,9 @@ def busy_folded_run(api):
          'text': 'Runner restarted during execution'}, machine['token'])
     post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})   # waits behind the held run
     rival(api, machine, attempt)
-    [line] = stopped_issue(api)['runs']
+    issue = stopped_issue(api)
+    print("ISSUE", issue)
+    [line] = issue["runs"]
     assert len(line['jobs']) == 2 and line['decided'] is None and all('decided' not in j for j in line['jobs'])
     return line['jobs']
 
@@ -1353,6 +1446,22 @@ def beside_open_work(monkeypatch):
     monkeypatch.setattr(execution, 'held_back', lambda *args, **kwargs: (1, ['Another task']))
 
 
+def test_a_folded_request_that_is_unsafe_to_retry_keeps_its_run_out_of_the_update_s_one_choice(api, monkeypatch):
+    """One choice settles every request folded into a run, so the run's line is only as safe as its least safe
+    request: a folded comment whose message used an approval keeps the run off Try again and out of the group."""
+    from backend import execution
+    first, second = busy_folded_run(api)
+    safe = {'safe': True, 'starts': 1, 'update': True, 'outside': [], 'consumed': 0, 'fallback_unknown': False}
+    monkeypatch.setattr(execution, 'retry_facts', lambda c, job, started, finished: {
+        **safe, **({'safe': False, 'consumed': 1} if job['id'] == second['id'] else {})})
+    line = update_line(api)
+    assert [j['id'] for j in line['jobs']] == [first['id'], second['id']]
+    assert (line['cause'], line['retry'], line['update_group']) == ('update', False, False)
+    monkeypatch.setattr(execution, 'retry_facts', lambda c, job, started, finished: safe)
+    line = update_line(api)
+    assert (line['retry'], line['update_group']) == (True, True)
+
+
 def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api, monkeypatch):
     """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
     a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
@@ -1362,12 +1471,16 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api,
             'acknowledge_uncertain_effects': True}
     assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'attempt_id': first['attempt_id']})['deferred'] is True
     # Partway: the saved request says so, the other is still to decide, so the line still offers its choice.
-    [line] = stopped_issue(api)['runs']
+    issue = stopped_issue(api)
+    print("ISSUE", issue)
+    [line] = issue["runs"]
     assert [j.get('decided') for j in line['jobs']] == ['resume', None] and line['decided'] is None
     assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'attempt_id': second['attempt_id']})['deferred'] is True
     assert 'runs' not in stopped_issue(api)
     beside_open_work(monkeypatch)
-    [line] = stopped_issue(api)['runs']
+    issue = stopped_issue(api)
+    print("ISSUE", issue)
+    [line] = issue["runs"]
     assert [j['decided'] for j in line['jobs']] == ['resume', 'resume'] and line['decided'] == 'resume'
     # A reader who may not decide still sees that a choice is saved, without the handles.
     [seen] = stopped_issue(api, 'ben-test')['runs']
@@ -1383,7 +1496,9 @@ def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api,
         assert post(api, f"jobs/{job['id']}/reconcile",
                     {**body, 'decision': decision, 'attempt_id': job['attempt_id']})['deferred'] is True
     beside_open_work(monkeypatch)
-    [line] = stopped_issue(api)['runs']
+    issue = stopped_issue(api)
+    print("ISSUE", issue)
+    [line] = issue["runs"]
     assert [j['decided'] for j in line['jobs']] == ['resume', 'dismiss'] and line['decided'] == 'mixed'
 
 
@@ -1401,7 +1516,9 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
     assert stop_cause(attempt('expired')) == 'timeout'
     assert stop_cause(attempt('interrupted', stop='human:ana')) == 'stopped'
     assert stop_cause(None) == 'partway'
-    assert {'stopped', 'partway'}.isdisjoint(ROUTINE_STOPS)
+    assert stop_cause(attempt('expired'), update=True) == 'update'   # the update's lapse, not a lost computer
+    assert stop_cause(attempt('interrupted', limited=True), update=True) == 'quota'  # a usage limit still says so
+    assert {'stopped', 'partway'}.isdisjoint(ROUTINE_STOPS) and 'update' in ROUTINE_STOPS
 
 
 def stop_partway(api, machine, attempt, thread):

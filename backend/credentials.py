@@ -517,6 +517,10 @@ class Vault:
         c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created) VALUES(?,?,?,?,?,?)',
                   (gid,cid,subject,who.actor,parent,H.now()))
         H.event(c,who.actor,'credential.granted',cid,{'grant':gid,'subject':subject,'parent':parent})
+        if subject.startswith('bot:') and row['env']:
+            # A task waiting for this variable on its reconnect card goes on (backend/reconnects.py).
+            from . import reconnects
+            reconnects.secret_stored(c,H.actor_id(subject),row['env'])
         return {'id':gid,'subject':subject,'credential':row['name'],'env':row['env']}
 
     def reveal(self,c,who,cid):
@@ -527,8 +531,43 @@ class Vault:
         if row['ciphertext'] is None:
             raise Problem('not_connected','This connection has no stored password or key',409)
         value=self.cipher.decrypt(c,row)
-        H.event(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None})
+        record_use(c,who.actor,'credential.revealed',cid,{'attempt':who.attempt_id or None},windowed=bool(who.attempt_id))
         return {'id':cid,'value':value}
+
+
+# A credential is used when a bot's run receives it or its computer is sent it; a person revealing it is not a use.
+# credential_uses has one row per (credential, actor, bot) with two times: `at`, the newest use (last_used reads it),
+# and `logged`, when an event row was last written for that pair. A repeat (`windowed`) writes no event while the pair's
+# `logged` is within USE_WINDOW, so a pair in use writes at least one row an hour (a run that reads its credentials once
+# per attempt, or a watcher re-sending every few minutes, does not write one row per read). Reveals by a person, reveals
+# with no attempt, and computer sends by model key always write one.
+USE_WINDOW=3600
+
+
+def record_use(c,actor,action,cid,detail,windowed):
+    """Record one use of a credential: its audit row when the pair's last logged row is older than USE_WINDOW (or the
+    use is not `windowed`), and the pair's newest-use time. A person's reveal is never a use."""
+    if actor.startswith('human:'):
+        H.event(c,actor,action,cid,detail)
+        return
+    now=H.now()
+    by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
+    last=c.execute('SELECT logged FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
+    write=(not windowed) or last is None or (last['logged'] or '')<H.shift(now,seconds=-USE_WINDOW)
+    if write:
+        H.event(c,actor,action,cid,detail)
+    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) '
+              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at,logged=excluded.logged',
+              (cid,actor,by,now,now if write else last['logged']))
+
+
+def last_used(c,cid):
+    """`last_used` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
+    key) for Library › Tools: the newest use of the credential, from credential_uses."""
+    row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
+    if not row:
+        return {'last_used':None,'last_used_by':''}
+    return {'last_used':row['at'],'last_used_by':row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -640,7 +679,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 revealable=permitted(c,who,row['id'],vault.admins)
                 if not (revealable or mine):continue
                 added|=mine
-                item=vault.brief(row)|{'can_reveal':revealable}
+                item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
                                 for g in c.execute('SELECT id,subject,granted_by,parent_id,created FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
@@ -776,7 +815,7 @@ def install_credentials(app,store,delegate=None,propose=None):
             for row in c.execute('SELECT * FROM credentials ORDER BY id'):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
                     values.append({'id':row['id'],'env':row['env'],'kind':row['kind'],'value':vault.cipher.decrypt(c,row)})
-                    H.event(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'})
+                    record_use(c,who.actor,'credential.sent_to_computer',row['id'],{'bot':bot,'runner':who.runner_id,'use':'watcher'},windowed=True)
             return {'credentials':values}
 
     @app.get('/api/v2/runner-model-credentials')
@@ -787,13 +826,21 @@ def install_credentials(app,store,delegate=None,propose=None):
         names=providers.MODEL_KEYS.get(runtime)
         if who.role!='runner':raise Problem('forbidden','Only a registered computer may ask for this',403)
         if not names:raise Problem('runtime','That runtime has no key or token to sign in with',422)
-        with store.transaction() as c:
+        from .computer_keys import keys_for
+        def chosen(c):
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
                 raise Problem('forbidden','Only a registered computer may ask for this',403)
             # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
             # else the shared one; none once a person cleared it or signed it out (model_login).
-            from .computer_keys import keys_for
-            reply,sent=keys_for(c,vault,who.runner_id,runtime,login)
+            return keys_for(c,vault,who.runner_id,runtime,login)
+        # Most computers poll with no key to send (signed out, switching, subscription): answer those from a read,
+        # so the poll never queues for the write lock. Sending a key records it, so that runs in one write transaction.
+        with store.read_transaction() as c:
+            reply,sent=chosen(c)
+        if not sent:
+            return reply
+        with store.transaction() as c:
+            reply,sent=chosen(c)
             for cid in sent:
-                H.event(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id})
+                record_use(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id},windowed=False)
             return reply

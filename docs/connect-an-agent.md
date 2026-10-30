@@ -40,7 +40,7 @@ delete meetings, and run Routines now.
 
 `hub_api` supports bodyless writes, including DELETE. A file read returns its content type and
 either `text` or `base64`, with `bytes` and `truncated`; at most 1 MiB is returned. A human may close
-any task they can edit with `hub_task_close`; `quiet: true` closes without waking a bot. BotOps uses
+any task they can edit with `hub_task_close`; `wake: false` closes without waking a bot. BotOps uses
 the requester's rights for that tool. `hub_bot_model` accepts a `harness` from the model's list.
 For a correction to your active BotOps request, send `hub_message_send` with `in_reply_to` set to
 the original message id, or `steer: true` in the same conversation. The message stays queued until

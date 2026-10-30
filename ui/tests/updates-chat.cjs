@@ -1,8 +1,8 @@
-// The Updates chat (ui/app/updates-chat.js; spec: CEO Bot v3, section 10.8, tests 25 to 27): the person's own chat bot
+// The Updates chat (ui/app/updates-chat.js; spec: Strategy Bot v3, section 10.8, tests 25 to 27): the person's own chat
+// bot
 // in a right rail beside the feed, the same conversation as their menu tab; a question goes with `place: "updates"`;
 // a link in a reply scrolls to and highlights that update, switching the day or Daily/Weekly as needed, while the chat
-// stays; the header button hides it and that is remembered; its edge resizes it. On a phone the bot is in the menu and
-// the button opens the chat full screen; a link closes it first. Every request is intercepted (fixtures only).
+// stays; the header button hides it and that is remembered; its edge resizes it. On a phone the button opens the chat full screen; a link closes it first. Every request is intercepted (fixtures only).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -86,7 +86,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
     // Desktop, a member: their Assistant beside the feed.
     {
       const cara = {id: 'cara', name: 'Cara', email: 'cara@example.test', role: 'member', cloud: true};
-      const chat = chatOf({bot: 'coo', ceo: false, name: 'Assistant', room_id: 'room-cara',
+      const chat = chatOf({bot: 'coo', name: 'Assistant', room_id: 'room-cara',
         messages: [{id: 'm0', conversation_id: 'room-cara', from_actor: 'human:cara', to_actor: 'bot:coo', body: 'Asked from the menu tab', created: iso(-hour), refs: {assistant: true}}]});
       const store = {};
       const {context, page, errors, sent, prefs, trees} = await open(browser, cara, {width: 1400, height: 900}, chat, store);
@@ -162,17 +162,17 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       assert.deepEqual(errors, []);
       await context.close();
     }
-    // Test 27, a phone: the owner's CEO Bot is in the menu; the Updates button opens it full screen; a link closes it.
+    // Test 27, a phone: the owner's chat is their Assistant like everyone's, not a menu row; the Updates button opens it
+    // full screen; a link closes it.
     {
       const ana = {id: 'ana', name: 'Ana', email: 'ana@example.test', role: 'owner', cloud: true};
-      const chat = chatOf({bot: 'goal-manager', ceo: true, name: 'Chief', room_id: 'room-ana', messages: []});
+      const chat = chatOf({bot: 'coo', name: 'Assistant', room_id: 'room-ana', messages: []});
       const {context, page, errors, sent} = await open(browser, ana, {width: 390, height: 844}, chat);
       await page.goto('http://tico-ui.test/#/updates');
       await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();
       assert.ok(await page.locator('#upd-chat').isHidden(), 'no rail on a phone');
       await page.locator('#mobile-more').click();
-      await page.locator('#nav-assistant').waitFor({state: 'visible'});
-      assert.equal(await page.locator('#nav-assistant [data-nav-name]').innerText(), 'Chief', 'the CEO Bot in the menu, by its name');
+      assert.ok(await page.locator('#nav-assistant').isHidden(), 'the Assistant is not in the menu');
       await page.keyboard.press('Escape');
       await page.evaluate(() => document.body.classList.remove('drawer'));
       await page.locator('#upd-chat-btn').click();
@@ -180,7 +180,7 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       await rail.locator('.p-text').waitFor({state: 'visible'});
       const box = await rail.boundingBox();
       assert.deepEqual([box.x, box.y, box.width, box.height], [0, 0, 390, 844], 'full screen');
-      assert.equal(await rail.locator('.updc-head h2').innerText(), 'Chief');
+      assert.equal(await rail.locator('.updc-head h2').innerText(), 'Assistant');
       assert.ok(await page.locator('#mobile-nav').isHidden(), 'over the phone\'s bar');
       if (shots) await page.screenshot({path: `${shots}/updates-chat-phone.png`});
       await rail.locator('[data-updc-hint]').click();               // an empty chat offers the question
@@ -195,6 +195,27 @@ const chatOf = over => ({available: true, state: 'active', can_turn_on: false, h
       await page.goBack();
       await page.waitForFunction(() => !document.body.classList.contains('upd-chat-full'));
       assert.match(new URL(page.url()).hash, /^#\/updates/, 'Back closed the chat and stayed on Updates');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    // The Assistant off: one line with Turn on for whoever may turn it on; for anyone else no rail and no button.
+    for (const canTurnOn of [true, false]) {
+      const dana = {id: 'dana', name: 'Dana', email: 'dana@example.test', role: canTurnOn ? 'owner' : 'member', cloud: true};
+      const chat = chatOf({available: false, state: 'archived', bot: 'coo', name: 'Assistant', room_id: null, messages: [], can_turn_on: canTurnOn});
+      const {context, page, errors} = await open(browser, dana, {width: 1400, height: 900}, chat);
+      await page.goto('http://tico-ui.test/#/updates');
+      await page.locator('#upd-feed [data-upd="u-sales"]').waitFor();
+      const rail = page.locator('#upd-chat');
+      if (canTurnOn) {
+        await rail.locator('[data-turn-on]').waitFor();
+        assert.equal(await rail.locator('.asst-off > span').first().innerText(), 'The Assistant is off.', 'one line');
+        assert.equal(await rail.locator('[data-turn-on]').innerText(), 'Turn on');
+        assert.equal(await rail.locator('.asst-off p').count(), 0, 'no paragraph');
+      } else {
+        await page.waitForFunction(() => document.querySelector('#upd-chat')?.hidden && document.querySelector('#upd-chat-btn')?.hidden);
+        assert.ok(!(await page.locator('#main').evaluate(el => el.classList.contains('upd-chat-layout'))), 'the feed has the page');
+        assert.equal(await page.getByText('Ask the owner').count(), 0);
+      }
       assert.deepEqual(errors, []);
       await context.close();
     }

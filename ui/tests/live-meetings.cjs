@@ -225,6 +225,15 @@ async function main() {
     await page.locator('[data-live-finalize]').click();
     await page.locator('.live-finalized').waitFor();
     assert(calls.some(([op]) => op === 'finalize'));
+    assert.doesNotMatch(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
+    world.detail.client = 'tico-recorder';
+    // The stable Open in Tico link selects even an ended meeting absent from the list.
+    world.meetings = [];
+    await page.goto('https://tico-ui.test/#/meetings?live=live-1');
+    await page.locator('.live-card').waitFor();
+    assert.match(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
+    await page.locator('#live-back').click();
+    await page.locator('#meet-live-now').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   } finally { await browser.close(); }

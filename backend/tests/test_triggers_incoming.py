@@ -10,7 +10,7 @@ from backend import trigger_presets as P
 from backend import triggers
 from backend.auth import Identity
 from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_triggers import hook, sig
+from backend.tests.test_triggers import hook, listener, rule_row, sig, turns
 
 
 def stripe_sig(secret, body, t):
@@ -89,8 +89,13 @@ def as_bot(api, slug):
     api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
 
 
-def routine(api, event="webhook.shop", key="orders", bot="ops"):
-    return post(api, f"bots/{bot}/routines", {"key": key, "title": "Order", "on": event, "text": "Ship it."})["routine"]
+def routine(api, trigger="shop", bot="ops"):
+    """An automation on the webhook that hands `bot` each call in a Bot turn (what a routine on it was)."""
+    return listener(api, trigger, bot, text="Ship it. Type {{webhook.type}}.", name="Order")
+
+
+def runs(api, aid):
+    return get(api, f"automations/{aid}/runs")["runs"]
 
 
 def stored_rows(api, sql, *args):
@@ -100,7 +105,7 @@ def stored_rows(api, sql, *args):
 
 def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, monkeypatch):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    routine(api)
+    aid = routine(api)
     assert hook(api, made["url"], headers={"Webhook-Id": "w1"}).status_code == 202
     monkeypatch.setattr(triggers, "KEEP", 1)
     for i in range(3):                       # w1's log row is pruned
@@ -111,8 +116,7 @@ def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, 
     assert stored_rows(api, "SELECT count(*) FROM trigger_bodies")[0][0] == 0
     again = hook(api, made["url"], headers={"Webhook-Id": "w1"})
     assert again.status_code == 200 and again.json()["duplicate"] is True
-    tasks = [t for t in get(api, "tasks?owner=bot:ops")["tasks"] if t.get("routine_id")]
-    assert len(tasks) == 4                   # w1, x0, x1, x2: the retry opened nothing
+    assert len(runs(api, aid)) == 4          # w1, x0, x1, x2: the retry ran nothing
     with api.app.state.store.transaction() as c:      # the ledger forgets after 30 days
         c.execute("UPDATE trigger_seen SET seen_at='2000-01-01T00:00:00.000000Z'")
     triggers.sweep(api.app.state.store)
@@ -128,7 +132,7 @@ def test_a_bare_retry_in_the_same_minute_is_a_duplicate(api):
 
 def test_each_preset_verifies_over_http_and_the_type_is_kept(api):
     made = post(api, "triggers", {"name": "Billing"})["trigger"]
-    routine(api, "webhook.billing")
+    routine(api, "billing")
     post(api, "triggers/billing/signing", {"preset": "standard", "secret": "not-whsec-at-all-xx"}, expected=422)
     got = post(api, "triggers/billing/signing", {"preset": "standard", "secret": STD_SECRET})["trigger"]
     assert got["preset"] == "standard" and get(api, "triggers/billing")["trigger"]["type_from"] == "/type"
@@ -145,8 +149,8 @@ def test_each_preset_verifies_over_http_and_the_type_is_kept(api):
     assert hook(api, made["url"], body, good).status_code == 200                        # same webhook-id
     log = get(api, "triggers/billing/deliveries")["deliveries"]
     assert [d["type"] for d in log if d["outcome"] == "accepted"] == ["invoice.paid"]
-    task = [t for t in get(api, "tasks?owner=bot:ops")["tasks"] if t.get("routine_id")][0]
-    assert "type: invoice.paid" in get(api, "tasks/" + task["id"])["task"]["body"]
+    task = turns(api, "Order")[0]
+    assert task["owner"] == "bot:ops" and 'field="webhook.type">\ninvoice.paid\n' in task["body"]
 
     stripe = post(api, "triggers/billing/signing", {"preset": "stripe", "secret": STRIPE_SECRET})["trigger"]
     assert stripe["preset"] == "stripe"
@@ -180,7 +184,7 @@ def test_a_signed_trigger_made_before_presets_is_checked_as_hmac():
 
 def test_the_gateway_door_skips_the_address_secret_and_the_cap_but_not_the_signature(api, monkeypatch):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    routine(api)
+    aid = routine(api)
     key = post(api, "triggers/shop/signing", {})["trigger"]["signing_secret"]
     store, vault, auth = api.app.state.store, api.app.state.vault, api.app.state.auth
     body = b'{"type": "paid"}'
@@ -192,7 +196,8 @@ def test_the_gateway_door_skips_the_address_secret_and_the_cap_but_not_the_signa
                                     auth=auth, vault=vault, **kw)
     signed = {"X-Hub-Signature-256": sig(key, body)}
     first, second = through(signed, "hq1"), through(signed, "hq2")
-    assert (first.outcome, first.tasks, second.outcome) == ("accepted", 1, "accepted")        # past a cap of 1
+    assert (first.outcome, second.outcome) == ("accepted", "accepted")                        # past a cap of 1
+    assert [r["outcome"] for r in first.rules] == ["automation"]
     assert through(signed, "hq1").outcome == "duplicate"
     bad = through({"X-Hub-Signature-256": sig("x" * 20, body)}, "hq3")
     assert (bad.outcome, bad.status) == ("refused", 401)
@@ -201,6 +206,7 @@ def test_the_gateway_door_skips_the_address_secret_and_the_cap_but_not_the_signa
         assert triggers.receive(c, "nope", body, signed, secret=None, via="gateway", delivery_id="d9").outcome == "not_found"
     row = stored_rows(api, "SELECT via FROM trigger_deliveries WHERE delivery='hq1'")[0]
     assert row["via"] == "gateway"
+    assert len(stored_rows(api, "SELECT id FROM automation_runs WHERE automation_id=?", aid)) == 2     # hq1 and hq2
 
 
 def test_rules_see_the_call_and_an_unheard_call_notes_its_maker_once_an_hour(api, monkeypatch):
@@ -233,23 +239,24 @@ def test_a_rules_failure_never_loses_the_delivery(api, monkeypatch):
         raise RuntimeError("bad rule")
     monkeypatch.setattr(rules, "judge_event", boom, raising=False)
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    routine(api)
+    aid = routine(api)
     got = hook(api, made["url"], b'{"a": 1}')
-    assert got.status_code == 202 and got.json()["tasks"] == 1 and got.json()["rules"] == 0
+    assert got.status_code == 202 and got.json()["rules"] == 1        # the automation's run; the broken rules none
+    assert len(runs(api, aid)) == 1
 
 
 def test_replay_runs_a_stored_call_again_once_per_request_and_not_after_it_expires(api):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    r = routine(api)
+    aid = routine(api)
     hook(api, made["url"], b'{"order": 7}', {"Webhook-Id": "w7"})
     post(api, "triggers/shop/deliveries/w7/replay", {}, token="cara-test", expected=403)
     one = post(api, "triggers/shop/deliveries/w7/replay", {}, key="rp1")["replay"]
-    assert one["delivery"] == "w7:replay:1" and one["tasks"] == 1
+    assert one["delivery"] == "w7:replay:1" and one["rules"] == 1
     assert post(api, "triggers/shop/deliveries/w7/replay", {}, key="rp1")["replay"] == one      # a retried request
     two = post(api, "triggers/shop/deliveries/w7:replay:1/replay", {})["replay"]
     assert two["delivery"] == "w7:replay:2" and two["of"] == "w7"
-    tasks = [t for t in get(api, "tasks?owner=bot:ops")["tasks"] if t.get("routine_id") == r["id"]]
-    assert len(tasks) == 3
+    assert sorted(r["trigger_ref"] for r in runs(api, aid)) == [
+        "webhook:shop:w7", "webhook:shop:w7:replay:1", "webhook:shop:w7:replay:2"]
     assert "replay" in " ".join(d["outcome"] for d in get(api, "triggers/shop/deliveries")["deliveries"])
     assert any(e for e in stored_rows(api, "SELECT 1 FROM events WHERE action='trigger.replayed'"))
     with api.app.state.store.transaction() as c:
@@ -389,10 +396,8 @@ def test_an_admin_manages_a_trigger_someone_else_made_and_a_plain_person_does_no
 
 def test_rules_counts_only_the_rules_that_worked_and_the_delivery_shows_why_the_rest_did_not(api):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action",
-                        "params": {"action": "wake_bot", "bot": "cpo", "text": "Order {{type}}"}})
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action",
-                        "params": {"action": "wake_bot", "bot": "ops", "text": "Order {{type}}"}})
+    rule_row(api, {"action": "wake_bot", "bot": "cpo", "text": "Order {{type}}"})
+    rule_row(api, {"action": "wake_bot", "bot": "ops", "text": "Order {{type}}"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='planned' WHERE slug='cpo'")
         c.execute("UPDATE bots SET state='active' WHERE slug='ops'")

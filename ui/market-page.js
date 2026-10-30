@@ -1,5 +1,5 @@
-/* Market is the Strategy section's second tab (ui/strategy-page.js): a note, the graph of who connects to whom, and Ask
-   the Librarian beside it (ui/docs-ask.js), which reads the graph at the moment you ask. It is not the Docs library. */
+/* Market is a Strategy tab (ui/strategy-page.js): a note and the graph of who connects to whom. It is not the Docs
+   library. */
 'use strict';
 let MARKET_VIEW = null;
 // Old #/market links land here (ui/app/router.js), keeping their query or note path.
@@ -7,8 +7,8 @@ const MARKET_ROUTE = '#/strategy/market';
 const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
 
 // The tab's views (ui/market-spend.js draws all but the first). #/strategy/market/<key> opens one; a note id always
-// has a slash in it, so a bare key is never a note. A bare #/strategy/market opens Spend once anything is sized,
-// else the graph; a link to a note always opens the graph.
+// has a slash in it, so a bare key is never a note. A bare #/strategy/market is the briefing (ui/app/redesign.js);
+// a link to a note opens the graph.
 const MARKET_VIEWS = [['players', 'Players'], ['spend', 'Spend'], ['buyers', 'Buyers'], ['value-chain', 'Value chain'], ['growth', 'Size vs growth']];
 function marketRouteView(route) {
   if (!route.startsWith(MARKET_ROUTE + '/')) return '';
@@ -30,9 +30,9 @@ const MARKET_TYPES = [
 
 const MARKET_BRIEF = 'brief';
 
-// Nothing about the market is written here: the Overview is the page the Librarian writes
-// (playbooks/market-setup.md). Until the market has content the page is its own empty state, drawn in
-// the app's theme rather than the graph's dark room: the Librarian's questions, or the notice while it works.
+// Nothing about the market is written here: the Overview is the page the Librarian, a helper nobody chats with,
+// writes (playbooks/market-setup.md). Until the market has content the page is its own empty state, drawn in the app's
+// theme rather than the graph's dark room: the setup questions, or the notice while the research runs.
 const marketStyle = document.createElement('style');
 marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-items:center;justify-content:center;overflow:auto;padding:32px 16px 12vh;background:var(--bg);color:var(--ink)}
 .market-start{width:min(560px,100%);display:grid;gap:10px;margin:0}
@@ -41,8 +41,6 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-start h1 label{font-size:inherit;color:inherit}
 .market-start textarea{min-height:112px;font:inherit;font-size:14px}
 .market-start .err{margin:0;font-size:13px}
-.market-who{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:13px}
-.market-who .nav-icon{font-size:17px;color:var(--accent)}
 .market-hint{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
 .market-count{white-space:nowrap;opacity:.8}
 .market-count::before{content:"· "}
@@ -61,10 +59,6 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-research:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .market-none{margin:0;color:var(--muted);font-size:14px}
 .market-blank{margin:0;color:var(--muted)}
-.market-ask-open{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin:0 0 10px;padding:7px 10px;border-radius:7px;background:none;border:1px solid var(--line);color:var(--ink);font-size:13px;cursor:pointer}
-.market-ask-open .nav-icon{font-size:17px;color:var(--accent)}
-.market-ask-open:hover{background:var(--surface2)}
-.market-ask-open:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 @media (max-width:600px){.market-shell.market-shell-blank{align-items:flex-start;padding:28px 16px}.market-start-actions .primary{flex:1}}`;
 document.head.appendChild(marketStyle);
 
@@ -91,7 +85,9 @@ window.marketStop = function marketStop() {
 // The view switch sits where the section's heading keeps its actions.
 function marketViewSwitch(view) {
   const box = $('#strat-actions');
-  if (box) box.innerHTML = `<nav class="mkt-views" aria-label="Market views">${MARKET_VIEWS.map(([key, label]) =>
+  // The Briefing is the tab's first view and Listening its last (ui/app/redesign-market.js).
+  const views = [['briefing', 'Briefing'], ...MARKET_VIEWS, ...(settingsIsAdmin() ? [['listening', 'Listening']] : [])];
+  if (box) box.innerHTML = `<nav class="mkt-views" aria-label="Market views">${views.map(([key, label]) =>
     `<a href="${MARKET_ROUTE}/${key}" data-market-view="${key}"${key === view ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 }
 
@@ -106,15 +102,12 @@ window.marketReload = function marketReload() {
 window.pageMarket = async function pageMarket() {
   const page = ++MARKET_PAGE;
   $('#main').classList.add('market-layout');
-  let view = marketRouteView(S.route);
-  if (!view && S.route === MARKET_ROUTE && await window.marketSpendSized?.()) view = 'spend';
-  if (page !== MARKET_PAGE) return;
+  const view = marketRouteView(S.route);
   if (view && view !== 'players') {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
     if (!$('#market-views')) $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-views" class="mkt-host"></div>';
     marketViewSwitch(view);
     window.marketViewsMount($('#market-views'), view);
-    window.syncLibrarianRail?.(true);
     return;
   }
   window.marketViewsStop?.();
@@ -124,29 +117,22 @@ window.pageMarket = async function pageMarket() {
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-shell" class="market-shell"><p class="market-loading">Opening the market…</p></div>';
     marketViewSwitch('players');
     const shell = $('#market-shell');
-    void window.marketBriefingCard?.(shell);
     try {
       const mounted = await mountMarket(shell);
       if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another view or note was asked for meanwhile
       MARKET_VIEW = mounted;
     } catch (error) {
       shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market graph did not load.')}</p>`;
-      window.syncLibrarianRail?.(true);
       return;
     }
   }
   await MARKET_VIEW.open(note);
-  if (isMarketRoute(S.route)) window.syncLibrarianRail?.(true);
 };
-// What Ask the Librarian needs from the graph (ui/docs-ask.js): a name for each row it cites, and those rows lit up.
-window.marketName = id => MARKET_VIEW?.name?.(id) || '';
-window.marketCite = ids => MARKET_VIEW?.cite?.(ids);
 
 async function mountMarket(shell) {
   const today = new Date().toISOString().slice(0, 10);
-  const graphUrl = (id, fill = false, include = []) => {
+  const graphUrl = (id, fill = false) => {
     const params = new URLSearchParams({focus: id, fill, limit: 250, as_of: today});
-    include.slice(0, 20).forEach(id => params.append('include', id));
     return '/v2/market/graph?' + params;
   };
   const [initial, listing, library] = await Promise.all([
@@ -167,7 +153,6 @@ async function mountMarket(shell) {
   shell.innerHTML = `<aside class="market-list" aria-label="Market notes">
       <a id="market-overview" class="market-overview-btn" href="${marketHref(MARKET_BRIEF)}">Overview</a>
       <input id="market-filter" type="search" placeholder="Search the market" aria-label="Search the market" autocomplete="off">
-      <button class="market-ask-open" type="button" data-librarian-open><span class="nav-icon" aria-hidden="true">auto_awesome</span>Ask the Librarian</button>
       <div id="market-index"></div>
     </aside>
     <section class="market-note">
@@ -184,10 +169,10 @@ async function mountMarket(shell) {
   let listVersion = 0, listTimer = 0, stopped = false, graphVersion = 0, openVersion = 0;
   let graphFocus = marketSelfId(), graphDefault = true;
 
-  async function loadGraph(id, fill = false, include = []) {
+  async function loadGraph(id, fill = false) {
     const version = ++graphVersion;
-    if (!include.length && graphFocus === id && graphDefault === fill) { graph.focus(fill ? null : id); return; }
-    const data = await get(graphUrl(id, fill, include));
+    if (graphFocus === id && graphDefault === fill) { graph.focus(fill ? null : id); return; }
+    const data = await get(graphUrl(id, fill));
     if (stopped || version !== graphVersion) return;
     (data.entities || []).forEach(row => byId.set(row.id, row));
     graph.update(data.entities || [], data.edges || [], fill ? null : id);
@@ -228,7 +213,7 @@ async function mountMarket(shell) {
     clearTimeout(listTimer); ++listVersion;
     listTimer = setTimeout(() => void fetchIndex(filter.value), 180);
   };
-  // Research with the Librarian on the page or entry being read (ui/docs-editor.js).
+  // Research on the page or entry being read (ui/docs-editor.js).
   let shownBody = '';
   $('#market-read').addEventListener('click', event => {
     const button = event.target.closest('[data-market-research]');
@@ -286,16 +271,11 @@ async function mountMarket(shell) {
     await showDoc(doc);
   }
 
-  return {shell, open, stop() { stopped = true; clearTimeout(listTimer); graph.stop(); },
-    name: id => byId.get(id)?.name || '',
-    async cite(ids) {
-      if (ids[0]) await loadGraph(ids[0], false, ids).catch(error => toast(error.message));
-      if (!stopped) graph.cite(ids);
-    }};
+  return {shell, open, stop() { stopped = true; clearTimeout(listTimer); graph.stop(); }};
 }
 
 // ---------------------------------------------------------------- an empty market
-// On a first visit the Librarian asks the owner four questions, one at a time (backend/librarian_setup.py): what you
+// On a first visit Market asks the owner four questions, one at a time (backend/librarian_setup.py): what you
 // sell, who buys it, who you compete with, what to watch. Each answer is kept on the server as it is given, so
 // "Skip for now" leaves and Continue picks up at the same question, in any browser. The last one files "Set up the
 // market map" (templates/catalog/librarian/playbooks/market-setup.md), which builds the map and sets what Market
@@ -305,12 +285,12 @@ async function mountMarket(shell) {
 const MARKET_RESEARCH_KEY = 'tico.market.researching';
 const MARKET_RESEARCH_MIN = 2 * 60 * 1000, MARKET_RESEARCH_MAX = 30 * 60 * 1000, MARKET_RESEARCH_POLL = 30 * 1000;
 let MARKET_RESEARCH = null;        // the same record in memory, for a browser that will not store it
-// [key, question, hint, placeholder]. Only the first must be answered: the Librarian finds the rest.
+// [key, question, hint, placeholder]. Only the first must be answered: the research finds the rest.
 const MARKET_QUESTIONS = [
   ['sell', 'What do you sell?', 'Your website, or a sentence or two.', 'https://example.com'],
-  ['buyers', 'Who buys it?', "The kinds of companies or people, and where they are. Leave it blank and I'll work it out.", 'Property managers in the US Midwest'],
-  ['competitors', 'Who do you compete with?', "Names or websites, one per line. Leave it blank and I'll find them.", 'CleanCo\nhttps://sparkle.example'],
-  ['watch', 'What should Market watch?', "Where your buyers talk, topics, rules or people to follow. Leave it blank and I'll suggest some.", 'r/PropertyManagement, new licensing rules'],
+  ['buyers', 'Who buys it?', 'The kinds of companies or people, and where they are. Optional.', 'Property managers in the US Midwest'],
+  ['competitors', 'Who do you compete with?', 'Names or websites, one per line. Optional.', 'CleanCo\nhttps://sparkle.example'],
+  ['watch', 'What should Market watch?', 'Where your buyers talk, topics, rules or people to follow. Optional.', 'r/PropertyManagement, new licensing rules'],
 ];
 
 function marketResearchGet() {
@@ -335,13 +315,10 @@ async function marketSig() {
   return `${(entities.total ?? (entities.entities || []).length)}|${written.reduce((a, b) => a > b ? a : b, '')}`;
 }
 
-const MARKET_WHO = '<p class="market-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>';
-
 function marketQuestionHtml(setup) {
   const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step];
   const last = setup.step === MARKET_QUESTIONS.length - 1;
   return `<form class="market-start" data-market-setup data-step="${setup.step}" novalidate>
-      ${MARKET_WHO}
       <h1><label for="market-answer">${esc(question)}</label></h1>
       <p class="market-hint" id="market-hint">${esc(hint)} <span class="market-count">${setup.step + 1} of ${MARKET_QUESTIONS.length}</span></p>
       <textarea id="market-answer" name="answer" rows="4" maxlength="4000" autocomplete="off" aria-describedby="market-hint" placeholder="${esc(placeholder)}">${esc(setup.answers[key] || '')}</textarea>
@@ -356,15 +333,14 @@ function marketQuestionHtml(setup) {
 function marketBlankHtml(row, setup) {
   if (row) return `<div class="market-researching" data-market-researching role="status">
       <span class="market-spin" aria-hidden="true"></span>
-      <div><strong>The Librarian is researching your market.</strong>
+      <div><strong>Researching your market.</strong>
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
   if (!(S.me?.cloud && S.me.role === 'owner') || !setup) return '<p class="market-none">Nothing here yet.</p>';
   if (!setup.skipped) return marketQuestionHtml(setup);
   const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
   return `<div class="market-start" data-market-resume>
-      ${MARKET_WHO}
       <h1>Set up Market</h1>
-      <p class="market-hint">I have ${MARKET_QUESTIONS.length} questions about your market, to set what Market tracks. You've answered ${answered}.</p>
+      <p class="market-hint">${MARKET_QUESTIONS.length} questions about your market set what Market tracks. You've answered ${answered}.</p>
       <div class="market-start-actions"><button class="primary" type="button" data-market-continue>Continue</button>
         <a href="#/docs?import=1">Attach files</a></div>
     </div>`;
@@ -457,7 +433,7 @@ async function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
-// The note's kicker, and Research for a page or entry the Librarian can add to.
+// The note's kicker, and Research for a page or entry the research can add to.
 function marketHead(kicker, target) {
   return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
     ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
@@ -506,7 +482,6 @@ function mountGraph(canvas, rows, edges) {
   }
   replace(rows, edges);
   let focus = null;
-  let cited = new Set();
   let hover = null;
   let ticks = 0, settled = 0, raf = 0;
   let running = true;
@@ -580,7 +555,6 @@ function mountGraph(canvas, rows, edges) {
       line: v('--g5') || '#5b6470', ok: v('--ok') || '#6cc48f', accent: v('--accent') || '#45c09c'};
   }
   function color(node, near) {
-    if (cited.has(node.id)) return pal.accent;
     if (node.id === focus || near.has(node.id)) return pal.ink;
     if (node.type === 'segment') return pal.ok;
     if (node.tier === 'core') return pal.ink;
@@ -626,7 +600,7 @@ function mountGraph(canvas, rows, edges) {
       ctx.fillStyle = color(node, near);
       ctx.fill();
     }
-    ctx.font = '12px system-ui, sans-serif';
+    ctx.font = '12px Inter, system-ui, sans-serif';
     ctx.textBaseline = 'middle';
     // A small graph names every node; a big one its core, the focus and its neighbours. Each label sits on a halo of
     // the background so a line under it never runs through the words.
@@ -716,14 +690,13 @@ function mountGraph(canvas, rows, edges) {
   return {
     update(rows, edges, id) {
       replace(rows, edges, id);
-      focus = byId.has(id) ? id : null; cited = new Set();
+      focus = byId.has(id) ? id : null;
       const parent = byId.get(id);
       if (parent) { view.x = -parent.x * view.k; view.y = -parent.y * view.k; }
       else { view.x = 0; view.y = 0; view.k = 1; }
       ticks = 0; settled = 0; invalidate();
     },
-    focus(id) { focus = byId.has(id) ? id : null; cited = new Set(); invalidate(); },
-    cite(ids) { cited = new Set(ids); if (ids[0] && byId.has(ids[0])) focus = ids[0]; invalidate(); },
+    focus(id) { focus = byId.has(id) ? id : null; invalidate(); },
     stop() {
       running = false; cancelAnimationFrame(raf);
       resize.disconnect(); theme.disconnect();

@@ -425,8 +425,8 @@ fn scan(revision: String, pins: Vec<Pin>, registry: &mut impl Registry) -> Resul
         }
         for v in [&pin.version, new] {
             let key = (pin.package.clone(), v.clone());
-            if !bundles.contains_key(&key) {
-                bundles.insert(key, registry.roots(&pin.package, v)?);
+            if let std::collections::btree_map::Entry::Vacant(slot) = bundles.entry(key) {
+                slot.insert(registry.roots(&pin.package, v)?);
             }
         }
         let old_roots = &bundles[&(pin.package.clone(), pin.version.clone())];

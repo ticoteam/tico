@@ -311,11 +311,11 @@ def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net)
         assert set(data) == set(catalog.EVENTS[name].example), name
 
 
-def test_the_ceo_bot_and_a_bot_without_the_send_switch_are_refused(api):
+def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
     made = make(api)
     assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0       # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
-        with pytest.raises(W.Refused, match="CEO"):
+        with pytest.raises(W.Refused, match="Strategy Bot"):
             W.publish(c, "custom.x", "s", {}, "bot:goal-manager", only=made["id"])
         with pytest.raises(W.Refused, match="switch is off"):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])

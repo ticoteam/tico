@@ -1,10 +1,21 @@
-/* ui/styles/tokens.css — Font face, the type scale, motion, the gray ramp and the colour tokens for dark and light.
+/* ui/styles/tokens.css — Font faces, the type scale, motion, the gray ramp and the colour tokens for dark and light.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:200;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2) format("woff2")}
-/* Type. System UI only (SF Pro on a Mac): the UI loads nothing from the network. Dense: 13px text, 16px page titles.
-   Every font-size in styles/ is one of these; icon glyphs keep px (12-32), and a phone's text fields a literal 16px. */
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:200;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=95d5a76f3a2a) format("woff2")}
+/* Text: Inter, self-hosted (ui/vendor/fonts/inter-variable.woff2, built by scripts/build-text-font.py; OFL, see
+   LICENSE-inter.txt). One variable file: weights 400-700, optical sizes 14-32, Latin and Latin Extended.
+   optional, not swap: a page that does not have the font within ~100ms (a cold cache) keeps the fallback for its whole
+   life, and one that has it (every later load: the URL is immutable) paints in Inter from the first frame. Text never
+   changes face under the reader, so nothing shifts. There is no italic file: the few italics are synthesised. */
+@font-face{font-family:"Inter";font-style:normal;font-weight:400 700;font-display:optional;
+  src:url(/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f) format("woff2")}
+/* Arial (Arimo and Liberation Sans share its metrics) scaled to Inter's width and line box, so the first, uncached
+   page wraps and stands like the rest. */
+@font-face{font-family:"Inter Fallback";src:local("Arial"),local("ArialMT"),local("Arimo"),local("Liberation Sans");
+  size-adjust:106.4%;ascent-override:91.02%;descent-override:22.66%;line-gap-override:0%}
+/* Type. Dense: 13px text, 16px page titles. Every font-size in styles/ is one of these; icon glyphs keep px (12-32),
+   and a phone's text fields a literal 16px (iOS zooms into anything smaller). */
 :root{
   --t-2xs:10px;   /* filled chips and badges */
   --t-xs:11px;    /* meta, counts, hints */
@@ -14,13 +25,31 @@
   --t-lg:16px;    /* page titles */
   --t-xl:20px;    /* figures (KPI values), big titles */
   --t-2xl:28px;   /* one-off display codes */
-  --lh-tight:1.25;--lh:1.45;--lh-read:1.6;
+  /* Three weights: 400 text, 500 emphasis and controls, 600 names, titles and labels. 700 only for the wordmark and
+     the Briefing's masthead. */
+  /* Line heights: none (a glyph centred in its own box), display (figures, 20px and up), tight (titles, chips, one-line
+     controls), the UI's text, and reading. */
+  --lh-none:1;--lh-display:1.1;--lh-tight:1.25;--lh:1.45;--lh-read:1.6;
+  /* Tracking follows the optical size: Inter tightens as it grows. Titles (16px and up) tight, 14px a touch, body
+     text none, uppercase labels open. */
+  --track-tight:-.011em;--track-snug:-.006em;--track-normal:0;
   /* the one uppercase label: section heads, table heads, field keys */
   /* long-form reading (Docs): its own small scale, larger than the UI's */
   --prose:15px;--prose-h1:22px;--prose-h2:18px;--prose-h3:16px;--prose-title:24px;
   --t-label:11px;--track-caps:.06em;
   /* motion: short and decelerating; nothing animates layout */
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
+  /* the house rules these serve are at the top of components.css */
+  /* focus: one ring for buttons, links, rows and switches, outside the box, or inside it on a row that meets its
+     container's edge; a text field takes the halo instead (its border turns the accent) */
+  --focus-ring:2px solid var(--accent);--focus-offset:2px;--focus-inset:-2px;
+  --focus-halo:3px solid color-mix(in srgb,var(--accent) 28%,transparent);
+  /* control heights: small and regular (a phone's are 40px, forms.css) */
+  --ctl-sm:28px;--ctl:32px;
+  /* the Ask button's footprint on a computer (ask.css): 16px off the bottom, 44px tall, 16px clear above it */
+  --fab-room:76px;
+  /* a fold's chevron (chevron_right) turns a quarter to open */
+  --chev-open:rotate(90deg);
 }
 /* Dark is the default. ui/theme.js sets <html data-theme> before the page paints: "dark" (also when nothing is
    saved), "light", or "system", which follows the OS. Light is the same nine steps in reverse order, so every rule
@@ -43,7 +72,7 @@
   /* Waiting labels need a separate ink: the amber also fills badges with dark text. */
   --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"Inter","Inter Fallback",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */
   --read-width:800px;--read-size:var(--t-md);--read-leading:1.65;
   color-scheme:dark;

@@ -7,12 +7,12 @@
 .use-bar-row select{width:auto;min-width:150px}
 .use-bar-row input[type=date]{width:auto}
 .use-custom{display:inline-flex;gap:var(--s2)}
-.use-seg{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px;max-width:100%;overflow-x:auto}
-.use-seg button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
-.use-seg button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.use-seg,.use-tabs{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px;max-width:100%;overflow-x:auto}
+.use-seg button,.use-tabs button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
+.use-seg button[aria-selected=true],.use-tabs button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .use-total{font-size:var(--t-xl);margin-bottom:var(--s4)}
 .use-total strong{font-weight:600}
-.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:.02em}
+.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:var(--track-normal)}
 .use-sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;white-space:nowrap}
 .use-total .use-sub{display:block;margin-top:2px}
 .use-total .use-low{white-space:normal}
@@ -24,7 +24,7 @@
 .use-who{display:flex;align-items:center;gap:var(--s2);min-width:0}
 .use-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .use-runs,.use-tok{color:var(--muted);font-size:var(--t-base)}
-.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:1.25}
+.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:var(--lh-tight)}
 .use-est{font-weight:600}
 .use-share{display:block;height:6px;border-radius:3px;background:var(--surface2)}
 .use-row:hover .use-share,.use-line[aria-expanded=true] .use-share{background:var(--line)}
@@ -61,11 +61,46 @@ button.use-limit.none{color:color-mix(in srgb,var(--muted) 70%,transparent)}
 span.use-limit{display:block}
 .use-dialog{width:min(360px,92vw)}
 .use-dialog form{display:flex;flex-direction:column;gap:var(--s3)}
-.use-dialog label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-base);color:var(--muted)}
-.use-dialog label.use-check{flex-direction:row;align-items:center;gap:var(--s2)}
+.use-dialog label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .use-dialog-row{display:flex;justify-content:flex-end;gap:var(--s2)}
 .use-fields{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
 .use-dialog p.muted{margin:0;font-size:var(--t-sm)}
+/* An amount: "$" inside the box, hidden while the box shows its hint. */
+.use-money{display:flex;align-items:center;gap:2px;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);cursor:text}
+.use-money:focus-within{border-color:var(--accent);outline:var(--focus-halo);outline-offset:0}
+.use-money:has(input:placeholder-shown)>span{visibility:hidden}
+.use-money input{flex:1;min-width:0;width:100%;height:100%;padding:0;border:0;background:none;box-shadow:none;outline:0;text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
+.use-money input::placeholder{color:color-mix(in srgb,var(--muted) 75%,transparent)}
+.use-money.changed{border-color:var(--wait);background:color-mix(in srgb,var(--wait) 8%,var(--surface))}
+.use-money:has(input[aria-invalid]){border-color:var(--fail)}
+/* The Limits tab: one row per scope, a column per window. */
+.use-tabs{margin-left:auto}
+.use-tabs[hidden]{display:none}
+.use-lim{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
+.use-lim-row{display:grid;grid-template-columns:minmax(150px,1fr) repeat(var(--use-n),96px) 32px;align-items:center;gap:var(--s2);padding:10px var(--s3) 12px}
+.use-lim-row+.use-lim-row{border-top:1px solid var(--line)}
+.use-lim-head{padding-top:6px;padding-bottom:6px;background:var(--surface2);font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.use-lim-head span{text-align:right;padding-right:8px}
+.use-lim-who{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.use-lim-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.use-lim-who .pill{flex:none}
+.use-lim-icon{flex:none;width:20px;height:20px;font-size:18px;color:var(--muted);display:inline-flex;align-items:center;justify-content:center}
+.use-lim-cell{position:relative;display:flex;flex-direction:column;gap:3px}
+.use-lim-h{display:none}
+.use-meter{position:absolute;left:3px;right:3px;bottom:-6px;display:block;height:3px;border-radius:2px;background:var(--surface2);overflow:hidden}
+.use-meter b{display:block;height:100%;background:var(--ok)}
+.use-meter.warn b{background:var(--wait)}
+.use-meter.bad b{background:var(--fail)}
+.use-lim-x,button.ghost.use-lim-x{width:28px;background:none;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:0;color:var(--muted)}
+.use-lim-x:hover{color:var(--ink)}
+.use-lim-row.removed .use-lim-name{text-decoration:line-through;color:var(--muted)}
+.use-lim-row.removed .use-money{opacity:.45}
+.use-lim-foot{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2);margin-top:var(--s3)}
+.use-lim-add{width:auto;min-width:160px}
+.use-check{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--t-base);color:var(--muted);margin-left:var(--s2);cursor:pointer}
+.use-lim-gap{flex:1}
+.use-lim-foot .err{margin:0;font-size:var(--t-sm)}
+.use-lim-foot [data-lim-discard]:disabled{visibility:hidden}
 .sb-cell-limit{white-space:nowrap}
 @media (max-width:760px){
   .use-row{grid-template-columns:1fr}
@@ -73,6 +108,18 @@ span.use-limit{display:block}
   .use-row>.use-limit{grid-row:2;justify-self:start;margin:0 0 var(--s2) var(--s3)}
   span.use-limit{display:none}
   .use-row>.use-detail{grid-row:3}
+  .use-head{flex-wrap:wrap}
+  .use-lim-row.use-lim-head{display:none}
+  .use-lim-row{position:relative;display:flex;flex-wrap:wrap;gap:6px 8px;padding:10px var(--s3) 14px}
+  .use-lim-who{flex:1 1 100%;padding-right:32px;min-height:28px}
+  .use-lim-end{position:absolute;top:8px;right:var(--s2)}
+  .use-lim-cell{flex:1 1 0;min-width:0}
+  .use-lim-cell:empty{display:none}
+  .use-lim-h{display:block;font-size:var(--t-xs);color:var(--muted)}
+  .use-money{height:40px;padding:0 6px;gap:1px}
+  .use-money input{font-size:16px}
+  .use-lim-add{flex:1 1 100%}
+  .use-check{margin-left:0}
 }
 
 .use-line:not(button){cursor:default}

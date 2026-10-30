@@ -74,11 +74,76 @@ def of(config):
     return value if type(value) is int and 0 <= value <= 1000 else None
 
 
-def startable(c, row):
+def startable(c, row, steps=None):
+    """`steps`: {step id: name} read for a whole list of tasks (`step_names`); without it, one read of the row's step."""
     if not row or row['status'] != 'open':
         return False
-    step = c.execute('SELECT name FROM task_steps WHERE id=?', (row.get('step_id'),)).fetchone()
-    return row.get('type_id') == H.GENERAL_TYPE or bool(step and step[0] == 'On Deck')
+    if steps is None:
+        step = c.execute('SELECT name FROM task_steps WHERE id=?', (row.get('step_id'),)).fetchone()
+        name = step[0] if step else None
+    else:
+        name = steps.get(row.get('step_id'))
+    return row.get('type_id') == H.GENERAL_TYPE or name == 'On Deck'
+
+
+def step_names(c, rows):
+    """{step id: name} for the steps of these tasks, read in one query per 500 steps."""
+    ids = sorted({r['step_id'] for r in rows if r and r.get('step_id')})
+    names = {}
+    for part in H.chunks(ids):
+        names.update({sid: name for sid, name in c.execute(
+            f"SELECT id,name FROM task_steps WHERE id IN ({_marks(part)})", part)})
+    return names
+
+
+def _marks(values):
+    return ",".join("?" * len(values))
+
+
+def maybe_waiting(c, rows):
+    """The ids of the tasks `waiting` might hold: a superset, found with one read per table for all the rows at once.
+    A task outside it has no wait that `waiting` would find, so a caller need not ask it. Each test below is the one
+    `waiting` and `H.wait_detail` make, only read for every task together; a row that any of them could match is kept
+    in, and `waiting` decides for it."""
+    rows = [r for r in rows if r]
+    suspect = {r['id'] for r in rows if snoozed(r) or r.get('next_run') or r.get('waiting_on')
+               or r.get('blocked_kind') == 'manual'}
+    ids = [r['id'] for r in rows if r['id'] not in suspect]
+    open_ids = [r['id'] for r in rows if r['id'] not in suspect and r['status'] == 'open']
+    cutoff = H.shift(H.now(), minutes=-PUT_BACK_MINUTES)
+
+    def found(sql, values, args=()):
+        for part in H.chunks(values):
+            suspect.update(r[0] for r in c.execute(sql.replace('{m}', _marks(part)), (*part, *args)))
+
+    # put_back_held: a queue return in the hour, for a task still open
+    found("SELECT DISTINCT e.task_id FROM task_events e JOIN tasks t ON t.id=e.task_id AND t.owner=e.actor "
+          "WHERE e.task_id IN ({m}) AND e.field IN ('status','queue_return') AND e.new='open' "
+          "AND e.old IN ('doing','waiting','done','review') AND e.ts>?", open_ids, (cutoff,))
+    if H._has_table(c, 'worktree_waits'):
+        found("SELECT DISTINCT task_id FROM worktree_waits WHERE task_id IN ({m}) AND state IN ('waiting','reserved')", ids)
+    # live_blocker, and the blocker in wait_detail
+    found("SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+          "WHERE r.to_task IN ({m}) AND r.kind='blocks' AND t.status IN (" + _marks(H.ACTIVE_STATUSES) + ")",
+          ids, tuple(H.ACTIVE_STATUSES))
+    from .milestone_waits import _present as milestones_present
+    if milestones_present(c):
+        found("SELECT DISTINCT task_id FROM task_milestone_waits WHERE task_id IN ({m}) AND woke_at IS NULL", ids)
+    found("SELECT DISTINCT task_id FROM approvals WHERE task_id IN ({m}) AND decision IS NULL", ids)
+    # an open child task (a review child is checked on its own, so it is kept in)
+    found("SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+          "WHERE r.kind='parent' AND r.to_task IN ({m}) AND t.status NOT IN ('done','closed','declined')", ids)
+    found("SELECT DISTINCT task_id FROM task_links WHERE task_id IN ({m}) AND kind='pr' "
+          "AND state IN ('open','draft','merged') AND json_extract(detail_json,'$.wake_once') IS NOT NULL", ids)
+    # an unanswered question the owner asked about the task: owner and task are matched in Python
+    pairs = {(r['owner'], r['id']) for r in rows if r['id'] not in suspect}
+    for part in H.chunks(sorted({actor for actor, _ in pairs})):
+        for actor, tid in c.execute(
+                f"SELECT m.from_actor,{H.MESSAGE_TASK_SQL} FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                f"WHERE m.from_actor IN ({_marks(part)}) AND m.kind='ask' AND m.superseded_at IS NULL", part).fetchall():
+            if (actor, tid) in pairs:
+                suspect.add(tid)
+    return suspect
 
 
 def review(c, row, *, parent_id=None):
@@ -182,32 +247,47 @@ def waiting(c, row, starting=False, *, include_next_run=True, result=False):
 
 def counts(c, bot, who=None, tasks=None):
     """Only tasks readable by the viewer contribute to the displayed counts."""
-    tasks = tasks if tasks is not None else H._rows(c.execute(
-        "SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing')", ('bot:' + bot,)))
-    going = queued = 0
-    for row in tasks:
-        if who is not None and not privacy.task_readable(c, who, row):
-            continue
-        if waiting(c, row):
-            continue
-        if row['status'] == 'doing':
-            going += 1
-        elif startable(c, row):
-            queued += 1
-    return {'going': going, 'waiting': queued}
+    return counts_many(c, {bot: tasks}, who)[bot]
 
 
-def refusal(c, row, config, woken=False, result=False, *, message=None):
+def counts_many(c, tasks_by_bot, who=None):
+    """`counts` for many bots at once: {bot: {'going', 'waiting'}} from `tasks_by_bot` ({bot: its open tasks}, or None to
+    read them). The wait checks and the step names are read once for all their tasks, not once a bot."""
+    for bot, tasks in tasks_by_bot.items():
+        if tasks is None:
+            tasks_by_bot[bot] = H._rows(c.execute(
+                "SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing')", ('bot:' + bot,)))
+    every = [row for tasks in tasks_by_bot.values() for row in tasks]
+    suspect = maybe_waiting(c, every)
+    steps = step_names(c, every)
+    out = {}
+    for bot, tasks in tasks_by_bot.items():
+        going = queued = 0
+        for row in tasks:
+            if who is not None and not privacy.task_readable(c, who, row):
+                continue
+            if row['id'] in suspect and waiting(c, row):
+                continue
+            if row['status'] == 'doing':
+                going += 1
+            elif startable(c, row, steps):
+                queued += 1
+        out[bot] = {'going': going, 'waiting': queued}
+    return out
+
+
+def refusal(c, row, config, woken=False, result=False, *, message=None, suspect=None):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
     that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
-    Waiting task's open subtasks do not hold back (`waiting`)."""
+    Waiting task's open subtasks do not hold back (`waiting`). `suspect`: `maybe_waiting` over the caller's tasks; a
+    task outside it is not asked `waiting` again."""
     if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
                                               or waiting(c, row, starting=True, result=result)):
         return "task_wait"
     if not startable(c, row):
         return None
-    if waiting(c, row, starting=True, include_next_run=False):
+    if (suspect is None or row['id'] in suspect) and waiting(c, row, starting=True, include_next_run=False):
         return 'task_wait'
     if next_run_held(c, row, message=message):
         return 'task_next_run'
@@ -222,9 +302,13 @@ def refusal(c, row, config, woken=False, result=False, *, message=None):
     return None
 
 
-def missing(c, settings, runner, body):
-    """The highest ranked eligible task without an unfinished run. Reads only, including on idle claims."""
+def missing(c, settings, runner, body, failed=None, waiting=None):
+    """The highest ranked eligible task without an unfinished run. Reads only, including on idle claims. A bot whose
+    claim check raised is passed over as the claim passes it over: `failed` (the claim's ClaimFaults) records it, and
+    each bot whose checks all pass, and `waiting` says its check is still backing off. A task whose own checks raise
+    is passed over and logged; the bot's other tasks are still looked at."""
     from . import execution as E
+    from .batch_work import report, shared_check, shared_scope, storage_error
     from .shared_bots import follow
     from .store import readiness_document
     ready = readiness_document(runner['readiness_json'])
@@ -244,34 +328,68 @@ def missing(c, settings, runner, body):
         # most of an idle claim's time on an install of forty bots.
         if not c.execute("SELECT 1 FROM tasks WHERE owner=? AND status='open' LIMIT 1", ('bot:' + slug,)).fetchone():
             continue
-        why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready, held_bots)
-        if why:
+        if (failed is not None and slug in failed.bots) or (waiting is not None and waiting(slug)):
             continue
-        config = follow(c, slug, config)
-        scope = E.claim_scope(c, slug)
+        try:
+            with shared_check():
+                why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready,
+                                              held_bots)
+                if not why:
+                    config = follow(c, slug, config)
+                    scope = E.claim_scope(c, slug)
+        except Exception as exc:
+            # One bot's raising check must not stop the other bots' open tasks from starting.
+            if storage_error(exc) or shared_scope(exc) == "team":
+                raise
+            if failed is not None:
+                failed.bot(slug, exc)
+            else:
+                report("auto task check", slug, exc)
+            continue
+        if why:
+            # A refusal is not a clean check: draining or a busy bot is refused before its checks run.
+            continue
+        if failed is not None:
+            failed.clean.add(slug)
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
                                      "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
-            if not startable(c, row) or refusal(c, row, config) or not H.task_private_readable(c, row['owner'], row):
-                continue
-            # A bot limited to one task (execution.scoped_sql) starts only that task or a direct subtask: a start
-            # queued for any other would wait, unclaimable, until the limit is lifted.
-            if scope and not E.in_scope(c, scope, row['id']):
-                continue
-            lane = E.job_lane(c, slug, config, {'refs': {'task': row['id']}},
-                              H.conversation(c, row['conversation_id']), E.lanes_on(runner), E.roots_on(runner))
-            if (slug, lane) in busy:
-                continue
-            # Failed/uncertain work belongs to explicit recovery, never an automatic retry.
-            if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id "
-                         "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
-                         f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
-                         f"AND {H.unheld_sql()} OR carrier.state NOT IN ('completed','cancelled') "
-                         f"AND {H.unheld_sql('carrier')}) LIMIT 1",
-                         (slug, row['id'])).fetchone():
-                continue
-            return row
+            try:
+                if found := _startable_task(c, row, slug, config, scope, runner, busy):
+                    return found
+            except Exception as exc:
+                # One task whose checks raise is that task's alone: no run exists to hold, so it is logged and passed
+                # over, and the other tasks still start.
+                if storage_error(exc) or shared_scope(exc) == "team":
+                    raise
+                report("auto task", row['id'], exc)
     return None
+
+
+def _startable_task(c, row, slug, config, scope, runner, busy):
+    """`row` when the backfill may start it now, else None."""
+    from . import claim_holds
+    from . import execution as E
+    if not startable(c, row) or refusal(c, row, config) or not H.task_private_readable(c, row['owner'], row):
+        return None
+    # A bot limited to one task (execution.scoped_sql) starts only that task or a direct subtask: a start queued for
+    # any other would wait, unclaimable, until the limit is lifted.
+    if scope and not E.in_scope(c, scope, row['id']):
+        return None
+    lane = E.job_lane(c, slug, config, {'refs': {'task': row['id']}},
+                      H.conversation(c, row['conversation_id']), E.lanes_on(runner), E.roots_on(runner))
+    if (slug, lane) in busy:
+        return None
+    # Failed/uncertain work belongs to explicit recovery, never an automatic retry. A job its claim holds is still the
+    # task's run, waiting for its bot's release: no second one is filed beside it.
+    if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                 "JOIN conversations cv ON cv.id=m.conversation_id "
+                 "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
+                 f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
+                 f"AND ({H.unheld_sql()} OR j.hold_reason=?) OR carrier.state NOT IN ('completed','cancelled') "
+                 f"AND {H.unheld_sql('carrier')}) LIMIT 1",
+                 (slug, row['id'], claim_holds.REASON)).fetchone():
+        return None
+    return row
 
 
 def enqueue(c, row):

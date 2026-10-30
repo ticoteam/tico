@@ -1,7 +1,7 @@
 // Needs you on a busy company: grouped by what each item takes (Decide, Pay, Sign in or connect, Review and send, Do)
 // with a count per group, in the server's order (due first); an approval reads what it approves; a deadline shows as a
 // due chip; a card with folded duplicates says "+N"; an ask with a recommendation offers "Do what you recommend", which
-// posts once and closes the card. Decide leads with the same button (and R). Overview shows the count and how many
+// posts once and closes the card. Its card (a tap on the row) leads with the same button (and R). Overview shows the count and how many
 // went away on their own this week.
 // NEEDS_SHOTS=<dir> also saves the screenshots for the PR.
 const {chromium} = require('playwright');
@@ -23,7 +23,8 @@ const TASKS = [
   base('t-deck', 'Review the launch deck', {requester: 'human:sam'}),
   base('t-call', 'Call Murphy back about the lease', {requester: 'bot:support'}),
   base('t-vendor', 'Switch the payroll vendor', {owner: 'bot:analyst', requester: 'human:ana', status: 'waiting', note: 'Waiting on Ana to pick the vendor.'}),
-  // A bot's question the CEO Bot merged into an item of its own: the server leaves it out of Needs you, so the page does.
+  // A bot's question the Strategy Bot merged into an item of its own: the server leaves it out of Needs you, so the
+  // page does.
   base('t-merged', 'Which pricing page first?', {requester: 'bot:ops',
     ask: {id: 'q-merged', body: 'Which pricing page launches first?', from_actor: 'bot:ops', to_actor: 'human:ana'}}),
   // Bots' own tasks with a question to Ana over three days old: one merged, which stays out of Older questions too.
@@ -81,7 +82,7 @@ async function shot(target, name) {
       count: g.querySelector('.tl-count, .tl-gcount, .count')?.textContent.trim()})));
     assert.deepEqual(groups.map(g => [g.key, g.count]),
       [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
-    assert.deepEqual(groups.map(g => g.label), ['Decide', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
+    assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
     assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));
@@ -101,11 +102,11 @@ async function shot(target, name) {
     assert.equal((await rec.textContent()).trim(), 'Do what you recommend');
     await shot(page, 'needs-you-groups');
 
-    // Decide leads with the same one-tap answer.
-    await page.evaluate(() => { location.hash = '#/decide'; });
-    const dc = page.locator('.decide .dc-card');
+    // Its card leads with the same one-tap answer.
+    await pick.locator('.tl-title').click();
+    const dc = page.locator('#need-card .dc-card[data-key="task:t-pick"]');
     await dc.waitFor();
-    assert.ok((await page.locator('.decide').textContent()).includes('Decide'));
+    assert.equal((await dc.locator('.dc-who .pill.needs').textContent()).trim(), 'Question');
     const dcRec = page.locator('.decide .dc-actions [data-dc="recommend"]');
     assert.ok((await dcRec.textContent()).includes('Do what you recommend'));
     assert.match(await dc.locator('.need-folded').innerText(), /Also waiting on this[\s\S]*Switch the payroll vendor/i);
@@ -113,14 +114,14 @@ async function shot(target, name) {
     await shot(page, 'decide-recommend');
 
     // One tap answers and the card goes.
-    await page.evaluate(() => { location.hash = '#/tasks'; });
+    await page.locator('#need-card [data-dc="close"]').click();
     await page.locator('#task-body [data-group="need:decide"] [data-recommend]').click();
     for (let i = 0; i < 50 && !taken.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(taken, [{ask: 'q-pick', version: 1}], 'with the version the card showed');
     await page.waitForFunction(() => !document.querySelector('#task-body [data-group="need:decide"] [data-recommend]'));
 
     // Overview: the count and what went away on its own.
-    await page.evaluate(() => { location.hash = '#/overview'; });
+    await page.evaluate(() => { location.hash = '#/overview/campus'; });
     const strip = page.locator('#overview-needs');
     await strip.waitFor();
     assert.equal(await strip.locator('strong').textContent(), 'Needs you 6');

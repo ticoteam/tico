@@ -59,7 +59,9 @@ URL = re.compile(r"https?://\S+", re.I)
 YEARS = (1990, 2100)
 BOT_FIELDS = ("id", "template", "title", "dept", "lead", "core", "reason", "start", "routine", "tools", "about", "runtime",
               "existing")
-BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person")
+# `team` is the name of the group a bot or seat goes in when the file is imported (backend/company_import.py). Absent or
+# blank, the group is the one its template belongs to, as it always was.
+BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person", "team")
 PERSON_FIELDS = ("id", "name", "role", "dept", "owner")
 # A goal's measure, as the page keeps it (format 0.2): up or down toward a target by a deadline, or a range to stay in.
 # `measure` "" is not set yet.
@@ -253,6 +255,10 @@ def _bot(raw, at):
         bot["person"] = _id(raw["person"], field + ".person")
     if raw.get("first_job") and not bot["existing"]:
         bot["first_job"] = _text(raw["first_job"], field + ".first_job", LIMITS["first_job"])
+    if raw.get("team") is not None:
+        team = _text(raw["team"], field + ".team", LIMITS["team"]).strip()
+        if team:
+            bot["team"] = team
     if bot["existing"]:
         # An agent the visitor already runs keeps its own schedule and work: the file holds no start, routine, tools
         # or first job for it, so the draft doesn't either.

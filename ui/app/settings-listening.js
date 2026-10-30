@@ -1,4 +1,4 @@
-/* ui/app/settings-listening.js — Settings > Listening
+/* ui/app/settings-listening.js — Listening's destinations, drawn in Strategy › Market › Listening (ui/app/redesign-market.js)
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

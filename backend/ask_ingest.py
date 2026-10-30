@@ -129,9 +129,9 @@ def save(c, actor, person, body):
 # ---- who is gated, and the person's load ------------------------------------------------------------------------
 
 def gated(who, assistant_bot=""):
-    """Whether this caller's write is gated: a bot writing as itself. A person, their Assistant acting for them
+    """Gate a bot writing as itself or through BotOps. A person, their Assistant acting for them
     (`via`), BotOps acting for a person and the keeper are not."""
-    return (who.role == "bot" and not who.via and str(who.actor).startswith("bot:")
+    return (who.role == "bot" and who.via in (None, "", "botops") and str(who.actor).startswith("bot:")
             and H.actor_id(who.actor) != assistant_bot)
 
 
@@ -240,6 +240,7 @@ def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
     call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
+    verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
             return None
@@ -255,8 +256,8 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             try:
                 qset = J.load_set(QUESTION_SET)
             except J.JudgeError as exc:
-                LOG.warning("Ask ingest is off: %s", exc.detail)
-                return None
+                LOG.warning("Ask ingest question set failed: %s", exc.code)
+                return {**verdict, "error": exc.code or "error"}
             engine = server_engine(store, c, primary)
             if engine is None:
                 # No decision model at all is Decide off: nothing to record. The month's cap is a failure kept.
@@ -267,10 +268,12 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
-        return {**verdict, "answers": answers, "items": {n: i for n, (i, _) in items.items()},
-                "criteria": _criteria(own), "call": call, "error": error}
+        verdict.update(answers=answers, call=call, error=error)
+        return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:          # the gate never stops the write
         LOG.warning("Ask ingest preflight failed: %s", type(exc).__name__)
+        if verdict is not None:
+            return {**verdict, "error": (exc.code if isinstance(exc, J.JudgeError) else None) or "error"}
         return None
 
 
@@ -439,7 +442,7 @@ def record(c, verdict, decided, ref, message_id=None):
 def on_reply(c, actor, task_id, text):
     """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
     to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
-    message. The CEO Bot's merge (backend/ceo_merge.py) relays the same way for its own merged items."""
+    message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:

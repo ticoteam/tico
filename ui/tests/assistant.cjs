@@ -1,6 +1,6 @@
 // The Assistant page (ui/app/assistant-page.js): its own chat at #/assistant with the bot chat's thread and composer,
-// reached from your own person page's Assistant tab (absent from anyone else's) and from "Ask the Assistant…" in
-// search (⌘K) with your words in the box. An empty chat offers suggestions, a lookup answers at once with in-app
+// reached from your own person page's Assistant tab (absent from anyone else's) and from Ask's Show chat; search
+// (⌘K) does not offer it. An empty chat offers suggestions, a lookup answers at once with in-app
 // links, a proposal is a Confirm / Cancel card that only your click runs, and it all fits a phone. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -93,6 +93,7 @@ function fixture() {
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Profile', 'Slack'], tag + ': no Assistant on another person\'s page');
       await page.goto('https://tico-ui.test/#/person/ana');
+      await page.waitForFunction(() => S.route === '#/person/ana');   // a page change draws a frame later (its fade)
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Assistant', 'Profile', 'Slack'], tag + ': Assistant is first on your own page');
       await page.locator('#ptabs [data-pt="assistant"]').click();
@@ -113,16 +114,17 @@ function fixture() {
       assert.equal(await page.locator('#conv-thread .asst-hints').count(), 0, tag + ': no suggestions once it has messages');
       assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': a fast answer has no thinking state');
 
-      // The old link and search both land here; search puts your words in the box.
+      // The old link lands here; search no longer offers the Assistant (Ask does, on every page).
       await page.goto('https://tico-ui.test/#/person/ana/assistant');
       await page.waitForURL(/#\/assistant$/);
       await page.keyboard.press('Control+k');
       await page.locator('#search-input').fill('find the launch plan');
-      const ask = page.locator('#search-results li[data-ask]');
-      await ask.waitFor();
-      assert.match(await ask.innerText(), /Ask the Assistant…/, tag + ': search offers the Assistant');
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.querySelector('#chat-composer .p-text')?.value === 'find the launch plan');
+      await page.locator('#search-results li').first().waitFor();
+      assert.doesNotMatch(await page.locator('#search-results').innerText(), /Ask the Assistant/, tag + ': search does not offer the Assistant');
+      await page.locator('#search-close').click();
+      await page.locator('#search-modal').waitFor({state: 'hidden'});
+      await box.fill('find the launch plan');
+      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-send')?.classList.contains('p-off'));
       await page.locator('#chat-composer .p-send').click();
       await page.waitForFunction(() => document.querySelectorAll('#conv-thread .conv-run.chat').length === 4);
       assert.deepEqual(state.sent.at(-1), 'find the launch plan', tag + ': sent');

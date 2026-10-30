@@ -249,6 +249,8 @@ class Recorder:
         self.holding = {}           # write locks held now: token -> (monotonic start, route, thread id)
         self.wait_total = 0.0       # write-lock wait finished since the start, ms
         self.slow_file = []         # slow requests not yet in the file
+        self._drainer = None        # the thread that drains `samples` (start_drain)
+        self._drain_halt = None
 
     def _reset(self):
         self.requests = {}          # (route, caller) -> [n, errors, bytes, total, max, hist, bytes_max, sql, wait]
@@ -307,7 +309,7 @@ class Recorder:
         hour = int((now or time.time()) // 3600 * 3600)
         edges, fingerprints, find = EDGES, self.fingerprints, bisect.bisect_left
         with self.lock:
-            shapes = self.sql.setdefault(hour, {})
+            shapes = None           # this hour's shapes, once a query sample lands in it (an empty hour is not kept)
             while True:
                 try:
                     s = self.samples.popleft()
@@ -316,6 +318,8 @@ class Recorder:
                 kind = s[0]
                 if kind == "q":
                     _, sql, ms, locked = s
+                    if shapes is None:
+                        shapes = self.sql.setdefault(hour, {})
                     fp = fingerprints.get(sql)
                     if fp is None:
                         if len(fingerprints) > 5000:
@@ -374,6 +378,30 @@ class Recorder:
                     _add(self.lag, s[1])
                     self.lag_max = max(self.lag_max, s[1])
 
+    def start_drain(self, every=TICK):
+        """Drains `samples` on a thread of its own, every `every` seconds, so nothing that waits on the database (a
+        flush, a stall's record, the hourly size pass) can leave the buffer to fill and drop samples. Idempotent."""
+        if self._drainer is not None:
+            return
+        halt = self._drain_halt = threading.Event()
+
+        def loop():
+            while not halt.wait(every):
+                try:
+                    self.drain()
+                except Exception as exc:
+                    LOG.warning("Flight recorder drain failed: %s", type(exc).__name__)
+
+        self._drainer = threading.Thread(target=loop, name="tico-flight-drain", daemon=True)
+        self._drainer.start()
+
+    def stop_drain(self):
+        if self._drainer is None:
+            return
+        self._drain_halt.set()
+        self._drainer.join(timeout=5)
+        self._drainer = None
+
     def pop_slow(self):
         with self.lock:
             out, self.slow_file = self.slow_file, []
@@ -395,6 +423,7 @@ class Recorder:
 
     def take(self, minute):
         """The minute's rows, and the SQL hours, ready to write; the minute's counters start again."""
+        self.drain()                # everything recorded so far is in this minute, drained or not
         with self.lock:
             requests, slow, lag, lag_max = self.requests, self.slow, self.lag, self.lag_max
             long_holds = self.long_holds + self.open_holds()
@@ -705,6 +734,9 @@ def _rows(c, table):
 
 
 def db_stats(store, use_dbstat=True):
+    """The database's size and the detail `size_db` keeps. Every read is its own short snapshot: a whole-file dbstat scan
+    or a run of row counts held one read open for minutes, which stopped WAL checkpoints. A per-object dbstat query
+    (`name=?`) reads only that object's pages, so each object is one short read of its own."""
     path = str(store.settings.db_path)
     size = os.path.getsize(path) if os.path.exists(path) else 0
     wal = os.path.getsize(path + "-wal") if os.path.exists(path + "-wal") else 0
@@ -712,22 +744,33 @@ def db_stats(store, use_dbstat=True):
     with store.read() as c:
         page_size = c.execute("PRAGMA page_size").fetchone()[0]
         free = c.execute("PRAGMA freelist_count").fetchone()[0] * page_size
-        present = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if use_dbstat:
-            try:
-                objects = c.execute("SELECT name, pgsize FROM dbstat WHERE aggregate=TRUE ORDER BY pgsize DESC LIMIT 40"
-                                    ).fetchall()
-                detail["objects"] = {r[0]: r[1] for r in objects}
-            except sqlite3.OperationalError:
-                detail["objects"] = None            # dbstat or its aggregate mode is unavailable
-        for table, column in BIG.items():
-            if table not in present:
-                continue
+        objects = c.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','index')").fetchall()
+    present = {name for name, kind in objects if kind == "table"}
+    if use_dbstat:
+        detail["objects"] = _object_pages(store, ["sqlite_schema"] + [name for name, _ in objects])
+    for table, column in BIG.items():
+        if table not in present:
+            continue
+        with store.read() as c:
             detail["rows"][table] = _rows(c, table)
             if column:
                 row = c.execute(f"SELECT {column} FROM {table} ORDER BY rowid LIMIT 1").fetchone()
                 detail["oldest"][table] = row[0] if row else None
     return size, wal, free, detail
+
+
+def _object_pages(store, names):
+    """The 40 objects with the most pages, `{name: pages}`; None when this SQLite has no dbstat. One short read each."""
+    pages = {}
+    for name in names:
+        with store.read() as c:
+            try:
+                row = c.execute("SELECT sum(pgsize) FROM dbstat WHERE name=? AND aggregate=TRUE", (name,)).fetchone()
+            except sqlite3.OperationalError:
+                return None                         # dbstat or its aggregate mode is unavailable
+        if row and row[0]:
+            pages[name] = row[0]
+    return dict(sorted(pages.items(), key=lambda kv: -kv[1])[:40])
 
 
 # ---------------------------------------------------------------------------- retention
@@ -808,6 +851,7 @@ class Flight(threading.Thread):
     def run(self):
         from . import releases
         self.file.start()
+        self.recorder.start_drain(self.tick_s)
         self.file.put({"kind": "start", "pid": os.getpid(), "version": releases.version(),
                        "commit": self.settings.release_commit, "python": sys.version.split()[0],
                        "sqlite": sqlite3.sqlite_version, "platform": sys.platform})
@@ -824,6 +868,7 @@ class Flight(threading.Thread):
                     self.size_db(now)
             except Exception as exc:
                 LOG.warning("Flight recorder pass failed: %s", type(exc).__name__)
+        self.recorder.stop_drain()
         try:
             self.recorder.drain()
             self.flush(minute)
@@ -840,7 +885,6 @@ class Flight(threading.Thread):
             LOG.warning("Flight recorder start event failed: %s", type(exc).__name__)
 
     def step(self):
-        self.recorder.drain()
         self.usage.sample(self.recorder.wait_total)
         for record in self.recorder.pop_slow():
             self.file.put(record)

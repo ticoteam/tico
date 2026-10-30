@@ -27,7 +27,7 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 const kpis = [{id: 'k-margin', name: 'Gross margin per job', unit: '%'}, {id: 'k-jobs', name: 'Jobs per week', unit: ''}];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money, because bots do the office work.',
@@ -234,7 +234,21 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('[data-strat-status]').innerText(), 'Not published');
       const publish = page.locator('[data-strat-publish]');
       assert.equal(await publish.isDisabled(), true);
-      assert.equal(await page.locator('[data-strat-why-not]').innerText(), 'Needs an active bet with Rules out and Wrong if');
+      // Why it is off is a (?) beside Publish, not a line of helper text.
+      assert.equal(await page.locator('[data-strat-why-not]').getAttribute('aria-label'), 'Needs an active bet with Rules out and Wrong if');
+      assert.equal(await page.locator('[data-strat-why-not]').innerText(), '?');
+      assert.doesNotMatch(await page.locator('#main').innerText(), /Needs an active bet/, 'no helper line');
+      await page.locator('[data-strat-why-not]').focus();
+      assert.equal(await page.locator('[data-strat-why-not] [role="tooltip"]').isVisible(), true, 'the words show on focus');
+      const pop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(pop.y >= 0 && pop.x >= 0 && pop.x + pop.width <= DESKTOP.width, 'the words open on screen');
+      await shot(page, 'publish-off', ['dark']);
+      await page.setViewportSize(PHONE);
+      await page.locator('[data-strat-why-not]').focus();
+      const phonePop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(phonePop.x >= 0 && phonePop.x + phonePop.width <= PHONE.width, 'the words open on a phone screen');
+      await shot(page, 'publish-off-phone', ['dark']);
+      await page.setViewportSize(DESKTOP);
       assert.match(await page.locator('li[data-bet="b-price"] [data-bet-wrong]').innerText(), /Not yet measurable/);
       await page.locator('li[data-bet="b-price"] [data-bet-edit]').click();
       const form = page.locator('[data-bet-form="b-price"]');
@@ -265,7 +279,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await form.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/bets/b-price'), ['POST', '/bets/b-price', {rules_out: 'Premium add-ons, custom quotes.',
         wrong_if: {kind: 'kpi', kpi_id: 'k-margin', direction: 'below', threshold: 25, check_by: '2027-01-31'}, status: 'active', revision: 1}]);
-      await page.locator('[data-strat-why-not]', {hasText: "Needs What we won't do"}).waitFor();
+      await page.locator(`[data-strat-why-not][aria-label="Needs What we won't do"]`).waitFor();
       assert.equal(await publish.isDisabled(), true);
       await page.locator('[data-section="not"] [data-section-edit]').click();
       await page.locator('[data-section-form] textarea').fill('No deep cleans.');
@@ -321,13 +335,13 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Goals: one Strategy line at the top; the goal editor's Bet picker saves bet_id; the bet's chip opens it on Strategy.
+    // Goals: no Strategy line at the top (Strategy is the tab beside it); the goal editor's Bet picker saves bet_id; the
+    // bet's chip opens it on Strategy.
     {
       const {page, errors, sent} = await open(browser, {route: '#/goals'});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      assert.match(await page.locator('#goal-strategy').innerText(), /^Strategy v1\s*·?\s*Acme cleans homes/);
-      assert.equal(await page.locator('#goal-strategy').getAttribute('href'), '#/strategy');
-      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]').first().click();
+      assert.equal(await page.locator('#goal-strategy').count(), 0);
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-cmo"]').click();
       const picker = panel.locator('select[name="bet"]');
@@ -375,7 +389,8 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A strategy change from the CEO Bot in Needs you: who suggests it and why, each change as Now / Proposed against the
+    // A strategy change from the Strategy Bot in Needs you: who suggests it and why, each change as Now / Proposed
+    // against the
     // draft, then "Add to draft" / "No, leave it" with the line that nothing is published (Dev 533).
     {
       const proposal = {id: 'p-draft', kind: 'strategy_draft', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'bot:goal-manager',
@@ -389,7 +404,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await card.waitFor();
       const flat = t => t.replace(/\s+/g, ' ').trim();
       assert.equal(flat(await card.locator('.kpi-prop-head').innerText()),
-        'CEO Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
+        'Strategy Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
       assert.equal(await card.locator('.strat-prop-open').getAttribute('href'), '#/strategy');
       // The vision it proposes is the draft's already: no row for it.
       assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(flat)), [
@@ -429,7 +444,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
       assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
       await lens.waitFor();
-      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^CEO Bot suggests a change to your strategy from the Blue Ocean lens/);
+      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Bot suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
       const tall = () => values.evaluateAll(els => els.map(el => el.scrollHeight > el.clientHeight + 1));
       // The draft's own text is short, so only Proposed is cut; both are clamped to four lines until Show all.
@@ -466,7 +481,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const old = {id: 'g-old', title: 'Win the office park', owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
       const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      await page.locator('#goal-tree .gt-row', {hasText: 'Win the office park'}).click();
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-old"]').click();
       const picker = panel.locator('select[name="bet"]');

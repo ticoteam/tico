@@ -52,6 +52,16 @@ with the reason (`none_saved`, `not_found`, `resume_failed`, `compact_failed`, `
 session other than the first also leaves a line in the run's diagnostics and in the task's history ("Started a new
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
 
+A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
+notices. On a harness that says when it compacts (the `compaction_events` capability, Claude Code), the bot's standing
+instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
+is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
+session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes
+again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
+interrupted turn, and after a turn that did not complete; the repo rules go again after a compaction or a turn that did
+not complete. A resumed session that turns out to be missing starts again with what a replacing session gets: the
+repo rules, the checkpoint and the room since its last turn. Other harnesses get the whole prompt every turn.
+
 A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is
 told to check what the interrupted turn already did before repeating a step.
 
@@ -74,7 +84,7 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long direct chat with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Rules**, **Start fresh when
+long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
 the topic changes** (off by default). It never happens in task chats or group chats, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
@@ -107,12 +117,16 @@ see [Chat goals](chat-goals.md).
 ## Many tasks at once
 
 A bot works its tasks at the same time, each in its own session and worktree. The computer decides how many turns it
-runs at once from its size (`capacity` in [runner.json](environments.md#runnerjson)). Turns on the same task, and
-in the main chat, still take turns.
+runs at once from its size (`capacity` in [runner.json](environments.md#runnerjson)). An owner or an admin can set
+**Turns at once** on the computer instead (Settings > Computers), up to 256; clearing it goes back to the size. A runner
+that predates `turns_at_once_v1` runs at most the capacity it reports, and Settings says so. Turns on the same task,
+and in the main chat, still take turns.
 
-When other bots share the computer, one bot holds at most half of its turns (at least one), so the others always have
-room for a review or a release; a bot alone on its computer uses every turn. A person's own message to the bot is not held back by this. When a turn frees, it goes to the bot
-holding the fewest turns there, then to the work that has waited longest. Work held back this way says "Waiting for a
+Nothing caps a bot below the computer's turns. When a turn frees, it goes to the bot holding the fewest turns
+there, then to the work that has waited longest, so bots that share a computer take turns between them. A bot's own
+**Turns at once** (set in its editor) caps its turns across every computer together, a person's message included: at
+its limit its queued work waits on every computer, and its other bots keep their turns. Work held back this way says
+"Waiting for a
 free turn on <computer>" in its chat and on its task. The task shows the same waiting reason as the chat (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 

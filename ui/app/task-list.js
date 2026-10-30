@@ -11,7 +11,7 @@ const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
 // What it takes groups your own Needs you only: it follows the server's queue, which is yours alone.
 const taskGroupsFor = (view, state) => TASK_GROUPS.filter(([k]) => k !== 'need' || (view === 'foryou' && (!state || tasksNeedsQueue(state, view))));
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
-const isTasksRoute = r => [TASKS, BOARD, ISSUES, RECURRING].includes(String(r || '').split('?')[0]);
+const isTasksRoute = r => [TASKS, BOARD, ISSUES].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
 // Small inline icons (the icon font is a fixed subset; these never need it).
 const TL_ICON = {
@@ -199,15 +199,15 @@ function taskItems(state, view = state.view) {
   state.memo?.set(view, out);
   return out;
 }
-// Your Needs you count: the tasks, then the approvals and questions asked outside any task.
-// While only some pages of Needs you are held, the server's count of the whole list.
-const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length
+// Your Needs you count: the tasks, then the approvals, questions and stale check outside any task, less what was just
+// answered on a card. While only some pages of Needs you are held, the server's count of the whole list.
+const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id) && !decideGone('task:' + it.id)).length + needsExtras().length
   : S.v2.needsCount;
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
   return {foryou: tasksNeedsQueue(state, 'foryou') ? tasksMyCount(active) : taskItems(state, 'foryou').length, list: active.length,
-    snoozed: taskItems(state, 'snoozed').length, recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
+    snoozed: taskItems(state, 'snoozed').length};
 }
 
 // ---- whose tasks the first tab shows: Me (Needs you, in the server's queue with its asks and approvals), Everyone
@@ -486,10 +486,12 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
   const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
   const need = tasksNeedsQueue(state) ? needsItem(t.id) : null;
+  // A task answered on a card (a question with options, a yes/no, a recommendation) opens its card, not the peek.
+  const card = need ? decideCardKey(need) : '';
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
-  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}" role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
+  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
     ${ctx.select ? `<input type="checkbox" class="tl-check" data-select="${esc(key)}" tabindex="-1" aria-label="Select ${esc(it.title)}">` : '<span class="tl-check-pad"></span>'}
     ${kids.length ? `<button type="button" class="tl-chev${open ? ' open' : ''}" data-expand="${esc(key)}" tabindex="-1" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Hide' : 'Show'} subtasks of ${esc(it.title)}">${TL_ICON.chev}</button>` : '<span class="tl-chev-pad"></span>'}
     <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
@@ -544,18 +546,22 @@ async function tasksRowStatusSave(state, id, bodyFor) {
 }
 function tasksEmptyHTML(state, what) {
   const filtered = tasksActiveFilterCount(state) || state.q;
-  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}${window.talkLineHTML?.() || ''}</div>`;
+  return `<div class="tl-empty">${filtered ? 'No tasks match.' : esc(what)}${filtered ? ' <button type="button" class="linkish" data-clear-filters>Clear filters</button>' : ''}</div>`;
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
   // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
   const queue = tasksNeedsQueue(state);
+  // A card just answered leaves Needs you at once (decide.js), and comes back on Undo.
+  if (queue) items = items.filter(it => !decideGone('task:' + it.id));
   const cards = queue && !state.q && !tasksActiveFilterCount(state);
-  // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
+  // Grouped by what it takes, approvals and questions go in their groups, in the server's order with the tasks.
   const byNeed = by === 'need' && queue;
-  const asks = cards && !byNeed ? approvalsHTML() + staleCardsHTML() + looseAsksHTML() : '';
+  const lead = cards ? needsExtras() : [];
+  const asks = lead.length && !byNeed ? `<section class="tl-group" data-group="asks"><header class="tl-ghead"><span class="tl-gname">Approvals and questions</span><span class="tl-gcount tnum">${lead.length}</span></header>
+    <div class="tl-rows" role="list" aria-label="Approvals and questions">${lead.map(it => needRowHTML(it, {by, select: tasksCanSelect()})).join('')}</div></section>` : '';
   const extra = new Map();
-  if (cards && byNeed) for (const it of [...pendingApprovals(), ...staleCards(), ...looseAsks()]) {
+  if (byNeed) for (const it of lead) {
     const k = 'need:' + (it.need || 'do');
     extra.set(k, [...(extra.get(k) || []), it]);
   }
@@ -602,10 +608,16 @@ function tasksListHTML(items, state) {
         ${g.create ? `<button type="button" class="tl-gact" data-group-add="${esc(g.key)}" aria-label="New task in ${esc(g.label)}" title="New task">${TL_ICON.plus}</button>` : ''}
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
-      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : it.kind === 'stale' ? staleCardHTML(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
+      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${byNeed ? tasksNeedRowsHTML(more, tops, ctx) : tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
   }).join('')}${filtered}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
-// Done: everything finished, newest first, a page at a time (routine runs live under Recurring).
+// A need group: its items outside any task among its tasks, all in the server's order.
+function tasksNeedRowsHTML(more, tops, ctx) {
+  const at = id => needsIndex().byId.get(String(id))?.i ?? Infinity;
+  return [...more.map(it => [at(it.id), needRowHTML(it, ctx)]), ...tops.map(it => [at(it.id), taskListRowHTML(it, ctx)])]
+    .sort((a, b) => a[0] - b[0]).map(r => r[1]).join('');
+}
+// Done: everything finished, newest first, a page at a time (a schedule's runs are under Automations › Runs).
 function tasksDoneHTML(items, state) {
   const list = items.filter(it => !isRecurringTask(it.task));
   if (state.doneLoading && !list.length) return '<div class="tl-empty">Loading finished tasks…</div>';
@@ -640,7 +652,6 @@ function tasksTools(state) {
     state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);
   }
   tasksPaint(tabs, tasksTabsHTML(state));
-  $('#task-bar').hidden = state.view === 'recurring';
   const who = $('#task-who-wrap');
   if (who) {
     who.hidden = state.view !== 'foryou';
@@ -680,7 +691,10 @@ function tasksTools(state) {
     mode.setAttribute('aria-pressed', String(!!state.selectMode));
     mode.textContent = state.selectMode ? 'Done' : 'Select';
   }
+  tasksBarEdge($('#task-bar'));
 }
+// A phone's filter bar scrolls sideways; while more of it is off to the right, its edge fades (task-list.css .more).
+const tasksBarEdge = bar => bar?.classList.toggle('more', bar.scrollWidth - bar.clientWidth - bar.scrollLeft > 1);
 // One popover for every menu on the page: a filter's values, the fields, Group by, and the bulk actions.
 // ↑/↓ move between its items (and in and out of its find box), Home/End jump, Enter picks, Esc closes.
 function tasksMenu(state, anchor, html, bind, toggle = true) {
@@ -1216,9 +1230,12 @@ function tasksKeys(state, ev) {
   }
   if (key === '/') { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
   if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); return; }
-  if (key === 'x' && listy && state.cursor && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
+  if (key === 'x' && listy && state.cursor?.startsWith('t') && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
   if (key === 'Enter' && listy && state.cursor && (!el || el === document.body || el.closest?.('.tl-row,.bcard') && !el.matches('button,a,input'))) {
-    ev.preventDefault(); taskPeekOpen(state, state.cursor); return;
+    ev.preventDefault();
+    const card = document.querySelector(`#task-body [data-task-key="${CSS.escape(state.cursor)}"]`)?.dataset.needCard;
+    if (card) decideOpen(card); else taskPeekOpen(state, state.cursor);
+    return;
   }
   if (key === 'Escape') {
     if ($('#task-peek')?.open) { ev.preventDefault(); taskPeekClose(state); return; }
@@ -1276,6 +1293,13 @@ function tasksBodyClick(state, ev) {
   const row = ev.target.closest('.tl-row,.bcard');
   if (!row || ev.target.closest('a[href]')) return false;
   const key = row.dataset.taskKey;
+  // A row answered on a card opens its card (decide.js); a row outside any task has nothing to select.
+  if (row.dataset.needCard && (key?.startsWith('n') || !(tasksCanSelect() && (ev.shiftKey || ev.metaKey || ev.ctrlKey || state.selectMode)))) {
+    ev.preventDefault();
+    state.cursor = key; tasksCursorPaint(state);
+    if (!decideOpen(row.dataset.needCard) && key?.startsWith('t')) taskPeekOpen(state, key);
+    return true;
+  }
   if (tasksCanSelect() && (ev.shiftKey || ev.metaKey || ev.ctrlKey || state.selectMode)) {
     ev.preventDefault();
     tasksSelect(state, key, ev.shiftKey ? 'range' : 'toggle');

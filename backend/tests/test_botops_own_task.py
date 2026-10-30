@@ -186,3 +186,31 @@ def test_botops_own_ask_is_a_plain_ask(api, botops):
     tried = api.post("/api/v2/tasks/dry-run", headers=headers(attempt["token"]),
                      json={"title": "x", "body": "x", "owner": "ana", "relations": parent, "due": "2026-11-01T00:00:00Z"})
     assert (tried.json()["actor"], tried.json()["role"]) == ("bot:botops", "bot")
+
+
+def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(api, botops):
+    from backend.tests.test_ask_ingest import FakeModel, items, calls
+    model = FakeModel(kind="own_work")
+    api.app.state.judge = model
+    _ready(api, botops)
+    ops = claim(api, botops, "ops")
+    task = post(api, "tasks", {"owner": "botops", "title": "Align Ops mail instructions",
+                               "body": "Update the docs only."}, token=ops["token"])
+    finish(api, botops, ops)
+    attempt = claim(api, botops, "botops")
+    filed = api.post("/api/v2/tasks", headers=headers(attempt["token"]), json={
+        "owner": "ana", "title": "Which mailbox should Ops send from?",
+        "body": "Choose support@ or hello@", "visibility": "private",
+        "relations": [{"task": task["id"], "kind": "parent"}]})
+    assert filed.status_code == 200, filed.text
+    made = filed.json()["task"]
+    assert (made["owner"], made["requester"]) == ("human:ana", "bot:ops")
+    [item], [call] = items(api), calls(api)
+    assert (item["mode"], item["outcome"], item["would"]) == ("rehearsal", "through", "sent_back")
+    assert item["asker"] == "bot:ops" and item["ref"] == made["id"] and item["call_id"] == call["id"]
+    assert len(model.calls) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM ask_ingest_settings").fetchone()[0] == 0
+        event = c.execute("SELECT detail_json FROM events WHERE action='task.create' AND target=?",
+                          (made["id"],)).fetchone()
+        assert '"via": "botops"' in event["detail_json"]

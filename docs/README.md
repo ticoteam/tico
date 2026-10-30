@@ -34,9 +34,9 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Use Tico](using-tico.md): your team's address, tasks, chats, results and Needs you.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its main chat.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
-- Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
+- Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
-- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator
@@ -47,10 +47,10 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
-- Advanced operations: [Cloud provisioning](install-advanced.md), [Sizing](sizing.md), [Observability](observability.md),
+- Advanced operations: [Cloud provisioning](install-advanced.md), [Many companies on one host](cell.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),
-  [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
+  [Runner wire contract](runner-wire-contract.md), [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
 - Staff only: [Manage a company's billing](staff-billing.md) (credit, minimum balance, grace, enforcement, reversals) and
   [Review the Hosting waitlist](staff-waitlist.md).
 

@@ -169,12 +169,17 @@ def _tally_queues(bots, rows, now, keep):
     now = now or H.now()
     out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "oldest_queued_at": None,
                "oldest_dead_at": None, "dead_ids": []} for b in bots}
+    stopped = {b: set() for b in bots}
     for row in rows:
         if keep and not keep(row):
             continue
         q = out[row["job_bot"]]
         if row["job_state"] == "uncertain":
-            q["uncertain"] += 1
+            # Counted per stopped run: requests folded into one run share its attempt and are one run to a person.
+            key = row["job_attempt"] or row["job_id"]
+            if key not in stopped[row["job_bot"]]:
+                stopped[row["job_bot"]].add(key)
+                q["uncertain"] += 1
         elif not row["free"]:
             q["dead"] += 1
             q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]

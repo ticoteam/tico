@@ -3,10 +3,13 @@
 The team is everyone: humans and bots. A **group** is a sub-team, and groups can hold groups. A group holds teammates, human or
 bot. This page is who is in which group, which bots each group holds, and who each bot is mainly for.
 
-The chart in the app is the **Team** sidebar: each group is a section that opens and closes, holding its humans and bots,
-with the groups inside it below them. A human or bot with no group sits at the top. The built-in bots (the Assistant, BotOps, the
-Librarian) stay out of the chart and the Goals tree. Assistant and BotOps have main rail entries;
-the Librarian is reached from Docs and Market. Settings > Bots lists them with the CEO Bot, the fourth built-in bot.
+The chart in the app is the **Team** sidebar: each group is a section that opens and closes (its arrow), holding its humans
+and bots, with the groups inside it below them. A group's name opens its team page ([Overview](overview.md)). A human or bot with no group sits at the top. The top of the chart is not drawn as
+one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
+row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
+human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
+Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
+the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
 whole name. A bot still onboarding has a small amber gear beside its name (**Onboarding**).
@@ -15,8 +18,7 @@ and a **Recruiting** mark where its reporting line puts it: under its bot or hum
 chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job description. It is not dragged and nothing
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
-The built-in **CEO Bot** ([Your CEO Bot](ceo-bot.md)) is on every install, at the top of the chart under the owner. The Heads, each in its department's group, and the bots that report to no one sit under it.
-Anyone can take it off their own chart: **Hide from my chart** in its row's menu (**More**), or on its row in Settings > Bots and in its settings there, each by its current name. On that person's chart the CEO Bot is not shown and the Heads and other bots sit where their own reporting lines and groups put them; everyone else's chart is unchanged. It is a view setting only, kept per person (the `chart.hide_ceo_bot` preference): Goals, Needs you, its chat, Strategy proposals and Settings > Bots still show it and it works as before, and its reporting line, access and level don't change. **Show on my chart** in Settings > Bots brings it back.
+The built-in **Strategy Bot** ([Your Strategy Bot](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
 The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
@@ -43,14 +45,16 @@ chart. Once someone has ordered a manager's reports, a new report, or one that m
 last there, after the ones before it, whatever its name. Under a manager nobody ordered, reports follow the chart's
 own order: humans first, then bots (temporary ones last, a bot's `order` lowest first), then by name, accents and
 case aside. The Goals tree, a person's page, **Updates** and `hub org order` list reports in the same order. A
-manager's reports shown in a group keep that order there, and move up and down among the ones beside them.
+manager's reports shown in a group keep that order there, and are dragged into place among the ones beside them.
 
 - **In the app**, drag a human or a bot onto the top or bottom of another report of the same manager to put it above or
-  below; dropping onto the middle of a row still makes it report there. Each report's row also has a menu with **Move
-  up** and **Move down**: Tab to it from the row, Enter opens it, the arrow keys choose and Escape closes it.
+  below; dropping onto the middle of a row still makes it report there. On touch, a long press picks the row up. A drop
+  saves nothing yet: the list shows the new place and asks under the row ("Move Doc Updater under Design?"); **Move**
+  (or Enter) saves, **Cancel**, Escape or a click elsewhere puts it back. By keyboard, move a teammate with the Org
+  chart's **Move to…**.
 - **Who orders them**: whoever may put reports under that manager, as for `reports_to`: the owner, the manager or
   someone it reports up to, and for a bot manager the person who runs it. A bot orders its own reports. Everyone else
-  sees the order without the handles or the menu, and the API refuses them. A drop onto someone you may not put that
+  sees the order without the handles, and the API refuses them. A drop onto someone you may not put that
   human or bot under says so and moves nothing.
 - **In the API and the tools**: `GET /api/v2/org/order/{manager}` lists a manager's direct reports in the chart's order
   (`manager` is a bot's slug or a human's id; put `bot:` or `human:` in front when one could be either);
@@ -68,7 +72,7 @@ direct reports' ([Updates](using-tico.md#updates)).
 
 The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
 **Add section** opens the inline group-name field. **Add bot** makes a Recruiting seat (a role with no bot yet) under the
-manager you choose and opens it: its job description, which the CEO Bot drafts for the owner, then **Recruit** and the
+manager you choose and opens it: its job description, which the Strategy Bot drafts for the owner, then **Recruit** and the
 pick ([Recruiting a seat](onboarding.md#recruiting-a-seat)). Open seats show on the chart under their manager with a
 **Recruiting** mark; clicking one opens it. **Ask BotOps** in the Add bot form opens its chat with an editable request,
 preserving any draft already there. Describe a custom bot or
@@ -101,9 +105,12 @@ Owners and admins change groups; everyone else reads them.
   (`{"name", "parent", "add": {"people": [], "bots": []}}`); `PATCH /api/v2/groups/{id}` renames it, moves it (`"parent": ""` is the top) and
   adds or removes teammates (`"add"`, `"remove"`); `DELETE /api/v2/groups/{id}` removes it, and the groups and teammates in it move up to
   its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one.
-- **With the tools**: `hub group list` and `hub group update [<group>] [--name] [--parent] [--add-human] [--add-bot] [--remove-human]
-  [--remove-bot]` (`hub_group_list`, `hub_group_update`); with no group given, `update` creates one from `--name`. BotOps does the same as the
-  person who asked it, with their own rights: a member is refused, an owner or an admin is not.
+- **With the tools**: `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
+  [--remove-bot]` and `hub group delete <group>` (`hub_group_list`, `hub_group_update`, `hub_group_delete`); with no group given, `update`
+  creates one from `--name`. `hub org reports-to <bot:slug|human:id> <manager>` (`hub_org_reports_to`) changes who a teammate reports to.
+  BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
+- **With the Strategy Bot**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
+  to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.
 
 Naming a group in an access list (`group:legal`, [permissions.md](permissions.md)) or in a human's `primary_for` names everyone in that
 group and in the groups nested in it.

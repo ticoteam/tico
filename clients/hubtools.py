@@ -48,7 +48,8 @@ ASK_WAIT_MAX = 300
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 # Bots cannot set ready; a task is closed through its separate requester action.
 TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status not in ("ready", "closed"))
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
+# task_cap and spend_limit: proposals (backend/proposals.py).
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
 PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
@@ -62,6 +63,7 @@ INSTRUCTIONS = ("Tico: tasks, messages, Decisions, status. "
 TOOLS = []
 CLI_TOOL_ALIASES = {
     "hub_task_child": ("hub_task_child_create",),
+    "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
     "hub_bot_repos": ("hub_bot_repos_get", "hub_bot_repos_set"),
     "hub_task_manager_status": ("hub_task_manager",), "hub_task_manager_on": ("hub_task_manager_set",),
@@ -70,6 +72,7 @@ CLI_TOOL_ALIASES = {
     "hub_task_show": ("hub_task_show", "hub_task_show_many"),      # `hub task show a b c` is one read
     "hub_market_size_accept": ("hub_market_size_decide",), "hub_market_size_reject": ("hub_market_size_decide",),
     "hub_market_size_params": ("hub_market_size_decide",),
+    "hub_task_defer": ("hub_task_later",),     # `hub task defer` is the older name of `hub task later`
 }
 
 
@@ -79,6 +82,21 @@ def _s(description, **extra):
 
 
 TASK_ID = {"type": "string", "description": "Task id: the full id, or its first 8 or more characters (`short_id` in hub_task_list)"}
+# How a send reaches its bot (backend/delivery.py), the same words on every send.
+DELIVERY = {"type": "string", "enum": ["steer", "queue", "defer"],
+            "description": "To a bot: steer goes into its running turn now (right after it if its harness can't "
+                           "steer), queue right after its current turn there (or now if idle), defer wakes nobody and "
+                           "goes in with its next turn there, at the latest after defer_for"}
+DEFER_FOR = {"type": "string", "pattern": "^(never|[1-9][0-9]{0,5}[mhd])$",
+             "description": "With defer: the latest it waits, 30m, 4h, 2d or never"}
+
+
+def _delivery(args):
+    """The request's delivery fields. A defer_for alone (the hub CLI's --defer) is a defer."""
+    way = args.get("delivery") or ("defer" if args.get("defer_for") is not None else None)
+    if not way:
+        return {}
+    return {"delivery": way, **({"defer_for": args["defer_for"]} if way == "defer" and args.get("defer_for") else {})}
 
 
 def tool(name, description, properties, required=(), *, writes=False, local=False):
@@ -203,7 +221,8 @@ def _uploaded(made):
        "visuals": VISUALS,
        "needs_action": {"type": "boolean", "default": False,
                         "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
-                        "bot's next run, whatever starts it"}},
+                        "bot's next run, whatever starts it"},
+       "delivery": DELIVERY, "defer_for": DEFER_FOR},
       required=("to", "text"), writes=True)
 def message_send(api, args):
     # Free text a person reads: an s3:// URI becomes its view URL first (clients/s3links.py); a command goes verbatim.
@@ -217,7 +236,7 @@ def _message_send(api, args):
         return assistant_send(api, args)
     if args.get("fyi"):
         return api.post("messages", {"to": args["to"], "text": args["text"], "kind": "notice",
-                                     "conversation_id": None, "refs": {},
+                                     "conversation_id": None, "refs": {}, **_delivery(args),
                                      **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
     attachments, local = _visuals(api, args.get("visuals"), lambda index, name, data: _uploaded(api.request(
         "POST", "/api/v2/files/uploads?name=" + quote(name, safe=""), raw=data, key=_key(args, ":visual:" + index))))
@@ -226,7 +245,7 @@ def _message_send(api, args):
                                  "in_reply_to": args.get("in_reply_to"),
                                  "refs": _refs(args.get("refs")),
                                  **({"attachments": attachments} if attachments else {}),
-                                 **({"command": True} if args.get("command") else {}),
+                                 **({"command": True} if args.get("command") else {}), **_delivery(args),
                                  **({"needs_action": True} if args.get("needs_action") else {})}, key=_key(args))
     if local and isinstance(sent, dict):
         sent = {**sent, "visuals_local": local}
@@ -249,7 +268,8 @@ def chat_goal(api, args):
 @tool("hub_chat_send", "Send a message or a headless slash command to a bot.",
       {"to": _s("The bot"), "text": _s("The message or command"),
        "conversation_id": _s("Continue this conversation"),
-       "command": {"type": "boolean", "default": False}, "visuals": VISUALS}, required=("to", "text"), writes=True)
+       "command": {"type": "boolean", "default": False}, "visuals": VISUALS,
+       "delivery": DELIVERY, "defer_for": DEFER_FOR}, required=("to", "text"), writes=True)
 def chat_send(api, args):
     return message_send(api, args)
 
@@ -297,17 +317,17 @@ def meeting_delete(api, args):
     return _as_person(api).post(f"meetings/{args['id']}/delete", {}, key=_key(args))
 
 
-@tool("hub_note_create", "Leave a bot a quiet note: it wakes nobody, asks nothing, and the bot's next run "
-      "reads it in the same prompt as whatever woke it.",
-      {"to": _s("The bot: a slug or `bot:<slug>`"), "text": _s("What it should know")},
+@tool("hub_note_create", "Leave a bot a deferred message (a note): it wakes nobody, asks nothing, and the bot's next "
+      "run reads it in the same prompt as whatever woke it. With defer_for, a run starts by then if none came.",
+      {"to": _s("The bot: a slug or `bot:<slug>`"), "text": _s("What it should know"), "defer_for": DEFER_FOR},
       required=("to", "text"), writes=True)
 def note(api, args):
-    body = {"to": args["to"], "text": args["text"]}
+    body = {"to": args["to"], "text": args["text"], **({"defer_for": args["defer_for"]} if args.get("defer_for") else {})}
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(api.post("notes", body, key=_key(args))["note"], links)
 
 
-@tool("hub_note_list", "Quiet notes, newest first: the ones left for you and the ones you left.",
+@tool("hub_note_list", "Deferred messages (notes), newest first: the ones left for you and the ones you left.",
       {"to": _s("Only notes to this bot (`me` for you)"), "from": _s("Only notes from this bot"),
        "since": _s("ISO time"), "waiting": {"type": "boolean", "default": False}})
 def notes(api, args):
@@ -315,7 +335,7 @@ def notes(api, args):
                    waiting="true" if args.get("waiting") else None)
 
 
-@tool("hub_note_delete", "Take back a quiet note you left, before any run has carried it.",
+@tool("hub_note_delete", "Take back a deferred message (note) you left, before any run has carried it.",
       {"id": _s("The note id")}, required=("id",), writes=True)
 def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
@@ -597,10 +617,18 @@ def tag_update(api, args):
                  "description": "URLs to attach: a pull request, an issue, a document"},
        "goal_id": _s("The goal this task serves (hub_goal_list); optional"),
        "next_run": {"type": "boolean", "default": False,
-                    "description": "For a bot owner: do not wake it; its next run carries this task"},
+                    "description": "The older name for delivery defer: a deferred task"},
+       "delivery": {"type": "string", "enum": ["queue", "defer"],
+                    "description": "For a bot owner: queue wakes it (the default); defer is a deferred task that wakes "
+                                   "nobody, which its next run carries, and starts a run by defer_for (24h)"},
+       "defer_for": DEFER_FOR,
        "roles": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
                  "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
                                 "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several"},
+       "model": _s("A bot-owned task's own model, from hub_bot_model's list: its runs use it, not the bot's task "
+                   "model"),
+       "effort": _s("Reasoning effort that model takes (with model)"),
+       "harness": _s("A harness from that model's harnesses list (with model)"),
        "dry_run": {"type": "boolean", "default": False}},
       required=("owner", "title"), writes=True)
 def task_create(api, args):
@@ -608,13 +636,15 @@ def task_create(api, args):
             "due": args.get("due"), "goal_id": args.get("goal_id") or None}
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
-    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
-                  "public_title", "public_summary", "from_private"):
+    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
+                  "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
+                  "harness"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
         if args.get(field) is not None:
             body[field] = args[field]
+    body.update(_delivery(args))
     if args.get("private") is not None:
         body["private"] = args["private"]
     roles = _roles(api, args)
@@ -687,11 +717,13 @@ def task_run(api, args):
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
       "wakes its bot about it (no stall wake, Still wanted? or Due reminder; a person's comment still does) until "
       "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
-      "Snoozing again moves the date.",
-      {"id": TASK_ID, "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone")},
+      "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
+      "(at most 500 characters).",
+      {"id": TASK_ID, "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
+       "note": _s("What to check when the snooze ends, in a sentence or two")},
       required=("id", "until"), writes=True)
 def task_snooze(api, args):
-    return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"]}, key=_key(args))
+    return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_waive_qa", "A person waives a Dev ticket's current In QA step for one exact pull request head, with a "
@@ -705,7 +737,7 @@ def task_waive_qa(api, args):
     return api.post(f"tasks/{args['id']}/qa-waiver", {"head": args["head"], "reason": args["reason"]}, key=_key(args))
 
 
-@tool("hub_task_defer", "A quiet (next-run) task carried into this run that you will not do now: say when it is "
+@tool("hub_task_later", "A deferred task carried into this run that you will not do now: say when it is "
       "picked up again, and it gets one run of its own then. Exactly one of `after` (when that task is done or closed), "
       "`at` (a time), `next_run` (with your next run), or `handled` (this run is done with it for now). With none, "
       "and without working it, your next run is handed it again. The task's own bot, or a person.",
@@ -714,8 +746,8 @@ def task_waive_qa(api, args):
        "next_run": {"type": "boolean", "description": "Pick it up with your next run, whatever starts it"},
        "handled": {"type": "boolean", "description": "This run is done with it for now; nothing to resume"}},
       required=("id",), writes=True)
-def task_defer(api, args):
-    return api.post(f"tasks/{args['id']}/defer", {"after": args.get("after"), "at": args.get("at"),
+def task_later(api, args):
+    return api.post(f"tasks/{args['id']}/later", {"after": args.get("after"), "at": args.get("at"),
                                                    "next_run": bool(args.get("next_run")),
                                                    "handled": bool(args.get("handled"))}, key=_key(args))
 
@@ -852,6 +884,12 @@ def task_question(api, args):
     return api.post("task-questions", body, key=_key(args))
 
 
+# hub_task_update and hub_task_done: the note stays on the task and chat hears only the title and status (the API's
+# `quiet`). `quiet` is still accepted as the older name.
+BRIEF = {"type": "boolean", "description": "Keep the note on the task; chat receives only its title and status"}
+BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
+
+
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
       "To reopen your done task, set doing or open; open requires a note and holds automatic starts for 60 minutes "
@@ -869,7 +907,7 @@ def task_question(api, args):
        "step_rank": {"type": "number", "description": "Its place within its step, lower first"},
        "number": {"type": "integer", "minimum": 1, "description": "Movers: the number of a task that has none"},
        "note": _s("What changed, or the result"),
-       "quiet": {"type": "boolean", "description": "Keep detailed notes on the task; chat receives only its title and status"},
+       "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
@@ -894,7 +932,7 @@ def task_update(api, args):
     current = api.get("tasks/" + args["id"])["task"]
     body = {"version": current["version"], "note": args.get("note"), "status": args.get("status"),
             "owner": args.get("owner"), "due": args.get("due"), "goal_id": args.get("goal_id")}
-    if args.get("quiet"):
+    if args.get("brief") or args.get("quiet"):       # `quiet`: brief's older name
         body["quiet"] = True
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
@@ -919,7 +957,7 @@ def task_update(api, args):
       {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
-       "quiet": {"type": "boolean", "description": "Keep detailed notes on the task; chat receives only its title and status"},
+       "brief": BRIEF, "quiet": BRIEF_OLD,
        "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_done(api, args):
@@ -1058,10 +1096,18 @@ def task_type_delete(api, args):
        "visuals": VISUALS, "on_behalf_of": ASKED,
        "needs_action": {"type": "boolean", "default": False,
                         "description": "To a bot: wake it now. Without this a bot's message to a bot waits for that "
-                        "bot's next run, whatever starts it"}},
+                        "bot's next run, whatever starts it"},
+       "delivery": {"type": "string", "enum": ["steer", "queue", "defer", "goal"],
+                    "description": "How the comment reaches the task's bot. steer: into its running turn now (right "
+                    "after it if its harness can't steer). queue: right after its current turn on this task, or now. "
+                    "defer: wakes nobody; its next turn on this task reads it, at the latest after defer_for (24h). "
+                    "goal: make the text the goal of its task session (no attachments or visuals; not public, not a "
+                    "question). Omitted, the task's default applies."},
+       "defer_for": DEFER_FOR},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
     body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id", "needs_action") if k in args}
+    body.update({"delivery": "goal"} if args.get("delivery") == "goal" else _delivery(args))
     local = []
     if args.get("visuals"):
         added, local = _visuals(api, args["visuals"], lambda index, name, data: _uploaded(_posted_file(
@@ -1112,7 +1158,7 @@ def task_ask_resolve(api, args):
 
 @tool("hub_task_delete", "Delete a task made by mistake, such as a duplicate: it goes to the trash and can be "
       "restored. Only a person signed in as themselves may: the task's requester, or someone who may move any "
-      "task. A task carrying work (a bot turn, a bot's own file, an approval, a subtask) is refused; close it instead.",
+      "task. It deletes whatever bots did on it; that work stays in place, hidden until a restore.",
       {"id": TASK_ID}, required=("id",), writes=True)
 def task_delete(api, args):
     return api.post(f"tasks/{args['id']}/delete", {}, key=_key(args))
@@ -1189,16 +1235,61 @@ def task_relate(api, args):
 
 @tool("hub_task_wait", "Make a task wait on another task (task:<id>, blocked_by), a pull request merging (pr:<url>, "
       "or pr:<task> for the one pull request linked on that task) or a release being published (release:<tag>). The "
-      "owner gets one wake when it happens; the task waited on keeps its own step. The reply's `readback` says what was "
+      "owner gets one wake when it happens; the task waited on keeps its own step. `note` (pr: and release: only) comes "
+      "back in that wake: what to check. The reply's `readback` says what was "
       "stored: check it before reporting the wait as set. `remove` takes it off.",
       {"id": TASK_ID, "on": _s("task:<id>, pr:<url|task> or release:<tag>"),
-       "remove": {"type": "boolean", "default": False}},
+       "remove": {"type": "boolean", "default": False},
+       "note": _s("What to check when the pull request or release wait fires, in a sentence or two")},
       required=("id", "on"), writes=True)
 def task_wait(api, args):
-    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove"))}, key=_key(args))
+    return api.post(f"tasks/{args['id']}/waits", {"on": args["on"], "remove": bool(args.get("remove")),
+                                                  "note": args.get("note")}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- goals
+GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id. On not_agreed read back again, never retry the save.")
+
+
+@tool("hub_goal_read_back", "Tico writes and stores the read-back in the owner's Strategy Bot chat. "
+                            "Saves nothing without a plain yes. "
+      "Returns message_id, text and exact method/path/body_json steps; save agreed steps with hub_goal_save. "
+      "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
+      {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
+      required=("changes",), writes=True)
+def goal_read_back(api, args):
+    changes = args["changes"]
+    if isinstance(changes, str):
+        changes = json.loads(changes)
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
+        raise ValueError("changes must be a JSON array of 1 to 20 change objects")
+    return api.post("goals/read-back", {"changes": changes}, key=_key(args))
+
+
+@tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
+      "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry.",
+      {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
+       "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
+       "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
+def goal_save(api, args):
+    path = args["path"]
+    if "{new}" in path:
+        created = args.get("created_goal")
+        if not created or not re.fullmatch(r"[A-Za-z0-9_-]+", created):
+            raise ValueError("created_goal must be the goal id from the first save")
+        path = path.replace("{new}", created)
+    # This helper only replays goal read-back writes; the server checks the cited yes and exact body.
+    if args["method"] != "POST" or not re.fullmatch(
+            r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/[^/]+/decide)", path):
+        raise ValueError("path must be a goal read-back save step")
+    if not args.get("on_behalf_of"):
+        raise ValueError("cite the owner's plain yes with on_behalf_of")
+    body = json.loads(args["body_json"])
+    if not isinstance(body, dict):
+        raise ValueError("body_json must be a JSON object")
+    return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
+
+
 @tool("hub_goal_list", "What you are for: your goals in order, the goals they support, and your reports' goals. Read this before you read a task. `all` is every "
       "live goal in the team.",
       {"owner": _s("Someone else's: a bot slug or a person id; default is yourself"),
@@ -1225,10 +1316,10 @@ def goal_show(api, args):
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
        "body": _s("What it means, what counts, what does not", default=""),
        "top": {"type": "boolean", "default": False, "description": "Put it first in the owner's order"},
-       "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)")},
+       "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)"), "on_behalf_of": GOAL_YES},
       required=("owner", "title"), writes=True)
 def goal_create(api, args):
-    return api.post("goals", {"owner": _target(api, args["owner"]), "title": args["title"],
+    return _asked(api, args).post("goals", {"owner": _target(api, args["owner"]), "title": args["title"],
                               "parent_id": args.get("parent_id"), "body": args.get("body") or "",
                               "top": bool(args.get("top")), "bet_id": args.get("bet_id") or None},
                     key=_key(args))["goal"]
@@ -1236,8 +1327,8 @@ def goal_create(api, args):
 
 @tool("hub_goal_status", "Set a goal's colour by hand: red, yellow or green with one honest sentence; "
       "done when reached, dropped when it stops mattering. A colour set by hand sticks, with your name and "
-      "note, until a person hands it back (status `auto`); the CEO Bot only suggests a different one. "
-      "`auto` lets the CEO Bot set the colour again: it ends a colour set by hand and works the automatic one "
+      "note, until a person hands it back (status `auto`); the Strategy Bot only suggests a different one. "
+      "`auto` lets the Strategy Bot set the colour again: it ends a colour set by hand and works the automatic one "
       "out now, from the goal's KPIs, or its owner's check-ins and tasks. The goal's owner, the owner of the goal "
       "it serves, or someone above them.",
       {"id": _s("Goal id"),
@@ -1251,9 +1342,9 @@ def goal_status(api, args):
                     key=_key(args))["goal"]
 
 
-@tool("hub_goal_refresh", "The CEO Bot's status pass: work the automatic colour of every live goal (or "
+@tool("hub_goal_refresh", "The Strategy Bot's status pass: work the automatic colour of every live goal (or "
       "the ones named) out again. A goal whose colour a person set only gets a visible suggestion. "
-      "Returns {changed, suggested, checked}. The CEO Bot or the team owner.",
+      "Returns {changed, suggested, checked}. The Strategy Bot or the team owner.",
       {"goal_ids": {"type": "array", "items": {"type": "string"}, "description": "Only these goals; default all"}},
       writes=True)
 def goal_refresh(api, args):
@@ -1262,7 +1353,7 @@ def goal_refresh(api, args):
 
 @tool("hub_goal_checkin", "Record how the owner says a goal is going, in their words: interpretation, kept "
       "apart from the readings (facts). It colours a goal that has no KPI. The goal's owner, someone above "
-      "them, or the CEO Bot recording an owner's answer (`from_actor`).",
+      "them, or the Strategy Bot recording an owner's answer (`from_actor`).",
       {"id": _s("Goal id"), "body": _s("What is going on, in a sentence or two"),
        "signal": {"type": "string", "enum": ["on_track", "at_risk", "off_track"]},
        "from_actor": _s("Whose words these are, when you record them for someone else: a bot slug or a person id"),
@@ -1285,39 +1376,44 @@ def goal_needs_you(api, args):
     return api.get("goals/needs-you")
 
 
-@tool("hub_goal_company", "The company's Vision and Description (the Company section at the top of Goals, where the CEO "
-      "Bot is on), empty until a person writes them. Read-only: only the owner or an admin changes them.", {})
+@tool("hub_goal_company", "The company's Vision and Description (the Company section at the top of Goals, "
+      "where the Strategy Bot is on), empty until a person writes them. Read-only: only the owner or an admin "
+      "changes them.", {})
 def goal_company(api, args):
     return api.get("company")
 
 
-@tool("hub_goal_ceo_bot", "The CEO Bot's name, how much it does (level 1 Passive, 2 suggests actions, 3 acts on its "
+@tool("hub_goal_strategy_bot", "The Strategy Bot's name, how much it does (level 1 Passive, "
+                               "2 suggests actions, 3 acts on its "
       "own; only the owner changes it), whether its regular checks run, and how many items it put in each person's "
       "Needs you today against its cap of 5.", {})
-def goal_ceo_bot(api, args):
-    return api.get("ceo-bot")
+def goal_strategy_bot(api, args):
+    return api.get("strategy-bot")
 
 
-@tool("hub_goal_ceo_bot_merge", "The CEO Bot only, at level 2 or 3: when several bots ask a person the same thing, "
+@tool("hub_goal_strategy_bot_merge", "The Strategy Bot only, at level 2 or 3: "
+                                     "when several bots ask a person the same thing, "
       "make them one item in that person's Needs you. The originals leave their Needs you while it is open; their one "
       "answer goes to every bot that asked. Counts toward the 5 a day.",
       {"person": _s("The person they all wait on: a person id"), "title": _s("The merged item's title"),
        "question": _s("The one question that answers them all"),
        "tasks": {"type": "array", "items": {"type": "string"}, "description": "2 to 10 task ids waiting on that person"}},
       required=("person", "title", "question", "tasks"), writes=True)
-def goal_ceo_bot_merge(api, args):
-    return api.post("ceo-bot/merge", {"person": _target(api, args["person"]), "title": args["title"],
+def goal_strategy_bot_merge(api, args):
+    return api.post("strategy-bot/merge", {"person": _target(api, args["person"]), "title": args["title"],
                     "question": args["question"], "tasks": list(args["tasks"])}, key=_key(args))
 
 
-@tool("hub_goal_ceo_bot_level3_offer", "The CEO Bot only: record that its Monday note offered level 3, once "
-      "`level3_offer.due` in hub_goal_ceo_bot is true (10 recoveries approved in a row unchanged, none offered in 30 "
+@tool("hub_goal_strategy_bot_level3_offer", "The Strategy Bot only: record that its Monday note offered level 3, once "
+      "`level3_offer.due` in hub_goal_strategy_bot is true (10 recoveries approved in a row "
+      "unchanged, none offered in 30 "
       "days). Only a person raises the level.", {}, writes=True)
-def goal_ceo_bot_level3_offer(api, args):
-    return api.post("ceo-bot/level3-offer", {}, key=_key(args))
+def goal_strategy_bot_level3_offer(api, args):
+    return api.post("strategy-bot/level3-offer", {}, key=_key(args))
 
 
-@tool("hub_goal_ceo_bot_decide", "The CEO Bot only, at level 3: make one decision alone, with its reason: 1 to 10 "
+@tool("hub_goal_strategy_bot_decide", "The Strategy Bot only, at level 3: "
+                                      "make one decision alone, with its reason: 1 to 10 "
       "changes to bot tasks (create a task for a bot, reorder one to the top of its queue, reassign one to another "
       "bot, close one), logged under one action id with an Undo for the owner. A task for a person, spending, "
       "publishing, outside sends, bots, goals, targets, the vision and instructions stay the owner's: those parts, and "
@@ -1331,7 +1427,7 @@ def goal_ceo_bot_level3_offer(api, args):
            "description": "1 to 10 changes"},
        "goal_id": _s("The goal this serves, if any")},
       required=("reason", "changes"), writes=True)
-def goal_ceo_bot_decide(api, args):
+def goal_strategy_bot_decide(api, args):
     changes = args["changes"]
     if isinstance(changes, str):                # the CLI passes the list as JSON
         try:
@@ -1341,15 +1437,16 @@ def goal_ceo_bot_decide(api, args):
     body = {"reason": args["reason"], "changes": list(changes)}
     if args.get("goal_id"):
         body["goal_id"] = args["goal_id"]
-    return api.post("ceo-bot/decisions", body, key=_key(args))
+    return api.post("strategy-bot/decisions", body, key=_key(args))
 
 
-@tool("hub_goal_ceo_bot_log", "The CEO Bot log, newest first: each decision it made alone and each thing it proposed "
+@tool("hub_goal_strategy_bot_log", "The Strategy Bot log, newest first: "
+                                   "each decision it made alone and each thing it proposed "
       "instead because it stays the owner's, with the reason and what Undo restored. The owner only: anyone else, "
-      "the CEO Bot included, is refused.",
+      "the Strategy Bot included, is refused.",
       {"before": _s("next_before from the previous page")})
-def goal_ceo_bot_log(api, args):
-    return api.get("ceo-bot/log" + (f"?before={quote(args['before'])}" if args.get("before") else ""))
+def goal_strategy_bot_log(api, args):
+    return api.get("strategy-bot/log" + (f"?before={quote(args['before'])}" if args.get("before") else ""))
 
 
 @tool("hub_goal_update", "Edit a goal: title, body, the goal it serves, its owner, or its place in "
@@ -1359,13 +1456,13 @@ def goal_ceo_bot_log(api, args):
        "owner": _s("New owner: a bot slug or a person id"),
        "rank": {"type": "integer", "description": "Position in the owner's order"},
        "top": {"type": "boolean", "default": False},
-       "bet_id": _s("The strategy bet it serves; an empty string unlinks it")},
+       "bet_id": _s("The strategy bet it serves; an empty string unlinks it"), "on_behalf_of": GOAL_YES},
       required=("id",), writes=True)
 def goal_update(api, args):
     body = {k: args.get(k) for k in ("title", "body", "parent_id", "rank", "bet_id")}
     body["owner"] = _target(api, args["owner"]) if args.get("owner") else None
     body["top"] = bool(args.get("top"))
-    return api.post("goals/" + args["id"], body, key=_key(args))["goal"]
+    return _asked(api, args).post("goals/" + args["id"], body, key=_key(args))["goal"]
 
 
 # The target lives on the link between a goal and a KPI: an improvement (baseline, target, deadline) or a
@@ -1422,16 +1519,19 @@ def kpi_show(api, args):
 @tool("hub_kpi_create", "Make a KPI: a measure on its own that goals link to. Name what is counted, per what; "
       "give a definition, the unit, which way is good, how often it is read and who is accountable (default you). "
       "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
-      "deadline; or a range: min/max). The CEO Bot proposes instead (hub_proposal_create).",
+      "deadline; or a range: min/max). The Strategy Bot proposes instead (hub_proposal_create).",
       {"name": _s("'booked Calendly demos per two weeks'"), "goal_id": _s("Link it to this goal"),
        "owner": _s("`me` (default), `company` (the owner's), a bot slug or a person id"),
-       **KPI_PROPS, **TARGET_PROPS},
+       **KPI_PROPS, **TARGET_PROPS, "on_behalf_of": GOAL_YES},
       required=("name",), writes=True)
 def kpi_add(api, args):
     body = {"name": args["name"], "goal_id": args.get("goal_id"),
             "owner": _target(api, args["owner"]) if args.get("owner") else None,
             **{k: args[k] for k in KPI_PROPS if args.get(k) is not None}, **_target_body(args)}
-    return api.post("kpis", body, key=_key(args))["kpi"]
+    if args.get("on_behalf_of") and args.get("goal_id"):
+        body.pop("goal_id")
+        return _asked(api, args).post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+    return _asked(api, args).post("kpis", body, key=_key(args))["kpi"]
 
 
 @tool("hub_kpi_update", "Change a KPI. A change to what it measures (definition, unit, direction, cadence, "
@@ -1459,24 +1559,31 @@ def kpi_restore(api, args):
 
 @tool("hub_kpi_link", "Link a goal to a KPI and set the target on that link, or change the target of an "
       "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
-      "linked. The goal's owner or someone above them; the CEO Bot proposes instead.",
+      "linked. The goal's owner or someone above them; the Strategy Bot proposes instead.",
       {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id (auto:<bot>:<metric> for a bot's automatic KPI)"),
-       **TARGET_PROPS},
+       **TARGET_PROPS, "on_behalf_of": GOAL_YES},
       required=("goal_id", "kpi_id"), writes=True)
 def kpi_link(api, args):
     body = {"kpi_id": args["kpi_id"], **_target_body(args)}
-    return api.post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis", body, key=_key(args))["kpi"]
+
+
+@tool("hub_kpi_target", "Set or remove the target on a goal's measure. Cite the owner's plain yes to its read-back.",
+      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id"), **TARGET_PROPS, "on_behalf_of": GOAL_YES},
+      required=("goal_id", "kpi_id"), writes=True)
+def kpi_target(api, args):
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}", _target_body(args), key=_key(args))["kpi"]
 
 
 @tool("hub_kpi_unlink", "Take a KPI off a goal. The KPI and its readings stay.",
-      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id")}, required=("goal_id", "kpi_id"), writes=True)
+      {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id"), "on_behalf_of": GOAL_YES}, required=("goal_id", "kpi_id"), writes=True)
 def kpi_unlink(api, args):
-    return api.post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}/unlink", {}, key=_key(args))["goal"]
+    return _asked(api, args).post(f"goals/{args['goal_id']}/kpis/{args['kpi_id']}/unlink", {}, key=_key(args))["goal"]
 
 
 @tool("hub_kpi_log", "Log a reading on a KPI: a fact, with the period it describes, where it came from and how "
       "good it is. Never edited: to correct one, log a new reading that `supersedes` it. The KPI's owner, the "
-      "CEO Bot, or the owner of a goal that uses it.",
+      "Strategy Bot, or the owner of a goal that uses it.",
       {"kpi_id": _s("KPI id"), "value": {"type": "number"},
        "note": _s("Where the number came from", default=""),
        "period_start": _s("Start of the period it describes, ISO date or date-time; default one cadence before the end"),
@@ -1501,14 +1608,16 @@ def kpi_log(api, args):
 @tool("hub_proposal_create", "Propose a change you may not make yourself, for the owner to confirm: clearer "
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the CEO Bot is on, a goal's Why (goal_why: "
-      "payload why, one line tying the goal to the company's vision), or, from the CEO Bot at level 2 or 3, a red or "
+      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the Strategy Bot "
+      "is on, a goal's Why (goal_why: "
+      "payload why, one line tying the goal to the company's vision), or, "
+      "from the Strategy Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
       "summary, vision, sections {serve, sell, know, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
       "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
-      "change, nothing is published). goal_wording may be only {bet_id} to link a goal to a bet. The CEO Bot "
+      "change, nothing is published). goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Bot "
       "cannot change a definition or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},
@@ -1532,13 +1641,14 @@ def proposal_list(api, args):
       "the goal or the KPI: a bot is refused. Confirming makes the change as that person.",
       {"id": _s("Proposal id"), "decision": {"type": "string", "enum": ["confirm", "reject"]},
        "note": _s("Why, optionally"),
-       "option": {"type": "integer", "description": "A recovery: approve this option (0 is the first), not the pick"}},
+       "option": {"type": "integer", "description": "A recovery: approve this option (0 is the first), not the pick"}, "on_behalf_of": GOAL_YES},
       required=("id", "decision"), writes=True)
 def proposal_decide(api, args):
     body = {"decision": args["decision"], "note": args.get("note") or ""}
     if args.get("option") is not None:
         body["option"] = int(args["option"])
-    return api.post(f"proposals/{args['id']}/decide", body, key=_key(args))["proposal"]
+    path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
+    return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 
 # ----------------------------------------------------------------------------- strategy
@@ -1654,7 +1764,8 @@ def strategy_diff(api, args):
     return api.get("strategy/diff", **{"from": int(args["from_n"]), "to": int(args["to_n"])})
 
 
-@tool("hub_strategy_guides", "Deprecated: the CEO Bot's drafting questions (the default guide only). The exercises "
+@tool("hub_strategy_guides", "Deprecated: the Strategy Bot's drafting questions (the "
+                             "default guide only). The exercises "
       "run against a strategy are lenses: hub_lens_list.", {})
 def strategy_guides(api, args):
     return api.get("strategy/guides")
@@ -1692,8 +1803,8 @@ def lens_list(api, args):
 
 
 @tool("hub_lens_run", "Run a lens: answers by step key (a step left out is skipped and assumed from the strategy), on "
-      "the published strategy or, for the owner, the draft. The owner, the CEO Bot and, for a market lens, the "
-      "Librarian may run one. The CEO Bot's run files its changes as one strategy_draft proposal; nobody's run "
+      "the published strategy or, for the owner, the draft. The owner, the Strategy Bot and, for a market lens, the "
+      "Librarian may run one. The Strategy Bot's run files its changes as one strategy_draft proposal; nobody's run "
       "publishes. Waits up to `wait` seconds (at most 60) for the result.",
       {"lens": _s("Lens id, from hub_lens_list"),
        "answers": {"type": "object", "description": "{step key: answer}. text: a string; list: an array of strings "
@@ -1886,7 +1997,7 @@ def market_watch_check(api, args):
 
 @tool("hub_market_briefing_post", "Librarian (the market curator): post the week's market briefing. `body` is Markdown, `items` the "
       "week's findings, each {text, kind: change|signal|theme|size, entity_ids: [market ids it touches]}. The server works out "
-      "which bets cite those ids and tells the CEO Bot. The same week again replaces it.",
+      "which bets cite those ids and tells the Strategy Bot. The same week again replaces it.",
       {"week": _s("ISO week, like 2026-W44"), "title": _s("A short title"), "body": _s("The briefing in Markdown"),
        "items": {"type": "array", "items": {"type": "object"}, "description": "{text, kind, entity_ids} per finding"}},
       required=("week", "title", "body"), writes=True)
@@ -1896,7 +2007,7 @@ def market_briefing_post(api, args):
 
 
 @tool("hub_market_briefing_latest", "The newest weekly market briefing with its body, its items and the bets it touches "
-      "(`briefing` is null before the first).", {})
+      "(`briefing` is null before the first); `source` names the automation run that posted it, if one did.", {})
 def market_briefing_latest(api, args):
     return api.get("market/briefings/latest")
 # ----------------------------------------------------------------------------- market spend
@@ -2257,6 +2368,89 @@ def files_import(api, args):
     return api.request("POST", "/api/v2/files/imports?" + BF.urlencode(query), raw=data, key=_key(args))
 
 
+# ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
+CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages")
+PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar) or task:<id>")
+CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
+                 "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
+                 "count": {"type": "integer", "description": "Latest pages: how many, 1 to 10"},
+                 "kpi": _s("KPI: the KPI id")}
+SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
+
+
+def _card_settings(args):
+    return {k: args[k] for k in CARD_SETTINGS if args.get(k) is not None}
+
+
+@tool("hub_card_list", "What is pinned at a place, in order: each card with what it shows you, and the pages you may "
+      "read. Without a place, the cards you made or see.", {"place": PLACE})
+def card_list(api, args):
+    person = _as_person(api)
+    return person.get("places/" + args["place"]) if args.get("place") else person.get("cards")
+
+
+@tool("hub_card_add", "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
+      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked).",
+      {"template": _s("The card", enum=list(CARD_TEMPLATES)), "title": _s("Its heading; empty uses the card's name"),
+       "place": PLACE, "size": SIZE, **CARD_SETTINGS}, required=("template",), writes=True)
+def card_add(api, args):
+    body = {"template": args["template"], "settings": _card_settings(args), "title": args.get("title") or "",
+            "place": args.get("place") or "", "size": args.get("size") or "medium"}
+    return _as_person(api).post("cards", body, key=_key(args))
+
+
+@tool("hub_card_update", "Change a card's heading or settings (only those sent change).",
+      {"card": _s("Card id"), "title": _s("Its heading"), **CARD_SETTINGS}, required=("card",), writes=True)
+def card_update(api, args):
+    body = {"settings": _card_settings(args) or None, "title": args.get("title")}
+    return _as_person(api).patch("cards/" + args["card"], {k: v for k, v in body.items() if v is not None},
+                                 key=_key(args))
+
+
+@tool("hub_card_remove", "Remove a card and every pin of it.", {"card": _s("Card id")}, required=("card",), writes=True)
+def card_remove(api, args):
+    return _as_person(api).call("DELETE", "cards/" + args["card"], {}, _key(args))
+
+
+@tool("hub_pin_add", "Pin a page (page:<file id>) or a card (card:<id>) at a place. Pinning a page to the Dashboard "
+      "or a team page lets that place's audience read it; a private task's file is refused.",
+      {"place": PLACE, "item": _s("page:<file id> or card:<id>"), "size": SIZE,
+       "position": {"type": "integer", "description": "0 is first; left out, last"}},
+      required=("place", "item"), writes=True)
+def pin_add(api, args):
+    body = {"place": args["place"], "item": args["item"], "size": args.get("size") or "medium"}
+    if args.get("position") is not None:
+        body["position"] = args["position"]
+    return _as_person(api).post("pins", body, key=_key(args))
+
+
+@tool("hub_pin_update", "Resize or move a pin.", {"pin": _s("Pin id"), "size": SIZE,
+      "position": {"type": "integer", "description": "0 is first"}}, required=("pin",), writes=True)
+def pin_update(api, args):
+    body = {k: args[k] for k in ("size", "position") if args.get(k) is not None}
+    return _as_person(api).patch("pins/" + args["pin"], body, key=_key(args))
+
+
+@tool("hub_pin_remove", "Unpin. A card pinned nowhere else goes with it.", {"pin": _s("Pin id")}, required=("pin",),
+      writes=True)
+def pin_remove(api, args):
+    return _as_person(api).call("DELETE", "pins/" + args["pin"], {}, _key(args))
+
+
+@tool("hub_file_search", "Search the files you may read, every bot's and people's uploads alike, by title and text "
+      "(Markdown, text, a page's words, a CSV's header and first rows): best first, each with an excerpt.",
+      {"q": _s("Words to find"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
+def files_search(api, args):
+    return api.get("files/search", q=args["q"], limit=args.get("limit"))
+
+
+@tool("hub_file_delete", "Delete a file for good, the owner only: every version's bytes leave storage and only the "
+      "fact that it was deleted stays. For a file that holds something it should not; archive anything else.",
+      {"id": _s("File id")}, required=("id",), writes=True)
+def files_delete(api, args):
+    return _as_person(api).call("DELETE", f"files/{args['id']}", None, _key(args))
+
+
 def files_publish_path(client, args):
     """`hub file publish <path>`: the CLI reads the file (inside this checkout only) and sends the bytes."""
     from clients import bot_files as BF
@@ -2269,6 +2463,67 @@ def files_publish_path(client, args):
     if commit:
         query["commit"] = commit
     return client.request("POST", "/api/v2/files/uploads?" + BF.urlencode(query), raw=data, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- pages
+# A page is an HTML file a bot keeps up to date to show people what it did and found (docs/pages.md). Tico draws its
+# status line (updated, by, version, cadence, data date) outside the page; scripts and outside loads are removed.
+CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "How often you mean to update it; past 1.5x "
+           "this the page says it is out of date"}
+
+
+def _page_fields(args):
+    return {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+
+
+@tool("hub_page_publish", "Publish a page: one self-contained .html file (inline CSS, SVG charts, no scripts; "
+      "anything that would load from elsewhere is removed). Put the headline and key numbers first: a card shows the "
+      "top. Publishing the same name again adds a version. With `task` it shows at the top of that task.",
+      {"name": _s("File name ending .html, e.g. weekly-review.html"), "text": _s("The page's HTML"),
+       "title": _s("What people see"), "cadence": CADENCE,
+       "as_of": _s("The date the data is from (YYYY-MM-DD) when it differs from today"),
+       "task": _s("The task it is for; it shows at the top of that task"),
+       "replaces": _s("The id of an older page of yours this one takes the place of"),
+       "scope": {"enum": ["task", "bot"]}, "path": _s("The file's path in your repository")},
+      required=("name", "text"), writes=True)
+def pages_publish(api, args):
+    body = {**_page_fields(args), **{k: args[k] for k in ("name", "text", "path") if args.get(k)}}
+    return api.post("pages", body, key=_key(args))
+
+
+@tool("hub_page_list", "Pages you may read, newest first: title, bot, version, when updated, cadence, data date, and "
+      "whether one is out of date or replaced.",
+      {"bot": _s("Only this bot's pages"), "task": _s("Only this task's pages"),
+       "archived": {"type": "boolean", "description": "Archived pages instead"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": _s("next_cursor from the previous page")})
+def pages_list(api, args):
+    return api.get("pages", bot=args.get("bot"), task=args.get("task"), archived=args.get("archived") or None,
+                   limit=args.get("limit"), cursor=args.get("cursor"))
+
+
+@tool("hub_page_show", "One page's status: title, bot, version, updated and by whom, cadence, data date, out of date "
+      "or replaced. Read its HTML with the file's address.", {"id": _s("Page id (its file id)")}, required=("id",))
+def pages_show(api, args):
+    return api.get("pages/" + args["id"])
+
+
+@tool("hub_page_archive", "Archive a page (hidden from lists and search; links still open it), or bring it back "
+      "with `restore`. Its bot, the people above it, bot administrators and the owner may.",
+      {"id": _s("Page id"), "restore": {"type": "boolean", "description": "Bring an archived page back"}},
+      required=("id",), writes=True)
+def pages_archive(api, args):
+    return _as_person(api).patch("pages/" + args["id"], {"archived": not args.get("restore")}, key=_key(args))
+
+
+def pages_publish_path(client, args):
+    """`hub page publish <path>`: the CLI reads the .html file (inside this checkout only) and sends the bytes."""
+    from clients import bot_files as BF
+    try:
+        name, _, data, relative = BF.read_local(BF.checkout_root(), args["path"])
+    except BF.Refused as exc:
+        return {"refused": "page", "detail": str(exc)}
+    query = {"name": name, "path": relative, **_page_fields(args)}
+    return client.request("POST", "/api/v2/pages?" + BF.urlencode(query), raw=data, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- docs
@@ -2394,7 +2649,9 @@ def docs_links(api, args):
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
       "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
-       "quiet": {"type": "boolean", "description": "Close without waking a bot"}, "on_behalf_of": ASKED},
+       "wake": {"type": "boolean", "default": True,
+                "description": "false: its bots read the close on their next run instead of being woken for it"},
+       "quiet": {"type": "boolean", "description": "Older name for wake: false"}, "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_close(api, args):
     current = None
@@ -2410,7 +2667,8 @@ def task_close(api, args):
                 raise
             # Fleet work has no human request; BotOps keeps its own task-closing rights.
     current = current or api.get("tasks/" + args["id"])["task"]
-    body = {"version": current["version"], "note": args.get("note"), "close": True, "quiet": bool(args.get("quiet"))}
+    body = {"version": current["version"], "note": args.get("note"), "close": True,
+            "quiet": args.get("wake") is False or bool(args.get("quiet"))}
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 
@@ -2426,7 +2684,6 @@ def history(api, args):
             "has_more": bool(page.get("has_more")), "next_before": page.get("next_before")}
 
 
-# ----------------------------------------------------------------------------- routines
 # ----------------------------------------------------------------------------- tools
 # What a bot uses, as its page shows it (docs/creating-bots.md, "What people see about a bot's tools"). Adding one
 # never carries a credential: `env` is a variable's name, and its stored Credential is granted to the bot.
@@ -2545,61 +2802,10 @@ def _bot_of(api, args):
     return args.get("bot") or api.get("me")["actor"].split(":", 1)[-1]
 
 
-def _routine_api(api, bot):
-    return _as_person(api) if bot != _bot_of(api, {}) else api
-
-
-@tool("hub_routine_list", "The routines a bot runs on a schedule: what it is told, and when. "
-      "Yours unless `bot` is given.", {"bot": _s("Another bot's slug")})
-def routine_list(api, args):
-    bot = _bot_of(api, args)
-    return _routine_api(api, bot).get(f"bots/{bot}/routines")["routines"]
-
-
-@tool("hub_routine_set", "Create a routine, or update the one with this key. Tico opens a "
-      "task with `text` each time it is due; a bot sets up its own, an operator sets a bot's. "
-      "Give `cron` (five fields, in `timezone`) or `on` (a Tico event), never both.",
-      {"key": _s("A stable name: letters, digits, dots, dashes or underscores"),
-       "title": _s("What the task is called"),
-       "text": _s("What the bot is told each time", default=""),
-       "cron": _s("Five-field cron, e.g. `0 7 * * 1-5`"),
-       "on": _s("A Tico event instead of a time: `meeting.ready`, `release_published`, or `webhook.<id>` for a trigger in hub_trigger_list"),
-       "timezone": _s("IANA zone for the cron; America/Los_Angeles by default"),
-       "enabled": {"type": "boolean", "default": True},
-       "bot": _s("Set it on another bot you operate; yourself by default")},
-      required=("key", "title"), writes=True)
-def routine_set(api, args):
-    body = {"key": args["key"], "title": args["title"], "text": args.get("text") or "",
-            "cron": args.get("cron") or "", "on": args.get("on") or "", "timezone": args.get("timezone") or "",
-            "enabled": args.get("enabled", True)}
-    bot = _bot_of(api, args)
-    return _routine_api(api, bot).post(f"bots/{bot}/routines", body, key=_key(args))["routine"]
-
-
-@tool("hub_routine_update", "Change one routine: title, text, cron, on, timezone, or `enabled` to turn it on or off. "
-      "Name it by its id or its key. For another bot's routine (`bot`) it acts as the person who asked you, with their "
-      "rights (BotOps).",
-      {"id": _s("The routine's id from hub_routine_list, or its key"), "title": _s("New title"), "text": _s("New text"),
-       "cron": _s("New five-field cron"), "on": _s("New event"), "timezone": _s("New zone"),
-       "enabled": {"type": "boolean", "description": "true turns it on, false turns it off"},
-       "bot": _s("The bot it belongs to, when it is not yours")},
-      required=("id",), writes=True)
-def routine_update(api, args):
-    body = {k: args.get(k) for k in ("title", "text", "cron", "on", "timezone", "enabled")}
-    ident = args["id"]
-    bot = args.get("bot") or (str(ident).split(":", 1)[0] if ":" in str(ident) else _bot_of(api, {}))
-    who = _routine_api(api, bot)
-    if args.get("bot") or ":" not in str(ident):      # an id is `<bot>:<key>`; a bare key is looked up on the bot
-        rows = who.get(f"bots/{_bot_of(api, args)}/routines")["routines"]
-        row = next((r for r in rows if ident in (r.get("id"), r.get("key"))), None)
-        if not row:
-            raise ValueError("No routine " + ident + ". Routines: " + ", ".join(str(r.get("key") or r.get("id")) for r in rows))
-        ident = row["id"]
-    return who.post(f"routines/{ident}", body, key=_key(args))["routine"]
 
 
 @tool("hub_event_types", "Every event Tico names (task.done, release.published, webhook.received, custom.<name>...), each with "
-      "its group, a plain description, its version and an example payload (`data`). Routines (`on`), rules (`event`) and "
+      "its group, a plain description, its version and an example payload (`data`). Automations (an event trigger), wake rules and "
       "outgoing webhooks read this one list; some events have an older spelling (`aliases`) that still works, and "
       "`sourceless` marks the events a rule judges with no task (webhook.received, tico.notice); `outbound` is false "
       "for those two, which an outgoing webhook cannot subscribe to.",
@@ -2610,11 +2816,11 @@ def event_types(api, args):
 
 
 @tool("hub_trigger_list", "The webhook triggers people and bots made: each one's `event` "
-      "(`webhook.<id>`) is what a routine's `on` names to run whenever something posts to it, with its "
+      "(`webhook.<id>`) is what an automation's webhook trigger names to run whenever something posts to it, with its "
       "verification `preset`, `type_from`, `hourly` limit, `keep_days` and `unheard` setting.", {})
 def trigger_list(api, args):
     return [{k: t.get(k) for k in ("id", "name", "event", "signed", "preset", "type_from", "hourly", "keep_days",
-                                   "unheard", "last_received", "received_24h", "refused_24h", "routines")}
+                                   "unheard", "last_received", "received_24h", "refused_24h", "automations")}
             for t in api.get("triggers")["triggers"]]
 
 
@@ -2628,15 +2834,15 @@ def _delivery_path(delivery):
 
 
 @tool("hub_trigger_create", "Make a webhook trigger. The answer's `url` is the address a sender posts to; it carries "
-      "the secret and is shown only now (hub_trigger_rotate makes a new one). A routine runs on it with "
-      "`on: webhook.<id>`.",
+      "the secret and is shown only now (hub_trigger_rotate makes a new one). An automation runs on it with "
+      "the trigger {type: webhook, id}.",
       {"name": _s("What it is for, e.g. Orders"), "id": _s("Optional id: lowercase letters, digits and dashes")},
       required=("name",), writes=True)
 def trigger_create(api, args):
     return _as_person(api).post("triggers", {"name": args["name"], "id": args.get("id") or ""}, key=_key(args))["trigger"]
 
 
-@tool("hub_trigger_show", "One trigger: address without the secret, settings, 24-hour counts and its routines.",
+@tool("hub_trigger_show", "One trigger: address without the secret, settings, 24-hour counts and its automations.",
       TRIGGER, required=("id",))
 def trigger_show(api, args):
     return api.get(f"triggers/{args['id']}")["trigger"]
@@ -2711,7 +2917,7 @@ def trigger_recover(api, args):
     return _as_person(api).post(f"triggers/{args['id']}/recover", {"since_hours": args.get("since") or 24}, key=_key(args))["recover"]
 
 
-@tool("hub_trigger_replay", "Run one stored call again: its routines and rules start as a new occurrence "
+@tool("hub_trigger_replay", "Run one stored call again: its automations and wake rules start as a new occurrence "
       "(`<delivery>:replay:<n>`). The call's body must still be kept (see `expires_at`).",
       {**TRIGGER, "delivery": _s("The delivery id from hub_trigger_deliveries")},
       required=("id", "delivery"), writes=True)
@@ -2828,24 +3034,156 @@ def release_now(api, args):
     return _as_person(api).post("release/now", {"note": args["note"]} if args.get("note") else {}, key=_key(args))
 
 
-@tool("hub_routine_delete", "Delete a routine. Its history stays; an occurrence nobody has "
-      "claimed yet closes. BotOps acting for a person gets a Confirm card in their chat (`needs_confirm`) instead.",
-      {"id": _s("Routine id")}, required=("id",), writes=True)
-def routine_delete(api, args):
-    bot = str(args["id"]).split(":", 1)[0]
-    answer = _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))
-    return answer if answer.get("needs_confirm") else answer["routine"]
+# Automations (backend/automations.py). One permission rule for every
+# surface: the owner, anyone above the owner, the group's lead; BotOps acts with the requester's rights. A bot that may
+# not change one proposes: its edit comes back as a pending version for a person to restore.
+_AUTO_FIELDS = {
+    "name": _s("What it is called"), "owner": _s("person:<id>, bot:<slug> or group:<id>"),
+    "group": _s("group:<id>, for permissions"), "enabled": {"type": "boolean"},
+    "spend_cap": {"type": ["object", "null"], "description": "{per_30m: dollars} for its LLM and bot turns; null = the bot's limit"},
+    "batch": {"type": "object", "description": "{times: [\"08:00\", ...], tz}: filters on receipt, the rest at these times"},
+    "trigger": {"type": "object", "description": "{type: message|task_received|schedule|webhook|listening|event, ...}"},
+    "steps": {"type": "array", "items": {"type": "object"},
+              "description": "The whole step tree (filter, decide, llm, find, bot_turn, paths, action). An action step is "
+                             "{type: action, do, args}; args by do: draft_reply and send_reply body (or text), to, bot "
+                             "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner; "
+                             "assign owner, text; note text (or note), bot; wake_bot bot, text; post_update to ([updates, market]), text (none posts what the bot_turn before it wrote); "
+                             "call_webhook webhook, type, data; archive and leave_for_you take none"},
+}
 
 
-@tool("hub_routine_run", "Run a scheduled routine now, with your own rights or BotOps's requester rights.",
-      {"id": _s("Routine id")}, required=("id",), writes=True)
-def routine_run(api, args):
-    bot = str(args["id"]).split(":", 1)[0]
-    return _routine_api(api, bot).post(f"routines/{args['id']}/run", {}, key=_key(args))
+@tool("hub_automation_list", "The automations you may see, newest first, each with `can_edit` and `problems` (wake rules naming a missing step).",
+      {"owner": _s("Only this owner's"), "limit": {"type": "integer", "default": 50},
+       "cursor": {"type": "integer", "description": "`next` from the page before"}})
+def automation_list(api, args):
+    query = "&".join(f"{k}={args[k]}" for k in ("owner", "limit", "cursor") if args.get(k) not in (None, ""))
+    return _as_person(api).get("automations" + ("?" + query if query else ""))
+
+
+@tool("hub_automation_get", "One automation: its trigger, steps, version, today's counts, next run and `problems` (wake rules naming a missing step).",
+      {"id": _s("auto_...")}, required=("id",))
+def automation_get(api, args):
+    return _as_person(api).get(f"automations/{args['id']}")
+
+
+@tool("hub_automation_question_sets", "The saved question sets a Decide step may name (`set`), each with its `id` "
+      "(name@version), `summary` and `questions`. Read-only.", {})
+def automation_question_sets(api, args):
+    return _as_person(api).get("automations/question-sets")
+
+
+@tool("hub_automation_guide", "How BotOps builds and edits automations: the rules and the flow format (triggers, "
+      "steps, actions and their args), generated from the hub's code. Read it before creating or updating one.", {})
+def automation_guide(api, args):
+    return _as_person(api).get("automations/guide")
+
+
+@tool("hub_automation_create", "Save a new automation (version 1). Checked on save: a bad flow is refused with why. "
+      "BotOps saves it off unless `enabled` is sent. A bot without rights to it saves a proposal: off, its first "
+      "version pending, for a person to turn on.",
+      {k: v for k, v in _AUTO_FIELDS.items()}, required=("name", "owner", "trigger"), writes=True)
+def automation_create(api, args):
+    body = {k: args[k] for k in _AUTO_FIELDS if k in args}
+    return _as_person(api).post("automations", {"steps": [], **body}, key=_key(args))
+
+
+@tool("hub_automation_update", "Change an automation. A new trigger, steps or batch times is a new version; a bot "
+      "without edit rights gets back `pending` (a proposal a person restores). Action args are named in `steps`. Then check `problems`.",
+      {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
+      required=("id",), writes=True)
+def automation_update(api, args):
+    body = {k: args[k] for k in (*_AUTO_FIELDS, "summary") if k in args}
+    return _as_person(api).patch(f"automations/{args['id']}", body, key=_key(args))
+
+
+@tool("hub_automation_delete", "Delete an automation; its runs stay. A built-in one is refused (pause it instead).",
+      {"id": _s("auto_...")}, required=("id",), writes=True)
+def automation_delete(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_automation_run", "Run an automation now, whatever its trigger says, and get the run: each step's status, "
+      "outputs and cost. `input` stands in for the trigger's output (message, task, item, event, body).",
+      {"id": _s("auto_..."), "input": {"type": "object", "description": "A sample trigger output"}},
+      required=("id",), writes=True)
+def automation_run(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/run", {"input": args.get("input") or {}},
+                                key=_key(args))["run"]
+
+
+@tool("hub_automation_runs", "An automation's runs, newest first, with step detail for 30 days and daily counts.",
+      {"id": _s("auto_..."), "limit": {"type": "integer", "default": 25}, "before": _s("`next` from the page before")},
+      required=("id",))
+def automation_runs(api, args):
+    query = "&".join(f"{k}={args[k]}" for k in ("limit", "before") if args.get(k) not in (None, ""))
+    return _as_person(api).get(f"automations/{args['id']}/runs" + ("?" + query if query else ""))
+
+
+@tool("hub_automation_held", "End an automation's run-guard hold (`hold` on hub_automation_get): `release` queues its "
+      "held runs, oldest first; `drop` skips them. Fix what starts a loop first.",
+      {"id": _s("auto_..."), "action": {"type": "string", "enum": ["release", "drop"]}},
+      required=("id", "action"), writes=True)
+def automation_held(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/held", {"action": args["action"]}, key=_key(args))
+
+
+@tool("hub_automation_recent_runs", "Runs across every automation you may see in the last `range`, newest first: what "
+      "started each, its outcome or failing step, steps, time and cost. `trigger: system` is Tico's own jobs.",
+      {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"},
+       "status": {"type": "string", "enum": ["done", "failed", "waiting", "running", "held"]},
+       "trigger": _s("message, task_received, schedule, webhook, listening, event or system; comma-separated"),
+       "owner": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
+       "before": _s("`next` from the page before")})
+def automation_recent_runs(api, args):
+    query = "&".join(f"{k}={quote(str(args[k]), safe=',')}" for k in ("range", "status", "trigger", "owner", "limit", "before")
+                     if args.get(k) not in (None, ""))
+    return _as_person(api).get("automations/runs" + ("?" + query if query else ""))
+
+
+@tool("hub_automation_stats", "Runs, failures and cost per automation you may see over the last `range`, in time "
+      "buckets oldest first, with totals: which automations fail or cost the most.",
+      {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"}})
+def automation_stats(api, args):
+    return _as_person(api).get("automations/stats?range=" + quote(str(args.get("range") or "1h"), safe=""))
+
+
+@tool("hub_automation_versions", "An automation's versions, newest first; `status: pending` for proposals only.",
+      {"id": _s("auto_..."), "status": {"type": "string", "enum": ["active", "pending"]}}, required=("id",))
+def automation_versions(api, args):
+    status = f"?status={args['status']}" if args.get("status") else ""
+    return _as_person(api).get(f"automations/{args['id']}/versions{status}")
+
+
+@tool("hub_automation_restore", "Make a version current: a pending one keeps its number, an older one is saved as "
+      "a new version.", {"id": _s("auto_..."), "n": {"type": "integer"}}, required=("id", "n"), writes=True)
+def automation_restore(api, args):
+    return _as_person(api).post(f"automations/{args['id']}/versions/{int(args['n'])}/restore", {}, key=_key(args))
+
+
+@tool("hub_automation_discard", "Discard a pending version: a proposal a bot made, which then goes away. The "
+      "automation stays as it is; any other version is refused (409).",
+      {"id": _s("auto_..."), "n": {"type": "integer", "description": "The pending version's number"}},
+      required=("id", "n"), writes=True)
+def automation_discard(api, args):
+    return _as_person(api).call("DELETE", f"automations/{args['id']}/versions/{int(args['n'])}", None, _key(args))
+
+
+@tool("hub_inbox_send", "Read or set an inbox's send switch (on by default). Off, an automation's send_reply saves a "
+      "draft instead. The inbox's person or the top of the org sets it.",
+      {"inbox": _s("An email address, slack:dm or slack:#<channel>"),
+       "send": {"type": "boolean", "description": "Omit to read it"}}, required=("inbox",), writes=True)
+def inbox_send(api, args):
+    from urllib.parse import quote
+    path = "inboxes/" + quote(str(args["inbox"]), safe="@:")
+    if "send" not in args:
+        return _as_person(api).get(path)
+    return _as_person(api).patch(path, {"send": bool(args["send"])}, key=_key(args))
 
 
 @tool("hub_bot_update", "Change a bot's settings (reports to, name, description, status) with your own rights. "
-      "BotOps acts as the person who asked, citing their message.",
+      "BotOps acts as the person who asked, citing their message. "
+      "A manager bot changes only its direct reports: their model, task model, name and description. Creating, archiving "
+      "or restoring a report goes through BotOps the same way, within the weekly limit.",
       {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
@@ -2861,7 +3199,7 @@ def routine_run(api, args):
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
        "update_subscriptions": {"type": "array", "items": {"type": "string", "enum": ["templates", "tico"]},
-                                "description": "Subscribe to updates, as quiet notes for its next run: templates "
+                                "description": "Subscribe to updates, as deferred messages for its next run: templates "
                                                "(its template's changes), tico (Tico releases); [] for none"},
        "status": {"type": "string", "enum": ["active", "paused", "planned"]},
        "app_delivery": _s("A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
@@ -2873,7 +3211,7 @@ def bot_set(api, args):
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
     row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == args["slug"]), None)
     if not row or row.get("revision") is None:
-        row = api.get(f"bots/{args['slug']}/access", **({"on_behalf_of": on_behalf} if delegated else {}))
+        row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
@@ -2935,7 +3273,7 @@ def bot_register(api, args):
       "own the bot). Each of see, read and write is `everyone`, or a comma list of person ids, `group:<id>` and "
       "`bot:<slug>`. Anyone who may read or write can also see it. Levels you leave out stay as they are.",
       {"slug": _s("The bot"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
-       "read": _s("Who may read its work: tasks, updates, files, status, routines"),
+       "read": _s("Who may read its work: tasks, updates, files, status, automations"),
        "write": _s("Who may send it messages and tasks")},
       required=("slug",), writes=True)
 def bot_access(api, args):
@@ -2978,7 +3316,7 @@ def bot_owners(api, args):
 
 
 @tool("hub_bot_setup_done", "Mark a bot's onboarding complete, as a person above it on the org chart (its manager, their "
-      "managers or the owner): it becomes Active, its routines run and it takes tasks. Nobody else may. A bot calling it "
+      "managers or the owner): it becomes Active, its automations run and it takes tasks. Nobody else may. A bot calling it "
       "on itself says it is ready instead, like hub_bot_ready, and stays Onboarding. Repeating it changes nothing. A "
       "member's bot counts toward their limit of active bots from here on, so this can answer `bot_limit`: tell the "
       "person to archive a bot or ask an admin.",
@@ -3030,7 +3368,7 @@ def seat_update(api, args):
     return api.patch(f"seats/{args['seat']}", body, key=_key(args))
 
 
-@tool("hub_seat_draft", "The CEO Bot's draft of a Recruiting seat's job description, on the task that asks for it "
+@tool("hub_seat_draft", "The Strategy Bot's draft of a Recruiting seat's job description, on the task that asks for it "
       "(the owner opened the seat). A description a person wrote is kept; Tico says so.",
       {"seat": _s("The seat id"), "text": _s("The job description")}, required=("seat", "text"), writes=True)
 def seat_draft(api, args):
@@ -3068,28 +3406,56 @@ def group_list(api, args):
     return api.get("groups")
 
 
-@tool("hub_group_update", "Create, rename, move or fill a group, as the person who asked you (an owner or an admin). "
-      "Leave `group` out to create one from `name`. `parent` nests it under another group (an empty one moves it to the "
-      "top). Adding a teammate to a group takes it out of the one it was in; built-in bots stay outside groups. Answers "
-      "with the group.",
+@tool("hub_group_update", "Create, rename, move, lead or fill a group, as the person who asked you (the owner or an "
+      "admin; a group's lead within the groups it leads). Leave `group` out to create one from `name`. `parent` nests it "
+      "under another group (an empty one moves it to the top). Adding a teammate to a group takes it out of the one it "
+      "was in; built-in bots stay outside groups. Answers with the group.",
       {"group": _s("The group's id; leave out to create a new one"), "name": _s("Its name"),
        "parent": _s("The id of the group it is in; empty for the top"),
        "add_humans": {"type": "array", "items": {"type": "string"}, "description": "Human ids to put in the group"},
        "add_bots": {"type": "array", "items": {"type": "string"}, "description": "Bot slugs to put in the group"},
        "remove_humans": {"type": "array", "items": {"type": "string"}, "description": "Human ids to take out of it"},
-       "remove_bots": {"type": "array", "items": {"type": "string"}, "description": "Bot slugs to take out of it"}},
+       "remove_bots": {"type": "array", "items": {"type": "string"}, "description": "Bot slugs to take out of it"},
+       "lead": _s("Its lead: bot:<slug> or person:<id>; empty for none"), "on_behalf_of": ASKED},
       writes=True)
 def group_update(api, args):
-    who = _as_person(api)
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     add = {"people": list(args.get("add_humans") or []), "bots": list(args.get("add_bots") or [])}
     remove = {"people": list(args.get("remove_humans") or []), "bots": list(args.get("remove_bots") or [])}
     if not args.get("group"):
         if not args.get("name"):
             raise ValueError("Name the new group, or say which group to change: hub group update <group> ...")
-        body = {"name": args["name"], "add": add, **({"parent": args["parent"]} if args.get("parent") else {})}
+        body = {"name": args["name"], "add": add, **{k: args[k] for k in ("parent", "lead") if args.get(k)}}
         return who.post("groups", body, key=_key(args))
-    body = {"add": add, "remove": remove, **{k: args[k] for k in ("name", "parent") if args.get(k) is not None}}
+    body = {"add": add, "remove": remove, **{k: args[k] for k in ("name", "parent", "lead") if args.get(k) is not None}}
     return who.patch(f"groups/{args['group']}", body, key=_key(args))
+
+
+@tool("hub_group_delete", "Delete a group, as the person who asked you (the owner or an admin). Its teammates and the "
+      "groups in it move up to its parent group.",
+      {"group": _s("The group's id"), "on_behalf_of": ASKED}, required=("group",), writes=True)
+def group_delete(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.call("DELETE", f"groups/{quote(str(args['group']), safe='')}", None, _key(args))
+
+
+@tool("hub_org_reports_to", "Change who a teammate reports to on the org chart, as the person who asked you: a bot "
+      "reports to a bot or a person, a person to a person. Answers with the change.",
+      {"teammate": _s("bot:<slug> or human:<id>"), "reports_to": _s("A bot's slug or human:<id> (a person: their id)"),
+       "on_behalf_of": ASKED}, required=("teammate", "reports_to"), writes=True)
+def org_reports_to(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    kind, _, ref = str(args["teammate"]).strip().partition(":")
+    boss = str(args["reports_to"]).strip()
+    if kind == "human" and ref:
+        return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
+    if kind != "bot" or not ref:
+        raise ValueError("Name the teammate as bot:<slug> or human:<id>")
+    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == ref), None)
+    if not row:
+        raise ValueError("No bot " + ref)
+    return who.post(f"bots/{quote(ref, safe='')}/definition",
+                    {"reports_to": boss, "expected_revision": row.get("revision")}, key=_key(args))
 
 
 @tool("hub_org_order", "A manager's direct reports, humans and bots, in the order the team chart shows them (placed ones "
@@ -3248,17 +3614,11 @@ def bot_place(api, args):
       "does not have its repository yet the answer is state waiting_for_repository: the placement is kept and Tico "
       "finishes going live by itself when the computer reports the repository, so do not call it again or wait.",
       {"bot": _s("The bot's slug"), "computer": _s("A computer's label or id; leave out to pick one"),
-       "setup": {"type": "boolean", "default": True, "description": "Start its setup chat when it is a starter bot"},
-       "routines": {"type": "array", "items": {"type": "object"}, "description":
-                    "The bot's live Routines as they must be, checked before activation (nothing is created): "
-                    '[{"id": "<bot>:<routine>", "title": "...", "cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", '
-                    '"enabled": true}]; id, title and timezone required, cron and on (an event) default "", enabled '
-                    "defaults to true, no other fields"}},
+       "setup": {"type": "boolean", "default": True, "description": "Start its setup chat when it is a starter bot"}},
       required=("bot",), writes=True)
 def bot_go_live(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/go-live", {"computer": args.get("computer") or "",
-                                                              "setup": args.get("setup", True),
-                                                              **({"routines": args["routines"]} if args.get("routines") is not None else {})}, key=_key(args))
+                                                              "setup": args.get("setup", True)}, key=_key(args))
 
 
 @tool("hub_bot_restore", "Bring an archived bot back, as the person who asked you (its owner or an admin): to the status it had "
@@ -3353,6 +3713,29 @@ def agent_pair_decline(api, args):
     return _as_person(api).post("agents/pairings/decline", {"code": args["code"]}, key=_key(args))
 
 
+@tool("hub_bot_turns_at_once", "Read or set the most turns a bot you manage runs at once across all computers. "
+      "Default no limit (null); N caps its turns on every computer together. Work over the limit waits and says so.",
+      {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
+       "description": "Omit to read, null for no limit, N for a cap"}}, ("bot",), writes=True)
+def bot_turns_at_once(api, args):
+    who = api.on_behalf_of_requester()
+    bot = who.get(f"bots/{args['bot']}")
+    if 'limit' not in args:
+        return {"bot": args['bot'], "turns_at_once": bot.get('turns_at_once')}
+    return who.post(f"bots/{args['bot']}/turns-at-once", {
+        "turns_at_once": args['limit'], "expected_revision": bot['revision']}, key=_key(args))
+
+
+@tool("hub_computer_turns_at_once", "Set how many turns a computer you administer runs at once. Null is automatic "
+      "(its own capacity); N is 1 to 256. A computer that cannot take a raised number runs at most the capacity it "
+      "reports.",
+      {"computer": _s("Computer id"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
+       "description": "Null for automatic, N for a count of turns at once"}}, ("computer", "limit"), writes=True)
+def computer_turns_at_once(api, args):
+    who = api.on_behalf_of_requester()
+    return who.post(f"computers/{args['computer']}/turns-at-once", {"turns_at_once": args['limit']}, key=_key(args))
+
+
 @tool("hub_bot_keep_tasks_going", "Read or set automatic assigned-task starts for a bot you manage. "
       "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
@@ -3366,57 +3749,75 @@ def bot_keep_tasks_going(api, args):
         "keep_tasks_going": args['limit'], "expected_revision": bot['revision']}, key=_key(args))
 
 
-_RULE_SCOPES = ["team", "type", "department", "bot", "task"]
-_RULE_THEN = ["ignore", "note", "batch", "wake", "ask", "action"]
-_RULE_FIELDS = {
-    "event": _s("The event the rule is for, or * for every event that is not always-wake (hub_rule_list shows them). "
-                "webhook.received and tico.notice (or a prefix like webhook.*) have no "
-                "task: team, department and bot scopes only (hub_event_types)"),
-    "then": {"type": "string", "enum": _RULE_THEN,
-             "description": "wake: start a run; note: write it quietly and carry a note to the next run; batch: hold it "
-                            "with the bot's other notices; ignore: write it quietly, no note; ask: one Needs-you item for "
-                            "the task's person; action: run params.action. For an event with no task, wake and note go to "
-                            "the bot the rule is set on (or params.bot) and batch is refused"},
-    "when": {"type": "object", "description": "All must hold: actor (human|bot|keeper), step, role (owner|requester|qa|"
-                                              "release_manager|other), tag, state (a task status); each a word or a list. "
-                                              "For a webhook event only trigger (the webhook's id) and type (order.* "
-                                              "matches a prefix)"},
-    "params": {"type": "object", "description": "An action rule names params.action: close, move_step, set_wait, relate, "
-                                                "note, assign {owner (a bot or person)}, add_tag {tag}, remove_tag {tag} "
-                                                "(a tag or a list), wake_bot {bot, text},send_webhook {webhook, type, data}, "
-                                                "create_task {owner (a bot), title, body} or forward {webhook} (the last two "
-                                                "only on webhook.received); text, data, title and body may hold {{path}} "
-                                                "placeholders (data.order, type, trigger.name). "
-                                                "A wake rule for an event with no task names params.bot and params.text"},
-    "on": {"type": "boolean", "description": "false turns the rule off"},
-    "position": {"type": "integer", "minimum": 0, "description": "Order inside its scope; lower first"},
-    "note": _s("Why the rule exists, 500 characters at most"),
-}
+BUDGET_VALUE = {"type": ["integer", "string"], "minimum": 0, "maximum": 100000,
+                "description": "Runs allowed; 0 is no limit, \"default\" follows the team"}
 
 
-def _rule_body(args, keys):
-    """The fields given; `when` and `params` come as an object from a tool call and as JSON text from the command."""
-    body = {k: args[k] for k in keys if k in args}
-    for key in ("when", "params"):
-        if isinstance(body.get(key), str):
-            try:
-                body[key] = json.loads(body[key])
-            except ValueError:
-                raise APIError("invalid", f"{key} is JSON, like {{\"actor\": \"bot\"}}", 422)
-    return body
+@tool("hub_bot_budget", "Read or set how many runs a bot may start per hour and per day, as the person who asked you. "
+      "Tico holds a bot that goes over (a runaway loop, not normal work): its queued work is kept and a person's "
+      "messages still run. With neither hour nor day it reads the budget, the team default, the runs so far and any "
+      "hold. Raising a budget above the runs that held the bot releases it; release does that without a change.",
+      {"bot": _s("Bot slug"), "hour": BUDGET_VALUE, "day": BUDGET_VALUE,
+       "release": {"type": "boolean", "description": "Release the bot from a hold (failed runs or run budget) instead"}},
+      ("bot",), writes=True)
+def bot_budget(api, args):
+    who = _as_person(api)
+    path = f"bots/{args['bot']}/budget"
+    if args.get("release") or args.get("action") == "release":
+        return who.post(f"bots/{args['bot']}/release", {}, key=_key(args))
+    body = {}
+    for field, name in (("turns_per_hour", "hour"), ("turns_per_day", "day")):
+        if name in args:
+            body[field] = None if args[name] in (None, "default") else int(args[name])
+    current = who.get(path)
+    if not body:
+        return current
+    return who.post(path, {**body, "expected_revision": current["revision"]}, key=_key(args))
 
 
-@tool("hub_rule_list", "List the wake rules that decide whether a message starts a bot's run: the built-in rules and the "
-      "rules set for the team, a task type, a department, a bot or a task, each with its 7-day run count and the share of "
-      "those runs that did nothing. A scoped rule overrides the built-ins; a person's message always wakes. Rules also say "
-      "what an event with no task does (a webhook arriving, a Tico notice): `sourceless_events` names them. When `more` is "
-      "true, list again from `next_offset`.",
-      {"scope_kind": {"type": "string", "enum": ["builtin"] + _RULE_SCOPES}, "scope_id": _s("The type, department, bot or task"),
-       "event": _s("Only this event"), "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-       "offset": {"type": "integer", "minimum": 0}})
-def rule_list(api, args):
-    return api.get("rules", scope_kind=args.get("scope_kind"), scope_id=args.get("scope_id"), event=args.get("event"),
-                   limit=args.get("limit"), offset=args.get("offset"))
+_PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
+
+
+@tool("hub_bot_profile", "Read or set a bot's profile, as the person who asked you: what wakes the bot and which tasks it takes. "
+      "doer works its tasks (news batched); reviewer takes review and QA requests only; lead hears the rest once a day; "
+      "manager runs on its schedule over its exceptions list and hears ticket news only then; responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
+      "rules on the Rules page. With no profile it reads the bot's and the choices. Leaving custom deletes the wake rules "
+      "it copied into the rules table, so say confirm_drop_rules.",
+      {"bot": _s("Bot slug"), "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
+       "batch_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "How long news waits to be batched"},
+       "sweep_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "Least time between two runs of a sweep"},
+       "digest_hour": {"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour of a lead's daily digest, team time"},
+       "pulls": {"type": "string", "enum": ["all", "review", "none"], "description": "Custom: which open tasks it starts by itself"},
+       "sweeps": {"type": "boolean", "description": "Custom: whether stall checks and automations may wake it"},
+       "takes": {"type": "string", "enum": ["all", "review", "watcher", "none"], "description": "Custom: which tasks it may be given"},
+       "confirm_drop_rules": {"type": "boolean", "description": "Leaving custom: delete the rules it copied"}},
+      ("bot",), writes=True)
+def bot_profile(api, args):
+    who = _as_person(api)
+    path = f"bots/{args['bot']}/profile"
+    current = who.get(path)
+    if not args.get("profile"):
+        return {**current, "choices": who.get("profiles")["profiles"]}
+    body = {k: args[k] for k in ("batch_seconds", "sweep_seconds", "digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules")
+            if args.get(k) is not None}
+    return who.post(path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args))
+
+
+@tool("hub_bot_release", "Release a bot Tico stopped, as the person who asked you: after five failed runs in a row, "
+      "for starting too many runs, or for queued runs it could not start. Check its last runs first. Its queued work, "
+      "kept while it was held, starts again.",
+      {"bot": _s("Bot slug")}, ("bot",), writes=True)
+def bot_release(api, args):
+    return _as_person(api).post(f"bots/{args['bot']}/release", {}, key=_key(args))
+
+
+@tool("hub_team_budget", "Read or set the team's default runs per hour and per day for bots with no budget of their own "
+      "(owner and admins). 0 is no limit.",
+      {"hour": BUDGET_VALUE, "day": BUDGET_VALUE}, (), writes=True)
+def team_budget(api, args):
+    body = {field: int(args[name]) for field, name in (("turns_per_hour", "hour"), ("turns_per_day", "day"))
+            if name in args and args[name] != "default"}
+    return _as_person(api).post("settings/turn-budgets", body, key=_key(args)) if body else _as_person(api).get("settings/turn-budgets")
 
 
 # ----------------------------------------------------------------------------- outgoing webhooks
@@ -3607,135 +4008,26 @@ def webhook_example(api, args):
                                                            key=_key(args))
 
 
-@tool("hub_rule_set", "Create a wake rule for the team, a task type, a department, a bot or one task, as the person who asked you. "
-      "The most specific scope wins: task, bot, department, type, team, then the built-in rules. A rule for an event with no "
-      "task (webhook.received) fires every matching row, one per bot, endpoint and asker, and does nothing when none match.",
-      {"scope_kind": {"type": "string", "enum": _RULE_SCOPES}, "scope_id": _s("The type, department, bot or task; leave out for the team"),
-       **_RULE_FIELDS, "on_behalf_of": ON_BEHALF_OF},
-      required=("scope_kind", "event", "then"), writes=True)
-def rule_set(api, args):
-    body = _rule_body(args, ("scope_kind", "scope_id", "event", "then", "when", "params", "on", "position", "note"))
-    return _as_person(api, args.get("on_behalf_of")).post("rules", body, key=_key(args))
+@tool("hub_task_caps", "Read the task caps: how many tasks each teammate may create for another per day, with "
+      "today's count, the tasks closed before the receiver acted, and the refused creates. Also the changes bots asked "
+      "for, which a person approves or declines as approvals. A cap is off until someone sets one.", {})
+def task_caps_read(api, args):
+    return _as_person(api).get("task-caps")
 
 
-@tool("hub_rule_update", "Change a wake rule you may edit, as the person who asked you. Built-in rules are read-only: "
-      "override one with hub_rule_set.",
-      {"id": _s("The rule's id"), **_RULE_FIELDS,
-       "expected_revision": {"type": "integer", "minimum": 1, "description": "The revision you read; omit to use the current one"},
-       "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
-def rule_update(api, args):
-    who = _as_person(api, args.get("on_behalf_of"))
-    revision = args.get("expected_revision") or who.get("rules/" + quote(args["id"], safe=""))["rule"].get("revision")
-    body = _rule_body(args, ("event", "then", "when", "params", "on", "position", "note"))
-    return who.post("rules/" + quote(args["id"], safe=""), {**body, "expected_revision": revision}, key=_key(args))
-
-
-@tool("hub_rule_delete", "Delete a wake rule you may edit, as the person who asked you.",
-      {"id": _s("The rule's id"), "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
-def rule_delete(api, args):
-    return _as_person(api, args.get("on_behalf_of")).post("rules/" + quote(args["id"], safe="") + "/delete", {},
-                                                           key=_key(args))
-
-
-@tool("hub_rule_suggestions", "List the wake rules Tico suggests making a note because over half of their runs in the last week "
-      "did nothing (at least 20 runs), each with its 7-day runs and no-op share. Only the suggestions the person who asked "
-      "may act on. Nothing changes until hub_rule_apply.",
-      {"status": {"type": "string", "enum": ["open", "all"], "description": "open (default), or all: also applied and dismissed in the last 30 days"},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
-       "on_behalf_of": ON_BEHALF_OF})
-def rule_suggestions(api, args):
-    return _as_person(api, args.get("on_behalf_of")).get("rules/suggestions", status=args.get("status"), limit=args.get("limit"),
-                                                          offset=args.get("offset"))
-
-
-@tool("hub_rule_apply", "Make a suggested rule a note, as the person who asked you: a table rule is edited, a built-in gets a "
-      "team rule for its event. Needs the right to edit that rule. hub_rule_dismiss on the applied suggestion puts it back.",
-      {"id": _s("The suggestion's id (hub_rule_suggestions)"), "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
-def rule_apply(api, args):
-    return _as_person(api, args.get("on_behalf_of")).post("rules/suggestions/" + quote(args["id"], safe="") + "/apply", {},
-                                                           key=_key(args))
-
-
-@tool("hub_rule_dismiss", "Decline a suggested rule change (Tico does not suggest that rule again for 28 days), or, on one "
-      "already applied, take it back: the rule returns to how it was, if nobody has changed it since. As the person who asked you.",
-      {"id": _s("The suggestion's id"), "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
-def rule_dismiss(api, args):
-    return _as_person(api, args.get("on_behalf_of")).post("rules/suggestions/" + quote(args["id"], safe="") + "/dismiss", {},
-                                                           key=_key(args))
-
-
-BUDGET_VALUE = {"type": ["integer", "string"], "minimum": 0, "maximum": 100000,
-                "description": "Runs allowed; 0 is no limit, \"default\" follows the team"}
-
-
-@tool("hub_bot_budget", "Read or set how many runs a bot may start per hour and per day, as the person who asked you. "
-      "Tico holds a bot that goes over (a runaway loop, not normal work): its queued work is kept and a person's "
-      "messages still run. With neither hour nor day it reads the budget, the team default, the runs so far and any "
-      "hold. Raising a budget above the runs that held the bot releases it; release does that without a change.",
-      {"bot": _s("Bot slug"), "hour": BUDGET_VALUE, "day": BUDGET_VALUE,
-       "release": {"type": "boolean", "description": "Release the bot from a hold (failed runs or run budget) instead"}},
-      ("bot",), writes=True)
-def bot_budget(api, args):
-    who = _as_person(api)
-    path = f"bots/{args['bot']}/budget"
-    if args.get("release") or args.get("action") == "release":
-        return who.post(f"bots/{args['bot']}/release", {}, key=_key(args))
-    body = {}
-    for field, name in (("turns_per_hour", "hour"), ("turns_per_day", "day")):
-        if name in args:
-            body[field] = None if args[name] in (None, "default") else int(args[name])
-    current = who.get(path)
-    if not body:
-        return current
-    return who.post(path, {**body, "expected_revision": current["revision"]}, key=_key(args))
-
-
-_PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
-
-
-@tool("hub_bot_profile", "Read or set a bot's profile, as the person who asked you: what wakes the bot and which tasks it takes. "
-      "doer works its tasks (news batched); reviewer takes review and QA requests only; lead hears the rest once a day; "
-      "manager runs on its schedule over its exceptions list and hears ticket news only then; responder answers people in chat and takes no tasks; monitor takes its watcher's tasks; custom keeps its own wake "
-      "rules on the Rules page. With no profile it reads the bot's and the choices. Leaving custom deletes the wake rules "
-      "it copied into the rules table, so say confirm_drop_rules.",
-      {"bot": _s("Bot slug"), "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
-       "batch_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "How long news waits to be batched"},
-       "sweep_seconds": {"type": "integer", "minimum": 0, "maximum": 604800, "description": "Least time between two runs of a sweep"},
-       "digest_hour": {"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour of a lead's daily digest, team time"},
-       "pulls": {"type": "string", "enum": ["all", "review", "none"], "description": "Custom: which open tasks it starts by itself"},
-       "sweeps": {"type": "boolean", "description": "Custom: whether stall checks and routines may wake it"},
-       "takes": {"type": "string", "enum": ["all", "review", "watcher", "none"], "description": "Custom: which tasks it may be given"},
-       "confirm_drop_rules": {"type": "boolean", "description": "Leaving custom: delete the rules it copied"}},
-      ("bot",), writes=True)
-def bot_profile(api, args):
-    who = _as_person(api)
-    path = f"bots/{args['bot']}/profile"
-    current = who.get(path)
-    if not args.get("profile"):
-        return {**current, "choices": who.get("profiles")["profiles"]}
-    body = {k: args[k] for k in ("batch_seconds", "sweep_seconds", "digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules")
-            if args.get(k) is not None}
-    return who.post(path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args))
-
-
-@tool("hub_bot_release", "Release a bot Tico stopped, as the person who asked you: after five failed runs in a row, or "
-      "for starting too many runs. Check its last runs first. Its queued work, kept while it was held, starts again.",
-      {"bot": _s("Bot slug")}, ("bot",), writes=True)
-def bot_release(api, args):
-    return _as_person(api).post(f"bots/{args['bot']}/release", {}, key=_key(args))
-
-
-@tool("hub_team_budget", "Read or set the team's default runs per hour and per day for bots with no budget of their own "
-      "(owner and admins). 0 is no limit.",
-      {"hour": BUDGET_VALUE, "day": BUDGET_VALUE}, (), writes=True)
-def team_budget(api, args):
-    body = {field: int(args[name]) for field, name in (("turns_per_hour", "hour"), ("turns_per_day", "day"))
-            if name in args and args[name] != "default"}
-    return _as_person(api).post("settings/turn-budgets", body, key=_key(args)) if body else _as_person(api).get("settings/turn-budgets")
+@tool("hub_task_cap_set", "Set how many tasks `sender` may create for `receiver` each day (teammate refs: bot:<slug> or "
+      "person:<id>). The receiver must be a manager above the sender at any level. per_day 0 blocks it; null removes the cap. "
+      "A bot's own change waits as an approval a person decides.",
+      {"sender": _s("bot:<slug> or person:<id>"), "receiver": _s("bot:<slug> or person:<id>, a manager above the sender"),
+       "per_day": {"type": ["integer", "null"], "minimum": 0, "description": "Tasks a day; null removes the cap"}},
+      ("sender", "receiver", "per_day"), writes=True)
+def task_cap_set(api, args):
+    body = {"sender": args["sender"], "receiver": args["receiver"], "per_day": args["per_day"]}
+    return _as_person(api).call("PUT", "task-caps", body, key=_key(args))
 
 
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
-      "run in progress to end.",
+      "run in progress to end. A manager bot may change its direct report's model.",
       {"bot": _s("The bot's slug"), "model": _s("A model id or name from the list; leave out to list them"),
        "effort": _s("Reasoning effort that model supports"), "harness": _s("A harness from that model's harnesses list"),
        "on_behalf_of": ON_BEHALF_OF},
@@ -3750,7 +4042,18 @@ def bot_model(api, args):
                            for m in catalog.get("models", []) if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)],
                 **{k: v for k, v in current.items() if k in ("harness", "effort")},
                 "current": current.get("model")}
-    requested = args.get("model") or current.get("model") or (catalog.get("default") or {}).get("model") or ""
+    model = _model_id(catalog, args.get("model") or current.get("model")
+                      or (catalog.get("default") or {}).get("model") or "")
+    revision = current["revision"]
+    body = {"model": model, "expected_revision": revision, **({"effort": args["effort"]} if args.get("effort") else {})}
+    if args.get("harness"):
+        body["harness"] = args["harness"]
+    return who.post(f"bots/{args['bot']}/model", body, key=_key(args))
+
+
+def _model_id(catalog, requested):
+    """The id of the one current catalog model that `requested` names by id or label (case-blind, an exact match
+    first). Raises ValueError when none, or more than one, match."""
     wanted = str(requested).strip().lower()
     choices = [m for m in catalog.get("models", []) if not m.get("deprecated")]
     hit = [m for m in choices if wanted in (str(m.get("id")).lower(), str(m.get("label")).lower())] or [
@@ -3758,11 +4061,64 @@ def bot_model(api, args):
     if len(hit) != 1:
         raise ValueError(("No model matches " if not hit else "More than one model matches ") + str(requested)
                          + ". Models: " + ", ".join(str(m.get("id")) for m in choices))
-    revision = who.get(f"bots/{args['bot']}/access")["revision"]
-    body = {"model": hit[0]["id"], "expected_revision": revision, **({"effort": args["effort"]} if args.get("effort") else {})}
-    if args.get("harness"):
-        body["harness"] = args["harness"]
-    return who.post(f"bots/{args['bot']}/model", body, key=_key(args))
+    return hit[0]["id"]
+
+
+@tool("hub_task_model", "Set the model one task's runs use, as the person who asked you: a model id or name from the "
+      "list, with its effort and harness. Leave out `model` to change only the effort or harness of the task's own "
+      "model; `clear` puts the task back on the bot's task model. Whoever may change the bot's model may change this; "
+      "a bot never does.",
+      {"id": TASK_ID, "model": _s("A model id or name from hub_bot_model's list; leave out to keep the task's own"),
+       "effort": _s("Reasoning effort that model takes"),
+       "harness": _s("A harness from that model's harnesses list"),
+       "clear": {"type": "boolean", "default": False, "description": "Clear the task's own model"},
+       "on_behalf_of": ON_BEHALF_OF},
+      required=("id",), writes=True)
+def task_model(api, args):
+    who = _as_person(api, args.get("on_behalf_of"))
+    if args.get("clear"):
+        body = {"model": None}
+    else:
+        body = {}
+        if args.get("model"):
+            body["model"] = _model_id(who.get("models"), args["model"])
+        for field in ("effort", "harness"):
+            if args.get(field):
+                body[field] = args[field]
+        if not body:
+            raise ValueError("Name a model, an effort or a harness, or clear the task's model")
+    return who.post(f"tasks/{args['id']}/model", body, key=_key(args))
+
+
+@tool("hub_bot_task_model", "Show, or set, the model a bot's tasks run on, as the person who asked you: a model id or "
+      "name from the list, with its effort and harness. Leave out `model` to change only the effort or harness on the "
+      "bot's own model; `clear` puts the bot's tasks back on its own model. A task's own model (hub_task_model) comes "
+      "before this. Whoever may change the bot's model may change this, and so may a manager bot for its direct "
+      "report.",
+      {"bot": _s("The bot's slug"),
+       "model": _s("A model id or name from hub_bot_model's list; leave out to keep the bot's own"),
+       "effort": _s("Reasoning effort that model takes"),
+       "harness": _s("A harness from that model's harnesses list"),
+       "clear": {"type": "boolean", "default": False, "description": "Clear the bot's task model"},
+       "on_behalf_of": ON_BEHALF_OF},
+      required=("bot",), writes=True)
+def bot_task_model(api, args):
+    who = _as_person(api, args.get("on_behalf_of"))
+    if not any(args.get(k) for k in ("model", "harness", "effort", "clear")):
+        return {"task_model": who.get(f"bots/{args['bot']}").get("task_model")}
+    # The bot row, not its access card: a manager bot reads its report's row but not who may reach it.
+    revision = who.get(f"bots/{args['bot']}")["revision"]
+    if args.get("clear"):
+        body = {"task_model": None, "expected_revision": revision}
+    else:
+        choice = {}
+        if args.get("model"):
+            choice["model"] = _model_id(who.get("models"), args["model"])
+        for field in ("effort", "harness"):
+            if args.get(field):
+                choice[field] = args[field]
+        body = {"task_model": choice, "expected_revision": revision}
+    return who.post(f"bots/{args['bot']}/task-model", body, key=_key(args))
 
 
 def _control(action):
@@ -4021,7 +4377,8 @@ def slack_channel_import(api, args):
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
-      "key, token or password. Never ask for the value in words.",
+      "key, token or password. On a task, the card goes in its thread and the task waits for it. Never ask for the value in "
+      "words.",
       {"env": _s("The variable's name, like JIRA_BASIC_AUTH"),
        "for_bot": _s("The bot that needs it; you, when you leave it out"),
        "label": _s("What it is, for the card's title: 'your Jira login'"),
@@ -4266,7 +4623,7 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-@tool("hub_stall_triage", "Quiet task triage: before a stall check stays silent on a quiet task nothing has changed on, Tico "
+@tool("hub_stall_triage", "Stalled task check: before a stall check stays silent on a stalled task nothing has changed on, Tico "
       "Decide reads its last six messages and sets the wait they name, closes the task if it is finished, or lets one wake "
       "through if it is stuck. On by default; the owner or an admin switches it. Omit `on` to read the switch.",
       {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
@@ -4274,6 +4631,16 @@ def stall_triage(api, args):
     if args.get("on") is None:
         return {"job": next(job for job in _as_person(api).get("system-routines")["jobs"] if job["key"] == "stall_triage")}
     return _as_person(api).call("PUT", "system-routines/stall_triage", {"on": bool(args["on"])}, _key(args))
+
+
+@tool("hub_audit", "Who changed what in the caps, spend, groups, automations and inboxes, newest first. "
+      "The owner reads every row; anyone else reads their own changes. Page with `before` from `next`.",
+      {"object": _s("One object, such as automation:<id> or inbox:<address>"),
+       "limit": {"type": "integer", "default": 50, "description": "Rows a page, up to 200"},
+       "before": _s("`next` from the page before")})
+def audit(api, args):
+    query = {k: args[k] for k in ("object", "limit", "before") if args.get(k) not in (None, "")}
+    return _as_person(api).get("audit", **query)
 
 
 # ----------------------------------------------------------------------------- approvals
@@ -4284,7 +4651,9 @@ def stall_triage(api, args):
       {"kind": {"type": "string", "enum": list(APPROVAL_KINDS)},
        "payload": {"type": "object", "description": "The exact action, as the approvals policy describes. "
                    "kind=send is to/cc/subject/body_sha256/mailbox. Skip this tool when the owner "
-                   "already said send; use mail send --approve <their-message-id>."},
+                   "already said send; use mail send --approve <their-message-id>. A "
+                   "proposal the hub applies on approval: task_cap {sender, receiver, per_day}, spend_limit "
+                   "{bot | pool: company|group:<id>, per_30m_usd, daily_usd, weekly_usd, monthly_usd}."},
        "task_id": _s("The task this action belongs to"),
        "supersedes_approval": _s("Your older undecided approval this replaces (a re-cut, a redraft); it is withdrawn. "
                                  "One on the same task for the same url, recipient and subject, PR or spend is replaced anyway")},
@@ -4652,7 +5021,7 @@ def ack(api, args):
       "\"body\": {\"decision\": \"declined\", \"note\": \"<reason>\"}}, {\"path\": \"/api/v2/messages/<id>/answer\", "
       "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100). Approving goes on a card only when the person's "
       "message names it (approve, merge, publish, send, spend); 'clear my queue' never approves. "
-      "The CEO Bot may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
+      "The Strategy Bot may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
       "{\"seats\":[{\"title\":\"...\",\"description\":\"...\",\"reports_to\":\"...\",\"team\":\"...\"}]} . "
       "Use hub_org_models for published recommendations; no seat is added before the owner confirms. "
       "A task action, decline or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
@@ -4669,11 +5038,12 @@ def assistant_propose(api, args):
 
 @tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
       "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
-      "what you saved. It is theirs alone and shows on What it has learned, where they edit or delete it. The CEO Bot "
+      "what you saved. It is theirs alone and shows on What it has learned, "
+      "where they edit or delete it. The Strategy Bot "
       "in the owner's chat saves what the owner teaches it about the company with layer company.",
       {"text": _s("One short line, in their words"),
        "layer": {"enum": ["personal", "company"], "default": "personal",
-                 "description": "personal (theirs), or company (the CEO Bot in the owner's chat only)"}},
+                 "description": "personal (theirs), or company (the Strategy Bot in the owner's chat only)"}},
       required=("text",), writes=True)
 def assistant_learn(api, args):
     return api.post("assistant/learned", {"layer": args.get("layer") or "personal", "text": args["text"]},
@@ -4681,7 +5051,7 @@ def assistant_learn(api, args):
 
 
 @tool("hub_assistant_learned", "What a person's chat bot has learned: their own layer, and for the owner the "
-      "company layer (vision, priorities, what they taught the CEO Bot about the company).", {})
+      "company layer (vision, priorities, what they taught the Strategy Bot about the company).", {})
 def assistant_learned(api, args):
     return api.get("assistant/learned")
 
@@ -5352,24 +5722,38 @@ REQUESTER = PEOPLE + BOTOPS
 REQUESTER_READ = REQUESTER + ("assistant",)
 HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are refused
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
-ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
+ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "hub_goal_update", "hub_kpi_create", "hub_kpi_link", "hub_kpi_target", "hub_kpi_unlink", "hub_proposal_decide", "hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_done", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
                     "hub_settings_set"}
 AUDIENCE = {
+    # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
+    "hub_task_caps": REQUESTER_READ, "hub_task_cap_set": PEOPLE + BOTS,
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
     "hub_bot_branch": REQUESTER,
-    "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
+    # A bot or agent that manages the bot changes its name and description, its model and its task model
+    # (report_managers); the server refuses any other bot.
+    "hub_bot_update": REQUESTER + ("bot", "agent"), "hub_bot_model": REQUESTER + ("bot", "agent"),
+    "hub_bot_task_model": REQUESTER + ("bot", "agent"),
+    # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
+    "hub_api": REQUESTER, "hub_credential_request": ("bot", "botops"),
+    # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
+    **{name: REQUESTER + ("assistant",) for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to")},
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
-    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_keep_tasks_going", "hub_rule_set", "hub_rule_update", "hub_rule_delete", "hub_rule_apply", "hub_rule_dismiss", "hub_stall_triage", "hub_bot_budget", "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
+    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_bot_turns_at_once",
+                                    "hub_computer_turns_at_once", "hub_agent_pair_show", "hub_agent_pair_approve",
+                                    "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live",
+                                    "hub_task_model",
+                                    "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
+                                    "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
-                                    "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
+                                    "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
     **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
@@ -5389,7 +5773,7 @@ AUDIENCE = {
     "hub_mcp_stats": PEOPLE + BOTS,   # a bot the owner granted outcome stats; the server refuses the rest
     "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
-    "hub_proposal_decide": PEOPLE,
+    "hub_proposal_decide": HUMANS_AND_ASSISTANT,
     "hub_bot_mail": PEOPLE,                         # backend/mail_settings.py: a person only
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
@@ -5399,7 +5783,11 @@ AUDIENCE = {
     **{name: PEOPLE for name in ("hub_seat_create", "hub_seat_update", "hub_seat_close")},
     "hub_org_models": KINDS,
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
-    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import")},
+    **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import",
+                               "hub_page_publish")},
+    # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
+    "hub_file_delete": ("owner", "botops"),
+    "hub_page_archive": PEOPLE + BOTS,
     # Reads that go over POST, which the Assistant may not make on its own.
     **{name: NOT_ASSISTANT for name in ("hub_sql", "hub_classify", "hub_decision_ask", "hub_decision_outcome",
                                          "hub_market_ask")},
@@ -5451,11 +5839,21 @@ RENAMED_TOOLS = {
     "hub_bot_register": "hub_bot_create", "hub_bot_set": "hub_bot_update", "hub_bot_onboarded": "hub_bot_setup_done",
     "hub_turns": "hub_run_list", "hub_fleet": "hub_health_check", "hub_fleet-check": "hub_health_check",
     "hub_fleet_check": "hub_health_check", "hub_computers": "hub_computer_list", "hub_catalog": "hub_template_list",
-    "hub_routine_on": "hub_routine_update", "hub_routine_off": "hub_routine_update", "hub_org": "hub_team_show",
+    "hub_org": "hub_team_show",
     "hub_updates": "hub_update_list", "hub_integrations": "hub_tool_list", "hub_integration": "hub_tool_show",
     "hub_queries": "hub_tool_query_search", "hub_learn": "hub_tool_learn", "hub_decisions": "hub_decision_ask",
     "hub_judge": "hub_decision_ask", "hub_listen_judge": "hub_listening_decide",
+    # 0.5: routines and wake rules are automations (a bot's wake rules are its "What wakes" automation).
+    "hub_routine_list": "hub_automation_list", "hub_routine_set": "hub_automation_create",
+    "hub_routine_update": "hub_automation_update", "hub_routine_on": "hub_automation_update",
+    "hub_routine_off": "hub_automation_update", "hub_routine_delete": "hub_automation_delete",
+    "hub_routine_run": "hub_automation_run", "hub_rule_list": "hub_automation_list",
+    "hub_rule_set": "hub_automation_update", "hub_rule_update": "hub_automation_update",
+    "hub_rule_delete": "hub_automation_update",
 }
+# Older names a call still runs under, unlisted. `hub_task_defer` says when a carried task is picked up again (a
+# hold, not a delivery): `defer` is the delivery word now (backend/delivery.py).
+CALL_ALIASES = {"hub_task_defer": "hub_task_later"}
 RENAMED_PREFIXES = (("hub_docs_", "hub_doc_"), ("hub_files_", "hub_file_"), ("hub_meetings_", "hub_meeting_"),
                     ("hub_status_", "hub_bot_status_"), ("hub_people_", "hub_human_"), ("hub_person_", "hub_human_"),
                     ("hub_tools_", "hub_tool_"), ("hub_batch_", "hub_needs_you_"), ("hub_listen_", "hub_listening_"),
@@ -5583,6 +5981,7 @@ class Protocol:
                 if source == "market":
                     args["market"] = True
                 name = "hub_doc_search"
+        name = CALL_ALIASES.get(name, name)
         entry = BY_NAME.get(name)
         if not entry and (new := renamed_to(name)):
             return self._tool_error(rid, {"error": "renamed", "detail": f"`{name}` was renamed `{new}` in Tico 0.2.21.",

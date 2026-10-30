@@ -23,6 +23,8 @@ function load(name, mapping = {[label]: record}) {
     let source = resources[name].Properties.FunctionCode;
     if (typeof source !== 'string') source = source['Fn::Join'][1].map(x => typeof x === 'string' ? x : 'files.example').join('');
     assert.ok(Buffer.byteLength(source) < 10240, 'CloudFront function size');
+    // CloudFront's runtime rejects `await` in call arguments at run time ("await in arguments not supported").
+    assert.ok(!/[(,[]\s*await\b/.test(source), 'no await inside call arguments');
     source = source.replace("import cf from 'cloudfront';", '').replace("import crypto from 'crypto';", '');
     const context = vm.createContext({crypto, Date: {now: () => now * 1000}, cf: {kvs: () => ({get: async key => {
         if (!(key in mapping)) throw Error('unknown');
@@ -183,7 +185,16 @@ test('hostile object headers, metadata and body never widen the ceiling or set c
 test('distribution wiring preserves files and error fallback without stacking the visual CSP', async () => {
     const config = resources.Distribution.Properties.DistributionConfig;
     const behaviors = [config.DefaultCacheBehavior, ...config.CacheBehaviors];
-    assert.equal(config.Enabled, false);
+    // Disabled unless the stand-up passes Enabled=true; standard logs only when given a log bucket.
+    assert.deepEqual(config.Enabled, {'Fn::If': ['Activate', true, false]});
+    assert.deepEqual(template.Conditions.Activate, {'Fn::Equals': [{Ref: 'Enabled'}, 'true']});
+    assert.equal(template.Parameters.Enabled.Default, 'false');
+    assert.deepEqual(config.Logging['Fn::If'][0], 'Logs');
+    assert.deepEqual(config.Logging['Fn::If'][1], {Bucket: {Ref: 'LogBucketDomainName'}, Prefix: {Ref: 'LogPrefix'},
+        IncludeCookies: false});
+    const logBucket = new RegExp('^(?:' + template.Parameters.LogBucketDomainName.AllowedPattern + ')$');
+    assert.ok(logBucket.test('ticofiles-logs-1.s3.amazonaws.com') && logBucket.test(''));
+    assert.ok(!logBucket.test('ticofiles-logs-1') && !logBucket.test('logs.s3.us-east-1.amazonaws.com.evil'));
     assert.equal(config.CacheBehaviors[0].PathPattern, '/visuals/*');
     for (const [i, behavior] of behaviors.entries()) {
         const name = i ? 'Visuals' : 'Files';
@@ -193,6 +204,16 @@ test('distribution wiring preserves files and error fallback without stacking th
         assert.deepEqual(policy.SecurityHeadersConfig.ContentSecurityPolicy,
             {ContentSecurityPolicy: "default-src 'none'; sandbox", Override: true});
         assert.ok(policy.RemoveHeadersConfig.Items.some(x => x.Header === 'Set-Cookie'));
+        // CloudFront refuses CORS headers as custom headers (stand-up, Oct 29): files use its CORS config.
+        assert.ok(!policy.CustomHeadersConfig.Items.some(x => /^access-control-/i.test(x.Header)));
+        const removesCors = policy.RemoveHeadersConfig.Items.some(x => /^access-control-/i.test(x.Header));
+        if (i) assert.ok(removesCors && !policy.CorsConfig);
+        else {
+            assert.ok(!removesCors);
+            assert.deepEqual(policy.CorsConfig.AccessControlAllowOrigins.Items, ['*']);
+            assert.equal(policy.CorsConfig.AccessControlAllowCredentials, false);
+            assert.equal(policy.CorsConfig.OriginOverride, true);
+        }
         assert.ok(policy.RemoveHeadersConfig.Items.some(x => x.Header === 'Content-Security-Policy-Report-Only'));
         assert.equal(policy.SecurityHeadersConfig.ContentTypeOptions.Override, true);
         assert.equal(policy.SecurityHeadersConfig.ReferrerPolicy.ReferrerPolicy, 'no-referrer');

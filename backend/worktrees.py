@@ -306,7 +306,9 @@ def inventory(c, computer):
     owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
     return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner,t.status AS task_status,"
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
-            f"LEFT JOIN bots b ON ('bot:' || b.slug)={owner} "
+            # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
+            # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.
+            f"LEFT JOIN bots b ON b.slug=substr({owner},5) AND substr({owner},1,4)='bot:' "
             "WHERE l.kind='worktree' AND l.computer_id=? AND (coalesce(l.state,'unknown')<>'removed' "
             "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))", (computer,))]
 
@@ -530,7 +532,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     hosted = [r[0] for r in c.execute("SELECT 'bot:' || bot FROM assignments WHERE runner_id=?", (who.runner_id,))]
     waits.serve(c, hosted, default_org)
     if not capable:
-        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
+        c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed' AND state<>'unknown'", (who.runner_id,))
         return []
     # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
     # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.

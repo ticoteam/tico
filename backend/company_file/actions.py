@@ -79,7 +79,8 @@ ALIASES = {
     "lawyer": "general-counsel", "contracts": "legal-review", "hr": "people-hr", "chief of staff": "chief-of-staff",
     "pr": "pr", "press": "pr", "ads": "paid-media", "release manager": "release-notes", "docs": "docs-writer",
     "technical writer": "docs-writer", "note taker": "meeting-notes", "meeting notes": "meeting-notes",
-    "project manager": "meeting-notes", "goal manager": "goal-manager", "librarian": "librarian", "assistant": "coo",
+    "project manager": "meeting-notes", "goal manager": "goal-manager", "ceo bot": "goal-manager",
+    "librarian": "librarian", "assistant": "coo",
     "botops": "botops", "cfo": "finance-lead", "cmo": "marketing-lead", "cto": "engineering-lead",
     "cap table": "equity-manager", "equity": "equity-manager", "fundraising": "fundraising-manager",
     "month-end close": "controller", "bookings": "scheduling-bookings", "scheduling": "scheduling-bookings",
@@ -112,12 +113,16 @@ def score(role, text):
 
 
 def find_role(text):
-    """The template a slug, name or everyday word names exactly, else None."""
+    """The template a slug, name or everyday word names exactly, else None. A name is tried whole before its "bot" or
+    "agent" ending is dropped, so the built-in's old name ("ceo bot") is an alias and "Strategy Bot" finds its
+    template."""
     key = re.sub(r"^(an?|the|some|another)\s+", "", str(text).strip().lower()).strip()
-    key = re.sub(r"\s+(bot|agent)$", "", key)
+    bare = re.sub(r"\s+(bot|agent)$", "", key)
     if key in ALIASES:
         return BY_SLUG.get(ALIASES[key])
-    return BY_SLUG.get(key) or BY_NAME.get(key)
+    if bare in ALIASES:
+        return BY_SLUG.get(ALIASES[bare])
+    return BY_SLUG.get(bare) or BY_NAME.get(key) or BY_NAME.get(bare)
 
 
 def closest_role(text):

@@ -1,10 +1,11 @@
 """What woke each run, its tokens and whether it acted, and the weekly table of them in hub sql
 (backend/run_triggers.py; token saving 1/9)."""
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend import automations
 from backend import github as G
 from backend import repositories as R
 from backend import routines
@@ -97,21 +98,27 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
 
 
 @pytest.mark.parametrize("fired_by", ["cron", "event"])
-def test_a_routines_new_task_is_woken_by_its_schedule(api, fired_by):
-    """A fresh occurrence opens a task; its wake is the routine, not the task handoff."""
+def test_a_routines_new_task_is_woken_by_its_automation(api, fired_by):
+    """A fresh occurrence of a routine (now its automation) opens a task; its wake names the automation, not the task
+    handoff."""
     store = api.app.state.store
+    fields = {"title": "Review the day", "text": "Review it", **(
+        {"cron": "0 9 * * *", "timezone": "UTC"} if fired_by == "cron" else {"on": "meeting.ready"})}
     with store.transaction() as c:
-        if fired_by == "cron":
-            c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,last_fired,next_due) "
-                      "VALUES('morning','ops','0 9 * * *','Review the day','Review it',NULL,?)", (H.shift(H.now(), days=-2),))
-        else:
-            c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) "
-                      "VALUES('morning','ops','meeting.ready','Meeting notes','File them')")
-            assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
+        aid = routines.create(c, "human:ana", "ops", fields, key="morning")["automation"]
     if fired_by == "cron":
-        assert Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.now()))["fired"]
+        automations.tick(store)                                   # sets its first due time
+        automations.tick(store, datetime.now(timezone.utc) + timedelta(days=1, minutes=1))
+    else:
+        with store.transaction() as c:
+            H.hook(c, "meeting.ready", "rec-1", lambda: {"title": "Planning"}, "human:ana")
+        store.automations.drain()
     with store.read() as c:
-        assert RT.of_message(newest(c, "ops", "New task from")) == ("schedule", "morning")
+        task = c.execute("SELECT id FROM tasks WHERE owner='bot:ops' AND title='Review the day'").fetchall()
+        assert len(task) == 1
+        wake = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs_json,'$.task')=? "
+                         "ORDER BY rowid LIMIT 1", (task[0]["id"],)).fetchone()
+        assert RT.of_message(H.message(c, wake[0])) == ("other", "automation:" + aid)
 
 
 def test_the_claim_puts_the_wake_on_the_run(api):

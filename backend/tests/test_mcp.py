@@ -91,6 +91,38 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
 
 
+def test_renamed_task_flags_still_take_their_older_names():
+    """`brief` (update, done) and `wake: false` (close) were both `quiet`; an older caller's `quiet` still sends the
+    same request, through the MCP schema check and the CLI."""
+    class Api:
+        def __init__(self):
+            self.bodies = []
+
+        def get(self, path, **query):
+            return {"actor": "human:ana", "role": "human"} if path == "me" else {"task": {"version": 3}}
+
+        def post(self, path, body=None, key=None):
+            self.bodies.append(body)
+            return {"task": {"id": "t1"}}
+
+    def sent(name, args):
+        args = {"id": "t1", **args}
+        assert hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"]) is None, args
+        api = Api()
+        hubtools.BY_NAME[name]["fn"](api, args)
+        return api.bodies[-1].get("quiet", False)
+
+    for name in ("hub_task_update", "hub_task_done"):
+        assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
+        assert sent(name, {}) is False
+    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
+    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
+    cli = hubcli.parser()
+    assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
+    assert cli.parse_args(["task", "create", "--owner", "ops", "--title", "T", "--quiet"]).next_run is True
+
+
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]
@@ -300,7 +332,7 @@ SUMMARY_FIELDS = {"id", "label", "online", "last_seen", "operator", "release", "
                   "readiness", "warnings", "errors"}
 
 
-def heavy_heartbeat(api, r, bots, n, release="0.3.56", update=None, huge=""):
+def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
     """What a busy computer reports: runtime catalogs, every bot's readiness with instruction warnings, a long error
     history and its repositories (synthetic, at the sizes the models allow)."""
     models = ["model-" + str(m) for m in range(30)]
@@ -350,15 +382,15 @@ def eleven_computers(api):
         mine = slugs[n * 3:n * 3 + 3]
         for bot in mine:
             assign(api, r, bot)
-        heavy_heartbeat(api, r, mine, n, release="0.3.50" if n == 1 else "0.3.56",
+        heavy_heartbeat(api, r, mine, n, release="0.4.50" if n == 1 else "0.4.56",
                         update={"state": "failed", "error": "download refused"} if n == 2 else
-                        {"state": "updating", "target": "0.3.56"} if n == 3 else None, huge="bot-13")
+                        {"state": "updating", "target": "0.4.56"} if n == 3 else None, huge="bot-13")
         computers.append(r)
     return computers
 
 
 def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_pages(api, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.3.56")
+    monkeypatch.setenv("TICO_VERSION", "0.4.56")
     computers = eleven_computers(api)
     add_bots(api, [f"helper-with-a-long-name-{k:03d}" for k in range(300)], computers[5]["runner_id"])
     assert len(json.dumps(get(api, "computers"))) > 200_000                 # the Computers page keeps everything

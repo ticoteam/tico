@@ -13,12 +13,12 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Give work or review a result | Tasks → New task, List, Board or Done |
 | Talk to a bot about one task | Bot chat → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
-| Add or edit a Routine | Settings → Rules → New routine, or the bot's Routines card |
-| See what Tico runs on its own | Settings → Rules → What Tico runs on its own ([System routines](system-routines.md)) |
+| Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
+| See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
 | Receive a webhook, or send events out | Settings → Webhooks → Incoming or Outgoing ([Webhooks](webhooks.md)) |
 | Keep webhooks while the server is off | Settings → Webhooks → Through Tico Gateway |
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
-| See or change what wakes a bot | Settings → Rules → What wakes a bot, or a task's **Wake rules** line |
+| See or change what wakes a bot | Automations → What wakes bots, or What wakes <bot> |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
@@ -35,14 +35,17 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
+| Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
+| Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
+| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
-| Contact support or continue a support conversation | Help (?) → Support rail |
+| Contact support or continue a support conversation | Ask → **+** → Tico support (phone: the Ask tab) |
 
-All four system bots appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries
-(Assistant opens your private chat, `#/assistant`);
-the CEO Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The CEO Bot is at the top of the team chart; the other three stay out of it.
+All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
+(bottom left, ⌘J; the phone's middle tab) opens your Assistant over any page, **Show chat** opens it full page
+(`#/assistant`), and the Assistant hands BotOps what needs BotOps;
+the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.

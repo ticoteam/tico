@@ -853,3 +853,55 @@ def test_an_address_with_a_user_name_never_lands_in_market_evidence_whatever_wro
     assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM market_watches")} == {"company/fieldcraft"}
     assert "segment/gc-suites" not in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
     assert rows(api, "SELECT id FROM market_entities WHERE id='company/trestle'")       # the player still lands
+
+
+# A made-up company (Acme Build): two sales teams, a sales seat with no team, and one whose team is "sales" in lower
+# case.
+TEAM_SEATS = [
+    ("Lab Partnerships Manager", "sales", "Lab network"),
+    ("Lab Outreach Rep", "sdr-research", "Lab network"),
+    ("Biopharma Sales Lead", "sales-lead", "Biopharma accounts"),
+    ("Biopharma Account Executive", "sales", "Biopharma accounts"),
+    ("Renewals Manager", "account-manager", ""),
+    ("Inside Sales Rep", "sdr-research", "sales"),
+]
+
+
+def team_text():
+    """The services chart cut to the built-ins, with TEAM_SEATS added; the Assistant carries a team too."""
+    draft = C.blank()
+    draft["company"].update(name="Acme Build", about="We sell lab data to biopharma accounts.",
+                            signals=["sells_services"])
+    draft = C.Turn(draft).finish()
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("coo", "botops")]
+    turn = C.Turn(draft)
+    for title, template, _ in TEAM_SEATS:
+        assert turn.apply("bot_add", {"template": template, "title": title, "reason": "Sells lab data."})["ok"], title
+    draft = turn.finish()
+    names = {title: team for title, _, team in TEAM_SEATS if team}
+    for bot in draft["bots"]:
+        if bot["title"] in names:
+            bot["team"] = names[bot["title"]]
+        elif bot["template"] == "coo":
+            bot["team"] = "Lab network"
+    return C.to_yaml(draft)
+
+
+def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_seats(environment):
+    api = environment()
+    preview_and_import(api, team_text())
+    groups = api.get("/api/v2/groups", headers=signed_in()).json()
+    names = [g["name"] for g in groups]
+    by_id = {g["id"]: g["name"] for g in groups}
+    seats = rows(api, "SELECT title,team FROM seats WHERE closed_at IS NULL")
+    placed = {r["title"]: by_id.get(r["team"], "") for r in seats}
+    assert placed == {"Lab Partnerships Manager": "Lab network", "Lab Outreach Rep": "Lab network",
+                      "Biopharma Sales Lead": "Biopharma accounts", "Biopharma Account Executive": "Biopharma accounts",
+                      "Renewals Manager": "Sales", "Inside Sales Rep": "Sales"}
+    # One group per name, its id the name's slug, made in file order. A sales seat with no team stays in the Sales group,
+    # and a team written "sales" joins that same group instead of making a second one.
+    assert names.count("Lab network") == names.count("Biopharma accounts") == names.count("Sales") == 1
+    assert {"lab-network", "biopharma-accounts"} <= set(by_id)
+    assert names.index("Lab network") < names.index("Biopharma accounts")
+    # The Assistant and BotOps are built-ins: outside groups, whatever team the file gives them.
+    assert not [r for r in rows(api, "SELECT bot,team FROM bot_config WHERE bot IN ('coo','botops')") if r["team"]]

@@ -8,6 +8,10 @@ the strategy draft (sections marked unconfirmed, bets `proposed`), the market by
 their sizes `proposed`, each size on its evidence), its players as market entities with their sites watched, the
 listening requests as a "Watching" section and the posts filed as market insights for the Librarian's next pass.
 Each goal names the bet it came from. A file without the block imports exactly as before.
+
+A seat with a `team` goes in the group of that name: one group per name, made in file order, or the group that already
+has it. A seat without one goes in its template's group. A built-in is the only bot a file makes, and it stays outside
+groups whatever its team says (backend/groups.py).
 """
 import hashlib
 import json
@@ -119,7 +123,7 @@ def plan(onboarding, c, who, text):
             reports_to, waits = line(bot)
             seats[key] = {"title": M.SeatCreate(title=bot["title"]).title, "template": bot["template"],
                           "description": O.job_description(card or {}, display, bot["reason"]),
-                          "reports_to": reports_to, "waits_on": waits}
+                          "reports_to": reports_to, "waits_on": waits, "team": bot.get("team", "")}
     except ValidationError:
         raise Problem("company_file", "A company name, title or instruction is too long for this Tico setup", 422) from None
     titles = {}
@@ -450,11 +454,16 @@ def apply(onboarding, c, who, text, fingerprint):
         parent = body.selected[slug].reports_to
         if row["reports_to"] != parent:
             onboarding.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"]))
-    # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task.
-    teams = Groups.seat_teams(c, onboarding.settings, sorted({seat["template"] for seat in seats.values()}))
-    made = lifecycle.lay_out(c, who.actor, {key: {**seat, "team": teams.get(seat["template"], ""),
-                                                  "description_by": "chart"}
-                                            for key, seat in seats.items()})
+    # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task. A seat with a
+    # team goes in the group of that name; one without goes in its template's group, as it always has.
+    teams = Groups.seat_teams(c, onboarding.settings,
+                              sorted({seat["template"] for seat in seats.values() if not seat["team"]}))
+    named = Groups.team_groups(c, [seat["team"] for seat in seats.values() if seat["team"]])
+    chart = {}
+    for key, seat in seats.items():
+        team = named.get(seat["team"]) or teams.get(seat["template"], "")
+        chart[key] = {**seat, "team": team, "description_by": "chart"}
+    made = lifecycle.lay_out(c, who.actor, chart)
     owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
     import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
     record = O.load(c)

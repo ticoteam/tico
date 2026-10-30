@@ -23,7 +23,7 @@ leaks, use **New secret** and update the tool.
 
 Post JSON to that address. Put two things in the body:
 
-- a `type`, a short word like `order.paid`, so rules can tell calls apart;
+- a `type`, a short word like `order.paid`, so automations can tell calls apart;
 - an id of your own, such as the order number.
 
 ```json
@@ -49,13 +49,16 @@ is `202` with a small JSON note.
 Either of these:
 
 ```
-hub rule set --scope-kind team --event webhook.received \
-  --when '{"trigger":"zapier-orders","type":"order.paid"}' \
-  --then action \
-  --params '{"action":"wake_bot","bot":"ops","text":"Order {{data.id}} paid: {{data.total}} from {{data.customer}}"}'
+hub automation create --file - <<'EOF'
+{"name": "Order paid", "owner": "bot:ops", "enabled": true,
+ "trigger": {"type": "webhook", "id": "zapier-orders",
+             "filters": [{"field": "webhook.type", "op": "is", "value": "order.paid"}]},
+ "steps": [{"id": "wake", "type": "action", "enabled": true, "do": "wake_bot",
+            "args": {"bot": "ops", "text": "Order {{webhook.data.id}} paid: {{webhook.data.total}} from {{webhook.data.customer}}"}}]}
+EOF
 ```
 
-or a routine that opens a task for every call (`hub routine set paid --title "Order paid" --on webhook.zapier-orders --text ...`).
+or the same automation with a Bot turn step instead of the action, which opens a task for every call ([Routines](routines.md)).
 
 ## Part 2: send Tico events to Zapier, Make or n8n
 
@@ -115,4 +118,4 @@ To post something that is not one of Tico's events, use `custom.`:
 hub webhook send <endpoint id> --type custom.deploy-done --data '{"app":"web"}'
 ```
 
-The endpoint must list `custom.*`. A rule can do the same with `send_webhook`.
+The endpoint must list `custom.*`. An automation can do the same with a `call_webhook` action.

@@ -128,7 +128,7 @@ async function wizard(browser, theme) {
   // Leaving setup restores the bar and makes the normal drawer reachable again.
   await phone.page.evaluate(() => { location.hash = '#/tasks'; });
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
   assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
@@ -184,7 +184,7 @@ async function created(browser, theme) {
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
   await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
   assert.equal(await phone.page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await noNotice(phone);
   await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();

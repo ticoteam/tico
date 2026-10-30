@@ -71,6 +71,27 @@ class Schema(HubCase):
                          "review PR")
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
+    def test_an_install_that_ran_the_first_rule_events_schema_gets_the_task_trigger_tables(self):
+        for table in ("rule_task_runs", "rule_task_state"):
+            self.conn.execute(f"DROP TABLE {table}")
+        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.RULE_EVENTS_SCHEMA) + 1}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertLessEqual({"rule_task_runs", "rule_task_state"}, names)
+
+    def test_an_install_at_the_last_schema_before_task_run_models_gets_the_table_and_keeps_its_tasks(self):
+        task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
+        self.conn.execute("DROP TABLE task_run_models")
+        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.TASK_RUN_MODELS_SCHEMA)}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("task_run_models", names)
+        self.assertEqual(self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0],
+                         "Prepare packet")
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+
     def test_every_table_and_index_in_the_contract_exists(self):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -317,7 +338,9 @@ class Rule5Tasks(HubCase):
         asked = H.task_comment(self.conn, CMO, row["id"], "Which image?", ask={"questions": [
             {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
              "multi": False, "other": True}], "who": ANA})
-        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"])
+        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"],
+                              extra_refs={"answer": {"target": {"comment": asked["id"]},
+                                                     "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
         self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")
@@ -1228,3 +1251,114 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(stored('seo'), 0)
         H.task_comment_delete(self.conn, ANA, other['id'], reply['id'])
         self.assertEqual(stored('seo'), 1)
+
+
+# ----------------------------------------------------------------------------- the Strategy Bot's tables, renamed
+# The two tables the Strategy Bot had under their old names, with each index as an install from before has it.
+OLD_STRATEGY_TABLES = {
+    "strategy_actions": ("ceo_actions", {"strategy_actions_created": ("ceo_actions_created", "created")}),
+    "strategy_merges": ("ceo_merges", {"strategy_merges_original": ("ceo_merges_original", "original, state"),
+                                       "strategy_merges_person": ("ceo_merges_person", "person, created")}),
+}
+
+
+class StrategyTableNames(HubCase):
+    """An install from before the rename keeps its Strategy Bot rows in the new tables, and for one release the old
+    tables stay equal to them, so an older release reopened after a rollback reads every row and what it writes there
+    comes back (hubdb.STRATEGY_TABLES)."""
+
+    def back_to_old_names(self, new):
+        old, indexes = OLD_STRATEGY_TABLES[new]
+        self.conn.execute(f"DROP TABLE {old}")      # the twin a new install keeps for an older release
+        for event in ("insert", "update", "delete"):
+            self.conn.execute(f"DROP TRIGGER {new}_to_old_{event}")
+        for index in indexes:
+            self.conn.execute(f"DROP INDEX {index}")
+        self.conn.execute(f"ALTER TABLE {new} RENAME TO {old}")
+        for index, (old_index, columns) in indexes.items():
+            self.conn.execute(f"CREATE INDEX {old_index} ON {old}({columns})")
+
+    def names(self, kind="table"):
+        return {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
+
+    def rows(self, table, columns="id, state"):
+        return sorted(tuple(r) for r in self.conn.execute(f"SELECT {columns} FROM {table}"))
+
+    def act(self, ident, state, table="strategy_actions"):
+        self.conn.execute(f"INSERT INTO {table}(id,created,actor,kind,state) VALUES(?,?,?,'level',?)",
+                          (ident, H.now(), "bot:goal-manager", state))
+
+    def test_rows_move_to_the_new_names_when_an_older_schema_starts_again(self):
+        self.act("a1", "done")
+        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
+                          "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
+        self.back_to_old_names("strategy_actions")
+        self.back_to_old_names("strategy_merges")
+        # An install that has not reached the migrations that create these tables runs them again, as it would on start.
+        first = min(H.MIGRATIONS.index(H.STRATEGY_ACTIONS_SCHEMA), H.MIGRATIONS.index(H.STRATEGY_MERGES_SCHEMA))
+        self.conn.execute(f"PRAGMA user_version={first}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        self.assertEqual(self.rows("strategy_actions"), [("a1", "done")])
+        self.assertEqual(self.rows("strategy_merges", "merged_into, original"), [("t1", "t2")])
+        self.assertEqual(self.rows("ceo_merges", "merged_into, original"), [("t1", "t2")])
+        self.assertLessEqual({"strategy_actions_created", "strategy_merges_original", "strategy_merges_person"},
+                             self.names("index"))
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+
+    def test_a_second_start_changes_nothing(self):
+        self.act("a1", "done")
+        self.back_to_old_names("strategy_actions")
+        H.migrate(self.conn)
+        before = self.rows("strategy_actions")
+        H.migrate(self.conn)
+        self.assertEqual(self.rows("strategy_actions"), before)
+        self.assertEqual(before, [("a1", "done")])
+
+    def test_every_write_this_release_makes_reaches_the_old_tables(self):
+        """A merged question and a log entry from before a rollback are there for the older release to read: its
+        answer is relayed to the original askers, and its Undo finds the entry."""
+        self.act("a1", "done")
+        self.act("a2", "done")
+        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
+                          "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
+        self.conn.execute("UPDATE strategy_actions SET state='undone' WHERE id='a1'")
+        self.conn.execute("DELETE FROM strategy_actions WHERE id='a2'")
+        self.conn.execute("INSERT INTO strategy_actions(id,created,actor,kind,state) VALUES('a3',?,?,'level','done') "
+                          "ON CONFLICT(id) DO NOTHING", (H.now(), "bot:goal-manager"))
+        self.assertEqual(self.rows("ceo_actions"), self.rows("strategy_actions"))
+        self.assertEqual(self.rows("ceo_actions"), [("a1", "undone"), ("a3", "done")])
+        self.assertEqual(self.rows("ceo_merges", "merged_into, original, state"), [("t1", "t2", "merged")])
+
+    def test_what_an_older_release_wrote_after_a_rollback_is_what_the_next_start_reads(self):
+        """The older release writes only to the old tables: an entry it added, one it undid and one it removed are all
+        as it left them once this release starts again."""
+        self.act("a1", "done")
+        self.act("a2", "done")
+        self.conn.commit()
+        for statement in ("INSERT INTO ceo_actions(id,created,actor,kind,state) VALUES('a3','x','bot:goal-manager',"
+                          "'level','done')", "UPDATE ceo_actions SET state='undone' WHERE id='a1'",
+                          "DELETE FROM ceo_actions WHERE id='a2'",
+                          "UPDATE ceo_merges SET state='settled' WHERE 0"):
+            self.conn.execute(statement)
+        self.conn.commit()
+        H.migrate(self.conn)
+        self.assertEqual(self.rows("strategy_actions"), [("a1", "undone"), ("a3", "done")])
+        # The triggers are back, so this release's writes reach the old table again.
+        self.act("a4", "done")
+        self.assertEqual(self.rows("ceo_actions"), self.rows("strategy_actions"))
+
+    def test_the_start_that_copies_an_older_releases_rows_leaves_the_triggers_in_place(self):
+        """Another server of this release may write as soon as the copy commits: that write reaches the old table."""
+        self.act("a1", "done")
+        self.conn.commit()
+        self.conn.execute("UPDATE ceo_actions SET state='undone' WHERE id='a1'")
+        self.conn.commit()
+        H._sync_strategy_tables(self.conn)
+        self.act("a2", "done")
+        self.assertEqual(self.rows("ceo_actions"), [("a1", "undone"), ("a2", "done")])
+
+    def test_a_new_install_has_the_old_tables_with_the_new_columns(self):
+        for old, new, _ in H.STRATEGY_TABLES:
+            columns = [r[1] for r in self.conn.execute(f"PRAGMA table_info({new})")]
+            self.assertEqual([r[1] for r in self.conn.execute(f"PRAGMA table_info({old})")], columns)

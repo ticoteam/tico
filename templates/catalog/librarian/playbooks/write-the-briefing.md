@@ -21,8 +21,8 @@ Each item is one sentence of what happened, cited by its source domain, and the 
 
 `kind` is `change` (something a competitor did), `signal` (a customer or channel said it), `theme` (a pattern across
 several) or `size` (a market number). Tag every entity the item is about, not only the main one: the server uses the
-tags to work out which bets the week touches, and the CEO Bot looks only at those. Write down what happened, never
-what the team should do about it; the bets are the CEO Bot's and the owner's to weigh.
+tags to work out which bets the week touches, and the Strategy Bot looks only at those. Write down what happened, never
+what the team should do about it; the bets are the Strategy Bot's and the owner's to weigh.
 
 ## 3. Write the page and post it
 
@@ -36,5 +36,5 @@ command. The briefing becomes the market page `market/briefings/<week>` and the 
 
 ## 4. Finish
 
-Name the week and the number of items in the sweep's report. Do not message the CEO Bot: the server opens its task
+Name the week and the number of items in the sweep's report. Do not message the Strategy Bot: the server opens its task
 when the briefing touches a bet.

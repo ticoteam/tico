@@ -4,8 +4,12 @@ sweep from the week's delta, the page monitors' changes, accepted listening item
 The briefing is a market page (`market/briefings/<week>`) and a row here that also lists its items, each tagged with the
 market entities it touches. The server works out which bets those entities touch: an active bet of the published
 strategy whose `cites`, or whose thesis wrong-if `market_id`, is one of them. It emits `market.briefing` with the
-touched bets, so the CEO Bot's routine on that event looks only at them; with none touched, it has nothing to do.
-One row per ISO week: posting the same week again replaces it and keeps `created`.
+touched bets, so the Strategy Bot's routine on that event looks only at them; with none touched, it has nothing to do.
+One row per ISO week: posting the same week again replaces it and keeps `created`. A briefing an automation posted
+(`post_update` to market, backend/automation_actions.py) carries `source: {automation, run, task}`; a post by hand
+clears it. `cadence` says how Market labels it: `daily` when an automation posted it on a schedule that runs on more
+than one day a week (the built-in Market briefing, each morning) or on anything but a schedule, so it is dated by its
+day; `weekly` for one posted by hand or by a once-a-week schedule.
 """
 import hashlib
 import re
@@ -42,6 +46,7 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
+    H.add_column(c, "market_briefings", "source", "TEXT")
 
 
 def this_week(at=None):
@@ -55,6 +60,9 @@ def _row(row, body=True):
     out = dict(row)
     out["items"] = MK.loads(out.get("items"), [])
     out["bets"] = MK.loads(out.get("bets"), [])
+    source = out.pop("source", None)
+    if source:
+        out["source"] = MK.loads(source, {})
     if not body:
         out.pop("body", None)
     return out
@@ -68,9 +76,27 @@ def touched(c, ids):
     return [{"id": b["id"], "n": n, "statement": b["statement"]} for n, b in enumerate(active, 1) if b["id"] in ids]
 
 
+def _once_a_week(cron):
+    """A five-field cron that runs on one day of the week only: `0 7 * * 1`, not `0 7 * * *` or `0 7 * * 1-5`."""
+    fields = str(cron or "").split()
+    return len(fields) == 5 and fields[2] == "*" and re.fullmatch(r"[0-7]|[A-Za-z]{3}", fields[4]) is not None
+
+
+def cadence(c, source):
+    """`daily` or `weekly` (see the module's note): read off the posting automation's trigger."""
+    aid = (source or {}).get("automation") if isinstance(source, dict) else None
+    if not aid:
+        return "weekly"
+    row = c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone()
+    trigger = (MK.loads(row["flow_json"], {}) if row else {}).get("trigger")
+    trigger = trigger if isinstance(trigger, dict) else {}
+    return "weekly" if trigger.get("type") == "schedule" and _once_a_week(trigger.get("cron")) else "daily"
+
+
 def _view(c, row, body=True):
     out = _row(row, body)
     out["touched"] = touched(c, set(out["bets"]))
+    out["cadence"] = cadence(c, out.get("source"))
     return out
 
 
@@ -108,10 +134,9 @@ def bets_touched(c, items):
     return out
 
 
-def post(c, who, week, title, body, items):
+def post(c, who, week, title, body, items, source=None):
     """Write (or replace) the week's briefing, its market page, and emit `market.briefing`. The caller has checked the
-    writer. Returns the briefing."""
-    from . import routines
+    writer. `source` is the automation run that posted it, if one did. Returns the briefing."""
     if not WEEK.match(week):
         raise Problem("validation", "week is an ISO week like 2026-W44", 422)
     items = [{"text": " ".join(i.text.split()), "kind": i.kind, "entity_ids": list(dict.fromkeys(i.entity_ids))}
@@ -123,18 +148,18 @@ def post(c, who, week, title, body, items):
     now = H.now()
     MK.write_page(c, who.actor, PAGE + week, title, body, CATEGORY, replace=True, record=False)
     if before:
-        c.execute("UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated=? WHERE week=?",
-                  (title, body, MK.dumps(items), MK.dumps(bets), now, week))
+        c.execute("UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated=?, source=? WHERE week=?",
+                  (title, body, MK.dumps(items), MK.dumps(bets), now, MK.dumps(source) if source else None, week))
     else:
-        c.execute("INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created, updated) "
-                  "VALUES (?,?,?,?,?,?,?,?,?)", (H.new_id(), week, title, body, MK.dumps(items), MK.dumps(bets),
-                                                   who.actor, now, now))
+        c.execute("INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created, updated, "
+                  "source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                  (H.new_id(), week, title, body, MK.dumps(items), MK.dumps(bets), who.actor, now, now,
+                   MK.dumps(source) if source else None))
     H.event(c, who.actor, "market.briefing", week, {"items": len(items), "bets": len(bets), "replaced": bool(before)})
     # One event per week; a replacement that touches other bets than before is a new occurrence for them.
     again = MK.loads(before["bets"], []) if before else []
     if not before or (bets and set(bets) != set(again)):
         subject = week if not before else week + "." + hashlib.sha256(",".join(sorted(bets)).encode()).hexdigest()[:6]
-        routines.emit(c, EVENT, subject, {"week": week, "bets": ", ".join(bets)}, title=title)
         H.hook(c, "market.briefing", subject, lambda: {"week": week, "bets": list(bets)}, who.actor, revision=0)
     return get(c, week)
 

@@ -161,6 +161,15 @@ credential admin, can fill a card. A credential admin stores any; a member store
 credential they stored themselves, unless the owner turns **Members store credentials for their bots** off in Settings > People; anyone
 else sees who to ask.
 
+A bot asking from a task (its turn works on one) puts the card in the task's thread instead, for the person who wrote to it
+there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
+task waits on the card ([Reconnect cards](tasks.md#reconnect-cards)):
+saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
+task does the same, for the person it acts for. Asking again on the same task returns the open card; another task's open
+card for the same variable stays (saving either saves both); cancelling the card ends the task's wait and tells the bot.
+When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
+request is cancelled; a person who cannot read the task cannot open its request either.
+
 If a human pastes a credential into the chat instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
@@ -203,8 +212,8 @@ breaks the `op://` form; reference it by its item id.
 - Credentials never go in tasks, git, logs, updates or prompts. A key-shaped string in a
   draft fails lint for this reason. A bot that needs one opens a card in the chat; BotOps stores what a human
   pastes and removes it from the conversation.
-- A missing credential is not yours to work around: open the card (`hub credential request`), or for a task no human is in,
-  name the variable on the task and stop. The bot's Tools list shows every declared Credential as present or missing.
+- A missing credential is not yours to work around: open the card (`hub credential request`); on a task it goes in the
+  task's thread and the task waits for it, so stop there. The bot's Tools list shows every declared Credential as present or missing.
 - Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential. Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.

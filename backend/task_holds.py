@@ -92,6 +92,10 @@ def holds(conn, row):
                                   (row["id"],))):
         H.approval_wait(conn, a)
         out.append({"kind": "approval", "on": a.get("decision_owner"), "what": f"a {a.get('kind') or 'yes'} approval"})
+    from .reconnects import hold as reconnect_hold
+    reconnect = reconnect_hold(conn, row["id"])
+    if reconnect:
+        out.append({"kind": "person", "on": reconnect["on"], "what": reconnect["what"]})
     if row.get("waiting_on") and not any(h["on"] == row["waiting_on"] for h in out):
         out.append({"kind": "person", "on": row["waiting_on"], "what": ""})
     # The external holds wait_detail reads after these: a worktree, a milestone, a GitHub callback.
@@ -163,6 +167,11 @@ def refresh(conn, task_id, cleared=None, at=None):
         if H.task(conn, task_id)["status"] != "waiting":
             return "resumed"
     if cleared and H.is_bot(row["owner"]):
+        # A reconnect wake owed on it goes now, with what cleared, as its one wake (backend/reconnects.py).
+        from . import reconnects
+        if reconnects.deliver(conn, task_id, why="holds", cleared=cleared):
+            task_blocked.bump(conn, row)
+            return "open"
         note = f"{cleared}; nothing left to wait on"
         H._set_status(conn, H.KEEPER, row, "open", note=note)
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))

@@ -54,6 +54,8 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 # Only asymmetric algorithms: an HMAC "signature" would be checkable with a public key.
 ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512")
 LEEWAY = 60
+# Which account chooser the provider shows at /auth/login?prompt=: only these two (login is the provider's own choice).
+PROMPTS = ("select_account", "login")
 LOGIN_WINDOW = 600
 TOUCH_EVERY = 60
 DISCOVERY_TTL = 3600
@@ -75,6 +77,24 @@ class NotOnRoster(Exception):
     def __init__(self, email):
         super().__init__("not on roster")
         self.email = email
+
+
+def _retry_after(reply):
+    """Seconds to wait after a 429: the JSON `retry_after` if it parses, else the Retry-After header, else 300; at most
+    an hour."""
+    wait = None
+    try:
+        body = reply.json()
+        if isinstance(body, dict) and body.get("retry_after") is not None:
+            wait = float(body["retry_after"])
+    except (ValueError, TypeError):
+        wait = None
+    if wait is None:
+        try:
+            wait = float(reply.headers.get("Retry-After", ""))
+        except ValueError:
+            wait = None
+    return int(min(3600, max(0, 300 if wait is None else wait)))
 
 
 def _loopback(url):
@@ -265,9 +285,10 @@ class Oidc:
             raise SignInError("login expired")
         return payload
 
-    def begin(self, target, fresh=False, challenge=""):
+    def begin(self, target, fresh=False, challenge="", prompt=""):
         """The provider URL to send the browser to, and the signed cookie that remembers this attempt.
-        `target` is a same-origin path, or (with the PKCE `challenge`) the URL of an allowed frontend."""
+        `target` is a same-origin path, or (with the PKCE `challenge`) the URL of an allowed frontend.
+        `prompt` is passed to the provider when it is one of PROMPTS; `fresh` asks for the account chooser."""
         doc = self._discover()
         state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
         params = {"response_type": "code", "client_id": self.settings.oidc_client_id,
@@ -277,7 +298,9 @@ class Oidc:
         domains = self.settings.oidc_allowed_domains
         if _google(self.issuer) and len(domains) == 1:
             params["hd"] = domains[0]            # a hint only; the ID token's claim is what is checked
-        if fresh:
+        if prompt in PROMPTS:
+            params["prompt"] = prompt
+        elif fresh:
             params["prompt"] = "select_account"
         endpoint = doc["authorization_endpoint"]
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(params)
@@ -287,8 +310,8 @@ class Oidc:
         return url, cookie
 
     def finish(self, query, cookie):
-        """The verified email of a finished login, the path (or frontend URL) to return to, and the
-        frontend's PKCE challenge ("" for the built-in page). Raises SignInError.
+        """The verified email of a finished login, the path (or frontend URL) to return to, the frontend's PKCE
+        challenge ("" for the built-in page), and the account it is: (issuer, subject). Raises SignInError.
         No database is held open: this waits on the provider."""
         pending = self._unsign(cookie)
         if query.get("error"):
@@ -298,19 +321,73 @@ class Oidc:
             raise SignInError("state mismatch")
         doc = self._discover()
         claims = self._verify(self._exchange(doc, code, pending["v"]), pending["n"], doc)
-        return self._email(claims), pending["x"], str(pending.get("c") or "")
+        return (self._email(claims), pending["x"], str(pending.get("c") or ""),
+                (str(claims["iss"]), str(claims["sub"])))
 
-    def person(self, c, email):
-        """The roster id for this email, the same match every proxy gets. Raises NotOnRoster."""
+    def person(self, c, email, account=None):
+        """The roster id this verified sign-in is. The account (issuer, subject) is matched first, so a person who changed
+        their address keeps their place, and the address moves to the new one unless someone else has it. Otherwise the
+        email is matched, and the account is remembered. An address the owner admits joins here on its first verified
+        sign-in (the same rule as the proxy's join, under this transaction). Raises NotOnRoster."""
+        from . import access
+        if account:
+            issuer, sub = account
+            row = c.execute("SELECT id,email FROM humans WHERE idp_issuer=? AND idp_sub=?", (issuer, sub)).fetchone()
+            if row:
+                if self._refused(c, row["id"]):
+                    raise NotOnRoster(email)
+                if str(row["email"] or "").lower() != email:
+                    self._move_email(c, row["id"], email)
+                return row["id"]
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
-        if not row or self._left(c, row["id"]):
+        if not row:
+            # An address the owner admits (Settings > People) joins on its first verified sign-in; a retired one never does.
+            if email in access.retired_emails(c) or not access.admitted(access.load_access(c, self.settings), email):
+                raise NotOnRoster(email)
+            row = {"id": access.join_on_sign_in(c, email)}
+        elif self._refused(c, row["id"]):
             raise NotOnRoster(email)
+        if account:
+            self._remember(c, row["id"], account)
         return row["id"]
 
-    def _left(self, c, human):
+    def _move_email(self, c, pid, email):
+        """The person's sign-in address changes to the one the account verified now. Refused (NotOnRoster) when a
+        retired address or another person's. Everything follows: see access.change_email / change_owner_email."""
+        from . import access, views
+        from . import people as P
+        if email in access.retired_emails(c) or access._email_taken(c, email, pid):
+            raise NotOnRoster(email)
+        roster = views.roster(c)
+        person = P.person(pid, roster)
+        owner = access.load_owner(c, self.settings)
+        actor = "human:" + pid
+        try:
+            if person and person["email"] and person["email"] == owner["email"]:
+                access.change_owner_email(c, actor, roster, owner, email, expected_revision=owner["revision"],
+                                          now=H.now(), settings=self.settings, via="sign_in")
+            else:
+                access.change_email(c, actor, roster, pid, email, now=H.now(), settings=self.settings, via="sign_in")
+        except Problem as exc:
+            log.info("sign-in address change refused: %s", exc.code)
+            raise NotOnRoster(email) from exc
+
+    def _remember(self, c, pid, account):
+        """Store the account a person signed in with. A different subject from the same issuer is an account change: it
+        is audited, and this issuer's email check is still what let it in."""
+        issuer, sub = account
+        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id=?", (pid,)).fetchone()
+        if row and row["idp_sub"] and row["idp_issuer"] == issuer and row["idp_sub"] != sub:
+            H.event(c, "human:" + pid, "person.account_changed", pid, {"issuer": issuer})
+        c.execute("UPDATE humans SET idp_issuer=?, idp_sub=? WHERE id=?", (issuer, sub, pid))
+
+    def _refused(self, c, human):
+        """Whether the roster refuses this person's sign-in: hidden, left the directory, or sign-in turned off. Checked
+        before any address moves, account is remembered or session issued."""
         from . import views
+        from . import people as P
         person = next((p for p in views.roster(c).get("people", []) if p.get("id") == human), None)
-        return bool(person and person.get("hidden"))
+        return bool(person and not P.may_sign_in(person))
 
     def _exchange(self, doc, code, verifier):
         data = {"grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect_uri,
@@ -442,6 +519,31 @@ class Oidc:
             answer = reply.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise SignInError(field.split("_")[1] + " failed: " + type(exc).__name__, 502) from exc
+        return reply.status_code, answer if isinstance(answer, dict) else {}
+
+    def push_people(self, rows):
+        """Send the install's sign-in list to the Tico account (backend/people_mirror.py): (HTTP status, answer), or None
+        when the account takes none (no `tico_people_endpoint`) or this is a rehearsal, which sends nothing out.
+        Same client credentials as `invite`; only the issuer's own host is ever sent to."""
+        from .invites import rehearsing
+        if rehearsing(self.settings):
+            return None
+        endpoint = self._endpoint(self._discover(), "tico_people_endpoint")
+        if endpoint is None:
+            return None
+        data = {"client_id": self.settings.oidc_client_id, "client_secret": self.settings.oidc_client_secret,
+                "people": json.dumps(rows, separators=(",", ":"), sort_keys=True)}
+        try:
+            reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise SignInError("people list failed: " + type(exc).__name__, 502) from exc
+        if reply.status_code == 429:
+            # The account may answer in HTML (a proxy's limit page): the wait then comes from its header, if any.
+            return 429, {"retry_after": _retry_after(reply)}
+        try:
+            answer = reply.json()
+        except ValueError:
+            answer = None
         return reply.status_code, answer if isinstance(answer, dict) else {}
 
     def email(self, headers, c):
@@ -601,7 +703,7 @@ def register(app, auth):
                                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
     @app.get(LOGIN_PATH)
-    def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = ""):
+    def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = "", prompt: str = ""):
         oidc = active()
         challenge = ""
         target = None if next.startswith("/") else oidc.frontend_target(next)
@@ -613,12 +715,14 @@ def register(app, auth):
                              "a PKCE code_challenge.")
             next, challenge = target, code_challenge
         next = next if challenge else safe_next(next)
+        prompt = prompt if prompt in PROMPTS else ""
         entry = canonical_entry(request, LOGIN_PATH, {
-            "next": next if next != "/" else "", "fresh": "1" if fresh else "", "code_challenge": challenge})
+            "next": next if next != "/" else "", "fresh": "1" if fresh else "", "code_challenge": challenge,
+            "prompt": prompt})
         if entry is not None:
             return entry
         try:
-            url, cookie = oidc.begin(next, bool(fresh), challenge)
+            url, cookie = oidc.begin(next, bool(fresh), challenge, prompt)
         except SignInError as exc:
             log.warning("sign-in could not start: %s", exc.reason)
             return _page(settings, 502, "Sign-in is unavailable",
@@ -651,9 +755,9 @@ def register(app, auth):
         oidc = active()
         jar = cookies(request.headers)
         try:
-            email, target, challenge = oidc.finish(dict(request.query_params), jar.get(oidc.login_cookie, ""))
+            email, target, challenge, account = oidc.finish(dict(request.query_params), jar.get(oidc.login_cookie, ""))
             with store.transaction() as c:
-                human = oidc.person(c, email)
+                human = oidc.person(c, email, account)
                 if challenge:
                     # No cookie for a frontend: it gets a code, in the fragment so no server or log sees it.
                     origin = "%s://%s" % urlparse(target)[:2]
@@ -662,12 +766,15 @@ def register(app, auth):
                 else:
                     sid = oidc.start_session(c, human, email, jar.get(oidc.cookie, ""))
         except NotOnRoster as exc:
+            # The browser's old session (of whoever was signed in before) ends with this refusal.
+            if jar.get(oidc.cookie):
+                oidc.revoke_session(jar.get(oidc.cookie))
             response = _page(settings, 403, "You're not on the list",
-                             "<b>" + html.escape(exc.email) + "</b> is not on " + html.escape(settings.company_name)
-                             + "'s list of people for " + html.escape(settings.app_name)
-                             + ". Ask whoever runs it to add you, or sign in with a different account.",
-                             (LOGIN_PATH + "?fresh=1", "Use another account"))
+                             "You're signed in as <b>" + html.escape(exc.email) + "</b>, and that address is not on "
+                             + html.escape(settings.company_name) + "'s list for " + html.escape(settings.app_name) + ".",
+                             (LOGIN_PATH + "?prompt=select_account", "Use another account"))
             response.delete_cookie(oidc.login_cookie, path="/", secure=oidc.secure, httponly=True)
+            response.delete_cookie(oidc.cookie, path="/", secure=oidc.secure, httponly=True)
             return response
         except SignInError as exc:
             log.warning("sign-in refused: %s", exc.reason)

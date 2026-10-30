@@ -453,6 +453,7 @@ directly and sends no ID.
 | `TICO_TELEMETRY`, `DO_NOT_TRACK` | `off` / `1` stops the count; the check then goes to GitHub |
 | `TICO_VERSION` | The running version, set by the image |
 | `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | An updater service the owner's "Update now" calls |
+| `TICO_UPDATES` | `tico`: Tico updates this server from outside (a cloud company, [cell mode](cell.md)). The app has no "Update now" and says "Tico updates this server"; Tico support's scheduled update is off |
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of

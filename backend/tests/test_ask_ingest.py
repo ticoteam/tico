@@ -872,3 +872,56 @@ def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch
     assert "salary" not in admin.text and "doctor" not in admin.text
     own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
     assert {"Ben's private salary review", "Which doctor do you see?"} <= {i["title"] for i in own.json()["items"]}
+
+
+@pytest.mark.parametrize("actor,role,via,expected", [
+    ("bot:ops", "bot", "botops", True),
+    ("bot:ops", "bot", "assistant", False),
+    ("human:ben", "human", "", False),
+    ("human:ben", "human", "botops", False),
+    ("human:ben", "human", "assistant", False),
+    ("bot:assistant", "bot", "", False),
+    ("bot:assistant", "bot", "botops", False),
+])
+def test_gate_preserves_person_and_assistant_exclusions(actor, role, via, expected):
+    from backend.auth import Identity
+    assert A.gated(Identity(actor, role, via=via), "assistant") is expected
+
+
+@pytest.mark.parametrize("mode", ["on", "rehearsal"])
+@pytest.mark.parametrize("where,reason", [("load_set", "not_found"), ("open_items", "error"),
+                                        ("server_engine", "unavailable")])
+def test_preflight_exception_keeps_failed_open_record(gate, monkeypatch, mode, where, reason):
+    from clients.judge import JudgeError
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": mode})
+    def fail(*args, **kwargs):
+        if reason == "error":
+            raise RuntimeError("private item text must not be recorded")
+        raise JudgeError(reason, "private item text must not be recorded")
+    monkeypatch.setattr(A.J if where == "load_set" else A, where, fail)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, reason)
+    assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert not calls(api) and not model.calls
+    assert "private item text" not in str(item)
+
+
+def test_exception_after_judging_keeps_call_link_and_fails_open(gate, monkeypatch):
+    api, model, token = gate
+    original = A._criteria
+    seen = []
+    def criteria(own):
+        seen.append(True)
+        if len(seen) == 2:
+            raise RuntimeError("could not assemble verdict")
+        return original(own)
+    monkeypatch.setattr(A, "_criteria", criteria)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item], [call] = items(api), calls(api)
+    assert (item["outcome"], item["reason"], item["call_id"]) == (A.FAILED_OPEN, "error", call["id"])
+    assert len(model.calls) == 1

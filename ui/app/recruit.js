@@ -1,6 +1,6 @@
 /* Recruiting a seat (backend/recruiting.py): Team > Add bot (and Settings > Bots > Add bot > Recruit candidates) makes a
    Recruiting seat first, then goes through the same flow as opening a seat on the org chart: its job description (the
-   CEO Bot drafts it for the owner), Recruit, and the pick, which creates the bot in Onboarding. */
+   Strategy Bot drafts it for the owner, behind the Assistant), Recruit, and the pick, which creates the bot in Onboarding. */
 'use strict';
 let RECRUIT_HANDOFF = null;
 let RECRUIT_POLL = null;
@@ -96,12 +96,15 @@ async function recruitNewSeat(seed = {}) {
     <div class="bot-editor-body"><p class="muted">Every bot starts as a Recruiting seat on the org chart: the role, its job description and who it reports to. You pick a candidate next.</p>
     <label>Role title<input name="title" maxlength="120" required value="${esc(title)}" placeholder="Customer support"></label>
     <label>Reports to<select name="reports_to">${recruitPlaces().map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('')}</select></label>
-    <label>Job description <span class="muted">(optional)</span><textarea name="description" rows="4" maxlength="8000" placeholder="${owner ? 'Leave it empty and your CEO Bot drafts one' : 'What should this role own? You can write it later'}">${esc(brief)}</textarea></label>
-    <p class="muted">Connecting an agent you already run? <button class="linkish" type="button" data-recruit-botops>Ask BotOps</button></p>
+    <label>Job description <span class="muted">(optional)</span><textarea name="description" rows="4" maxlength="8000" placeholder="${owner ? `Leave it empty and one is drafted for you` : 'What should this role own? You can write it later'}">${esc(brief)}</textarea></label>
+    <p class="muted">Connecting an agent you already run? <button class="linkish" type="button" data-recruit-ask>Ask</button></p>
     <p class="err" role="alert" data-recruit-error hidden></p></div>
     <div class="bot-editor-actions"><button class="primary" type="submit">Create seat</button><button class="ghost" type="button" data-recruit-close>Cancel</button></div></form>`;
   dialog.querySelectorAll('[data-recruit-close]').forEach(b => { b.onclick = () => dialog.close(); });
-  dialog.querySelector('[data-recruit-botops]').onclick = () => { dialog.close(); recruitAskBotOps(); };
+  dialog.querySelector('[data-recruit-ask]').onclick = () => {
+    dialog.close();
+    askDraft('Help me connect an agent I already run. Here is where it lives (folder path and computer, or GitHub URL):\n\n');
+  };
   const form = dialog.querySelector('form'), error = dialog.querySelector('[data-recruit-error]');
   let creating = false;
   form.onsubmit = async event => {
@@ -121,22 +124,10 @@ async function recruitNewSeat(seed = {}) {
   form.elements.title.focus();
 }
 
-function recruitAskBotOps() {
-  const bot = (S.emps || []).find(row => row.name === 'botops' && row.can_chat && !botLimited(row));
-  if (!bot) { toast('BotOps chat is unavailable. Ask your team owner for access.', true); return; }
-  const pill = botPill('botops'), box = pq(pill, '.p-text');
-  if (!box.value.trim()) {
-    box.value = 'Help me connect an agent I already run. Here is where it lives (folder path and computer, or GitHub URL):\n\n';
-    box.dispatchEvent(new Event('input', {bubbles: true}));
-  }
-  pill.focusOnOpen = true;
-  if (location.hash === '#/bot/botops/chat') showBotTab('chat'); else location.hash = '#/bot/botops/chat';
-}
-
 function recruitDraftLine(seat) {
-  const by = esc(seat.draft?.by || 'CEO Bot');
-  if (seat.draft?.state === 'drafting') return `<span class="recruit-spin" aria-hidden="true"></span>${by} is drafting the job description…`;
-  if (seat.description_by === 'ceo_bot') return `Drafted by ${by}.${seat.can_edit ? ' Edit it as you like.' : ''}`;
+  // The Strategy Bot drafts it behind the Assistant, so the line names nobody.
+  if (seat.draft?.state === 'drafting') return '<span class="recruit-spin" aria-hidden="true"></span>Drafting the job description…';
+  if (seat.description_by === 'strategy_bot') return `Drafted for you.${seat.can_edit ? ' Edit it as you like.' : ''}`;
   if (seat.description_by === 'chart') return seat.description ? 'From the org chart model.' : 'No job description yet.';
   return '';
 }
@@ -174,7 +165,7 @@ async function recruitSeat(id) {
     } finally { saving = null; showDirty(); }
   })());
   if (save) save.onclick = async () => { try { await saveText(); toast('Job description saved.'); } catch (e) { status.textContent = e.message; } };
-  // The CEO Bot's draft arrives in a minute or so; a description being typed is never replaced.
+  // The Strategy Bot's draft arrives in a minute or so; a description being typed is never replaced.
   if (seat.draft?.state === 'drafting') RECRUIT_POLL = setInterval(async () => {
     if (!dialog.open) { clearInterval(RECRUIT_POLL); return; }
     if (document.hidden) return;

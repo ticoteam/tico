@@ -6,7 +6,11 @@ a conversation, how to attach one, what Tico does to a page when it is attached,
 it, and what a reader sees outside Tico.
 
 Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card. Without a separate
-visual address, pages and SVG are cards with **Open** instead ([details](#with-and-without-a-visual-address)).
+visual address or [Tico file hosting](files.md#tico-file-hosting), pages and SVG are cards with **Open** instead
+([details](#with-and-without-a-visual-address)).
+
+A page a bot keeps current, with a cadence and a status line Tico draws, is a [page](pages.md): the same frame and
+the same clean-up, published with `hub page publish`.
 
 ## When a bot adds a visual
 
@@ -58,9 +62,9 @@ A visual shows as a file chip instead of a card only when its type or size isn't
 ### With and without a visual address
 
 Visuals are always on. What a conversation shows depends on whether your Tico has a working separate visual address
-(see [Self-hosting](#self-hosting)). You don't turn anything on or off.
+or uses Tico file hosting (see [Self-hosting](#self-hosting)). You don't turn anything on or off.
 
-| Visual | With a visual address | Without one |
+| Visual | With a visual address or Tico file hosting | Without either |
 |---|---|---|
 | Picture (PNG, JPEG, GIF, WebP) | Inline card | Inline card |
 | Video, audio | Plays in its card | Plays in its card |
@@ -69,8 +73,8 @@ Visuals are always on. What a conversation shows depends on whether your Tico ha
 Without a visual address, Tico shows pictures, video and audio from the app's own address, as media only. It never
 shows a page or an SVG from there, so they open in the file viewer instead of in the conversation. The card's menu
 (**Open in file viewer**, **Download**) works as above; there is no **Expand** for a page or SVG. If the still
-preview can't load, the card keeps its title and **Open**. Set up a visual address and the same messages show
-inline: nothing is lost in between.
+preview can't load, the card keeps its title and **Open**. Set up a visual address or Tico file hosting and the same
+messages show inline: nothing is lost in between.
 
 ### Video and audio
 
@@ -214,9 +218,19 @@ Without `TICO_VISUAL_ORIGIN` (a local install included), visuals use the fallbac
 pictures (PNG, JPEG, GIF, WebP), video and audio as media only, each with its own type, `X-Content-Type-Options:
 nosniff` and a content policy that runs no script. Pages and SVG are never served inline from the app's own address;
 they show as cards that open in the file viewer. Set `TICO_VISUAL_ORIGIN` and they show inline too: messages keep
-their visuals. **Settings › General** shows admins which applies, as one read-only line: "Visuals: full" or "Visuals: pictures, video and audio
-only (no separate visual address)", with a link to this section. `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the visual route sets
-a cookie.
+their visuals. `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the visual route sets a cookie.
+
+**Tico file hosting** is the way for a Mac or local install, which other computers can't reach: with it on and no
+`TICO_VISUAL_ORIGIN`, pages and SVG show inline from the company's `ticofiles.com` address
+([Tico file hosting](files.md#tico-file-hosting)). Their address is still on the app's own `/visuals/<token>` route,
+made for one reader. Each load checks that reader again and sends the frame on to a four-minute link to the page's
+cleaned copy there; the app's own address never serves the page. That copy allows framing only by the app's own
+address (`TICO_PUBLIC_URL`, and on a loopback address both `127.0.0.1` and `localhost`) and `TICO_CORS_ORIGINS`;
+only HTTPS addresses and loopback qualify. Open the app at an address other than these and pages don't show.
+
+**Settings › General** shows admins which applies, as one read-only line with a link to this section: "Visuals:
+full", "Visuals: full, from Tico file hosting", or, with neither, a line saying pages and SVG can't show inline and
+that a visual address or Tico file hosting fixes it. Finish setup's review says the same when neither is set.
 
 `TICO_VISUAL_ORIGIN`'s host must reach the same Tico server as the app: visual addresses are
 `<TICO_VISUAL_ORIGIN>/visuals/<token>`, and the server answers that path.
@@ -224,7 +238,11 @@ a cookie.
 Desktop builds that support a separate visual origin learn its exact HTTPS
 address from the signed-in server configuration before showing cross-origin
 visuals. They accept only that address's signed visual paths; the visual origin
-is not granted native command or app-log permissions. Signing out or changing servers
+is not granted native command or app-log permissions. Builds that support Tico
+file hosting learn its address the same way (`visual_files` in the config) and
+let a page's frame follow only its signed `/visuals/<2 hex>/<hash>?e=…&k=…&s=…`
+links. Until the app has confirmed that address, and in older builds, such a
+page is an **Open** card. Signing out or changing servers
 clears the allowance. If the address cannot be confirmed, the app shows file
 links while the rest of the page remains usable. The server still checks each
 visual token and the reader's current access on every request.

@@ -107,7 +107,7 @@ def assess(c, ticket, checker, *, head=None, check_id=None, attempt_id=None):
     else:
         builder, builder_known = _executed(c, ticket["id"])
         from .check_pools import maker, makers
-        checker_families = makers(c, checker)
+        checker_families = makers(c, checker, whole=True)    # a model of unknown company may be the builder's
         configured_families = {maker(c, checker)} - {""}
         checker_known = bool(checker_families)
         evidence = "configured/runtime"
