@@ -84,7 +84,9 @@ impl Relay {
     }
 
     /// The next attempt's turn: calls pass again, with its key and bot id and a deadline from now. False when its
-    /// Gateway is not the one this relay sends to, which takes a relay of its own.
+    /// Gateway is not the one this relay sends to, which takes a relay of its own. A relay is kept only with one
+    /// conversation's pi (the pool key: owner bot and conversation), so a process left from that conversation's earlier
+    /// turn could call again under the same bot.
     pub fn resume(&mut self, upstream: &str, key: String, bot: Option<String>) -> bool {
         if safe_upstream(upstream).as_deref() != Some(self.shared.base.as_str()) { return false; }
         *self.shared.key.lock().unwrap_or_else(|p| p.into_inner()) = (key, bot);
