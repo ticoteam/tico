@@ -150,6 +150,7 @@ async function staleReadAfterControl(browser, action) {
     await page.close();
     const member = await open(browser, 'member', '#/bot/ops/info');
     member.state.paused = true;
+    await member.page.waitForFunction(() => BOT?.slug === 'ops' && BOT.pauseLoadedAt != null && !BOT.pauseLoading);
     await member.page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
     await member.page.getByText('Ask Ana to unpause', {exact: true}).waitFor();
     assert.equal(await member.page.locator('#bot-control-host button').count(), 0);
