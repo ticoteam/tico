@@ -1689,7 +1689,8 @@ STABLE.append(('/api/v2/notices', 'get', 'Notices', 'listNotices', 'Notices from
 SCHEMAS['NoticeList'] = obj({'notices': items(obj({'id': 's', 'kind': 's', 'body': 's', 'url': 's', 'sent_at': 's',
                                                     'received_at': 's', 'source': {'enum': ['relay', 'latest']}}))})
 SCHEMAS.update({
-    'SleepWhenIdle': obj({'sleep': obj({'hosted': 'b', 'layout': {'type': ['string', 'null']}, 'hours': 'i', 'runners': 'b',
+    'SleepWhenIdle': obj({'sleep': obj({'hosted': 'b', 'layout': {'type': ['string', 'null']}, 'hours': 'i', 'minutes': 'i',
+                                        'source': {'enum': ['cell', 'owner', 'default']}, 'managed': 'b', 'runners': 'b',
                                         'active': 'b', 'idle_since': {'type': ['string', 'null']}, 'blocker': 's',
                                         'wake_at': {'type': ['string', 'null']},
                                         'last_request': {'type': ['object', 'null']}, 'last_error': 's'})}),

@@ -324,7 +324,7 @@ def create_app(settings=None):
             webhook_delivery.start(store, app.state.vault, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
-        # Sleep when idle (backend/sleep_idle.py): looks every five minutes, and only on a hosted server that asked for it.
+        # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
         sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
         scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
         directory_task = asyncio.create_task(directory_loop()) if timers else None

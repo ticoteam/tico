@@ -38837,6 +38837,19 @@
               "hours": {
                 "type": "integer"
               },
+              "minutes": {
+                "type": "integer"
+              },
+              "source": {
+                "enum": [
+                  "cell",
+                  "owner",
+                  "default"
+                ]
+              },
+              "managed": {
+                "type": "boolean"
+              },
               "runners": {
                 "type": "boolean"
               },
@@ -38877,7 +38890,10 @@
               "last_error",
               "last_request",
               "layout",
+              "managed",
+              "minutes",
               "runners",
+              "source",
               "wake_at"
             ],
             "additionalProperties": true

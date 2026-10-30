@@ -114,7 +114,13 @@ def cell():
     """Whether this install is a Tico Cloud cell company: TICO_CELL=1, which `setup cell` writes (docs/cell.md). A .env
     an older core wrote has only TICO_UPDATES=tico, until that company's next `cell update`; it still counts."""
     from . import releases
-    return os.environ.get("TICO_CELL", "").strip() == "1" or releases.managed()
+    return strict_cell() or releases.managed()
+
+
+def strict_cell():
+    """Only TICO_CELL=1 says a cell. TICO_UPDATES=tico alone is the general externally-managed-update flag, which other
+    installs carry too, so Sleep when idle uses this one: its cell behaviour must not turn on for them."""
+    return os.environ.get("TICO_CELL", "").strip() == "1"
 
 
 def current(store):

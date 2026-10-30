@@ -2611,7 +2611,10 @@ export type SleepWhenIdle = {
   last_error: string;
   last_request: Record<string, unknown> | null;
   layout: string | null;
+  managed: boolean;
+  minutes: number;
   runners: boolean;
+  source: "cell" | "owner" | "default";
   wake_at: string | null;
 };
 };
