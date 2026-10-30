@@ -237,9 +237,12 @@ async fn page(browser: &super::cdp::Browser, target: Option<&str>) -> Result<(St
         }
         return browser.attach(t).await.map(|s| (t.to_string(), s)).map_err(|_| "no_page");
     }
+    // Unnamed, only a web page can be the one: a new tab or a chrome:// page takes no login, and on a display with no
+    // window stacking more than one tab can say it is visible.
+    let web = targets["targetInfos"].as_array().into_iter().flatten().filter(|t| t["type"] == "page" && web_host(&text_of(&t["url"])).is_some());
     let mut best: Option<(u8, String, String)> = None;
-    for t in pages.iter().take(20) {
-        let Ok(session) = browser.attach(t).await else { continue };
+    for t in web.map(|t| text_of(&t["targetId"])).take(20) {
+        let Ok(session) = browser.attach(&t).await else { continue };
         let score = match eval(browser, &session, "[document.hasFocus(), document.visibilityState === 'visible']").await {
             Ok(v) => (v[0] == true) as u8 * 2 + (v[1] == true) as u8,
             Err(_) => 0,
