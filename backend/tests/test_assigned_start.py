@@ -480,6 +480,25 @@ def test_overdue_scopes_reader_before_its_row_budget(api, clock, monkeypatch):
         assert [r['id'] for r in rows] == [wanted]
 
 
+def test_overdue_checks_the_readers_rule_per_candidate_and_never_lists_every_task(api, clock):
+    """Needs you and Health read this page with the reader's task rule: checked per open task by key, not as a list
+    of every task the rule allows (a scan of all tasks, 55 ms a call on TIDY)."""
+    task_bot(api, lanes=True)
+    new_task(api, 'Overdue plan')
+    seen = []
+    with api.app.state.store.read() as c:
+        visible = api.app.state.auth.task_sql(c, api.app.state.auth.authenticate(
+            {"authorization": "Bearer ana-test"}, "/api/v2/tasks", "GET"))
+        c.set_trace_callback(seen.append)
+        try:
+            list(A.overdue(c, visible=visible))
+        finally:
+            c.set_trace_callback(None)
+        [page] = [s for s in seen if s.startswith('SELECT t.* FROM tasks t JOIN bots b')]
+        plan = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + page))
+    assert "SCAN tasks" not in plan and "SCAN t " not in plan and "LIST SUBQUERY" not in plan, plan
+
+
 def test_assignment_backlog_bounds_provenance_work_and_reuses_each_attempt(api, clock, monkeypatch):
     machine = task_bot(api, lanes=True)
     first = new_task(api, 'Earlier attempted assignment')
