@@ -1651,6 +1651,28 @@ def create_app(settings=None):
             raise Problem("gateway_fetch_failed", f"Fetch failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
         return answer
 
+    @app.post("/api/v2/gateway/images")
+    def gateway_images(request: Request, body: M.GatewayImage):
+        """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
+        bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Images are off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.image(base, key, body.prompt, body.category, body.images, body.size,
+                                                    body.count, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_image_unavailable", "The Tico AI Gateway does not make images yet", 503)
+            raise Problem("gateway_image_failed", f"Image failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
+
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):
         """Save the gateway key (and URL), then ask the Gateway about it. The owner only; the key is sealed at once and

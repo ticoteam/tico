@@ -382,6 +382,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
     hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
+    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+                                           make an image (storyboard, photo, character or graphic) and save it;
+                                           PATH.json beside it says how it was made
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -2505,6 +2508,17 @@ def parser():
     s.add_argument("url")
     s.add_argument("--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)")
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
+    s.add_argument("prompt")
+    s.add_argument("--category", required=True, choices=("storyboard", "photo", "character", "graphic"),
+                   help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)")
+    s.add_argument("--ref", dest="refs", action="append", default=[], metavar="FILE",
+                   help="a reference image (PNG, JPEG or WebP, 2 MiB at most); up to 4")
+    s.add_argument("--size", help="WxH, for example 1920x1080 (the nearest aspect ratio is asked for)")
+    s.add_argument("--count", type=int, help="how many images, 1 to 4 (1 by default)")
+    s.add_argument("--out", required=True, metavar="PATH",
+                   help="the file for the first image; more are saved as name-2.png, name-3.png...")
+    s.set_defaults(fn="gateway image")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(dest="sub")
     s = decision.add_parser("ask", help="ask the decision model typed questions about a JSON state (questions/README.md)")
     s.add_argument("--set", dest="question_set", help="a question set: questions/<name>.json in the Tico checkout")
