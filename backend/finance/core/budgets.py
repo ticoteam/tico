@@ -23,7 +23,6 @@ ROLLOVER = ("none", "unused")
 TARGETS = ("card", "gateway_key", "teammate")
 METHODS = ("trend", "run_rate", "recurring", "fixed", "manual")
 HOLD_STATES = ("held", "settled", "released")
-ROLLOVER_LOOKBACK = 12              # periods a rollover reaches back
 ONCE_END = date(9999, 12, 31)
 
 

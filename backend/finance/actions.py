@@ -39,6 +39,9 @@ DENIAL_CODES = (DENIED, NOT_AVAILABLE)
 SOURCE = "finance"                    # marks a Tico approval as Finance's, for the decide routes to route
 MAX_KEY = 200
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
+# Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
+# request.
+RESOLVED_KEYS = frozenset({"effective_from", "date"})
 
 
 @dataclass(frozen=True)
@@ -72,8 +75,11 @@ def _canonical(payload: object) -> dict[str, object]:
     return dict(cast(dict[str, object], loaded))
 
 
-def _stored(row: Mapping[str, object]) -> ActionResult:
-    result = json.loads(str(row["result_json"] or "{}"))
+def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
+    """An action as recorded. A replay or a status lookup carries the id, status, code and reason only (`full` is for
+    the call that just committed it): finance data is read fresh through finance/reads with the caller's current view,
+    so a retry after a revoked grant returns nothing they may no longer see (spec §5)."""
+    result = cast(dict[str, object], json.loads(str(row["result_json"] or "{}"))) if full else dict[str, object]()
     return ActionResult(status=str(row["status"]), kind=str(row["kind"]), action_id=str(row["id"]),
                         result={k: v for k, v in result.items() if k != "what"}, code=str(row["code"] or ""),
                         reason=str(row["reason"] or ""), approval_id=str(row["approval_id"] or "") or None,
@@ -108,6 +114,24 @@ def _requester(c: sqlite3.Connection, who: str) -> str:
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
 
 
+def _same_request(prior: Mapping[str, object], body: Mapping[str, object]) -> bool:
+    """Whether a stored payload is this request: equal, or equal but for defaults the planner filled in."""
+    if prior == body:
+        return True
+    extra = set(prior) - set(body)
+    return extra <= RESOLVED_KEYS and all(prior.get(k) == v for k, v in body.items())
+
+
+def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
+    """The one person the gate sends this to now, or "" when it needs nobody (it allows, or its approver asked)."""
+    if gate.outcome != "needs_approval":
+        return ""
+    approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting())
+    if not approver:
+        raise FinanceError(DENIED, "nobody can approve this: the install has no owner")
+    return "" if approver == who else approver
+
+
 def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object]) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate."""
@@ -133,7 +157,8 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     if not dry_run:
         prior = SX.by_key(c, key)
         if prior is not None:
-            if prior["kind"] != kind or json.loads(prior["payload_json"]) != body or prior["actor"] != p.actor:
+            if prior["kind"] != kind or not _same_request(json.loads(prior["payload_json"]), body) or \
+                    prior["actor"] != p.actor:
                 return ActionResult(status="failed", kind=kind, code=CONFLICT,
                                     reason="that idempotency key was used for a different request")
             return _stored(prior)
@@ -146,16 +171,13 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         ctx = load(c, at)
     except FinanceError as e:
         return _finish_refused(c, p, kind, body, key, action_id, e, dry_run, at)
+    if not dry_run:
+        handlers.suspend_unstanding(ctx)
     _savepoint(c, "fin_act")
     try:
         gate, plan = _plan(ctx, p, kind, body)
-        approver = ""
-        if gate.outcome == "needs_approval":
-            approver = O.approver(ctx.org, gate.who, p.who, ctx.approver_setting())
-            if not approver:
-                raise FinanceError(DENIED, "nobody can approve this: the install has no owner")
-            if approver == p.who:
-                approver = ""          # the one who would decide asked: nothing to ask
+        approver = _approver(ctx, gate, p.who)
+        body = {**body, **plan.resolved}
         would = "needs_approval" if approver else "committed"
         if dry_run:
             _rollback(c, "fin_act")
@@ -257,6 +279,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     if row["status"] != "needs_approval":
         return _stored(row)
     ctx = load(c, at)
+    handlers.suspend_unstanding(ctx)
     appr = tico.approval(c, approval_id)
     if appr is None:
         return _close(ctx, row, "withdrawn", "withdrawn", "its approval is gone")
@@ -280,13 +303,18 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
     _savepoint(c, "fin_decide")
     try:
-        _plan_gate, plan = _plan(ctx, p, kind, body)
+        gate, plan = _plan(ctx, p, kind, body)
+        now_to = _approver(ctx, gate, p.who)
+        if now_to and now_to != row["approval_to"]:
+            # The person who decides this changed since it was asked (a new manager, a finance approver named).
+            _rollback(c, "fin_decide")
+            return _reask(ctx, row, p, kind, body)
         tico.approval_consume(c, str(row["approval_by"]), approval_id)
         result = plan.apply(str(row["id"]))
         SX.finish(c, str(row["id"]), status="committed", result=result, code="", reason="", at=ctx.at)
         _audit(c, p, str(row["id"]), kind, "committed", extra={"approval_id": approval_id})
         _release(c, "fin_decide")
-        return _stored(SX.by_id(c, str(row["id"])))
+        return _stored(SX.by_id(c, str(row["id"])), full=True)
     except FinanceError as e:
         _rollback(c, "fin_decide")
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
@@ -305,7 +333,10 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
         gate, plan = _plan(ctx, p, kind, body)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
-    approver = O.approver(ctx.org, gate.who or "owner", p.who, ctx.approver_setting())
+    try:
+        approver = _approver(ctx, gate, p.who) or ctx.org.owner
+    except FinanceError as e:
+        return _close(ctx, row, "denied", e.code, e.message)
     what = f"{plan.summary} (Finance action {row['id']})"
     SX.finish(ctx.c, str(row["id"]), status="needs_approval", result={"what": what}, code="",
               reason="the approved payload did not match; asked again", at=ctx.at)

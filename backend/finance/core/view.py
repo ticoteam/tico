@@ -5,10 +5,12 @@ Default (company setting, seeded): the owner sees everything; managers the expen
 teams under them; everyone else their own expenses (lines tagged with them). Revenue, the balance sheet, payables,
 receivables and sources are owner-only unless granted. Unattributed lines show only in company-wide views.
 """
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import date
 
-from .errors import denied, invalid
+from . import dates
+from .errors import FinanceError, denied, invalid
 from .ledger import PNL_TYPES, Account, descendants
 from .org import SYSTEM, Org
 
@@ -22,7 +24,7 @@ MEMBER_DEFAULTS = ("own_expenses", "none")
 PAYROLL_DEFAULTS = ("totals", "hidden")
 OTHERS_SEE = ("totals", "hidden")
 PRIVATE_LABEL = "Payroll (private)"
-MIN_PAID = 3                         # a department's payroll total shows only with at least this many paid people
+MIN_PAID = 3                         # a department's payroll cell shows only with at least this many paid people
 
 
 @dataclass(frozen=True)
@@ -177,7 +179,7 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
     bs_lines: set[str] = set()
     used: list[str] = []
     for grant in grants:
-        if not live(grant, at) or not applies(org, grant, viewer):
+        if not live(grant, at) or not applies(org, grant, viewer) or not standing(org, grant, defaults, accounts):
             continue
         used.append(grant.id)
         below = org.below(grant.whose_team) if grant.whose == "team" else frozenset[str]()
@@ -261,6 +263,23 @@ def check_shape(grant: Grant, org: Org, accounts: Mapping[str, Account]) -> None
         raise invalid(f"{grant.what} is always company-wide")
 
 
+def standing(org: Org, grant: Grant, defaults: Defaults, accounts: Mapping[str, Account]) -> bool:
+    """Whether the grantor could still make `grant` now. One that exceeds its grantor's authority (they no longer lead
+    the team, the subject moved, the owner changed) counts as suspended from the moment it does, written or not."""
+    if not grant.granted_by or grant.granted_by == SYSTEM:
+        return True
+    try:
+        check_grant(org, grant.granted_by, grant, defaults, accounts)
+    except FinanceError:
+        return False
+    return True
+
+
+def unstanding(org: Org, grants: Iterable[Grant], defaults: Defaults, accounts: Mapping[str, Account]) -> list[str]:
+    """Active grants their grantor could not make now: what a write path marks suspended."""
+    return [g.id for g in grants if g.status == "active" and not standing(org, g, defaults, accounts)]
+
+
 def may_revoke(org: Org, actor: str, grant: Grant) -> bool:
     return actor == grant.granted_by or bool(org.owner) and actor == org.owner
 
@@ -285,42 +304,75 @@ class Suppressed:
 
 
 def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts: Mapping[str, Account],
-             cells: Iterable[Cell], narrow: bool) -> Suppressed:
-    """The one suppression function every surface uses (spec §7.5). Without full detail a private account (payroll by
-    person) shows only as one total per department of at least MIN_PAID paid people, in every month of the window,
-    and only when the view covers the whole department. A narrower read (by team below a department, by teammate, by
-    vendor) shows none of it. Unattributed private lines never show. A teammate always sees their own lines. What is
-    cut is cut from every total, so nothing can be worked out by subtraction."""
-    rows = list(cells)
-    cut: set[str] = set()
+             cells: Iterable[Cell], narrow: bool, *, window: tuple[date, date], closed: frozenset[str],
+             fiscal_start: int = 1) -> Suppressed:
+    """The one suppression function every surface uses (spec §7.5). It returns the cells in `window`.
+
+    Without full detail a private account (payroll by person) shows only as fixed cells: department x pay run, where a
+    run is that account's lines on one pay date. A run with MIN_PAID or more paid people in the department is one cell
+    on its pay date; smaller (off-cycle) runs show only inside one cell per department and fiscal quarter, dated the
+    quarter's last day, when those runs paid MIN_PAID or more people. A cell shows only when its whole run (or quarter)
+    is in closed periods, so it never changes once seen, and only to a viewer who covers the whole department. The cells
+    come from the runs, never from the caller's dates: a window takes in a cell whole by its date or not at all, so
+    `cells` must reach the whole fiscal quarters around `window`. A narrower read (a team below a department, a teammate,
+    a vendor) shows none of it. A teammate sees their own lines only in a result with no department cell on that
+    account, so own lines and a department total never sit side by side. Unattributed private lines never show."""
+    lo, hi = window[0].isoformat(), window[1].isoformat()
+
+    def inside(day: str) -> bool:
+        return lo <= day <= hi
     kept: list[Cell] = []
-    groups: dict[tuple[str, str], list[Cell]] = {}
-    for cell in rows:
+    cut: set[str] = set()
+    own: list[Cell] = []
+    runs: dict[tuple[str, str, str], list[Cell]] = {}
+    for cell in cells:
         rule = private.get(cell.account_id)
         if rule is None or cell.account_id in view.full_detail:
-            kept.append(cell)
+            if inside(cell.day):
+                kept.append(cell)
             continue
-        own = bool(cell.teammate) and cell.teammate == view.viewer
         department = org.department(cell.team) if cell.team else ""
         account = accounts.get(cell.account_id)
         whole = account is not None and department != "" and \
             view.covers_team(account, department, org.below(department))
         if rule.others_see == "hidden" or narrow or not view.department_payroll or not whole:
-            if own:
-                kept.append(cell)
-            else:
-                cut.add(cell.account_id)
+            _unshown(view, [cell], inside, own, cut)
             continue
-        groups.setdefault((cell.account_id, department), []).append(cell)
-    for (account_id, _department), group in groups.items():
-        paid: dict[str, set[str]] = {}
-        for cell in group:
-            if cell.teammate:
-                paid.setdefault(cell.day[:7], set()).add(cell.teammate)
-        months = {cell.day[:7] for cell in group}
-        if all(len(paid.get(m, set())) >= MIN_PAID for m in months):
-            kept.extend(group)
-            continue
-        kept.extend(cell for cell in group if cell.teammate and cell.teammate == view.viewer)
-        cut.add(account_id)
+        runs.setdefault((cell.account_id, department, cell.day), []).append(cell)
+    shown: list[Cell] = []
+    quarters: dict[tuple[str, str, date, date], list[Cell]] = {}
+    for (account_id, department, day), group in runs.items():
+        if len({x.teammate for x in group if x.teammate}) < MIN_PAID:
+            q = dates.fiscal_bounds(dates.day(day), 3, fiscal_start)
+            quarters.setdefault((account_id, department, q[0], q[1]), []).extend(group)
+        elif inside(day) and day[:7] in closed:
+            shown.append(Cell(account_id, day, department, "", "", sum(x.amount for x in group)))
+        else:
+            _unshown(view, group, inside, own, cut)
+    for (account_id, department, start, end), group in quarters.items():
+        months = {dates.add_months(start, n).isoformat()[:7] for n in range(3)}
+        if inside(end.isoformat()) and months <= closed and \
+                len({x.teammate for x in group if x.teammate}) >= MIN_PAID:
+            shown.append(Cell(account_id, end.isoformat(), department, "", "", sum(x.amount for x in group)))
+        else:
+            _unshown(view, group, inside, own, cut)
+    with_cell = {x.account_id for x in shown}
+    for cell in own:
+        if cell.account_id in with_cell:
+            cut.add(cell.account_id)
+        else:
+            kept.append(cell)
+    kept.extend(shown)
     return Suppressed(cells=tuple(kept), hidden=frozenset(cut), excluded=bool(cut))
+
+
+def _unshown(view: View, group: Iterable[Cell], inside: Callable[[str], bool], own: list[Cell],
+             cut: set[str]) -> None:
+    """Private cells in the window that no department cell shows: the viewer's own wait in `own`, the rest are cut."""
+    for cell in group:
+        if not inside(cell.day):
+            continue
+        if cell.teammate and cell.teammate == view.viewer:
+            own.append(cell)
+        else:
+            cut.add(cell.account_id)

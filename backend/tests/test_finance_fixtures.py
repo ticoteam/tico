@@ -90,3 +90,14 @@ def spend(c: sqlite3.Connection, code: str, amount: int, *, day: str = "2026-10-
         line["contact_id"] = vendor
     return FA.post_entry(c, {"date": day, "source": "usage", "source_id": source_id or f"s{next(_keys)}",
                              "lines": [line, {"account_id": account(c, "1000"), "amount": -amount}]}, at=AT)
+
+
+def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
+    """Change who leads a team on the org chart ("" for nobody)."""
+    groups = {k: dict(v) for k, v in GROUPS.items()}
+    if lead:
+        groups[team]["lead"] = lead
+    else:
+        groups[team].pop("lead", None)
+    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+              (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))

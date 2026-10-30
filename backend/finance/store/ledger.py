@@ -102,6 +102,12 @@ def closed_on(c: sqlite3.Connection, book_id: str, day: str) -> bool:
                      (book_id, day, day)).fetchone() is not None
 
 
+def closed_months(c: sqlite3.Connection, book_id: str) -> frozenset[str]:
+    """Every closed monthly period, as YYYY-MM: payroll cells show only for runs in them."""
+    return frozenset(str(r[0])[:7] for r in c.execute("SELECT start_date FROM fin_periods WHERE book_id=? AND "
+                                                       "status='closed'", (book_id,)))
+
+
 # ------------------------------------------------------------------------------------------------ entries and lines
 def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
                  reverses_id: str, by: str, at: str) -> list[str]:

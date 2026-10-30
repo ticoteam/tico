@@ -71,40 +71,54 @@ def _period(ctx: Ctx, b: B.Budget, at: date, versions: Sequence[B.Version]) -> t
 
 def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[date, date], at: date) -> int | None:
     """The amount for the period: the version in force at its start (on `at` for a once budget), plus what an `unused`
-    rollover carries in from earlier periods."""
+    rollover carries in from every earlier period since the budget's first version."""
     base = B.amount_at(versions, at if b.period == "once" else period[0])
-    if base is None or b.rollover != "unused":
+    if base is None or b.rollover != "unused" or not versions:
         return base
+    fy = ctx.book.fiscal_year_start
+    first = min(dates.day(v.effective_from) for v in versions)
     history: list[tuple[int | None, int]] = []
-    start = period[0]
-    for _ in range(B.ROLLOVER_LOOKBACK):
-        start, end = B.previous(b, start, ctx.book.fiscal_year_start, versions)
+    start, end = B.period_of(b, first, fy, versions)
+    tree = subtree(ctx, b.id)
+    while start < period[0]:
         a, z = start.isoformat(), end.isoformat()
-        spent = actual(ctx, b, a, z) + SB.held(ctx.c, subtree(ctx, b.id), a, z)
-        history.append((B.amount_at(versions, start), spent))
-    return base + B.carry(list(reversed(history)))
+        history.append((B.amount_at(versions, start), actual(ctx, b, a, z) + SB.held(ctx.c, tree, a, z)))
+        start, end = B.period_of(b, end.fromordinal(end.toordinal() + 1), fy, versions)
+    return base + B.carry(history)
 
 
-def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> dict[str, int]:
-    """What allocations under these budgets still reserve, by target (`teammate:<actor>`, `card:<id>`, ...): each one's
-    amount less what its target has spent and holds against it, never below zero."""
-    out: dict[str, int] = {}
+def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[tuple[str, str, int]]:
+    """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
+    target used under it, never below zero. A target's use (its holds, settled holds, and for a teammate their posted
+    lines) draws down only the nearest allocation for that target above it, never every one up the tree."""
     budgets = ctx.budgets()
+    by_target: dict[str, list[tuple[str, int]]] = {}
     for row in SB.allocations(ctx.c, budget_ids):
-        target = f"{row['target_kind']}:{row['target_id']}"
         b = budgets.get(row["budget_id"])
-        if b is None or not b.active:
-            continue
-        used = SB.held(ctx.c, subtree(ctx, b.id), start, end, target)
-        if row["target_kind"] == "teammate":
-            used += actual(ctx, b, start, end, teammate=str(row["target_id"]))
-        out[target] = out.get(target, 0) + max(0, int(row["amount"]) - used)
+        if b is not None and b.active:
+            by_target.setdefault(f"{row['target_kind']}:{row['target_id']}", []).append((b.id, int(row["amount"])))
+    out: list[tuple[str, str, int]] = []
+    for target, rows in by_target.items():
+        kind, _, tid = target.partition(":")
+        on = {bid for bid, _ in rows}
+        used: dict[str, int] = {}
+
+        def usage(bid: str) -> int:
+            if bid not in used:
+                total = SB.target_used(ctx.c, subtree(ctx, bid), start, end, target, absorbed=kind != "teammate")
+                used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid) if kind == "teammate" else 0)
+            return used[bid]
+        for bid, amount in rows:
+            under = [x for x in subtree(ctx, bid)[1:] if x in on]
+            nearest = [x for x in under if not any(y != x and x in subtree(ctx, y) for y in under)]
+            out.append((bid, target, max(0, amount - usage(bid) + sum(usage(x) for x in nearest))))
     return out
 
 
-def state(ctx: Ctx, budget_id: str, at: date, target: str = "") -> B.State:
+def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = ()) -> B.State:
     """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
-    With a `target`, that target's own unused allocation is not counted against it: it may spend what was set aside."""
+    With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
+    counted against it (it may spend what was set aside for it there); its allocations on other branches still are."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -112,8 +126,9 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "") -> B.State:
     period = _period(ctx, b, at, versions)
     start, end = period[0].isoformat(), period[1].isoformat()
     tree = subtree(ctx, b.id)
-    reserve = _reserve(ctx, tree, start, end)
-    held = SB.held(ctx.c, tree, start, end) + sum(v for k, v in reserve.items() if k != target)
+    mine = set(path)
+    reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end) if not (target and t == target and bid in mine))
+    held = SB.held(ctx.c, tree, start, end) + reserve
     return B.state(b, period, _amount(ctx, b, versions, period, at), actual(ctx, b, start, end), held)
 
 
@@ -162,7 +177,8 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
 def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
     """What a new spend of `amount` meets across its budget and every parent."""
     at = dates.day(ctx.today)
-    chain = [(b, state(ctx, b.id, at, target)) for b in B.chain(ctx.budgets(), leaf_id)]
+    path = chain_of(ctx, leaf_id)
+    chain = [(b, state(ctx, b.id, at, target, path)) for b in B.chain(ctx.budgets(), leaf_id)]
     return B.decide(chain, amount)
 
 
@@ -182,8 +198,7 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
     if source_id:
         prior = SB.hold_for_source(ctx.c, source, source_id)
         if prior is not None:
-            return HoldDecision(allowed=True, action="ok", hold_id=str(prior["id"]), budget_id=str(prior["budget_id"]),
-                                reason="already held")
+            return _again(ctx, prior, amount, target, by)
     b = _scope(ctx, budget_scope)
     if b is None:
         return HoldDecision(allowed=True, action="ok", reason="no budget covers this spend")
@@ -196,9 +211,33 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
     hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=amount, currency=ctx.book.base_currency, source=source,
                          source_id=source_id, target=target, held_on=ctx.today, expires_at=expires_at, by=by, at=ctx.at)
     crossings(ctx, chain_of(ctx, b.id), by)
-    left = state(ctx, b.id, dates.day(ctx.today), target).remaining
+    left = state(ctx, b.id, dates.day(ctx.today), target, chain_of(ctx, b.id)).remaining
     return HoldDecision(allowed=True, action=verdict.action, hold_id=hid, budget_id=b.id,
                         warn_budget_ids=verdict.warn_budgets, remaining=left)
+
+
+def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: str) -> HoldDecision:
+    """The same (source, source_id) asked again. The same amount returns the live hold; a smaller one shrinks it; a
+    larger one grows it only if the increase passes a fresh budget check, else the hold stays as it was and the
+    decision says so."""
+    hid, bid, was = str(prior["id"]), str(prior["budget_id"]), int(str(prior["amount"]))
+    target = target or str(prior["target"] or "")
+    path = chain_of(ctx, bid)
+    if amount == was:
+        return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid, reason="already held")
+    if amount > was:
+        verdict = decide(ctx, bid, amount - was, target)
+        if not verdict.allowed:
+            crossings(ctx, [verdict.limit_budget], by)
+            limit = ctx.budgets()[verdict.limit_budget]
+            return HoldDecision(allowed=False, action=verdict.action, hold_id=hid, budget_id=bid,
+                                limit_budget_id=limit.id, warn_budget_ids=verdict.warn_budgets,
+                                reason=f"kept the hold at {was}: {amount} is over the {limit.name} budget")
+    SB.resize_hold(ctx.c, hid, amount)
+    crossings(ctx, path, by)
+    return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid,
+                        remaining=state(ctx, bid, dates.day(ctx.today), target, path).remaining,
+                        reason=f"resized the hold from {was} to {amount}")
 
 
 def settle(ctx: Ctx, hold_id: str, actual_amount: int, entry_id: str | None, by: str = SYSTEM) -> bool:

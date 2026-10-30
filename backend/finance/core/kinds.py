@@ -24,7 +24,8 @@ NEEDS = {"journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "acc
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke")
 SPEND = ("payment_create",)
-# A bot categorizing or posting more than this asks a finance admin (§6.4 rule 5).
+# A bot categorizing or posting more than this in one action (an entry's debits, or the lines it tags) asks a finance
+# admin (§6.4 rule 5).
 BOT_CATEGORIZE_LIMIT = 500_000
 
 
@@ -62,13 +63,13 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     return Gate("deny", rule=f"right:{right}")
 
 
-def default_gate(org: Org, actor: str, kind: str, *, largest: int = 0, new_account: bool = False) -> Gate:
+def default_gate(org: Org, actor: str, kind: str, *, total: int = 0, new_account: bool = False) -> Gate:
     """The phase-0 defaults (§6.4): closing or reopening a period asks the owner (unless the owner asks); a bot's
-    categorization or entry over $5,000, or a bot's new account, asks a finance admin."""
+    categorization or entry totalling over $5,000, or a bot's new account, asks a finance admin."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
-    if actor in org.bots and kind in ("categorize", "journal") and largest > BOT_CATEGORIZE_LIMIT:
+    if actor in org.bots and kind in ("categorize", "journal") and total > BOT_CATEGORIZE_LIMIT:
         return Gate("needs_approval", "finance_admin", "default:bot-over-5000")
     if actor in org.bots and new_account:
         return Gate("needs_approval", "finance_admin", "default:bot-new-account")

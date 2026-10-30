@@ -75,6 +75,23 @@ def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
     return int(c.execute(sql, args).fetchone()[0])
 
 
+def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str, target: str,
+                absorbed: bool) -> int:
+    """What a target's holds placed in the window used on these budgets: live holds at their amount, settled ones at
+    what they settled for (with `absorbed`, also those an entry has taken in, for targets no line is tagged with)."""
+    if not budget_ids:
+        return 0
+    marks = ",".join("?" * len(budget_ids))
+    settled = "status='settled'" if absorbed else "status='settled' AND entry_id IS NULL"
+    return int(c.execute(f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN {settled} THEN settled_amount "
+                         f"ELSE 0 END), 0) FROM fin_holds WHERE budget_id IN ({marks}) AND target=? AND held_on>=? "
+                         f"AND held_on<=?", [*budget_ids, target, start, end]).fetchone()[0])
+
+
+def resize_hold(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
+    return c.execute("UPDATE fin_holds SET amount=? WHERE id=? AND status='held'", (amount, hold_id)).rowcount
+
+
 def insert_hold(c: sqlite3.Connection, *, budget_id: str, amount: int, currency: str, source: str, source_id: str,
                 target: str, held_on: str, expires_at: str | None, by: str, at: str) -> str:
     hid = new_id()

@@ -32,6 +32,7 @@ class Ctx:
     _rights: dict[str, frozenset[str]] = field(default_factory=lambda: dict[str, frozenset[str]]())
     _views: dict[str, VW.View] = field(default_factory=lambda: dict[str, VW.View]())
     _budgets: dict[str, B.Budget] | None = None
+    _private: dict[str, VW.PrivateLine] | None = None
 
     @property
     def today(self) -> str:
@@ -54,10 +55,16 @@ class Ctx:
             self._budgets = SB.budgets(self.c, self.book.id)
         return self._budgets
 
+    def private(self) -> dict[str, VW.PrivateLine]:
+        if self._private is None:
+            self._private = SA.private_lines(self.c)
+        return self._private
+
     def changed(self) -> None:
         """Forget what this call cached after it writes accounts, budgets or access."""
         self.accounts = SL.accounts(self.c, self.book.id)
         self._budgets = None
+        self._private = None
         self._views.clear()
         self._rights.clear()
 

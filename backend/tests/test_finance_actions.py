@@ -30,7 +30,9 @@ def test_same_key_same_result_and_dry_runs_write_nothing(books):
         first = act(c, OWNER, "account_create", body, "a1")
         again = act(c, OWNER, "account_create", body, "a1")
         assert first.status == again.status == "committed" and first.action_id == again.action_id
-        assert first.result == again.result and _count(c, "fin_accounts") == before["fin_accounts"] + 1
+        # A replay carries the id and status only: the account is read fresh with the caller's view.
+        assert first.result["account_id"] and again.result == {}
+        assert _count(c, "fin_accounts") == before["fin_accounts"] + 1
         assert act(c, OWNER, "account_create", {**body, "name": "Trips"}, "a1").code == "conflict"
         denied = act(c, OWNER, "payment_create", {"amount": 1}, "p1")
         assert (denied.status, denied.code) == ("denied", "not_available")
@@ -82,7 +84,7 @@ def test_approval_commits_once(books):
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
         done = FA.approval_decided(c, asked.approval_id, AT)
         again = FA.approval_decided(c, asked.approval_id, AT)
-        assert done.status == again.status == "committed" and done.result == again.result
+        assert done.status == again.status == "committed" and done.result["budget_id"] and again.result == {}
         assert _count(c, "fin_budgets") == 5
         assert H.approval(c, asked.approval_id)["consumed_at"]
         assert act(c, "bot:coder", "x", {}, "coder-1").code == "conflict"
@@ -153,3 +155,34 @@ def test_default_gates_send_close_and_large_bot_entries_to_one_person(books):
         grant = act(c, "bot:coder", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "team",
                                                    "whose_team": "web"})
         assert grant.code == "denied"            # the coder leads no team
+
+
+def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
+    with books.transaction() as c:
+        asked = _coder_asks(c, _software(c))
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='coder'")
+        redo = FA.approval_decided(c, asked.approval_id, AT)
+        assert (redo.status, redo.approver) == ("needs_approval", "human:ben") and _count(c, "fin_budgets") == 4
+
+
+def test_defaults_are_fixed_when_asked_not_when_approved(books):
+    with books.transaction() as c:
+        parent = _software(c)
+        asked = _coder_asks(c, parent)
+        stored = c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert '"effective_from": "2026-10-01"' in stored
+        assert _coder_asks(c, parent).action_id == asked.action_id         # a retry without it is the same request
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, "2026-11-02T09:00:00.000000Z")
+        assert done.status == "committed" and done.result["effective_from"] == "2026-10-01"
+
+
+def test_the_bot_gate_counts_the_whole_entry(books):
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"})
+        act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
+        split = {"date": "2026-10-03", "lines": [{"account_id": account(c, "6900"), "amount": 300_000},
+                                                 {"account_id": account(c, "6100"), "amount": 300_000},
+                                                 {"account_id": account(c, "1000"), "amount": -600_000}]}
+        assert act(c, "bot:coder", "journal", split).status == "needs_approval"

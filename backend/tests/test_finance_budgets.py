@@ -180,3 +180,72 @@ def test_two_holds_racing_for_the_last_dollars(books):
     assert sorted(r.allowed for r in results) == [False, True]
     with books.read() as c:
         assert FA.budget_state(c, ai, AT).held == 600
+
+
+def test_impacts_and_errors_show_only_numbers_the_actor_may_see(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("eng", 6_000), ("sales", None)))
+        spend(c, "6100", 5_000, team="sales")             # Software has 5,000 left; Engineering 6,000
+        for right in ("finance.book", "finance.budgets"):
+            act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": right})
+        act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "bs_lines", "account_ids": [account(c, "1000")]})
+        dry = act(c, "human:ben", "journal", {"date": "2026-10-03", "lines": [
+            {"account_id": account(c, "6100"), "amount": 100, "tags": {"team": "web"}},
+            {"account_id": account(c, "1000"), "amount": -100}]}, dry_run=True)
+        assert [b["budget_id"] for b in dry.impact["budgets"]] == [kids["eng"]]       # not company-wide Software
+        over = act(c, "human:ben", "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
+                                                      "target_id": "bot:coder", "amount": 5_500})
+        assert over.code == "invalid" and not any(ch.isdigit() for ch in over.reason)
+        assert "5000" in act(c, OWNER, "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
+                                                         "target_id": "bot:coder", "amount": 5_500}).reason
+
+
+def test_an_allocation_serves_only_spend_on_its_own_branch(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 5_000), ("sales", 5_000)))
+        act(c, OWNER, "allocation_set", {"budget_id": kids["sales"], "target_kind": "card", "target_id": "c1",
+                                         "amount": 3_000})
+        spend(c, "6100", 3_000, team="sales")             # Software: 10,000 - 3,000 spent - 3,000 set aside
+        d = FA.hold_place(c, budget_scope=kids["web"], amount=4_500, currency="USD", source="card", source_id="w1",
+                          expires_at=None, target="card:c1", at=AT)
+        assert not d.allowed and d.limit_budget_id == pid
+
+
+def test_a_settled_hold_draws_its_allocation_down_once(books):
+    with books.transaction() as c:
+        soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 100})
+        bid = str(soft.result["budget_id"])
+        act(c, OWNER, "allocation_set", {"budget_id": bid, "target_kind": "card", "target_id": "c1", "amount": 100})
+        d = FA.hold_place(c, budget_scope=bid, amount=100, currency="USD", source="card", source_id="t1",
+                          expires_at=None, target="card:c1", at=AT)
+        assert d.allowed
+        FA.post_entry(c, {"date": "2026-10-10", "source": "import", "source_id": "t1", "lines": [
+            {"account_id": account(c, "6100"), "amount": 100}, {"account_id": account(c, "1000"), "amount": -100}]},
+            hold_ids=[str(d.hold_id)], at=AT)
+        s = FA.budget_state(c, bid, AT)
+        assert (s.actual, s.held, s.remaining) == (100, 0, 0)
+
+
+def test_rollover_carries_from_the_first_version(books):
+    with books.transaction() as c:
+        r = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000,
+                                            "rollover": "unused", "effective_from": "2025-01-01"})
+        assert r.status == "committed", r
+        assert FA.budget_state(c, str(r.result["budget_id"]), AT).amount == 22_000   # Oct 2026 + 21 months unused
+
+
+def test_asking_again_for_a_source_resizes_its_hold_or_says_why_not(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+
+        def again(amount):
+            return FA.hold_place(c, budget_scope=ai, amount=amount, currency="USD", source="run", source_id="r1",
+                                 expires_at=None, at=AT)
+        first = again(400)
+        grown = again(900)
+        assert grown.allowed and grown.hold_id == first.hold_id and "900" in grown.reason
+        refused = again(1_200)
+        assert not refused.allowed and refused.hold_id == first.hold_id and "kept" in refused.reason
+        assert FA.budget_state(c, ai, AT).held == 900
+        assert again(300).allowed and FA.budget_state(c, ai, AT).held == 300

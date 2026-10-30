@@ -14,7 +14,7 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, invalid
 from .core.ledger import PNL_TYPES, descendants
-from .handlers import sees_budget
+from .handlers import private_scope, sees_budget
 from .store import access as SA
 from .store import budgets as SB
 from .store import ledger as SL
@@ -47,19 +47,27 @@ def _window(start: str | None, end: str | None, ctx: Ctx) -> tuple[date, date]:
 
 
 def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None) -> list[VW.Cell]:
-    """The rollup totals in the window this viewer's view takes in, before suppression."""
+    """The rollup totals this viewer's view takes in, before suppression: the window, and for private accounts the
+    whole fiscal quarters around it, since their cells are whole pay runs and quarters chosen without the window."""
+    ids = sorted(account_ids) if account_ids is not None else sorted(s.ctx.accounts)
+    hidden = [i for i in ids if i in s.private and i not in s.view.full_detail]
+    plain = [i for i in ids if i not in hidden]
+    fy = s.ctx.book.fiscal_year_start
+    wide = (dates.fiscal_bounds(a, 3, fy)[0], dates.fiscal_bounds(z, 3, fy)[1])
     out: list[VW.Cell] = []
-    for r in SL.rollup_rows(s.ctx.c, s.ctx.book.id, a.isoformat(), z.isoformat(), account_ids):
-        account = s.ctx.accounts.get(r["account_id"])
-        if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
-            continue
-        out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
-                           vendor=r["vendor"], amount=int(r["amount"])))
+    for ids_, (p, q) in ((plain, (a, z)), (hidden, wide)):
+        for r in SL.rollup_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_):
+            account = s.ctx.accounts.get(r["account_id"])
+            if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
+                continue
+            out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
+                               vendor=r["vendor"], amount=int(r["amount"])))
     return out
 
 
-def _suppress(s: _Seen, cells: list[VW.Cell], narrow: bool) -> VW.Suppressed:
-    return VW.suppress(s.view, s.ctx.org, s.private, s.ctx.accounts, cells, narrow)
+def _suppress(s: _Seen, cells: list[VW.Cell], narrow: bool, a: date, z: date) -> VW.Suppressed:
+    return VW.suppress(s.view, s.ctx.org, s.private, s.ctx.accounts, cells, narrow, window=(a, z),
+                       closed=SL.closed_months(s.ctx.c, s.ctx.book.id), fiscal_start=s.ctx.book.fiscal_year_start)
 
 
 def _cap(rows: list[Row], top_n: int) -> list[Row]:
@@ -95,7 +103,8 @@ def _top_budgets(s: _Seen) -> list[B.Budget]:
 
 def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, period: str = "month",
         basis: str = "cash", at: str | None = None) -> Row:
-    """Income and expense lines by period, with budget and projection beside each actual."""
+    """Income and expense lines by period, with budget and projection beside each actual. Income is posted as credits
+    (negative); it shows as positive revenue, so net = income - expense."""
     s = _open(c, viewer, at)
     if basis != s.ctx.book.basis:
         raise invalid(f"the books are kept on a {s.ctx.book.basis} basis")
@@ -105,14 +114,15 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     fy = s.ctx.book.fiscal_year_start
     buckets = dates.buckets(period, a, z, fy)
     pnl_ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
-    sup = _suppress(s, _cells(s, a, z, pnl_ids), narrow=False)
+    sup = _suppress(s, _cells(s, a, z, pnl_ids), False, a, z)
     actual: dict[str, list[int]] = {i: [0] * len(buckets) for i in pnl_ids}
     for cell in sup.cells:
         if cell.account_id in sup.hidden:
             continue
         n = _bucket_index(buckets, cell.day)
         if n >= 0 and cell.account_id in actual:
-            actual[cell.account_id][n] += cell.amount
+            sign = -1 if s.ctx.accounts[cell.account_id].type == "income" else 1
+            actual[cell.account_id][n] += sign * cell.amount
     budget: dict[str, list[int | None]] = {}
     tops = _top_budgets(s)
     versions = SB.versions(c, [b.id for b in tops])
@@ -205,7 +215,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
         cells = [x for x in cells if x.teammate == teammate]
     department_wide = not teammate and (not team or s.ctx.org.department(team) == team)
     narrow = by not in ("department", "account") or not department_wide
-    sup = _suppress(s, cells, narrow)
+    sup = _suppress(s, cells, narrow, a, z)
     sums: dict[str, int] = {}
     for cell in sup.cells:
         key = _key(s, cell, by)
@@ -248,8 +258,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         raise FinanceError(NOT_FOUND, "no such account")
     ids = sorted(descendants(s.ctx.accounts, account_id))
     cells = _cells(s, a, z, ids)
-    whole = _suppress(s, cells, narrow=False)
-    split = _suppress(s, cells, narrow=True)
+    whole = _suppress(s, cells, False, a, z)
+    split = _suppress(s, cells, True, a, z)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole.hidden else sum(x.amount for x in whole.cells),
@@ -290,10 +300,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
 # ------------------------------------------------------------------------------------------------ budgets
 def _private_scope(s: _Seen, b: B.Budget) -> bool:
     """A budget over private lines shows its amount but not its spend to a viewer without their detail."""
-    if s.view.everything and s.view.full_detail >= frozenset(s.private):
-        return False
-    scope = budgeting.scope_accounts(s.ctx, b)
-    return any(a in s.private and a not in s.view.full_detail for a in scope)
+    return private_scope(s.ctx, s.view.viewer, b)
 
 
 def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
