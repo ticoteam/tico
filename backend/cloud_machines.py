@@ -64,6 +64,14 @@ machine; a shared machine's facts are its member bots' together:
              stops running machines and keeps their disks. A 402 is asked again once HQ says the company is open.
     errors   HQ not answering or refusing: the bot's queued work says so ("its cloud machine didn't start"), and the
              call is retried with backoff (BACKOFF to BACKOFF_MAX); one history event per streak, not per retry.
+    fence    `decide` reads a snapshot, and a claim can lease work between it and HQ's stop. So a stop or delete is
+             reserved first (`reserve`), in a write transaction, which the claim's own write serializes with: `decide`
+             again on the facts read under that lock, and no turn leased or running on the machine's computer, or it
+             is not sent. The reservation (`stop_until`, STOP_HOLD from the clock read under that lock) and HQ's
+             stopping or stopped keep the claim from handing that computer work (`held`), every member bot's on the
+             shared one, and its company-wide waiters too. HQ saying it did not stop lets it go at once; an answer
+             that leaves it open (`stopped_unknown`) keeps it until HQ's next list says, and a server that died
+             mid-stop lets it lapse.
 
 `decide` is the whole policy as a pure function of the row, the facts and the clock, so the tests drive it directly.
 """
@@ -93,7 +101,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try REAL, failures INTEGER NOT NULL DEFAULT 0,
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated TEXT);
+ enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated TEXT, stop_until REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created TEXT NOT NULL);
 """
@@ -116,6 +124,8 @@ FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as 
 ENROLL_MINUTES = 15
 ENROLL_GRACE = 60               # past its newest code's expiry, a machine not enrolled yet never will be
 ENROLL_TRIES = 3                # machines made in a row that never enrolled before it waits for a person
+STOP_HOLD = 120                 # a stop's reservation lapses this late: a server that died mid-stop strands no work
+GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -613,6 +623,45 @@ def decide(current, found, at, idle_s):
     return "start", None
 
 
+def reserve(c, settings, key, action, machine_id):
+    """Hold machine `key` for a stop or delete (`action`) before HQ is asked, in the write transaction a claim also
+    takes, so the two serialize: the row as it is now, or None to send nothing. `decide` must still say `action` on
+    the facts read here, at the clock read here (a look's own clock may be minutes old by now: HQ's list and other
+    machines' calls come first), and no attempt may be leased or running on its computer, whichever bot's: a claim
+    that came first has its turn out, and one that comes after finds the reservation (`held`) and takes nothing. The
+    reservation lapses STOP_HOLD after this clock."""
+    at = now()
+    current = row(c, key)
+    if not current or current["machine_id"] != machine_id:
+        return None
+    found = facts(c, settings, current, at)
+    if decide(current, found, at, idle_after(c, current["machine_size"] or current["size"]))[0] != action:
+        return None
+    if current["runner_id"] and c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
+                                          "LIMIT 1", (current["runner_id"],)).fetchone():
+        return None
+    save(c, key, stop_until=at + STOP_HOLD)
+    return {**current, "stop_until": at + STOP_HOLD}
+
+
+def held(c, runner_id):
+    """Why the claim gives computer `runner_id` no new turn, or "": it is a cloud machine reserved for a stop
+    (`reserve`, until its reservation lapses) or one HQ says is stopping or stopped. Any other computer: ""."""
+    found = c.execute("SELECT state,stop_until FROM cloud_machines WHERE runner_id=? LIMIT 1", (runner_id,)).fetchone()
+    if not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now()):
+        return ""
+    return "This cloud machine is stopping. Its bots' work waits for it to start again."
+
+
+def stopped_unknown(refused):
+    """Whether HQ's answer to a stop or delete leaves open that the machine is going down: no answer or one this
+    server could not read (status 0: a timeout, an oversized or malformed answer), HQ's own failure (5xx), out of
+    credit (402: HQ stops it itself) or already stopping (409 sandbox_stopping). Any other 4xx is HQ saying it did
+    not, and a 404 that it has no such machine."""
+    return (refused.status == 0 or refused.status >= 500 or refused.status == 402
+            or (refused.status == 409 and refused.code == "sandbox_stopping"))
+
+
 # ----------------------------------------------------------------------------- the manager
 class Manager:
     """Runs `decide` for every machine (each bot's own, and the shared one) and carries it out against HQ. `client` is
@@ -747,6 +796,11 @@ class Manager:
     def act(self, hq, current, action, found, at):
         key = current["bot"]
         code = None
+        if action in ("stop", "delete"):
+            with self.store.transaction() as c:
+                current = reserve(c, self.settings, key, action, current["machine_id"])
+            if current is None:
+                return                                      # a claim came first, or the facts changed: not now
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
@@ -785,7 +839,7 @@ class Manager:
             woke_for = "always_on" if current["always_on"] else found["want"]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
-            save(c, key, **fields, failures=0, next_try=None, problem="", problem_at=None)
+            save(c, key, **fields, failures=0, next_try=None, problem="", problem_at=None, stop_until=None)
             H.event(c, H.KEEPER, "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                     key, {"size": machine["size"], "machine": machine["id"]})
 
@@ -797,7 +851,7 @@ class Manager:
             # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
             # answers with that one (act), which is not the new machine.
             save(c, key, state="deleted", enroll_by=None, enroll_fails=fails, wake_key=None,
-                 woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try=None,
+                 woke_at=None, active_at=None, heartbeat_at=None, failures=0, next_try=None, stop_until=None,
                  **({"problem": "no_enroll", "problem_at": H.now()} if fails >= ENROLL_TRIES
                     else {"problem": "", "problem_at": None}))
             H.event(c, H.KEEPER, "cloud_machine.deleted", key, {"machine": current["machine_id"],
@@ -818,6 +872,14 @@ class Manager:
             fields = {"failures": failures, "next_try": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
+        if action in ("stop", "delete"):
+            if stopped_unknown(refused):
+                # It may be stopping all the same: the fence holds for STOP_HOLD more, and the next look asks HQ's
+                # list, whose stopping or stopped holds it from then (`held`). Running there, it lapses.
+                fields["stop_until"] = now() + STOP_HOLD
+                self.synced = None
+            else:
+                fields["stop_until"] = None                 # HQ said it did not: its runner may take work again
         with self.store.transaction() as c:
             save(c, key, **fields)
             if refused.status == 402 and current["problem"] != "out_of_credit" or (
@@ -1025,7 +1087,7 @@ def remove(store, hq, who, auth, bot):
         save(c, bot, machine_id=None, runner_id=None, state="none", machine_size=None, started_at=None,
              stopped_at=None, cost_month_usd=0, starts_month=0, last_error="", active_at=None, heartbeat_at=None,
              ttl_s=None, next_try=None, failures=0, problem="", problem_at=None, wake_key=None, woke_at=None,
-             enroll_by=None, enroll_fails=0, changed_by=who.actor)
+             enroll_by=None, enroll_fails=0, stop_until=None, changed_by=who.actor)
         H.event(c, who.actor, "cloud_machine.deleted", bot, {"machine": current["machine_id"]})
     return {"ok": True}
 

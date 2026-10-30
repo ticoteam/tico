@@ -27,6 +27,19 @@ cloud machine" under Computer).
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
 
+## A stop never lands under a turn
+
+The server decides an idle stop on a read of the hub, and a runner can claim work between that read and HQ's stop.
+So before it asks HQ to stop or delete a machine it reserves the stop in a write transaction, the lock the claim also
+takes: it decides again on what it reads there, and finds no turn leased or running on the machine's computer, or it
+sends nothing. While the reservation holds (`cloud_machines.stop_until`, two minutes from the clock read under that
+lock), and while HQ says the machine is stopping or stopped, that computer's claims get no new turn (`paused`: "This
+cloud machine is stopping"), for every bot on the shared one, and its company-wide waiters do not hold other
+computers. HQ saying it did not stop (a 4xx) lets the reservation go at once. An answer that leaves it open (no
+answer, one that cannot be read, a 5xx, 402, or 409 `sandbox_stopping`) keeps it two more minutes and asks HQ's list
+at the next look: stopping or stopped there holds the claim from then on, running lets it lapse. A server that died
+mid-stop lets it lapse, and a start clears it.
+
 ## How a machine becomes the bot's runner
 
 1. The server mints a one-time enrollment code for the machine (15 minutes, single use; only its digest is kept, in

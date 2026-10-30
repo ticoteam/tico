@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, cloud_access, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import claim_holds, cloud_access, cloud_machines, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -2990,6 +2990,7 @@ class Execution:
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
+                    or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
                     or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
                 continue
@@ -3045,7 +3046,7 @@ class Execution:
             return {"attempt": None, "paused": cloud_access.LOCKED}
         if c.execute('SELECT 1 FROM org_turn_waits LIMIT 1').fetchone():
             return None
-        why = runner_versions.paused(c, who.runner_id)
+        why = runner_versions.paused(c, who.runner_id) or cloud_machines.held(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)
@@ -3167,7 +3168,9 @@ class Execution:
             return {'attempt': None, 'waiting': org_turns.REASON}
         if cloud_access.locked(c):
             return {"attempt": None, "paused": cloud_access.LOCKED}
-        why = runner_versions.paused(c, who.runner_id)
+        # A cloud machine reserved for a stop takes no new turn: checked under this write lock, which the stop's
+        # reservation also takes, so a claim either finds it or has its turn out before it (cloud_machines.reserve).
+        why = runner_versions.paused(c, who.runner_id) or cloud_machines.held(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)

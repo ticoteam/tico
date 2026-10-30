@@ -1180,6 +1180,8 @@ class Store:
             c.executescript(_watchers.SCHEMA)
             from . import cloud_machines as _cloud_machines
             c.executescript(_cloud_machines.SCHEMA)
+            # A stop's reservation against the claim (backend/cloud_machines.py `reserve`); NULL is none.
+            H.add_column(c, "cloud_machines", "stop_until", "REAL")
             from . import screening as _screening
             c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs
