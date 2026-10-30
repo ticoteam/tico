@@ -189,12 +189,16 @@ def waits(c, task_id):
         "SELECT * FROM task_milestone_waits WHERE task_id=? ORDER BY created, target", (task_id,)))]
 
 
+PENDING_SQL = ("SELECT kind,label FROM task_milestone_waits WHERE task_id=? AND woke_at IS NULL "
+               "ORDER BY created LIMIT 1")
+
+
 def pending(c, task_id):
     """The first milestone this task still waits for, as a phrase ('PR #943 to merge'), or None."""
     if not _present(c):
         return None
-    row = c.execute("SELECT kind,label FROM task_milestone_waits WHERE task_id=? AND woke_at IS NULL "
-                    "ORDER BY created LIMIT 1", (task_id,)).fetchone()
+    from .read_cache import one
+    row = one(c, PENDING_SQL, (task_id,))
     return sentence(row["kind"], row["label"]) if row else None
 
 
