@@ -483,6 +483,49 @@ def reconcile_caddy(tag):
         raise RuntimeError("Caddy did not report its applied configuration healthy")
 
 
+def tunnel_services():
+    """The tunnel front door's services in the current compose files: cloudflared, and the hold it routes through when
+    that compose file has one. Empty without the cloudflared profile, and on a runner."""
+    if MODE != "server":
+        return []
+    names = compose("config", "--services").split()
+    return [n for n in ("hold", "cloudflared") if n in names] if "cloudflared" in names else []
+
+
+def hold_ready(seconds):
+    """One running hold that answers: a request to its own port reaches the healthy server's /healthz through it."""
+    deadline = time.time() + seconds
+    while True:
+        try:
+            ids = [cid for cid, (oneoff, _) in containers_of_service("hold").items() if not oneoff]
+            state = inspect(ids[0]).get("State", {}) if len(ids) == 1 else {}
+            if state.get("Running") and not state.get("Restarting"):
+                compose("exec", "-T", "hold", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz",
+                        timeout=INSPECT_SECONDS)
+                return True
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            pass
+        if time.time() >= deadline:
+            return False
+        time.sleep(POLL_SECONDS)
+
+
+def reconcile_tunnel(tag):
+    """cloudflared reads its route only when it starts, and the route a compose file with a hold names (ingress.yml)
+    sends every request through the hold. So the hold is started and must answer before cloudflared is recreated; if it
+    does not, cloudflared is left as it is (on an install from before the hold, its direct route to the server) and the
+    update fails, so the rollback puts the old bundle back. `up --no-deps` skips compose.yaml's depends_on, and a
+    cloudflared started onto a missing hold would leave the install unreachable from outside."""
+    services = tunnel_services()
+    if "hold" in services:
+        compose("up", "-d", "--no-deps", "hold", tag=tag)
+        if not hold_ready(HEALTH_SECONDS):
+            raise RuntimeError("the tunnel's hold did not come up within %d seconds, so cloudflared was left on its "
+                               "old route" % HEALTH_SECONDS)
+    if "cloudflared" in services:
+        compose("up", "-d", "--no-deps", "cloudflared", tag=tag)
+
+
 SNAPSHOT_SCRIPT = """
 import glob, os, sqlite3, sys, threading, time
 folder, name, keep, seconds = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
@@ -866,6 +909,7 @@ def update(version, running=""):
     bundled = False
     snapshot, switched = "", False
     caddy = False
+    tunnel = []   # the tunnel front door's services in the new bundle, reconciled once the server is healthy
     unsettled = False   # a command that changes containers did not report back: settle() before any outcome
     try:
         try:
@@ -903,12 +947,16 @@ def update(version, running=""):
             apply_bundle(files, release)
             bundled = True
         try:
+            if bundled:
+                tunnel = tunnel_services()
             if PULL != "never":
                 compose("pull", SERVICE, tag=version)
                 if caddy:
                     # The verified target bundle may pin a new front-door image.
                     # Stage it before switching; rollback/settle use local images.
                     compose("pull", "caddy", tag=version)
+                if tunnel:   # likewise the hold and cloudflared: one that cannot be pulled refuses the update here
+                    compose("pull", *tunnel, tag=version)
             if MODE == "server":
                 # Last thing before the switch, so little is lost if it is undone: a new version may migrate the
                 # schema and then fail its health check, and the old image cannot read a newer schema.
@@ -932,6 +980,8 @@ def update(version, running=""):
             check_switched(version, target)
             if caddy:
                 reconcile_caddy(version)
+            if tunnel:
+                reconcile_tunnel(version)
         except (RuntimeError, subprocess.SubprocessError) as exc:
             unsettled = isinstance(exc, Unsettled)
             restoring = False
@@ -961,6 +1011,8 @@ def update(version, running=""):
                     back = healthy(HEALTH_SECONDS)
                     if back and caddy and not unsettled:
                         reconcile_caddy(previous)
+                    if back and tunnel and not unsettled:
+                        reconcile_tunnel(previous)   # the restored bundle's route: unchanged unless it had moved
             except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
                 unsettled = unsettled or isinstance(rollback_exc, Unsettled)
                 back = False
@@ -977,7 +1029,7 @@ def update(version, running=""):
         if bundled and MODE == "server":
             # Slack, the front door and anything new follow the new compose file; the updater itself stays put.
             for name in other_services():
-                if name == "caddy":   # selected existing Caddy was explicitly reconciled; do not enable another profile
+                if name == "caddy" or name in tunnel:   # front doors were reconciled above; do not enable another profile
                     continue
                 try:
                     compose("up", "-d", "--no-deps", name, tag=version)
