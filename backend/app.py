@@ -6884,8 +6884,7 @@ def create_app(settings=None):
                      "paused_by": paused_by, "open_tasks": count}
             key, base = gateway_connection.target(c, app.state.vault, settings)[:2]
         # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
-        billing = company_billing.read(key, base)
-        value["company_paused"] = billing.get("state") == "paused" and billing.get("record_only") is False
+        value["company_paused"] = company_billing.paused(key, base)
         return value
 
     @app.post("/api/v2/bots/{bot}/control")

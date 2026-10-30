@@ -102,6 +102,15 @@ async function staleReadAfterControl(browser, action) {
     const strip = page.locator('#bot-control-host');
     await strip.getByRole('button', {name: 'Pause', exact: true}).waitFor();
     assert.equal(await page.locator('#main > :first-child').getAttribute('id'), 'bot-control-host');
+    // Refreshes with the page's view unchanged do not re-read the pause state until it is a minute old.
+    await page.waitForFunction(() => !BOT.pauseLoading);
+    const readsBefore = state.reads;
+    await page.evaluate(() => { botAlertDraw(); botAlertDraw(); botAlertDraw(); });
+    await page.waitForFunction(() => !BOT.pauseLoading);
+    assert.equal(state.reads, readsBefore, 'repeated refreshes with an unchanged state make no pause-state request');
+    await page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
+    await page.waitForFunction(() => !BOT.pauseLoading);
+    assert.equal(state.reads, readsBefore + 1, 'a stale view is re-read once on refresh');
     let dialogs = 0; page.on('dialog', async d => {dialogs++; await d.dismiss();});
     await strip.getByRole('button', {name: 'Pause', exact: true}).focus();
     await page.keyboard.press('Enter');
