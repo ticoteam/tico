@@ -1,6 +1,6 @@
 // The Liquid Dot stays cheap (ui/app/liquid-dot.js, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
 // CDP, fixtures only:
-// - Idle 10 s with Ask closed: no layout, at most 4 style recalcs, under 150 ms of main-thread work, no paints from
+// - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
 // - With the CPU slowed 4x, opening Ask (the dot flies in), a reply (it flies to the new turn) and closing (it flies
 //   back): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
@@ -89,22 +89,31 @@ const round = v => Math.round(v * 10) / 10;
     const {page, errors} = await open(browser);
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
-    await page.waitForTimeout(1500);                       // the page settles: first draws, fonts, support's read
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read, the peek's first look
 
     // ---- Idle, Ask closed.
+    // Count the scheduler's swaps in the window: each may cost a few style recalcs (4 at most), nothing else may.
+    await page.evaluate(() => { window.__swaps = 0; new MutationObserver(l => { window.__swaps += l.length; })
+      .observe(document.body, {subtree: true, attributes: true, attributeFilter: ['data-idle']}); });
     const before = await metrics(cdp);
-    await browser.startTracing(page, {categories: ['devtools.timeline']});
+    await browser.startTracing(page, {categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline.stack']});
     await page.waitForTimeout(IDLE_MS);
     const after = await metrics(cdp);
+    const swaps = await page.evaluate(() => window.__swaps);
     const trace = JSON.parse((await browser.stopTracing()).toString());
     const sampled = [await dotAnimations(page)];       // after: reading animations recalcs style itself
     const events = (trace.traceEvents || trace).filter(e => e.ph === 'X' || e.ph === 'B');
+    // What laid out, if anything: the script frames (or the style change) behind each layout, for the message.
+    const why = events.filter(e => e.name === 'Layout').map(e => (e.args?.beginData?.stackTrace || []).slice(0, 4)
+      .map(f => f.functionName || '(anonymous)').join(' < ') || events.filter(o => o !== e && o.tid === e.tid && o.ts <= e.ts
+      && o.ts + (o.dur || 0) >= e.ts + (e.dur || 0)).map(o => o.args?.data?.functionName || o.args?.data?.type || o.name).join(' > ') || 'no script');
     const idle = {layouts: after.LayoutCount - before.LayoutCount, recalcs: after.RecalcStyleCount - before.RecalcStyleCount,
       taskMs: round((after.TaskDuration - before.TaskDuration) * 1000), paints: events.filter(e => e.name === 'Paint').length,
-      props: [...new Set(sampled.flatMap(s => s.props))].sort(), liveDots: Math.max(...sampled.map(s => s.dots))};
+      props: [...new Set(sampled.flatMap(s => s.props))].sort(), liveDots: Math.max(...sampled.map(s => s.dots)), swaps};
     out.idle = idle;
-    assert.equal(idle.layouts, 0, `idle: ${idle.layouts} layouts`);
-    assert.ok(idle.recalcs <= 4, `idle: ${idle.recalcs} style recalcs`);
+    assert.equal(idle.layouts, 0, `idle: ${idle.layouts} layouts: ${JSON.stringify(why)}`);
+    assert.ok(idle.recalcs <= 4 * Math.max(1, swaps), `idle: ${idle.recalcs} style recalcs over ${swaps} idle swaps`);
     assert.ok(idle.taskMs < 150, `idle: ${idle.taskMs} ms of main-thread work`);
     assert.ok(idle.paints <= 1, `idle: ${idle.paints} paints`);
     assert.ok(idle.props.every(p => DOT_ANIMATED.has(p)), `the dot animates ${idle.props}`);

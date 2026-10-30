@@ -2,22 +2,13 @@
 updates, outgoing webhooks, the mail action queue and the Slack outbox. A refusal is an answer, never a raise."""
 import json
 
-import pytest
-
 from backend import automation_actions as A
-from backend import updates
 from backend.store import H
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_market import _librarian
 
 MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "subject": "Invoice"}}
 SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
-
-
-@pytest.fixture
-def wednesday(monkeypatch):
-    """A plain-text post on a Friday is refused (Friday is a week in review, which needs slides): pin the day."""
-    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-28")
 
 
 def auto(owner="person:ana"):
@@ -72,16 +63,24 @@ def test_wake_bot_wakes_it_with_the_run_on_the_notice(api):
     assert not act(api, "wake_bot", {"bot": "nobody"})["ok"]
 
 
-def test_post_update_posts_as_the_owner(api, wednesday):
+def test_post_update_posts_as_the_owner(api):
     assert act(api, "post_update", {"text": "Shipped the fix"}, owner="bot:ops")["ok"]
     assert act(api, "post_update", {}) == {"ok": False, "detail": "post_update needs text"}
+
+
+def test_post_update_posts_a_daily_on_a_friday(api, monkeypatch):
+    """A Friday's week in review needs slides, which an automation never has: its text is still a daily."""
+    from backend import updates
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-30")
+    assert act(api, "post_update", {"text": "Shipped the fix"}, owner="bot:ops")["ok"]
+    assert sql(api, "SELECT kind FROM updates WHERE bot='ops'") == [{"kind": "daily"}]
 
 
 BRIEF = {"brief": {"ref": "task_9", "turn": {"bot": "librarian", "task": "task_9"},
                    "text": "# Acme market, Tuesday\n\n- Northwind cut its price.\n- No bet is touched."}}
 
 
-def test_post_update_to_market_and_updates_posts_the_turns_briefing(api, wednesday):
+def test_post_update_to_market_and_updates_posts_the_turns_briefing(api):
     """With no text it posts what the turn before wrote: the week's briefing on Market, one line on the Librarian's
     daily update pointing at it. Both name the run; a second run the same day keeps one line."""
     _librarian(api)
@@ -103,7 +102,7 @@ def test_post_update_to_market_and_updates_posts_the_turns_briefing(api, wednesd
     assert [u["source"] for u in listed if u["bot"] == "librarian"] == [source]
 
 
-def test_post_update_to_market_is_the_librarians_or_the_top_of_the_orgs(api, wednesday):
+def test_post_update_to_market_is_the_librarians_or_the_top_of_the_orgs(api):
     _librarian(api)
     assert act(api, "post_update", {"to": ["market"], "text": "Acme week"}, owner="bot:ops") == {
         "ok": False, "detail": "only the Librarian and the top of the org post to Market"}
@@ -167,9 +166,3 @@ def test_an_idle_pr_find_reads_open_prs_whose_last_activity_is_old(api):
         every = A.find(c, auto(), "prs", "", 20, ("", ""))
     assert sorted(r["id"] for r in idle) == ["link_draft", "link_idle"]
     assert len(every) == 4
-
-
-def test_plain_text_on_a_friday_is_not_a_week_in_review(api, monkeypatch):
-    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-30")
-    done = act(api, "post_update", {"text": "Shipped the fix"}, owner="bot:ops")
-    assert done["ok"] is False and done["detail"].startswith("Not a week in review yet: it has no slides")

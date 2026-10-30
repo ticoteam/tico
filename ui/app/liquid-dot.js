@@ -116,3 +116,9 @@ globalThis.document?.addEventListener('visibilitychange', () => {
   document.querySelectorAll('.ldot').forEach(el => el.toggleAttribute('data-paused', document.hidden || LDOT_OFF.has(el)));
   if (document.hidden) { clearTimeout(LDOT_TIMER); LDOT_TIMER = 0; } else ldotSchedule();
 });
+// Reduced motion turned on mid-flight: every scripted move (flights, hops, the pill, support's chip) jumps to its end
+// at once, so nothing keeps moving after the switch. CSS animations stop on their own (liquid-dot.css).
+globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').addEventListener?.('change', e => {
+  if (!e.matches || typeof document.getAnimations !== 'function') return;
+  document.getAnimations().forEach(a => { if (!globalThis.CSSAnimation || !(a instanceof CSSAnimation)) try { a.finish(); } catch { a.cancel(); } });
+});
