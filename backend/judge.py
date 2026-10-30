@@ -257,6 +257,10 @@ def _held(budget):
     return 0 if budget == DECIDE_BUDGET else budget
 
 
+def _in_flight(key):
+    return _RESERVED[key] if key == 0 else _RESERVED.get(key, 0.0)
+
+
 def reservation(settings, models, state, questions):
     """The most one call can cost: all of its input and MAX_OUTPUT_TOKENS of output at each of `models`, the providers
     a chain asks in turn. Each can be paid: an answer that comes back unusable still costs, and the next is asked."""
@@ -285,11 +289,11 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
         if cap > 0:
             with store.read() as c:
                 spent = spent_this_month(c, None, budget)
-            if spent + _RESERVED.get(_held(budget), 0.0) + reserved > cap:
+            if spent + _in_flight(_held(budget)) + reserved > cap:
                 _skip("every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap")
                 raise J.JudgeError("spend_cap", f"Decide has cost ${spent:.2f} this month; the team's cap is "
                                    f"${cap:.2f} until the 1st (UTC)", 429)
-        _RESERVED[_held(budget)] = _RESERVED.get(_held(budget), 0.0) + reserved
+        _RESERVED[_held(budget)] = _in_flight(_held(budget)) + reserved
     try:
         try:
             result = call()
@@ -302,7 +306,7 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
         return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions, budget[1])}
     finally:
         with _METER:
-            _RESERVED[_held(budget)] = max(0.0, _RESERVED.get(_held(budget), 0.0) - reserved)
+            _RESERVED[_held(budget)] = max(0.0, _in_flight(_held(budget)) - reserved)
 
 
 def _spend(store, label, attempts, state, questions, action="judge.spend"):
