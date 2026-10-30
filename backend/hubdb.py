@@ -5813,7 +5813,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False, routine=False):
+                quiet_notice=False, from_private=False, routine=False, same=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5929,7 +5929,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         dup = twins[0] if twins else None
     else:
         dup = _same_title(conn, scope + " ORDER BY created,id",
-                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
+                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title, keep=same)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -6076,10 +6076,12 @@ def title_key(title):
     return " ".join(str(title or "").split()).casefold()
 
 
-def _same_title(conn, sql, args, title):
-    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None."""
+def _same_title(conn, sql, args, title, keep=None):
+    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None. `keep(conn, task_id)`, when
+    given, also has to say it is the same work: a file review asks the same words about other versions."""
     key = title_key(title)
-    return next((r for r in _rows(conn.execute(sql, args)) if title_key(r["title"]) == key), None)
+    return next((r for r in _rows(conn.execute(sql, args))
+                 if title_key(r["title"]) == key and (keep is None or keep(conn, r["id"]))), None)
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn

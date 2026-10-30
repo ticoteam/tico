@@ -381,6 +381,8 @@ const decideStepsOnly = c => c.type === 'task' && (!!c.it.steps_only || pipeline
 function decideActionsPlain(c, k) {
   const skip = `<button type="button" data-dc="skip">Skip${k('S')}</button>`;
   if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
+  // A pick between files has a button under each file: no Pick one row.
+  if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
   if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes">Approve${k('Y')}</button>`;
   if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;

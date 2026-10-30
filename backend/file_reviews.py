@@ -4,8 +4,9 @@ person approved a version (`hub file approved`, docs/files.md).
 The question's ask keeps the versions under review (`review`: file, version, digest) and shows them on the card as
 attachments, which each reader sees through the file's own visibility (visuals.decorate). An answer records a verdict
 per version in its file's activity log (action `reviewed`), so the approval check reads one indexed log, never the
-messages. Only a person's verdict counts, the newest one on that version decides, and a version never inherits
-another's: a new version is a new review.
+messages. A bot may review another bot's file too (`hub file review`), for a company where a bot moves a stage. By
+default only a person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict
+on that version decides, and a version never inherits another's: a new version is a new review.
 """
 
 import re
@@ -14,8 +15,9 @@ from .store import H, Problem
 from . import task_privacy as privacy
 
 APPROVE, CHANGES = "Approve", "Request changes"
-PICK_MAX = 5                    # a pick is one option per file, plus Request changes: at most 6 options
 AMOUNT = re.compile(r"\$?[0-9]+(?:\.[0-9]{1,2})?")
+BY = re.compile(r"human|any|bot:[a-z0-9][a-z0-9_-]{0,63}")
+VERDICTS = ("approve", "changes")
 
 
 def _label(title, taken, n):
@@ -59,6 +61,20 @@ def resolve(c, auth, blobs, who, person, items):
                             "title": row["title"], "kind": kind, "name": v["name"], "size": v["size"],
                             "content_type": v["mime"], "url": f"/api/v2/files/{row['id']}?v={number}"})
     return entries, attachments
+
+
+def same_versions(entries):
+    """Whether an open question task with the same words asks about these same versions (hubdb.task_create's duplicate
+    check): the same question about a new version is a new review."""
+    mine = {(e["file"], e["version"]) for e in entries}
+
+    def same(c, task_id):
+        row = c.execute("SELECT m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                        "WHERE t.id=? AND json_extract(m.refs_json,'$.review') IS NOT NULL "
+                        "ORDER BY m.created DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
+        files = ((H._json(row["refs_json"], {}) or {}).get("review") or {}).get("files") or [] if row else []
+        return {(f.get("file"), f.get("version")) for f in files} == mine
+    return same
 
 
 def options(entries, attachments, pick, given):
@@ -146,12 +162,54 @@ def spend_approval(c, who, asked, task_id, spend, previous):
     return made["id"]
 
 
-def approved(c, auth, who, fid=None, version=None, path=None, digest=None):
-    """Whether a person approved this exact version (`hub file approved`): {approved, by, at, task, question, file,
-    version, digest, verdict}. By file id (current version without one), or by a path in the bot's checkout and the
-    digest of its bytes now, which finds the bot's versions with those exact bytes. Only verdicts on tasks the caller
-    reads count; the newest person's verdict on the version decides."""
+def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=None, verdict=None, note=""):
+    """A verdict given directly (`hub file review`): a bot reviewing another bot's file, on a task it reads, when it can
+    open the file; a person may too. Recorded as a `reviewed` line like an answer's, with no question."""
     from .files import file_visible
+    if verdict not in VERDICTS:
+        raise Problem("validation", "A review approves or asks for changes", 422)
+    task_id = auth.task(c, who, auth.resolve_task(c, who, task))["id"]
+    mine = H.actor_id(who.actor) if H.is_bot(who.actor) else None
+    if fid:
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row or row["archived"] or not file_visible(c, auth, who, row, {}):
+            raise Problem("not_found", "File not found", 404)
+        number = version or row["current_version"]
+        v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
+        if not v:
+            raise Problem("not_found", f"File {fid} has no version {number}", 404)
+    elif path and digest:
+        # The same bytes another bot published from the same path: the newest such version this reviewer can open.
+        row = v = None
+        for found in c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE "
+                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot=?), v.created DESC "
+                               "LIMIT 20", (path, digest, mine or "")).fetchall():
+            candidate = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
+            if file_visible(c, auth, who, candidate, {}):
+                row, v = candidate, found
+                break
+        if not row:
+            raise Problem("not_found", "No published file you can open has these bytes at this path", 404)
+    else:
+        raise Problem("validation", "Give a file id, or a path and its digest", 422)
+    if mine and row["bot"] == mine:
+        raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
+    entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
+              "detail_json) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
+              (entry["file"], who.actor, getattr(who, "attempt_id", "") or None, task_id, entry["version"], entry["digest"],
+               H.now(), H._dump({"verdict": verdict, "question": None, "task": task_id, "note": note or ""})))
+    return _verdict(c, who, row["id"], v["version"], entry["digest"], by=who.actor)
+
+
+def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="human"):
+    """Whether this exact version is approved (`hub file approved`): {approved, by, at, task, question, file, version,
+    digest, verdict}. By file id (current version without one), or by a path in the bot's checkout and the digest of
+    its bytes now, which finds the bot's versions with those exact bytes. Only verdicts on tasks the caller reads
+    count, from whom `by` names (a person by default, `bot:SLUG`, or `any`); the newest such verdict decides."""
+    from .files import file_visible
+    if not BY.fullmatch(by or ""):
+        raise Problem("validation", "--by is human, any or bot:SLUG", 422)
     if fid:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not row or not file_visible(c, auth, who, row, {}):
@@ -178,18 +236,27 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None):
         raise Problem("validation", "Give a file id, or a path and its digest", 422)
     out = None
     for row, v in found:
-        result = _verdict(c, who, row["id"], v["version"], v["source_digest"] or v["digest"])
+        result = _verdict(c, who, row["id"], v["version"], v["source_digest"] or v["digest"], by=by)
         if result["approved"]:
             return result
         out = out or result
     return out
 
 
-def _verdict(c, who, fid, number, digest):
+def _counts(actor, by):
+    """Whether a verdict from `actor` is one `by` asks for: human, any (a person or a bot), or that one actor."""
+    if by == "human":
+        return H.is_human(actor)
+    if by == "any":
+        return H.is_human(actor) or H.is_bot(actor)
+    return actor == by
+
+
+def _verdict(c, who, fid, number, digest, by="human"):
     for r in c.execute("SELECT * FROM bot_file_activity WHERE file_id=? AND action='reviewed' AND version=? "
                        "ORDER BY id DESC", (fid, number)).fetchall():
         task = H.task(c, r["task_id"]) if r["task_id"] else None
-        if not H.is_human(r["actor"]) or not task or not privacy.task_readable(c, who, task):
+        if not _counts(r["actor"], by) or not task or not privacy.task_readable(c, who, task):
             continue
         detail = H._json(r["detail_json"], {}) or {}
         verdict = detail.get("verdict")

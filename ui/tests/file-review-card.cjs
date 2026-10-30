@@ -109,6 +109,8 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
       picks: [...document.querySelectorAll('.decide .qc-rpick')].map(p => [p.querySelector('.vcard-title').textContent, p.querySelector('.qc-bl').textContent.trim()]),
       changes: document.querySelector('.decide .qc-changes')?.textContent.trim(),
       spend: document.querySelector('.decide .qc-spend')?.textContent}));
+    // Each option is its own button: the action row keeps only Skip.
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.decide .dc-actions button')].map(b => b.textContent.replace(/[A-Z]$/, '').trim())), ['Skip']);
     assert.deepEqual(picks, {picks: [['Bright kitchen', '1 Bright kitchen'], ['Blue door', '2 Blue door']], changes: 'Request changes',
       spend: 'Bright kitchen also approves spending 12.50 (gateway): Render the final cut'});
     await shoot('review-pick');

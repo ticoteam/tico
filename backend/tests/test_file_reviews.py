@@ -108,3 +108,63 @@ def test_a_bot_checks_its_checkout_file_by_the_digest_of_its_bytes(api):
     same, edited = (hashlib.sha256(text.encode()).hexdigest() for text in ("# Cut", "# Cut, edited"))
     assert approved(api, bot, path="cuts/cut.md", digest=same)["approved"]
     assert not approved(api, bot, path="cuts/cut.md", digest=edited)["approved"]
+
+
+def review(api, token, body, expected=200):
+    r = api.post("/api/v2/file-reviews", json=body, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_a_bot_reviews_another_bots_file_and_only_by_names_whose_verdicts_count(api):
+    _, _, ops = setup_attempt(api)
+    _, _, finance = setup_attempt(api, bot="finance")
+    task = post(api, "tasks", {"owner": "bot:ops", "title": "Cut the launch video", "body": "For the launch."})
+    r = api.post("/api/v2/files/uploads", json={"name": "cut.md", "text": "# Cut", "task": task["id"]},
+                 headers=headers(ops["token"]))
+    assert r.status_code == 200, r.text
+    fid = r.json()["file"]["id"]
+    # A bot never reviews its own bot's file.
+    review(api, ops["token"], {"file": fid, "task": task["id"], "verdict": "approve"}, expected=403)
+    got = review(api, finance["token"], {"file": fid, "task": task["id"], "verdict": "approve", "note": "Clean."})
+    assert got["approved"] and got["by"] == "bot:finance" and got["question"] is None
+    # A bot's verdict never satisfies the default: only a person's counts.
+    assert not approved(api, ops["token"], file=fid)["approved"]
+    assert approved(api, ops["token"], file=fid, by="bot:finance")["approved"]
+    assert approved(api, ops["token"], file=fid, by="any")["approved"]
+    assert not approved(api, ops["token"], file=fid, by="bot:writer")["approved"]
+    assert api.get("/api/v2/file-approvals", params={"file": fid, "by": "everyone"},
+                   headers=headers(ops["token"])).status_code == 422
+    # Each --by reads its own newest verdict.
+    review(api, finance["token"], {"file": fid, "task": task["id"], "verdict": "changes", "note": "Trim the end."})
+    review(api, "ana-test", {"file": fid, "task": task["id"], "verdict": "approve"})
+    assert approved(api, ops["token"], file=fid)["by"] == "human:ana"
+    assert approved(api, ops["token"], file=fid)["approved"]
+    assert not approved(api, ops["token"], file=fid, by="bot:finance")["approved"]
+    assert approved(api, ops["token"], file=fid, by="any")["approved"]
+
+
+def test_the_same_question_about_a_new_version_is_new_and_about_the_same_versions_a_duplicate(api):
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    v1 = publish(api, bot, "# Cut one")
+    ask(api, bot, [{"file": v1["id"], "version": 1}], topic="first")
+    v2 = publish(api, bot, "# Cut two")
+    ask(api, bot, [{"file": v2["id"], "version": 2}], topic="second")
+    again = ask(api, bot, [{"file": v2["id"], "version": 2}], topic="third", expected=422)
+    assert again["error"]["code"] == "duplicate"
+
+
+def test_deleting_a_review_question_is_allowed_and_its_verdicts_stop_counting(api):
+    _, _, attempt = setup_attempt(api)
+    bot = attempt["token"]
+    v1 = publish(api, bot, "# Cut")
+    made = ask(api, bot, [{"file": v1["id"]}])
+    answer(api, made, ["Approve"])
+    assert approved(api, bot, file=v1["id"])["approved"]
+    # A verdict is not work done on the task (backend/task_delete.py FILE_WORK); the bot's wake by the answer is.
+    from backend.task_delete import delete_tasks
+    with api.app.state.store.read() as c:
+        assert "bot_file_activity.task_id" not in delete_tasks(c, [made["task"]["id"]])["refused"]
+    assert post(api, f"tasks/{made['task']['id']}/delete", {}) == {"deleted": made["task"]["id"]}
+    assert not approved(api, bot, file=v1["id"])["approved"]

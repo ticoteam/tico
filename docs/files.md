@@ -480,12 +480,18 @@ and answer contracts.
 
 ### Approved versions
 
-`hub file approved <path|FILE[@N]>` (MCP `hub_file_approved`, `GET /api/v2/file-approvals?file=&version=` or
-`?path=&digest=`) says whether a person approved that exact version in a
-[file review](tasks.md#reviewing-files). It prints `{approved, by, at, task, question}` and exits 0 when approved,
-1 when not, 2 on bad input. A path is the bot's own file, matched by the sha256 of its bytes now. Only a person's
-verdict counts, the newest on that version decides (Request changes after Approve means not approved), and a new
-version is never approved by an older one's review.
+`hub file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `hub_file_approved`,
+`GET /api/v2/file-approvals?file=&version=` or `?path=&digest=`, plus `&by=`) says whether that exact version is
+approved. It prints `{approved, by, at, task, question}` and exits 0 when approved, 1 when not, 2 on bad input. A
+path is the bot's own file, matched by the sha256 of its bytes now. By default only a person's verdict counts (an
+answer to a [file review](tasks.md#reviewing-files)); `--by` names whose verdicts count instead. The newest matching
+verdict on that version decides (Request changes after Approve means not approved), a new version is never approved
+by an older one's review, and a deleted task's verdicts stop counting.
+
+`hub file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `hub_file_review`,
+`POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
+bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
+may use it too; Decide is the usual way.
 
 Upload retries verify their idempotency receipt before writing bytes to durable storage.
 Multipart retries still parse and hash the incoming bytes to reject changed content, using

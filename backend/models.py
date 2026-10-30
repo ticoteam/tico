@@ -422,6 +422,18 @@ class ReviewFile(Contract):
     version: Annotated[int, Field(strict=True, ge=1)] | None = None
 
 
+class FileReview(Contract):
+    """A verdict given directly on one file version (`hub file review`, backend/file_reviews.py): by file id, or by a
+    path and the SHA-256 of its bytes."""
+    file: ID | None = None
+    version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    path: Annotated[str, Field(max_length=1000)] | None = None
+    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    task: ID
+    verdict: Literal["approve", "changes"]
+    note: Annotated[str, Field(max_length=4000)] = ""
+
+
 class QuestionSpend(Contract):
     """Picking `label` also approves this spend for the asking bot, decided by the person who picks it."""
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]

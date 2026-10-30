@@ -532,13 +532,15 @@ Approvals for spending or publishing keep their own card.
 `hub_task_question` with `review`) asks about exact file versions. A path is published first. The card shows the files
 inline (pictures, video, audio, pages; four at most, the rest as chips) with **Approve** and **Request changes**, unless
 the bot gives its own options. `--pick` (2–5 files) makes one option per file, each under its media, plus **Request
-changes**. Request changes asks for a note. The person must be able to open each file.
+changes**. Request changes asks for a note. The person must be able to open each file. With your own `--option`s,
+only one labelled "Approve" approves; any other label is recorded as `other`. The same question about other versions
+is a new question; about the same versions while the first is open, it is refused as a duplicate.
 
 The answer records `reviewed: [{file, version, digest, verdict}]` (`approve`, `changes`, `passed` for the files not
 picked, `other`). `--spend "LABEL=AMOUNT:WHAT"` (`--spend-account`, default `gateway`) makes picking LABEL also
 approve that spend: the answer stores `spend_approval`, a `spend` approval the bot requested and the person decided,
 which the bot consumes once (`hub approval consume`). [`hub file approved`](files.md#approved-versions) reads the
-verdicts.
+verdicts. Where a bot moves a stage instead of a person, it reviews directly with `hub file review`.
 
 Tico refuses a bot's question to a person, saying why and with an example, when:
 

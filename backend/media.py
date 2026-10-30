@@ -634,6 +634,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             guest = readable_by(c, person, private, parent)
             if guest:
                 H.task_reach(c, who.actor, parent, person)
+            # Files under review (backend/file_reviews.py): versions the person can open, and the options they make.
+            from . import file_reviews
+            review = attachments = None
+            if body.review:
+                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
             topic = H.question_topic(body.topic)
             # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
             found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
@@ -644,7 +649,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 made = task_create(c, who, M.TaskCreate(
                     title=title, body=body.body or question, owner=who.actor, private=body.private,
                     relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
-                    review_prs=snapshots)
+                    review_prs=snapshots, same=file_reviews.same_versions(review) if review else None)
                 tid = made["task"]["id"]
             # The person must be able to read the task by every rule a read checks, or the question would reach
             # them (Slack, mail) while the task stays hidden from them.
@@ -652,12 +657,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
             except Problem as exc:
                 raise unreadable(person) from exc
-            # Files under review (backend/file_reviews.py): versions the person can open, and the options they make.
-            from . import file_reviews
-            review = attachments = None
             picks, shown = options, asked
-            if body.review:
-                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+            if review:
                 picks = file_reviews.options(review, attachments, body.pick, body.options)
                 shown = {**asked, "options": [o.model_dump(include={"label", "description", "then", "recommended"})
                                               for o in picks]}

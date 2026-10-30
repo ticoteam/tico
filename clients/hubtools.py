@@ -2495,19 +2495,15 @@ def files_delete(api, args):
     return _as_person(api).call("DELETE", f"files/{args['id']}", None, _key(args))
 
 
-@tool("hub_file_approved", "Whether a person approved this exact file version on a review question "
-      "(hub_task_question with review): `approved` true only when the newest person's answer covering that version, "
-      "with the same bytes, approved or picked it. A later Request changes undoes it; another version is never "
-      "approved by it. Also who answered, when, and on which task and question.",
-      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
-                    "(its bytes now)")}, required=("target",))
-def files_approved(api, args):
-    target = str(args["target"]).strip()
+def _file_target(api, target, command):
+    """A review target as the API takes it: {file, version} for FILE[@N], or {path, digest} for a path in this
+    checkout, read here (its bytes now)."""
+    target = str(target).strip()
     if FILE_REF.fullmatch(target) and not os.path.exists(target):
         fid, _, number = target.partition("@")
-        return api.get("file-approvals", file=fid, version=int(number) if number else None)
+        return {"file": fid, **({"version": int(number)} if number else {})}
     if not hasattr(api, "post_multipart"):
-        raise APIError("validation", "A path is read on the computer that runs you: use hub file approved there", 422)
+        raise APIError("validation", f"A path is read on the computer that runs you: use {command} there", 422)
     from clients import bot_files as BF
     try:
         path, relative = BF.local_file(BF.checkout_root(), target)
@@ -2517,7 +2513,34 @@ def files_approved(api, args):
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1 << 20), b""):
             digest.update(chunk)
-    return api.get("file-approvals", path=relative, digest=digest.hexdigest())
+    return {"path": relative, "digest": digest.hexdigest()}
+
+
+@tool("hub_file_approved", "Whether this exact file version is approved: `approved` true only when the newest verdict "
+      "on that version, with the same bytes, approved it. By default only a person's verdict counts (an answer to "
+      "hub_task_question with review); `by` bot:SLUG or any also reads bots' hub_file_review. A later Request changes "
+      "undoes it; another version is never approved by it. Also who, when, and on which task and question.",
+      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
+                    "(its bytes now)"),
+       "by": _s("Whose verdicts count: human (default), any, or bot:SLUG")}, required=("target",))
+def files_approved(api, args):
+    query = _file_target(api, args["target"], "hub file approved")
+    return api.get("file-approvals", **query, **({"by": args["by"]} if args.get("by") else {}))
+
+
+@tool("hub_file_review", "Approve or ask for changes on another bot's exact file version, on a task you can read, "
+      "when you can open the file: for a company where a bot moves a stage. Never your own bot's file. "
+      "hub_file_approved with by bot:SLUG reads it.",
+      {"target": _s("FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
+                    "(its bytes now, matched to the version another bot published)"),
+       "verdict": {"type": "string", "enum": ["approve", "changes"]},
+       "task": _s("The task the review is for"),
+       "note": _s("What to change, or why it is approved", maxLength=4000)},
+      required=("target", "verdict", "task"), writes=True)
+def files_review(api, args):
+    body = {**_file_target(api, args["target"], "hub file review"), "task": args["task"], "verdict": args["verdict"],
+            **({"note": args["note"]} if args.get("note") else {})}
+    return api.post("file-reviews", body, key=_key(args))
 
 
 def files_publish_path(client, args):
