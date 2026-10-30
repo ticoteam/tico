@@ -22,10 +22,14 @@ The state is kept in registry_metadata (KEY), so a restart keeps a lock until HQ
 for the request gate. Every answer replaces it: paying, or credit landing, opens everything again at the next read
 (every SYNC seconds while the company is a cloud one, and whenever Settings > Billing is opened), with no restart. HQ
 not answering keeps the last word. A change of access is an audit event (`cloud.access`).
+
+Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) is asked every SYNC too, not every
+UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
 """
 
 import json
 import logging
+import os
 import threading
 from datetime import timedelta
 
@@ -37,13 +41,15 @@ KEY = "cloud-access"
 ACCESS = ("open", "frozen", "locked")
 REASONS = (None, "out_of_credit", "trial_over", "unpaid")
 SYNC = timedelta(seconds=60)          # how often HQ is asked while the company is a cloud one
-UNKNOWN = timedelta(hours=1)          # and while it is not (or HQ has not said yet)
+UNKNOWN = timedelta(hours=1)          # and while it is not (or HQ has not said yet, off a Tico Cloud cell)
 OPEN_PATHS = ("/api/me", "/api/v2/me", "/api/status", "/api/v2/cloud-access", "/api/v2/system/storage/export")
 OPEN_PREFIXES = ("/api/v2/billing",)
 LOCKED = "Pay to continue: this company's Tico Cloud plan is locked"
 ROUTINES_PAUSED = {"frozen": "out of credit", "locked": "Tico Cloud is locked"}
 _MISSING = object()
-_running = threading.Lock()
+_guard = threading.Lock()
+_busy = False                         # a sync thread is running
+_again = False                        # asked while one ran: one more sync after it (the key may have changed meanwhile)
 
 
 def _url(value):
@@ -104,6 +110,13 @@ def routines_paused(c):
     return ROUTINES_PAUSED.get(access(c))
 
 
+def cell():
+    """Whether this install is a Tico Cloud cell company: TICO_CELL=1, which `setup cell` writes (docs/cell.md). A .env
+    an older core wrote has only TICO_UPDATES=tico, until that company's next `cell update`; it still counts."""
+    from . import releases
+    return os.environ.get("TICO_CELL", "").strip() == "1" or releases.managed()
+
+
 def current(store):
     """The state the request gate reads: the store's copy, loaded once."""
     found = getattr(store, "_cloud_access", _MISSING)
@@ -157,25 +170,37 @@ def sync(store, vault, settings):
 
 
 def due(store, at, last):
-    """Whether the scheduler asks HQ now: every SYNC while the company is a cloud one, else every UNKNOWN."""
+    """Whether the scheduler asks HQ now: every SYNC while the company is a cloud one, or while a Tico Cloud cell has no
+    answer yet; else every UNKNOWN (self-hosted and EC2-hosted installs)."""
     if last is None:
         return True
-    return at - last >= (SYNC if current(store) is not None else UNKNOWN)
+    return at - last >= (SYNC if current(store) is not None or cell() else UNKNOWN)
 
 
 def sync_later(store, vault, settings):
-    """`sync` on its own thread, one at a time: a tick never waits on HQ."""
-    if not _running.acquire(blocking=False):
-        return
+    """`sync` on its own thread, one at a time: a tick never waits on HQ. Asked while one runs (say, a key was just
+    enrolled under it), it runs once more after, so the request is never lost."""
+    global _busy, _again
+    with _guard:
+        if _busy:
+            _again = True
+            return
+        _busy = True
+    threading.Thread(target=_run, args=(store, vault, settings), name="cloud-access", daemon=True).start()
 
-    def run():
+
+def _run(store, vault, settings):
+    global _busy, _again
+    while True:
         try:
             sync(store, vault, settings)
         except Exception:  # noqa: BLE001 - the next tick asks again
             log.exception("Tico Cloud access check failed")
-        finally:
-            _running.release()
-    threading.Thread(target=run, name="cloud-access", daemon=True).start()
+        with _guard:
+            if not _again:
+                _busy = False
+                return
+            _again = False
 
 
 def view(found):

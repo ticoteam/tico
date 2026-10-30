@@ -57,13 +57,16 @@ const DROP_RESPONSE: &[&str] =
     &["connection", "keep-alive", "transfer-encoding", "content-length", "proxy-authenticate", "trailer", "upgrade", "te"];
 
 /// A running relay for one turn. Dropping it (with the turn's vault) stops it and every call still open on it, and
-/// removes the turn's own pi configuration directory (`dir`).
+/// removes the turn's own pi configuration directory (`dir`). A pi kept between turns keeps its relay (hosts/pi.rs
+/// Held), paused while no turn runs and resumed with the next attempt's key.
 pub struct Relay {
     pub url: String,
     pub token: String,
     pub dir: Option<std::path::PathBuf>,
     deadline: Instant,
     retry_at: Arc<AtomicU64>,
+    shared: Arc<Shared>,
+    pausing: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -72,6 +75,25 @@ impl Relay {
     pub async fn stop(&mut self) {
         if let Some(stop) = self.shutdown.take() { let _ = stop.send(()); }
         let _ = (&mut self.task).await;
+    }
+
+    /// No turn is running: every call is refused from now on, and every call still open has ended when this returns.
+    pub async fn pause(&self) {
+        let (done, ended) = tokio::sync::oneshot::channel();
+        if self.pausing.send(done).is_ok() { let _ = ended.await; }
+    }
+
+    /// The next attempt's turn: calls pass again, with its key and bot id and a deadline from now. False when its
+    /// Gateway is not the one this relay sends to, which takes a relay of its own. A relay is kept only with one
+    /// conversation's pi (the pool key: owner bot and conversation), so a process left from that conversation's earlier
+    /// turn could call again under the same bot.
+    pub fn resume(&mut self, upstream: &str, key: String, bot: Option<String>) -> bool {
+        if safe_upstream(upstream).as_deref() != Some(self.shared.base.as_str()) { return false; }
+        *self.shared.key.lock().unwrap_or_else(|p| p.into_inner()) = (key, bot);
+        self.deadline = Instant::now() + Duration::from_secs(MAX_RUN_SECONDS);
+        self.retry_at.store(0, Ordering::SeqCst);
+        self.shared.active.store(true, Ordering::SeqCst);
+        true
     }
     /// The Gateway's Retry-After, including a reset that passed while the harness was finishing.
     pub fn limit_reset(&self) -> Option<String> {
@@ -106,10 +128,12 @@ pub fn admit(hop: Option<crate::fallback::Hop>, relayed: bool) -> Option<crate::
 struct Shared {
     client: reqwest::Client,
     base: String,
-    key: String,
+    /// The Gateway's key and the bot's id, the latest attempt's (Relay::resume).
+    key: std::sync::Mutex<(String, Option<String>)>,
     token: String,
-    bot: Option<String>,
     retry_at: Arc<AtomicU64>,
+    /// Whether a turn is running: between a kept pi's turns the relay passes on nothing (Relay::pause).
+    active: std::sync::atomic::AtomicBool,
 }
 
 /// `url` without a trailing slash, when the key may go there: https, or plain http only to this computer named
@@ -182,7 +206,10 @@ pub async fn hand_to_turn(
     // A lease taken for a Gateway turn goes back early; one taken because the harness runs as its own user
     // (`isolated_user`) stays with the turn, which returns it at cleanup.
     let gateway = crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str());
-    let release = |vault: &mut Vault| if gateway { if let Some(mut user) = vault.turn_user.take() { user.permit_reuse(); } };
+    let release = |vault: &mut Vault| if gateway {
+        vault.relay.take();
+        if let Some(mut user) = vault.turn_user.take() { user.permit_reuse(); }
+    };
     let pinned = match credentials(client, &text_of(&attempt["id"])).await {
         Ok(pinned) => pinned,
         Err(e) => { release(vault); return Err(e); }
@@ -191,6 +218,17 @@ pub async fn hand_to_turn(
         release(vault);
         return if crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str()) { Err(NO_KEY.into()) } else { Ok(()) };
     };
+    // A kept pi's relay and user (hosts/pi.rs Pool::reclaim): the same relay URL and token, with this attempt's key.
+    if let (Some(relay), Some(user)) = (vault.relay.as_mut(), vault.turn_user.as_ref()) {
+        if relay.resume(&url, key.clone(), bot.clone()) {
+            let dir = user.dir.join("pi");
+            vault.values.push(key);
+            let relay = vault.relay.take().unwrap();
+            attach(relay, dir, env, vault);
+            return Ok(());
+        }
+        if let Some(mut old) = vault.relay.take() { old.stop().await; }
+    }
     let mut user = match vault.turn_user.take().map(Ok).unwrap_or_else(crate::turn_users::Lease::take) {
         Ok(user) => user,
         Err(e) if !crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str()) => {
@@ -245,13 +283,25 @@ async fn start_for_user(upstream: &str, key: String, bot: Option<String>, uid: O
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = format!("tico-relay-{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let retry_at = Arc::new(AtomicU64::new(0));
-    let shared = Arc::new(Shared { client, base, key, token: token.clone(), bot, retry_at: retry_at.clone() });
+    let shared = Arc::new(Shared {
+        client, base, key: std::sync::Mutex::new((key, bot)), token: token.clone(), retry_at: retry_at.clone(), active: true.into(),
+    });
     let (shutdown, mut stopping) = tokio::sync::oneshot::channel();
+    let (pausing, mut pauses) = tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
+    let kept = shared.clone();
     let task = tokio::spawn(async move {
+        let shared = kept;
         let mut calls = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
                 _ = &mut stopping => break,
+                Some(done) = pauses.recv() => {
+                    // Calls accepted from here on are refused; the ones open now end.
+                    shared.active.store(false, Ordering::SeqCst);
+                    calls.abort_all();
+                    while calls.join_next().await.is_some() {}
+                    let _ = done.send(());
+                }
                 accepted = listener.accept() => match accepted {
                     Ok((socket, _)) => {
                         if let Some(uid) = uid {
@@ -269,7 +319,7 @@ async fn start_for_user(upstream: &str, key: String, bot: Option<String>, uid: O
         calls.abort_all();
         while calls.join_next().await.is_some() {}
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, retry_at, shutdown: Some(shutdown), task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, retry_at, shared, pausing, shutdown: Some(shutdown), task })
 }
 
 /// Match the client's reverse four-tuple, rather than the accepted (supervisor-owned) socket.
@@ -341,6 +391,9 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
     if !same(given, &s.token) {
         return answer(&mut socket, 401, "This relay serves its own turn only").await;
     }
+    if !s.active.load(Ordering::SeqCst) {
+        return answer(&mut socket, 503, "No turn is running on this relay").await;
+    }
     if target.strip_prefix(PREFIX) != Some(MODEL_CALL) {
         return answer(&mut socket, 404, "This relay passes on model calls only").await;
     }
@@ -365,13 +418,14 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
         body.extend_from_slice(&chunk[..n]);
     }
     body.truncate(length);
-    let mut request = s.client.post(format!("{}{MODEL_CALL}", s.base)).bearer_auth(&s.key).body(body);
+    let (key, bot) = s.key.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let mut request = s.client.post(format!("{}{MODEL_CALL}", s.base)).bearer_auth(&key).body(body);
     for (k, v) in &headers {
         if !DROP_REQUEST.contains(&k.as_str()) {
             request = request.header(k.as_str(), v.as_str());
         }
     }
-    if let Some(bot) = &s.bot {
+    if let Some(bot) = &bot {
         request = request.header(BOT_HEADER, bot.as_str());
     }
     let mut response = match request.send().await {
@@ -891,7 +945,7 @@ git -C "$1" config credential.helper "!touch $4-credential"; git -C "$1" config 
         let tmp = std::path::Path::new("/tmp").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
         let shm = std::path::Path::new("/dev/shm").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = crate::hosts::pi::PiHost::new("fixture", vec![], tx);
+        let host = crate::hosts::pi::PiHost::new("fixture", vec![], tx, std::sync::Arc::new(crate::hosts::pi::Pool::new(user.dir.join("pi-pool"), 1)));
         let mut settings = crate::hosts::Settings { identity: Some(user.identity()), cwd: workspace.display().to_string(), model: Some("tico-mid-1.0".into()), ..Default::default() };
         settings.env = grant_env;
         settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
@@ -1086,7 +1140,12 @@ print(json.dumps(r))
         let asked = crate::isolation::command_as(Some(reused.identity()), crate::env::python())
             .args(["-c", ask, &socket_path.display().to_string()]).env_clear().output().await.unwrap();
         assert!(String::from_utf8_lossy(&asked.stdout).contains("bad request"), "reused: {}{}", String::from_utf8_lossy(&asked.stdout), String::from_utf8_lossy(&asked.stderr));
-        reused.permit_reuse(); drop(reused);
+        // A user kept with an idle pi (hosts/pi.rs Held) goes back the same way when that pi goes, its relay revoked;
+        // `next` below takes it again.
+        let kept = start_for_user(&gateway, KEY.into(), None, Some(reused.uid)).await.unwrap();
+        let kept_port = url::Url::parse(&kept.url).unwrap().port().unwrap();
+        crate::hosts::pi::Held { user: Some(reused), relay: Some(kept) }.end().await;
+        assert!(TcpStream::connect(("127.0.0.1", kept_port)).await.is_err());
         assert!(!socket_path.exists());
         drop(shared_socket);
         // A second name for a turn-owned temp file must not survive readable, nor return its UID to the pool.

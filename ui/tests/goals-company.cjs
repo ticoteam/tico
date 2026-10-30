@@ -182,13 +182,13 @@ const panelFor = async (page, owner) => {
     // Needs you (backend/goal_asks.py): the vision ask and the bundled Why ask read as themselves, not as empty KPI
     // rows; the vision row takes the owner to Strategy, a goal in the Why row opens its panel at that goal.
     {
-      const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Tell your Strategy Bot what this company is for', status: 'open'}},
+      const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Say what this company is for', status: 'open'}},
         {kind: 'why', goals: [{goal_id: 'g-top', goal_title: 'Grow rentals 30%', why: 'x'}, {goal_id: 'g-cmo', goal_title: 'Double organic signups', why: 'y'}],
          task: {id: 't-why', title: 'These goals need a Why line', status: 'open'}}];
       const {page, errors} = await open(browser, {needs});
       const rows = page.locator('#goal-needs li');
       assert.equal(await rows.count(), 2);
-      assert.match(await rows.nth(0).innerText(), /^Tell your Strategy Bot what this company is for/);
+      assert.match(await rows.nth(0).innerText(), /^Say what this company is for/);
       assert.match(await rows.nth(1).innerText(), /These goals need a Why line: Grow rentals 30%, Double organic signups/);
       assert.equal(await page.locator('#goal-needs [data-kpi]').count(), 0);
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').waitFor();
@@ -219,7 +219,7 @@ const panelFor = async (page, owner) => {
       const text = await row.innerText();
       assert.match(text, /A recovery · Double organic signups/);
       assert.match(text, /Signups 40 against 120\./);
-      assert.match(text, /Push SEO first · the Strategy Bot's pick/);
+      assert.match(text, /Push SEO first · recommended/);
       assert.match(text, /Head of Marketing is paused right now; this part would come back to you/);
       assert.equal(await row.locator('[data-option="1"]').getAttribute('class'), 'primary');
       await Promise.all([page.waitForResponse(r => r.url().endsWith('/proposals/p-rec/decide')), row.locator('[data-option="0"]').click()]);

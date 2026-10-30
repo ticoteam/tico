@@ -28,6 +28,7 @@ check
 check_circle
 chevron_left
 chevron_right
+close
 co_present
 code
 code_blocks
@@ -108,7 +109,6 @@ person_add
 person_search
 play_arrow
 podium
-power
 price_check
 psychology
 query_stats

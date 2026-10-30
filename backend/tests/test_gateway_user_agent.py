@@ -154,6 +154,7 @@ HQ_CLIENTS = {
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',
+    "setup/cell_stats.py": '"User-Agent": "tico-cell-stats"',
 }
 
 

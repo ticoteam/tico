@@ -5,9 +5,10 @@
 //    nest a group in another; a member has none of those handles.
 //  - the top of the chart (the one person nobody is above) is a plain row, with what reports to them beside it: groups
 //    first, then humans and bots; a drop on it still reports there, and a saved fold of it hides nothing;
-//  - a manager's reports keep the order they are dragged (or moved up and down by keyboard) into, through a reload;
+//  - a drop waits for Move in a strip under the row (ui/tests/sidebar-drag-confirm.cjs covers Cancel and Escape);
+//  - a manager's reports keep the order they are dragged into, through a reload;
 //    a drop onto a manager the viewer may not put reports under says so and moves nothing; reports nobody placed
-//    follow the server's rule on the chart and a person's page; reports shown in a group move up and down there.
+//    follow the server's rule on the chart and a person's page; reports shown in a group are reordered there.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -169,6 +170,7 @@ async function open(browser, me, branches = false) {
       });
       return json({});
     }
+    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -204,13 +206,23 @@ const level = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().e
 const row = (page, name) => page.locator('#tree .noderow[data-org^="g:"]', {has: page.locator('.dept-label', {hasText: new RegExp('^' + name + '$')})});
 const node = (page, key) => page.locator(`#tree [data-org="${key}"]`);
 // A real drag, with a pause after it starts: the "No group" row only shows once a drag has begun.
-async function drag(page, from, to) {
+// `edge` 'top' or 'bottom' drops on that edge of a fellow report (before or after it); else on its middle.
+async function drag(page, from, to, edge) {
   await from.hover();
   await page.mouse.down();
   await page.mouse.move(40, 40);
   await page.mouse.move(45, 45);
-  await to.hover();
+  const box = edge && await to.boundingBox();
+  await to.hover(edge ? {position: {x: 20, y: edge === 'top' ? 2 : box.height - 2}} : undefined);
   await page.mouse.up();
+}
+// A drop waits in a strip under the moved row: its sentence, then Move.
+async function confirmMove(page, text) {
+  const strip = page.locator('#tree .org-confirm');
+  await strip.waitFor();
+  assert.equal(await strip.locator('.org-confirm-q').textContent(), text);
+  await strip.getByRole('button', {name: 'Move', exact: true}).click();
+  await strip.waitFor({state: 'detached'});
 }
 
 async function reportOrder(browser) {
@@ -221,49 +233,45 @@ async function reportOrder(browser) {
   const under = () => besideTop(page);
   assert.deepEqual(await under(), ['Cara', 'Analyst', 'Builder', 'Scout'], 'nobody placed them: humans, then names');
   // Dragged onto the top of a fellow report, Scout goes above it, and stays there through a reload.
-  const analyst = node(page, 'b:analyst');
-  await node(page, 'b:scout').hover();
-  await page.mouse.down();
-  await page.mouse.move(40, 40);
-  await analyst.hover({position: {x: 20, y: 2}});
-  await page.mouse.up();
+  await drag(page, node(page, 'b:scout'), node(page, 'b:analyst'), 'top');
+  await confirmMove(page, 'Move Scout above Analyst?');
   await page.waitForFunction(() => document.querySelectorAll('#tree [data-org-place]')[1]?.dataset.org === 'b:scout');
   assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:analyst', 'bot:builder']}]);
   await page.reload();
   await page.locator('#tree a.node').first().waitFor();
   assert.deepEqual(await under(), ['Cara', 'Scout', 'Analyst', 'Builder']);
-  // By keyboard: Tab from the row to its Move menu, then Move up, Move down.
-  await node(page, 'b:builder').focus();
-  await page.keyboard.press('Tab');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.orgMenu), 'b:builder');
+  // Ordering is by drag only: no Move menu on the rows.
+  assert.equal(await page.locator('#tree [data-org-menu], #tree .org-order-menu').count(), 0, 'no Move menu');
+  // The bottom of a fellow report puts it below. The strip shows whole above the rows after it and the tree's lines
+  // (the list's layout containment clips nothing), with focus on Move; Enter saves.
+  await drag(page, node(page, 'b:builder'), node(page, 'b:scout'), 'bottom');
+  const strip = page.locator('#tree .org-confirm');
+  await strip.waitFor();
+  assert.equal(await strip.locator('.org-confirm-q').textContent(), 'Move Builder below Scout?');
+  assert.deepEqual(await under(), ['Cara', 'Scout', 'Builder', 'Analyst'], 'the tree shows the new order while it waits');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('#tree .org-confirm button')].every(b => {
+    const r = b.getBoundingClientRect();
+    return b.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)) && b.contains(document.elementFromPoint(r.left + 4, r.bottom - 3));
+  })), true, 'both buttons are on top where they are drawn');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.orgConfirm), 'go');
+  assert.deepEqual(calls, [], 'nothing saved before Move');
   await page.keyboard.press('Enter');
-  assert.equal(await page.getByRole('menuitem', {name: 'Move down'}).isDisabled(), true, 'the last one goes no lower');
-  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move up');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'b:builder' && !document.querySelector('#tree .org-order-menu'));
+  await strip.waitFor({state: 'detached'});
   assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:builder', 'bot:analyst']}]);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.org), 'b:builder', 'focus back on the moved row');
   assert.deepEqual(await under(), ['Cara', 'Scout', 'Builder', 'Analyst']);
-  await page.keyboard.press('Enter');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelectorAll('#tree [data-org-place]')[3]?.dataset.org === 'b:builder');
-  assert.deepEqual(calls.shift(), ['PUT', 'human:ana', {reports: ['human:cara', 'bot:scout', 'bot:analyst', 'bot:builder']}]);
-  // Escape closes the menu, back on its button, and moves nothing.
-  await page.keyboard.press('Enter');
-  await page.keyboard.press('Escape');
-  assert.equal(await page.locator('#tree .org-order-menu').count(), 0);
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.orgMenu), 'b:builder');
   assert.deepEqual(calls, []);
   assert.deepEqual(errors, []);
   await page.close();
 
   // Ben may move his CMO, but not under Scout, who is not his: he is told so, and nothing moves.
   const ben = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member'});
-  assert.equal(await ben.page.locator('#tree [data-org-menu], #tree [data-org-place]').count(), 0, 'nothing of his to order');
+  assert.equal(await ben.page.locator('#tree [data-org-place]').count(), 0, 'nothing of his to order');
   const before = await shape(ben.page);
   await ben.page.locator('#tree [data-toggle="p:ben"]').first().click();
   await drag(ben.page, node(ben.page, 'b:cmo'), node(ben.page, 'b:scout'));
   await ben.page.locator('.toast.err', {hasText: "You can't put CMO under Scout"}).waitFor();
+  assert.equal(await ben.page.locator('#tree .org-confirm').count(), 0, 'a refused drop asks nothing');
   assert.deepEqual(ben.calls, []);
   assert.deepEqual(await shape(ben.page), before);
   assert.deepEqual(ben.errors, []);
@@ -292,23 +300,17 @@ async function reportFallback(browser) {
   assert.deepEqual(await chips('Reports').allTextContents(), ['bea', 'Ben', 'Cara', 'Éli', 'Zoë'], "Ana's page: the same humans' order (Ben too, in his group on the chart)");
   assert.deepEqual((await chips('Bots').allTextContents()).filter(n => ['Scout', 'Builder', 'Analyst'].includes(n)), ['Scout', 'Builder', 'Analyst'],
     "and the same bots' order");
-  // Two of Ana's reports shown in a group of their own: Move down there swaps them in her order.
+  // Two of Ana's reports shown in a group of their own: a drop below the other there swaps them in her order.
   await page.goto('https://tico-ui.test/#/updates');
   groups.push({id: 'campaigns', name: 'Campaigns', parent: ''});
   for (const r of [...people, ...bots]) if (['cara', 'builder'].includes(r.id || r.name)) r.team = 'campaigns';
   await page.evaluate(() => refresh(true));
   assert.deepEqual((await shape(page)).find(n => n.Campaigns)?.Campaigns, ['Cara', 'Builder']);
-  await node(page, 'p:cara').focus();
-  await page.keyboard.press('Tab');
-  await page.keyboard.press('Enter');
-  assert.equal(await page.getByRole('menuitem', {name: 'Move up'}).isDisabled(), true, 'first in the group');
-  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Move down');
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.dataset.orgMenu === 'p:cara' && !document.querySelector('#tree .org-order-menu'));
+  await drag(page, node(page, 'p:cara'), node(page, 'b:builder'), 'bottom');
+  await confirmMove(page, 'Move Cara Mendes below Builder?');
   // Her whole order as the tree shows it: the group (above her other reports at the top) first.
   assert.deepEqual(calls, [['PUT', 'human:ana', {reports: ['bot:builder', 'human:cara', 'bot:scout', 'human:bea', 'human:eli', 'human:zoe', 'bot:analyst']}]]);
   assert.deepEqual((await shape(page)).find(n => n.Campaigns)?.Campaigns, ['Builder', 'Cara']);
-  assert.equal(await page.getByRole('button', {name: 'Move Cara Mendes'}).count(), 1);
   assert.deepEqual(errors, []);
   await page.close();
 }
@@ -377,7 +379,10 @@ async function owner(browser) {
   assert.deepEqual(calls, []);
   // Add one inside a group.
   await row(page, 'Sales').hover();
-  await page.locator('[data-group-add=sales]').click();
+  await page.locator('[data-group-plus=sales]').click();
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot', 'Add existing bot', 'Add group'], 'a group adds no humans');
+  await shot(page, 'group-add-menu-desktop');
+  await page.getByRole('menuitem', {name: 'Add group', exact: true}).click();
   await page.locator('#tree .org-name').fill('EMEA');
   await page.locator('#tree .org-name').press('Enter');
   await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).waitFor();
@@ -394,14 +399,17 @@ async function owner(browser) {
 
   // Drag a human, and a bot, into a group.
   await drag(page, node(page, 'p:cara'), row(page, 'Revenue'));
+  await confirmMove(page, 'Move Cara Mendes into Revenue?');
   await page.waitForFunction(() => document.querySelector('#tree [data-org="g:sales"]')?.closest('li')?.querySelector('a[href="#/person/cara"]'));
   assert.deepEqual(calls.shift(), ['PATCH', 'sales', {add: {people: ['cara']}}]);
   await drag(page, node(page, 'b:scout'), row(page, 'Revenue'));
+  await confirmMove(page, 'Move Scout into Revenue?');
   await page.waitForFunction(() => document.querySelector('#tree [data-org="g:sales"]')?.closest('li')?.querySelector('a[href="#/bot/scout"]'));
   assert.deepEqual(calls.shift(), ['PATCH', 'sales', {add: {bots: ['scout']}}]);
 
   // Nest a group in another.
   await drag(page, row(page, 'Legal'), row(page, 'Revenue'));
+  await confirmMove(page, 'Move Legal into Revenue?');
   await page.waitForFunction(() => [...document.querySelectorAll('#tree li.org-group')].some(li => li.querySelector(':scope > .noderow .dept-label')?.textContent === 'Revenue' && [...li.querySelectorAll(':scope > ul > li.org-group > .noderow .dept-label')].some(l => l.textContent === 'Legal')));
   assert.deepEqual(calls.shift(), ['PATCH', 'legal', {parent: 'sales'}]);
   assert.deepEqual(await shape(page), [
@@ -411,9 +419,11 @@ async function owner(browser) {
   // Out of a group: onto "No group", which shows while dragging.
   assert.equal(await page.locator('#tree .org-no-group').isVisible(), false);
   await drag(page, node(page, 'p:cara'), page.locator('#tree .org-no-group'));
+  await confirmMove(page, 'Move Cara Mendes out of Revenue?');
   await page.waitForFunction(() => !document.querySelector('#tree [data-org="g:sales"]')?.closest('li')?.querySelector('a[href="#/person/cara"]'));
   assert.deepEqual(calls.shift(), ['PATCH', 'sales', {remove: {people: ['cara']}}]);
   await drag(page, row(page, 'SEO'), page.locator('#tree .org-no-group'));
+  await confirmMove(page, 'Move SEO out of Marketing?');
   await page.waitForFunction(() => [...document.querySelectorAll('#tree > li.org-group > .noderow .dept-label')].some(l => l.textContent === 'SEO'));
   assert.deepEqual(calls.shift(), ['PATCH', 'seo', {parent: ''}]);
   assert.deepEqual(await shape(page), [
@@ -424,7 +434,7 @@ async function owner(browser) {
 
 // The top of the chart is not one more level: Ana, whom nobody is above, is a plain row (no chevron), and the groups and
 // the humans and bots that report to her sit at her level, at desktop and phone widths. Nothing about whom anyone
-// reports to changes: a drop on her row still makes a bot report to her, and her reports keep their Move menu. A fold of
+// reports to changes: a drop on her row still makes a bot report to her, and her reports keep their drop zones. A fold of
 // her row saved before (hub.collapsed.v3.*) hides nothing. Another person at the top does not undo it; with the owner
 // not at the top and two others there, the chart nests as before.
 async function topOfChart(browser) {
@@ -444,11 +454,12 @@ async function topOfChart(browser) {
     await shot(page, width === 390 ? 'team-top-mobile' : 'team-top-desktop');
   }
   await page.setViewportSize({width: 1300, height: 900});
-  assert.deepEqual(await page.locator('#tree [data-org-menu]').evaluateAll(els => els.map(b => [b.dataset.orgMenu, b.dataset.orgIn])),
-    [['p:cara', 'p:ana'], ['b:scout', 'p:ana']], 'her reports keep their Move menu');
+  assert.deepEqual(await page.locator('#tree [data-org-place]').evaluateAll(els => els.map(b => [b.dataset.org, b.dataset.orgIn])),
+    [['p:cara', 'p:ana'], ['b:scout', 'p:ana']], 'her reports keep their places to drop before and after');
 
   // A drop on the top row makes the bot report to her.
   await drag(page, node(page, 'b:writer'), node(page, 'p:ana'));
+  await confirmMove(page, 'Move Writer under Ana Rivera?');
   await page.waitForFunction(() => S.emps.find(e => e.name === 'writer')?.reports_to === 'human:ana');
   assert.deepEqual(calls.shift(), ['POST', 'definition', 'writer', {reports_to: 'human:ana', expected_revision: 1}]);
 
@@ -494,9 +505,14 @@ async function member(browser) {
   assert.deepEqual(await shape(page), [
     'Ana', {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, 'Cara', 'Scout']);
   await page.locator('#org-add-group').click();
-  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Add bot']);
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot']);
   await page.keyboard.press('Escape');
-  assert.equal(await page.locator('[data-group-rename], [data-group-add], [data-group-delete], #tree .org-no-group').count(), 0);
+  assert.equal(await page.locator('[data-group-rename], [data-group-bet], [data-group-delete], #tree .org-no-group').count(), 0);
+  // A group's plus still recruits into it.
+  await row(page, 'Marketing').hover();
+  await page.locator('[data-group-plus=marketing]').click();
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Recruit a bot']);
+  await page.keyboard.press('Escape');
   await page.evaluate(() => orgGroupDelete('marketing'));
   assert.equal(await page.locator('#tree .noderow[data-org^="g:"][draggable="true"]').count(), 0);
   assert.equal(await node(page, 'b:scout').getAttribute('draggable'), null, 'a member moves only what reports up to them');
@@ -524,19 +540,19 @@ async function teamAdd(browser) {
   // draft
   // of its job description arrives while it is open, Recruit offers one recommended candidate with its model, and the
   // pick creates the bot in Onboarding where the seat was.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await shot(page, 'team-add-bot-desktop');
   await page.locator('[data-recruit-new] [name=title]').fill('Ledger');
   await page.locator('[data-recruit-new] [name=reports_to]').selectOption('scout');
   await page.locator('[data-recruit-new] [type=submit]').click();
-  await page.locator('[data-recruit-draft]', {hasText: 'is drafting'}).waitFor();
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafting the job description'}).waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'seats', {title: 'Ledger', reports_to: 'scout', description: ''}]);
   assert.deepEqual(calls.shift(), ['POST', 'open', 'seat1', {}]);
   assert.equal(bots.some(b => b.name === 'ledger'), false, 'no bot exists until a candidate is picked');
   await page.locator('#tree a.node.seat[data-seat-open="seat1"]').waitFor({state: 'attached'});
   assert.match(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').textContent(), /Ledger\s*Recruiting/);
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout'].map(n => n.kind + ':' + n.id)), ['seat:seat1']);
-  await page.locator('[data-recruit-draft]', {hasText: 'Drafted by Strategy Bot'}).waitFor({timeout: 8000});
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafted for you.'}).waitFor({timeout: 8000});
   assert.equal(await page.locator('#recruit-picker textarea').inputValue(), 'Keeps the books and closes each month.');
   await page.getByRole('button', {name: 'Recruit', exact: true}).click();
   const cards = page.locator('[data-recruit-candidate]');
@@ -557,7 +573,7 @@ async function teamAdd(browser) {
   await page.goBack();
   await page.waitForFunction(() => location.hash === '#/updates');
   // A permission lost while the form is open creates nothing, and submitting never navigates the page.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await page.locator('[data-recruit-new] [name=title]').fill('Analyst');
   await page.evaluate(() => { S.me.role = 'viewer'; S.me.can_create_bots = false; });
   await page.locator('[data-recruit-new] [type=submit]').click();
@@ -569,7 +585,7 @@ async function teamAdd(browser) {
 
   // The bot is hired from the words on screen. A reply to an earlier save never marks newer typing saved: one save runs
   // at a time, a second click joins it, and it carries on until the stored text matches.
-  await choose('Add bot');
+  await choose('Recruit a bot');
   await page.locator('[data-recruit-new] [name=title]').fill('Payroll');
   await page.locator('[data-recruit-new] [name=description]').fill('Runs payroll.');
   await page.locator('[data-recruit-new] [type=submit]').click();
@@ -622,22 +638,16 @@ async function teamAdd(browser) {
   await node(page, 'p:new-human').waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'humans', {email: 'dana@acme.example', name: 'Dana'}]);
 
-  // BotOps (for an agent you already run) starts an editable draft, never sends it, and keeps one being written.
-  await choose('Add bot');
-  await page.locator('[data-recruit-botops]').click();
-  const draft = page.locator('#chat-composer .p-text');
-  await draft.waitFor();
-  assert.match(await draft.inputValue(), /folder path and computer, or GitHub URL/);
-  assert.equal(await draft.evaluate(el => el === document.activeElement), true);
-  await draft.fill('Keep this existing request.');
-  await choose('Add bot');
-  await page.locator('[data-recruit-botops]').click();
-  assert.equal(await draft.inputValue(), 'Keep this existing request.');
-  assert.deepEqual(calls, [], 'the handoff does not send a chat message');
+  // Add existing bot opens the external agent instructions.
+  await choose('Add existing bot');
+  await page.locator('dialog.connect-agent[open]').waitFor();
+  await page.locator('dialog.connect-agent [data-close]').click();
+  await page.waitForFunction(() => !document.querySelector('dialog.connect-agent'));
+  assert.deepEqual(calls, []);
 
   // The same actions work from the phone drawer and the menu stays within the screen.
   await page.setViewportSize({width: 390, height: 844});
-  await page.locator('#bot-back-arrow').click();
+  await page.evaluate(() => { askToggle(false); location.hash = '#/updates'; });
   await page.waitForFunction(() => location.hash === '#/updates');
   await page.locator('#mobile-more').click();
   await page.locator('#org-add-group').click();

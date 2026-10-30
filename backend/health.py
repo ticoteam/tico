@@ -647,14 +647,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             claimable = (('company_limit', None, False) if company_stopped else
-                         _claimable(c, settings, where[0], slug, limits))
+                         _claimable(c, settings, where[0], slug, limits, suspect=suspect))
             if claimable is None:
                 continue        # the claim's check for this bot raised: Health names that check instead
             refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True)
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, suspect=suspect)
                 if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
@@ -805,6 +805,8 @@ HELD = {
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
+    # A private meeting's turn runs only on a runner with private lanes (execution.PRIVATE_LANES).
+    "private_update": ("{computer} needs a Tico update before it can join private meetings", COMPUTERS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": ("Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now", BOT_SETTINGS),
@@ -1665,7 +1667,7 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("version", "Version", "info",
                                  f"Tico will update this server to {_v(notice['scheduled'])} when idle.",
                                  [_fix("What is new", "#/changelog")]))
-        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (docs/cell.md)
+        elif notice.get("available") and notice.get("managed"):     # Tico runs this server's updates (TICO_UPDATES)
             checks.append(_check("version", "Version", "info",
                                  f"{_v(notice.get('latest'))} is out. You are on {_v(releases.version())}. "
                                  "Tico updates this server.", [_fix("What is new", "#/changelog")]))

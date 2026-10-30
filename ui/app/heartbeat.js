@@ -235,7 +235,7 @@ const updateGroupRow = group => {
   const dismiss = cls => `<button class="${cls}" type="button" data-group-decision="dismiss">Don’t retry</button>`;
   return `<div class="settings-issue stopped-group" data-update-group="${group.k}">
     <div><strong>${n} run${n === 1 ? '' : 's'} stopped during Tico’s update at ${group.at.toISOString().slice(11, 16)} UTC</strong>
-    <p>${!deciding ? 'Only the operator of each bot, or BotOps, can decide them.' : risky ? `${risk} Don’t retry applies to ${scope}.`
+    <p>${!deciding ? 'Only the operator of each bot can decide them.' : risky ? `${risk} Don’t retry applies to ${scope}.`
       : `Try all again applies to ${scope}; each bot checks what already happened before repeating anything.`}</p></div>
     <div class="issue-buttons">${deciding ? (risky ? dismiss('primary') : resume('primary') + dismiss('ghost')) : ''}<button class="ghost" type="button" data-group-details aria-expanded="false">Details</button></div>
     <ul class="stopped-lines" data-group-runs hidden></ul><p class="stopped-result" data-group-result role="status" aria-live="polite"></p></div>`;
@@ -324,7 +324,6 @@ function renderAccount() {
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
   el.querySelector('.account-email').textContent = me.email || 'Not signed in';
   renderAccountStatus();
-  $('#connect-agent').hidden = !settingsCanMakeTokens();
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();

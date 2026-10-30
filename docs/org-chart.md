@@ -45,14 +45,16 @@ chart. Once someone has ordered a manager's reports, a new report, or one that m
 last there, after the ones before it, whatever its name. Under a manager nobody ordered, reports follow the chart's
 own order: humans first, then bots (temporary ones last, a bot's `order` lowest first), then by name, accents and
 case aside. The Goals tree, a person's page, **Updates** and `hub org order` list reports in the same order. A
-manager's reports shown in a group keep that order there, and move up and down among the ones beside them.
+manager's reports shown in a group keep that order there, and are dragged into place among the ones beside them.
 
 - **In the app**, drag a human or a bot onto the top or bottom of another report of the same manager to put it above or
-  below; dropping onto the middle of a row still makes it report there. Each report's row also has a menu with **Move
-  up** and **Move down**: Tab to it from the row, Enter opens it, the arrow keys choose and Escape closes it.
+  below; dropping onto the middle of a row still makes it report there. On touch, a long press picks the row up. A drop
+  saves nothing yet: the list shows the new place and asks under the row ("Move Doc Updater under Design?"); **Move**
+  (or Enter) saves, **Cancel**, Escape or a click elsewhere puts it back. By keyboard, move a teammate with the Org
+  chart's **Move to…**.
 - **Who orders them**: whoever may put reports under that manager, as for `reports_to`: the owner, the manager or
   someone it reports up to, and for a bot manager the person who runs it. A bot orders its own reports. Everyone else
-  sees the order without the handles or the menu, and the API refuses them. A drop onto someone you may not put that
+  sees the order without the handles, and the API refuses them. A drop onto someone you may not put that
   human or bot under says so and moves nothing.
 - **In the API and the tools**: `GET /api/v2/org/order/{manager}` lists a manager's direct reports in the chart's order
   (`manager` is a bot's slug or a human's id; put `bot:` or `human:` in front when one could be either);
@@ -68,14 +70,16 @@ direct reports' ([Updates](using-tico.md#updates)).
 
 ## Groups
 
-The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
-**Add section** opens the inline group-name field. **Add bot** makes a Recruiting seat (a role with no bot yet) under the
-manager you choose and opens it: its job description, which the Strategy Bot drafts for the owner, then **Recruit** and the
-pick ([Recruiting a seat](onboarding.md#recruiting-a-seat)). Open seats show on the chart under their manager with a
-**Recruiting** mark; clicking one opens it. **Ask BotOps** in the Add bot form opens its chat with an editable request,
-preserving any draft already there. Describe a custom bot or
-share an existing agent's folder path and computer, or its GitHub URL. Nothing is sent until you send the message;
-BotOps helps work out the setup rather than automatically importing an arbitrary folder.
+The **+** beside **Team** offers **Recruit a bot**, **Add existing bot**, **Add section** and **Add human**, according to
+your permissions. Each group's **+** offers the same, with **Add group** (a group inside it) and no **Add human**.
+**Add section** and **Add group** open the inline group-name field. **Recruit a bot** asks for a job title and an optional
+job description, makes a Recruiting seat (a role with no bot yet) under the manager you choose and opens it: its job
+description, which the Strategy Bot drafts for the owner, then **Recruit** and the pick
+([Recruiting a seat](onboarding.md#recruiting-a-seat)). From a group's **+** the seat is in that group and reports to its
+head by default. **Add existing bot** opens [Connect an external agent](connect-an-agent.md). Open seats show on the chart
+under their manager with a **Recruiting** mark; clicking one opens it.
+
+Clicking a group's name opens its page and unfolds it; its arrow folds it.
 
 A group is an id, a name, an optional parent group, and its teammates. A teammate is in one group at a time: putting a human or bot in a
 group takes it out of the one it was in. Groups are stored with the roster (`org_groups` in `registry/people.yaml` seeds them; from then on

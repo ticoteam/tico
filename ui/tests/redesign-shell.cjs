@@ -1,7 +1,7 @@
 // The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected, Settings with its System tab and no design switch, the Strategy tabs with the
-// Strategy Bot beside them (a rail on a desktop, a sheet on a phone), the Budget tab drawing (its tree and edits are
+// redirected, Settings with its System tab and no design switch, the Strategy tabs with no Strategy Bot
+// beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cjs), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
 const {chromium} = require('playwright');
@@ -19,8 +19,9 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page, name) => { if (shots) await page.screenshot({animations: 'disabled', path: path.join(shots, `redesign-${name}.png`)}); };
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-const PHONE_BAR = ['Team', 'Search', 'Ask', 'Tasks', 'Updates', 'More'];
-const railKeys = page => page.$$eval('#side .side-scroll > *', els => els.map(el =>
+const PHONE_BAR = ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More'];   // Ask Tico: the Liquid Dot in the centre slot
+// The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
+const railKeys = page => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => els.map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && el.querySelector(':scope > [data-nav]')?.dataset.nav) || el.id || el.className.split(' ')[0]));
 const shownRail = page => page.$$eval('#side .side-scroll a.nav-link, #side .side-scroll .rd-lib a.nav-link', els =>
   [...new Set(els)].filter(el => el.checkVisibility()).map(el => {
@@ -85,7 +86,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // Phone first: the rail, old addresses redirected, the Strategy tabs and the Strategy Bot as a sheet.
+    // Phone first: the rail, old addresses redirected, the Strategy tabs with no Strategy Bot.
     {
       const tag = 'phone';
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
@@ -120,19 +121,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const org = await page.locator('.rd-org').innerText();
       assert.ok(org.includes('Builder'), tag + ': Org lists the chart');
       assert.ok(!org.includes('BotOps'), tag + ': helpers are off the Org chart');
-      assert.ok(await page.locator('#sbot-fab').isVisible(), tag + ': the Strategy Bot is a button');
-      assert.equal(await page.locator('#sbot').evaluate(el => el.getBoundingClientRect().top >= innerHeight), true, tag + ': its sheet is closed');
-      await page.locator('#sbot-fab').click();
-      await page.waitForFunction(() => Math.abs(document.querySelector('#sbot').getBoundingClientRect().bottom - innerHeight) < 2);
-      assert.equal(await page.locator('#sbot h2').innerText(), 'Strategy Bot', tag + ': named Strategy Bot');
-      await page.locator('#sbot .gm-form .p-text').waitFor();
-      assert.deepEqual(await page.locator('#sbot .gm-form').evaluate(form => {
-        const ask = form.querySelector('.ask'), pill = form.querySelector('.p-pill').getBoundingClientRect();
-        const send = form.querySelector('.p-send').getBoundingClientRect();
-        return [getComputedStyle(ask).borderTopWidth, pill.height <= 46, send.right <= pill.right && send.left > pill.left + pill.width / 2];
-      }), ['0px', true, true], tag + ': the composer is one line, send inside on the right, no outer box');
-      await shot(page, 'phone-strategy-bot');
-      await page.locator('.sbot-close').click();
+      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot panel or button');
       await page.evaluate(() => { location.hash = '#/strategy/budget'; });
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       assert.ok(await noSideScroll(page), tag + ': no sideways scroll');
@@ -149,8 +138,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await page.close();
     }
 
-    // Desktop: the rail reads as the mock, the Strategy Bot sits beside every tab, and a task cap's 409 reads as its
-    // message.
+    // Desktop: the rail reads as the mock, no Strategy Bot beside any tab, and a task cap's 409 reads as its message.
     {
       const tag = 'desktop';
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
@@ -161,10 +149,8 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
       assert.equal(await page.locator('#side a[data-nav="strategy"].cur').count(), 1, tag + ': Strategy is current');
-      assert.ok(await page.locator('#sbot').isVisible(), tag + ': the Strategy Bot rail');
-      assert.equal(await page.locator('#sbot-fab').isVisible(), false, tag + ': no button on a desktop');
-      const main = await page.locator('#main').boundingBox(), rail = await page.locator('#sbot').boundingBox();
-      assert.ok(main.x + main.width <= rail.x + 1, tag + ': the page gives the rail its room');
+      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot rail');
+      assert.equal(await page.locator('#main').evaluate(el => el.classList.contains('sbot-open')), false);
       await shot(page, 'desktop-budget');
 
       // A task cap's 409: the message is what a person reads, in a toast's words and in the bot's chat.
@@ -181,14 +167,13 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       for (const [hash, tab] of [['#/strategy/market/listening', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']]) {
         await page.evaluate(h => { location.hash = h; }, hash);
         await page.waitForFunction(t => document.querySelector('.strat-tabs a.cur')?.textContent === t, tab);
-        assert.ok(await page.locator('#sbot').isVisible(), `${tag}: the Strategy Bot beside ${hash}`);
+        assert.equal(await page.locator('#sbot').count(), 0, `${tag}: no Strategy Bot beside ${hash}`);
         if (hash === '#/strategy/goals') await shot(page, 'desktop-goals');
-        if (hash === '#/strategy') await shot(page, 'desktop-strategy-bot');
+        if (hash === '#/strategy') await shot(page, 'desktop-strategy');
         if (hash === '#/strategy/org') await shot(page, 'desktop-org');
         if (hash === '#/strategy/market/listening') await shot(page, 'desktop-listening');
       }
       await page.evaluate(() => { location.hash = '#/tasks'; });
-      await page.locator('#sbot').waitFor({state: 'detached'});
       // The roster fixture stores the old default name, which state.js shows as the Strategy Bot: it must not appear.
       assert.ok(!(await page.locator('body').innerText()).includes('CEO Bot'), tag + ': no "CEO Bot" anywhere');
       await page.evaluate(() => { location.hash = '#/settings'; });

@@ -314,20 +314,20 @@ def may_chat(c, auth, who, bot):
     # The assistant is chatted with in one place only: each person's own Assistant room, through
     # /api/v2/assistant (backend/assistant.py). It has no chat with anyone else and no shared or
     # per-bot chat, so every other route that asks "may I chat with it" says no. The Strategy Bot the
-    # same: of people, only the owner talks to it, in the Strategy Bot chat /api/v2/assistant gives them;
-    # an earlier chat with it anyone had stays readable, read-only.
+    # same: no person chats with it, their Assistant hands it work; an earlier chat with it anyone had
+    # stays readable, read-only.
     return bot not in (auth.settings.assistant_bot, STRATEGY_BOT)
 
 
 def require_chat(c, auth, who, bot):
     """Write on the bot, and a bot that has a chat of its own (the Assistant has only the room
-    /api/v2/assistant gives each person, the Strategy Bot only the owner's Strategy Bot chat)."""
+    /api/v2/assistant gives each person, and no person chats with the Strategy Bot)."""
     auth.require_write(c, who, bot)
     if not may_chat(c, auth, who, bot):
         if bot == STRATEGY_BOT:
             from . import strategy_bot
-            raise Problem("forbidden", "Of people, only the company's owner talks to the " + strategy_bot.name(c)
-                          + ", in their own chat with it (/api/v2/assistant); talk to your Assistant", 403)
+            raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask your "
+                          + auth.settings.assistant_name + " (/api/v2/assistant), which hands it the work", 403)
         raise Problem("forbidden", auth.settings.assistant_name + " chats only in your own Assistant "
                       "(/api/v2/assistant); message one of your bots here", 403)
 
@@ -535,7 +535,8 @@ def operation_issues(c, who, auth):
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
                 from .agents import CONFIG_SQL
                 config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
-                runtime = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config else {})[0] or "your"
+                runtime = providers.bot_choice(c, auth.settings,
+                                               H._json(config["config_json"], {}) or {} if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
                 from . import login_holds
@@ -1028,14 +1029,26 @@ _VISIBLE_TASK_SQL = "SELECT * FROM tasks WHERE id=? AND (%s)"
 
 
 def _prime_person_origins(c, visible_sql, ids):
-    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, read in one query
-    per 500 with that same rule rather than one query per card and ancestor."""
-    if read_cache.cache(c) is None:
-        return
+    """The rows person_origin reads, each task as `visible_sql` lets this reader see it or None, checked in one query
+    per 500 with that same rule rather than one query per card and ancestor. Returns the ids the rule lets this
+    reader see, so the caller needs no second check of them.
+
+    The check answers one row, the readable ids as JSON, and the rows are the snapshot's task rows (H.prime_tasks; Needs
+    you has read them all just before). Reading `SELECT *, (rule)` here stepped every row again, each step the GIL given
+    up and taken back: on a busy server that waits up to the 5 ms switch interval a row, and a 2 ms read took 50 ms to
+    1.4 s on Tico Team."""
+    readable = set()
     for part in H.chunks(sorted({tid for tid in ids if tid})):
-        found = {row["id"]: row for row in c.execute(
-            "SELECT * FROM tasks WHERE id IN (%s) AND (%s)" % (",".join("?" * len(part)), visible_sql), part)}
-        read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(tid,): found.get(tid) for tid in part})
+        found = json.loads(c.execute("SELECT json_group_array(id) FROM tasks WHERE id IN (%s) AND (%s)"
+                                     % (",".join("?" * len(part)), visible_sql), part).fetchone()[0])
+        readable.update(found)
+        if read_cache.cache(c) is not None:
+            H.prime_tasks(c, found, with_tags=False)
+            # The row `SELECT * FROM tasks WHERE id=? AND (rule)` answers: the task's row as stored, or None.
+            rows = {tid: read_cache.one(c, H.TASK_SQL, (tid,)) for tid in found}
+            read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql,
+                             {(tid,): dict(rows[tid]) if rows.get(tid) else None for tid in part})
+    return readable
 
 
 def prime_list_origins(c, visible_sql, rows):
@@ -1377,6 +1390,15 @@ def fold_related(items, c, me):
     return [it for it in items if str(it["id"]) not in gone]
 
 
+# Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
+# Team, 43 ms warm) to find a few hundred replaced asks.
+WITHDRAWN_ASKS_SQL = (
+    "SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
+    "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
+    f"AND {H.OPEN_ASK_SQL})")
+
+
 def went_away(c, me, days=7):
     """How many of `me`'s Needs you items left this week without them: an ask that expired or went ahead on its bot's
     default, an ask or approval withdrawn (superseded by a newer one, or no longer needed), and what their Assistant
@@ -1386,10 +1408,7 @@ def went_away(c, me, days=7):
                         "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
-    withdrawn = (c.execute("SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
-                           "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
-                           "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
-                           f"AND {H.OPEN_ASK_SQL})", (me, since)).fetchone()[0]
+    withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
                  + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
     assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
@@ -1654,14 +1673,14 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     privacy.prime_messages(c, [m for row in raw["approvals"]
                                if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
-    _prime_person_origins(c, visible, chain)
+    chain_seen = _prime_person_origins(c, visible, chain)     # the chain's visibility, read once with its rows
     pipelines = H.type_list(c)
     asks_of = H.open_tasks_asks(c, cards, actor=privacy.actor(who))
-    can_see = _readable_task_ids(
-        c, visible,
-        [row["id"] for row in cards]
-        + [tid for originals in merged.values() for tid in originals]
-        + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    wanted = ([row["id"] for row in cards]
+              + [tid for originals in merged.values() for tid in originals]
+              + [row["task_id"] for row in raw["approvals"] if row.get("task_id")])
+    elsewhere = _readable_task_ids(c, visible, [tid for tid in wanted if tid not in chain])
+    can_see = {tid for tid in wanted if (tid in chain and tid in chain_seen) or tid in elsewhere}
     from . import reconnects
     reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
@@ -1745,6 +1764,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
+    readable_memo = {}      # a blocker or ancestor shared by many cards is checked once in this snapshot
+
+    def readable(tid):
+        if tid not in readable_memo:
+            readable_memo[tid] = _readable(auth, c, who, tid)
+        return readable_memo[tid]
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
     from . import ask_ingest
@@ -1756,7 +1781,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item
-            item["holds_up"] = holds_up(c, row, lambda tid: _readable(auth, c, who, tid))
+            item["holds_up"] = holds_up(c, row, readable)
             if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
                 own = roadmap_entry(c, row)
         if item["kind"] in ("question", "ask"):
@@ -2684,7 +2709,7 @@ def install_views(app, store, auth, mutate, task_view):
                     raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
-                        "items": [x for x in items if str(x["id"]) in positions]}
+                        "items": needs_visuals(c, who, [x for x in items if str(x["id"]) in positions])}
             out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
                    "went_away": went_away(c, who.actor), "version": current, "next": None}
             if limit is not None or cursor:
@@ -2692,7 +2717,16 @@ def install_views(app, store, auth, mutate, task_view):
                 out["bots"] = needs_bots(items, who.actor)
                 if restarted:
                     out["restart"] = True
+            needs_visuals(c, who, out["items"])
             return out
+
+    def needs_visuals(c, who, items):
+        """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,
+        added after the list's version is taken: an address renewed on the hour is not a change to the list."""
+        asks = [x["ask"] for x in items if isinstance(x.get("ask"), dict) and (x["ask"].get("refs") or {}).get("attachments")]
+        if asks:
+            visuals.for_reader(app, auth.settings, c, who, asks)
+        return items
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):

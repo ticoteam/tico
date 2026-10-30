@@ -235,7 +235,12 @@ const card = () => ({
     const seen = {};
     for (const id of ['t-pair', 't-several', 't-yn']) {
       items = [id === 't-pair' ? pair(id) : id === 't-several' ? several(id) : yesNo(id)];
-      await page.evaluate(async id => { location.hash = '#/tasks'; await v2Refresh(); decideOpen('task:' + id); }, id);
+      // A page change draws a frame later (its fade): the card opens over the Tasks page once it is drawn.
+      await page.evaluate(async id => {
+        location.hash = '#/tasks';
+        await new Promise(done => { const drawn = () => S.route === '#/tasks' ? done() : requestAnimationFrame(drawn); drawn(); });
+        await v2Refresh(); decideOpen('task:' + id);
+      }, id);
       await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
       if (id !== 't-yn') await page.waitForFunction(() => document.querySelectorAll('.decide .dc-body img[data-tf-src]').length >= 2);
       const decide = await page.evaluate(([pictures]) => ({pics: eval(pictures)('.decide .dc-body'),

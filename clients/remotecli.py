@@ -303,7 +303,7 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
-    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search", "gateway fetch"):
+    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search", "gateway fetch", "gateway image"):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
@@ -1187,6 +1187,8 @@ def main(args, who=None):
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
+        if args.fn == "file approved":
+            return 0 if isinstance(result, dict) and result.get("approved") else 1
         if isinstance(result, dict) and result.get("readback"):    # what a relation write stored, direction and all
             for line in result["readback"]:
                 print("hub: stored: " + str(line), file=sys.stderr)

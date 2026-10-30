@@ -211,7 +211,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key "
                        "NOT LIKE 'computer-profiles:%'") == [
         "access", "access_bot_limit", "bot_access", "ceo-bot", "company-turn-incident",
-        "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated",
+        "credential-file-migration-v1", "credential-file-migration-v2-hub", "credential-use-backfill", "docs_migrated",
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",

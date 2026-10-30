@@ -534,6 +534,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
   for (let attempt = 0; t && attempt < 2; attempt++) {
     const body = bodyFor(t);
     if (!body) return;
+    if (attempt === 0 && body.status === 'done') taskDoneMotion('t' + id);   // its check draws while the list catches up
     state.refused?.delete(id);
     try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
     catch (e) {

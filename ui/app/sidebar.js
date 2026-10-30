@@ -20,11 +20,11 @@ document.querySelectorAll('[data-section-toggle]').forEach(button => button.oncl
   renderNavSections();
 });
 renderNavSections();
-// The built-ins stay out of the team chart. The Assistant and BotOps have their own rows in the main rail (each
-// person's private Assistant is its own page, ui/app/assistant-page.js); the Strategy Bot is beside the Strategy tabs
-// and the Librarian on Docs and Market. Search, bot pickers and a person's page do not list the Assistant or the Librarian;
-// Settings > Bots manages all four, and #/bot/<slug> opens each.
-const isHiddenBot = slug => slug === assistantBot() || slug === 'librarian';
+// The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
+// ui/app/assistant-page.js); BotOps, the Strategy Bot and the Librarian are its helpers (state.js ASSISTANT_HELPERS),
+// which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
+// and #/bot/<slug> opens each for its settings, runs and logs.
+const isHiddenBot = slug => slug === assistantBot() || isAssistantHelper(slug);
 const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.name));
 // Groups first: a human or a bot hangs in the group its `team` names (backend/groups.py); groups nest by `parent`. Inside
 // a group a teammate hangs under whoever it reports to when that one is in the same group, else at the top of the group.
@@ -151,11 +151,9 @@ function inboxNavRows() {
 // whose bot is not shown there (the recently-viewed list, or "Only bots I can read or write").
 let INBOX_PLACED = new Set();
 function inboxNavLink(row) {
-  const here = messagingParams();
   const href = `${MESSAGING}?bot=${encodeURIComponent(row.bot)}&source=${encodeURIComponent(row.source)}`;
-  const on = S.route.startsWith(MESSAGING) && here.bot === row.bot && here.source === row.source;
   const icon = row.kind === 'slack' ? SLACK_ICON : `<span class="nav-icon inbox-kind" aria-hidden="true">mail</span>`;
-  return `<li><a href="${href}" title="${esc(row.title)}"${on ? ' class="cur" aria-current="page"' : ''}>${icon}<span>${esc(row.label)}</span></a></li>`;
+  return `<li><a href="${href}" title="${esc(row.title)}">${icon}<span>${esc(row.label)}</span></a></li>`;
 }
 function renderInboxNav() {
   const section = $('#nav-inboxes-section'), list = $('#inbox-list');
@@ -168,9 +166,25 @@ function renderInboxNav() {
   const rows = inboxNavRows().filter(row => !INBOX_PLACED.has(row.bot));
   section.hidden = !rows.length;
   patchHTML(list, rows.map(inboxNavLink).join(''));
+  navCurSync(list);
 }
-function renderLibrarians() {
-  window.syncLibrarianRail?.();   // the Librarian's chat beside Library's pages follows the team as read now
+// Which row is the page you are on is marked in place: the list's markup never depends on the route, so a page change
+// replaces no row (patchHTML keeps them all), and a whole group never redraws because one of its rows became current.
+function navCurSync(root) {
+  const bot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
+  const person = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
+  const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
+  for (const a of root.querySelectorAll('a.dept-label, a.node, a.person-mail-link, .inbox-list a')) {
+    const href = a.getAttribute('href') || '', org = a.dataset.org || '';
+    const q = here && href.startsWith(MESSAGING) ? new URLSearchParams(href.split('?')[1] || '') : null;
+    const on = a.matches('.dept-label') ? S.route === href
+      : a.matches('.person-mail-link') ? !!q && here.bot === q.get('bot')
+      : q ? here.bot === q.get('bot') && here.source === q.get('source')
+      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2) : false;
+    a.classList.toggle('cur', on);
+    // The mail link beside a person marks its bot's mailbox; the person's own row is the page.
+    if (on && !a.matches('.person-mail-link')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
 }
 function mailPersonVisible(person) {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
@@ -270,34 +284,136 @@ function orgMoveRefusal(from, to) {
 const orgOrderId = key => (key.startsWith('p:') ? 'human:' : 'bot:') + key.slice(2);
 // The reports in the order the tree shows them, as the server names them; the ones not in the tree keep their places.
 const orgOrderKeys = parent => [...$('#tree').querySelectorAll('[data-org-place]')].filter(n => n.dataset.orgIn === parent).map(n => n.dataset.org);
-async function orgOrderSave(parent, keys, focus) {
-  ORG_MENU = null;
-  try {
-    await put(`/v2/org/order/${encodeURIComponent(orgOrderId(parent))}`, {reports: keys.map(orgOrderId)});
-    await refresh(true);
-  } catch (e) { toast(e.message, true); }
+// A drop is not saved at once: moving someone is rare and a mis-drop is costly. The tree shows the new place at once and a
+// strip under the moved row asks to confirm it; Move (Enter, as it has focus) saves, Cancel, Escape or a press anywhere
+// else puts the chart back with no request. Reordering is by drag only, with a mouse or a long press on touch; by
+// keyboard, a teammate is moved with the Org chart's "Move to…" sheet (ui/strategy-page.js), which stays as it is.
+let ORG_PENDING = null;        // {from, to, where, parent, keys, text, anchor, set, was, saving, sent}
+const orgObj = (kind, id) => kind === 'p' ? (S.people || []).find(p => p.id === id)
+  : kind === 'b' ? (S.emps || []).find(e => e.name === id) : (S.orgGroups || []).find(g => g.id === id);
+const orgGroupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || id;
+const orgTeamOf = key => orgObj(key[0], key.slice(2))?.team || '';
+// What a drop would change, as field writes on the chart's own rows (S.people, S.emps, S.orgGroups), and the sentence
+// that asks for it; null when it changes nothing. The same cases as orgDrop, which saves it.
+function orgDropPlan(from, to, where, parent) {
+  const kind = from[0], id = from.slice(2), set = [];
+  let text;
+  if (where) {
+    const keys = orgOrderKeys(parent).filter(k => k !== from), i = keys.indexOf(to), was = orgOrderKeys(parent);
+    if (i < 0) return null;
+    keys.splice(where === 'after' ? i + 1 : i, 0, from);
+    if (keys.join() === was.join()) return null;
+    keys.forEach((k, n) => set.push([k[0], k.slice(2), 'report_position', n]));
+    text = `Move ${orgName(from)} ${where === 'after' ? 'below' : 'above'} ${orgName(to)}?`;
+    return {keys, set, text};
+  }
+  if (kind === 'g') {
+    if (!to.startsWith('g:')) return null;
+    const into = to.slice(2), group = orgObj('g', id);
+    if (!group || (group.parent || '') === into) return null;
+    for (let g = into, hops = 0; g && hops < 50; g = orgObj('g', g)?.parent || '', hops++)
+      if (g === id) { toast(`${group.name} can't go inside itself.`, true); return null; }
+    set.push(['g', id, 'parent', into]);
+    text = into ? `Move ${group.name} into ${orgGroupName(into)}?` : `Move ${group.name} out of ${orgGroupName(group.parent)}?`;
+  } else if (to.startsWith('g:')) {
+    const into = to.slice(2), at = orgTeamOf(from);
+    if (into === at || (!into && !at)) return null;
+    set.push([kind, id, 'team', into]);
+    text = into ? `Move ${orgName(from)} into ${orgGroupName(into)}?` : `Move ${orgName(from)} out of ${orgGroupName(at)}?`;
+  } else {
+    if (kind === 'p' && !to.startsWith('p:')) return null;
+    const row = orgObj(kind, id); if (!row) return null;
+    const reports_to = kind === 'p' ? to.slice(2) : to.startsWith('p:') ? 'human:' + to.slice(2) : to.slice(2);
+    if ((row.reports_to || '') === reports_to) return null;
+    set.push([kind, id, 'reports_to', reports_to], [kind, id, 'org_parent', to], [kind, id, 'report_position', undefined]);
+    text = `Move ${orgName(from)} under ${orgName(to)}?`;
+  }
+  return {keys: [], set, text};
+}
+// The preview is written onto the rows each time the tree is drawn, as a refresh brings fresh ones; undone, the rows
+// read as they did at the drop.
+function orgPendingApply(p) {
+  for (const [kind, id, field, value] of p.set) {
+    const row = orgObj(kind, id); if (!row) continue;
+    if (value === undefined) delete row[field]; else row[field] = value;
+  }
+}
+function orgPendingUndo(p) {
+  for (const [kind, id, field, value] of p.was) {
+    const row = orgObj(kind, id); if (!row) continue;
+    if (value === undefined) delete row[field]; else row[field] = value;
+  }
+}
+function orgDropAsk(from, to, where, parent) {
+  if (from === to || ORG_PENDING?.saving) return;
+  // A second drag while one waits replaces it: the chart goes back first, so the new move is read from what is saved.
+  if (ORG_PENDING) { orgPendingUndo(ORG_PENDING); ORG_PENDING = null; renderTree(); }
+  if (!where) {
+    const refused = !to.startsWith('g:') && orgMoveRefusal(from, to);
+    if (refused) { toast(refused, true); return; }
+  }
+  const plan = orgDropPlan(from, to, where, parent); if (!plan) return;
+  const was = plan.set.map(([kind, id, field]) => { const row = orgObj(kind, id); return [kind, id, field, row && Object.hasOwn(row, field) ? row[field] : undefined]; });
+  ORG_PENDING = {from, to, where, parent, ...plan, was, anchor: from, saving: false, sent: false};
   renderTree();
-  if (focus) $('#tree').querySelector(`[data-org-menu="${CSS.escape(focus)}"]`)?.focus();
+  const go = $('#tree [data-org-confirm="go"]');
+  go?.focus({preventScroll: true});
+  go?.closest('.org-confirm')?.scrollIntoView({block: 'nearest'});
 }
-function orgReorder(key, at, where, parent) {
-  const keys = orgOrderKeys(parent).filter(k => k !== key), i = keys.indexOf(at);
-  if (i < 0) return;
-  keys.splice(where === 'after' ? i + 1 : i, 0, key);
-  return orgOrderSave(parent, keys);
+// The strip under the anchor row (the moved one; its new manager's row when that is folded).
+const orgConfirmHTML = key => {
+  const p = ORG_PENDING; if (!p || p.anchor !== key) return '';
+  const off = p.saving ? ' disabled' : '';
+  return `<div class="org-confirm" role="group" aria-labelledby="org-confirm-q"><span class="org-confirm-q" id="org-confirm-q">${esc(p.text)}</span>`
+    + `<span class="org-confirm-do"><button type="button" class="primary" data-org-confirm="go"${off}>Move</button><button type="button" class="ghost" data-org-confirm="cancel"${off}>Cancel</button></span></div>`;
+};
+// Focus back on the moved row, or on the one it went under when that is folded.
+function orgFocusRow(...keys) {
+  for (const key of keys) {
+    const n = $('#tree').querySelector(`[data-org="${CSS.escape(key)}"]`), a = n?.matches('a') ? n : n?.querySelector('a.dept-label');
+    if (a?.offsetParent) { a.focus({preventScroll: true}); return; }
+  }
 }
-// One place up or down among the rows beside it (a group shows some of a manager's reports): it swaps places with that
-// neighbour in the manager's whole order.
-function orgMoveStep(key, parent, step) {
-  const keys = orgOrderKeys(parent), node = $('#tree').querySelector(`[data-org-place][data-org="${CSS.escape(key)}"]`);
-  const near = [...(node?.closest('ul')?.children || [])].map(li => li.querySelector(':scope > .noderow > [data-org-place]'))
-    .filter(n => n?.dataset.orgIn === parent).map(n => n.dataset.org);
-  const i = near.indexOf(key), j = i + step;
-  if (i < 0 || j < 0 || j >= near.length) return;
-  const x = keys.indexOf(key), y = keys.indexOf(near[j]);
-  [keys[x], keys[y]] = [keys[y], keys[x]];
-  return orgOrderSave(parent, keys, key);
+// After each draw: the moved row is marked, the strip spans the rail from its left edge, and when the moved row is not
+// shown (under a folded manager) the strip goes under the row it was dropped on.
+function orgPendingMark(tree) {
+  const p = ORG_PENDING;
+  for (const n of tree.querySelectorAll('.org-moved')) if (!p || n.dataset.org !== p.from) n.classList.remove('org-moved');
+  if (!p) return;
+  tree.querySelector(`[data-org="${CSS.escape(p.from)}"]`)?.classList.add('org-moved');
+  const strip = tree.querySelector('.org-confirm');
+  if ((!strip || !strip.offsetParent) && p.anchor !== p.to) { p.anchor = p.to; renderTree(); return; }
+  if (strip) strip.style.setProperty('--org-confirm-in', Math.max(0, strip.parentElement.getBoundingClientRect().left - tree.getBoundingClientRect().left) + 'px');
 }
-let ORG_MENU = null;                       // the key whose Move menu is open
+function orgPendingCancel(refocus = true) {
+  const p = ORG_PENDING; if (!p || p.saving) return;
+  orgPendingUndo(p); ORG_PENDING = null; renderTree();
+  if (refocus) orgFocusRow(p.from);
+}
+async function orgPendingSave() {
+  const p = ORG_PENDING; if (!p || p.saving) return;
+  p.saving = true;
+  // The request is built from the chart as it was: orgDrop reads a teammate's group and a bot's revision first thing.
+  orgPendingUndo(p);
+  const sent = p.where ? put(`/v2/org/order/${encodeURIComponent(orgOrderId(p.parent))}`, {reports: p.keys.map(orgOrderId)}) : orgDrop(p.from, p.to);
+  renderTree();
+  try { await sent; p.sent = true; await refresh(true); }
+  catch (e) { p.sent = true; orgPendingUndo(p); toast(e.message, true); }
+  ORG_PENDING = null; renderTree();
+  orgFocusRow(p.from, p.to);
+}
+document.addEventListener('keydown', ev => {
+  if (!ORG_PENDING || ev.key !== 'Escape') return;
+  ev.preventDefault(); ev.stopPropagation(); orgPendingCancel();
+}, true);
+// A press elsewhere cancels, except on a row that may be dragged: putting the chart back would redraw that row under the
+// pointer and lose the drag. A click there (no drag) still cancels, and a drop asks again.
+document.addEventListener('pointerdown', ev => {
+  if (ORG_PENDING && !ev.target.closest?.('#tree .org-confirm, #tree [draggable="true"]')) orgPendingCancel(false);
+}, true);
+document.addEventListener('click', ev => {
+  if (ORG_PENDING && !ev.target.closest?.('#tree .org-confirm')) orgPendingCancel(false);
+}, true);
 async function orgDrop(from, to) {
   const isGroup = to.startsWith('g:');
   if (from.startsWith('g:')) {
@@ -308,7 +424,6 @@ async function orgDrop(from, to) {
     const at = kind === 'people' ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team;
     if (group) await patch(`/v2/groups/${encodeURIComponent(group)}`, {add: {[kind]: [id]}});
     else if (at) await patch(`/v2/groups/${encodeURIComponent(at)}`, {remove: {[kind]: [id]}});
-    else return;
   } else if (from.startsWith('p:')) {
     if (!to.startsWith('p:')) return;
     await post(`/v2/humans/${encodeURIComponent(from.slice(2))}`, {reports_to: to.slice(2)});
@@ -318,8 +433,6 @@ async function orgDrop(from, to) {
     const reports_to = to.startsWith('p:') ? 'human:' + to.slice(2) : to.slice(2);
     await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {reports_to, expected_revision: e.revision});
   }
-  await refresh(true);
-  renderTree();
 }
 function orgDragWire(tree) {
   if (!tree || tree.dataset.orgDrag) return;              // the tree is redrawn often; its listeners are added once
@@ -329,40 +442,83 @@ function orgDragWire(tree) {
   const clear = () => tree.querySelectorAll(marks.map(m => '.' + m).join(',')).forEach(n => n.classList.remove(...marks));
   // The top or bottom third of a fellow report puts the dragged one before or after it; the middle, as anywhere
   // else, makes it report there.
-  const zone = (target, ev) => {
+  const zone = (target, y) => {
     if (!draggingIn || target.dataset.orgIn !== draggingIn || !target.hasAttribute('data-org-place')) return '';
-    const box = target.getBoundingClientRect(), y = (ev.clientY - box.top) / (box.height || 1);
-    return y < 1 / 3 ? 'before' : y > 2 / 3 ? 'after' : '';
+    const box = target.getBoundingClientRect(), at = (y - box.top) / (box.height || 1);
+    return at < 1 / 3 ? 'before' : at > 2 / 3 ? 'after' : '';
   };
-  tree.addEventListener('dragstart', ev => {
-    const node = ev.target.closest('[data-org][draggable="true"]'); if (!node) return;
+  // The mark a row shows with the dragged one over it, '' when it takes no drop. A move the viewer may not make still
+  // drops, to say why; nothing moves.
+  const markFor = (target, y) => {
+    if (!target || !dragging || target.dataset.org === dragging || target.hasAttribute('data-helper')) return '';
+    const to = target.dataset.org, where = zone(target, y);
+    if (!where && (to.startsWith('g:') ? !orgCanGroups() : dragging.startsWith('g:'))) return '';
+    return where ? 'drop-' + where : !to.startsWith('g:') && orgMoveRefusal(dragging, to) ? 'drop-refused' : 'drop-target';
+  };
+  const begin = node => {
     dragging = node.dataset.org; draggingIn = node.hasAttribute('data-org-place') ? node.dataset.orgIn : '';
-    ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dragging);
     node.classList.add('dragging'); tree.classList.add('org-dragging');
+  };
+  const end = () => { tree.querySelectorAll('.dragging').forEach(n => n.classList.remove('dragging')); tree.classList.remove('org-dragging'); clear(); dragging = null; };
+  const finish = (target, y) => {
+    const from = dragging, to = target.dataset.org, where = zone(target, y), parent = draggingIn;
+    end(); orgDropAsk(from, to, where, parent);
+  };
+  let touch = null;                                       // a long press on a row: {node, x, y, timer, active, scroller}
+  tree.addEventListener('dragstart', ev => {
+    if (touch) { ev.preventDefault(); return; }           // a finger drags with the long press below, not the browser's drag
+    const node = ev.target.closest('[data-org][draggable="true"]'); if (!node) return;
+    begin(node);
+    ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dragging);
   });
-  tree.addEventListener('dragend', ev => { ev.target.closest?.('[data-org]')?.classList.remove('dragging'); tree.classList.remove('org-dragging'); clear(); dragging = null; });
+  tree.addEventListener('dragend', end);
   tree.addEventListener('dragover', ev => {
-    const target = ev.target.closest('[data-org]'); if (!target || !dragging || target.dataset.org === dragging) return;
-    const to = target.dataset.org;
-    if (target.hasAttribute('data-helper')) return;       // built-in and message bots are not on the chart
-    const where = zone(target, ev);
-    if (!where && (to.startsWith('g:') ? !orgCanGroups() : dragging.startsWith('g:'))) return;
+    const target = ev.target.closest('[data-org]'), mark = markFor(target, ev.clientY); if (!mark) return;
     ev.preventDefault(); ev.dataTransfer.dropEffect = 'move';
-    // A move the viewer may not make still drops, to say why; nothing moves.
-    clear(); target.classList.add(where ? 'drop-' + where : !to.startsWith('g:') && orgMoveRefusal(dragging, to) ? 'drop-refused' : 'drop-target');
+    clear(); target.classList.add(mark);
   });
   tree.addEventListener('dragleave', ev => { ev.target.closest?.('[data-org]')?.classList.remove(...marks); });
-  tree.addEventListener('drop', async ev => {
+  tree.addEventListener('drop', ev => {
     const target = ev.target.closest('[data-org]'); if (!target || !dragging || target.hasAttribute('data-helper')) return;
     ev.preventDefault();
-    const from = dragging, to = target.dataset.org, where = zone(target, ev), parent = draggingIn; dragging = null;
-    clear(); tree.classList.remove('org-dragging');
-    if (from === to) return;
-    if (where) return orgReorder(from, to, where, parent);
-    const refused = !to.startsWith('g:') && orgMoveRefusal(from, to);
-    if (refused) { toast(refused, true); return; }
-    try { await orgDrop(from, to); } catch (e) { toast(e.message, true); }
+    finish(target, ev.clientY);
   });
+  // Touch: a phone starts no HTML drag from a finger, so a long press (400ms, holding still) picks the row up, the
+  // finger carries it over the same drop targets, and lifting it drops it there. Moving before then scrolls as usual.
+  const scrollerOf = el => { for (; el && el !== document.body; el = el.parentElement) { const o = getComputedStyle(el).overflowY; if ((o === 'auto' || o === 'scroll') && el.scrollHeight > el.clientHeight) return el; } return null; };
+  const touchOff = () => { if (touch) clearTimeout(touch.timer); if (touch?.active) end(); touch = null; };
+  const touchAt = (x, y) => document.elementFromPoint(x, y)?.closest('#tree [data-org]') || null;
+  tree.addEventListener('touchstart', ev => {
+    touchOff();
+    const node = ev.touches.length === 1 && ev.target.closest('[data-org][draggable="true"]'); if (!node) return;
+    const t = ev.touches[0];
+    touch = {node, x: t.clientX, y: t.clientY, active: false, timer: setTimeout(() => {
+      if (!touch || touch.node !== node) return;
+      touch.active = true; touch.scroller = scrollerOf(tree); begin(node);
+    }, 400)};
+  }, {passive: true});
+  tree.addEventListener('touchmove', ev => {
+    if (!touch) return;
+    const t = ev.touches[0];
+    if (!touch.active) { if (Math.hypot(t.clientX - touch.x, t.clientY - touch.y) > 8) touchOff(); return; }
+    ev.preventDefault();
+    touch.x = t.clientX; touch.y = t.clientY;
+    const s = touch.scroller, box = s?.getBoundingClientRect();
+    if (box && t.clientY < box.top + 40) s.scrollTop -= 8; else if (box && t.clientY > box.bottom - 40) s.scrollTop += 8;
+    const target = touchAt(t.clientX, t.clientY), mark = markFor(target, t.clientY);
+    clear(); if (mark) target.classList.add(mark);
+  }, {passive: false});
+  tree.addEventListener('touchend', ev => {
+    if (!touch) return;
+    const {active, x, y} = touch;
+    clearTimeout(touch.timer); touch = null;
+    if (!active) return;
+    ev.preventDefault();                                  // no click on the row it was lifted from
+    const target = touchAt(x, y);
+    if (markFor(target, y)) finish(target, y); else end();
+  });
+  tree.addEventListener('touchcancel', touchOff);
+  tree.addEventListener('contextmenu', ev => { if (touch) ev.preventDefault(); });
 }
 // Adding and renaming a group happen in the tree: a one-line field where the group goes or is. Enter saves, Escape or
 // leaving the field cancels.
@@ -539,7 +695,7 @@ $('#org-history').onclick = () => {
   renderTree();
 };
 // Helpers (built-ins and message bots) are off the Team list; they have their own entry points. `reports_to` is untouched,
-// and a bot that reports to one hangs where it would have. The Strategy Bot is one too: its place is the Strategy tabs.
+// and a bot that reports to one hangs where it would have. The Strategy Bot is one too: the Assistant asks it.
 const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
@@ -580,27 +736,10 @@ function orgTopPerson(byParent) {
   return tops.find(n => S.me?.owner_id && n.id === S.me.owner_id) || tops.find(n => me && n.id === me)
     || (roles.length === 1 ? roles[0] : tops.length === 1 ? tops[0] : null);
 }
-// Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
-// hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
-let MY_AGENT, MY_AGENT_AT = 0;
-async function loadMyAgent() {
-  MY_AGENT_AT = Date.now();
-  try {
-    const data = await get('/v2/me/tokens'), rows = data.tokens || [], now = Date.now();
-    MY_AGENT = data.can_create === false ? null : rows.some(r => r.last_used && !r.revoked_at && !(r.expires_at && new Date(r.expires_at) < now));
-  } catch { MY_AGENT = null; }
-  renderTree();
-}
-window.addEventListener('tico:agents-changed', () => void loadMyAgent());
-// An agent set up after the dialog closed reports in later: check again on return to the app, at most once a minute.
-window.addEventListener('focus', () => { if (MY_AGENT === false && Date.now() - MY_AGENT_AT > 60e3) void loadMyAgent(); });
 function renderTree() {
+  if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
   ensureCollapsed();
-  if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
   const byParent = orgTreeWithHelpers(orgTreeByParent());
-  const myId = mePerson()?.id;
-  const curBot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
-  const curPerson = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
   let needCounts;                                   // counted once per render, on first use
   const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -617,7 +756,7 @@ function renderTree() {
   const rec = (parent, depth) => rows(parent, orgSorted(parent, byParent[parent]), depth);
   const rows = (parent, sorted, depth) => {
     // The reports here that the viewer may put in order, per manager: a manager's own rows, or in a group the members
-    // that share one. Each gets a place to drop before or after, and Move up and Move down.
+    // that share one. Each gets a place to drop before or after.
     const lists = {};
     for (const n of sorted) {
       if (n.kind !== 'person' && (n.kind !== 'bot' || isHelperBot(n))) continue;
@@ -630,7 +769,7 @@ function renderTree() {
   };
   // The top of the chart is not drawn as one more level: its top person (orgTopPerson) is a plain row, and the groups,
   // then the humans and bots, that report to them follow at the same level, then the rest of the top, where any other
-  // person nobody is above nests their own reports as usual. The top person's reports keep their order and Move menu,
+  // person nobody is above nests their own reports as usual. The top person's reports keep their order and drop zones,
   // and a drop on the top row still reports there. With no top person the chart nests as before.
   const top = orgTopPerson(byParent), topKey = top ? 'p:' + top.id : '';
   const recTop = () => {
@@ -640,29 +779,22 @@ function renderTree() {
     return rows('', [top], 0) + rows(topKey, under.filter(isGroup), 1) + rows('', rest.filter(isGroup), 1)
       + rows(topKey, under.filter(n => !isGroup(n)), 1) + rows('', rest.filter(n => !isGroup(n)), 1);
   };
-  // A report's place among its manager's reports: its drop zones and its Move menu.
+  // A report's place among its manager's reports: its drop zones above and below.
   const placeAttrs = (key, at) => at.order.includes(key) ? ` data-org-in="${esc(at.parent)}" data-org-place` : '';
-  const moveMenu = (key, name, at) => {
-    const i = at.order.indexOf(key);
-    if (i < 0) return '';
-    const open = ORG_MENU === key, label = 'Move ' + name;
-    const moves = `<button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button>`;
-    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="Move" aria-label="${esc(label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
-      + (open ? `<span class="org-order-menu" role="menu" aria-label="${esc(label)}">${moves}</span>` : '')
-      + '</span>';
-  };
   // flat: the history list, one row per bot and person, no children and nothing to drag
   const row = (node, depth, flat = false, at = {parent: '', order: []}) => {
     if (node.kind === 'group') {
       const key = 'g:' + node.id, manage = orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
+      // The plus opens the add menu for this group (ui/app/team-add.js): recruit a bot, an existing one, or a group.
+      const plus = !flat && teamAddAny(node.id), menuOpen = plus && teamAddOpenFor(node.id);
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
       return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}>
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
-        ${renaming ? orgGroupFieldHTML(node.name) : (here => `<a class="dept-label${here ? ' cur' : ''}" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false"${here ? ' aria-current="page"' : ''}>${esc(node.name)}</a>`)(S.route === TEAM_PAGE + encodeURIComponent(node.id))}
+        ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false">${esc(node.name)}</a>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
+        ${plus && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-plus="${esc(node.id)}" title="Add" aria-label="Add to ${esc(node.name)}" aria-haspopup="menu" aria-expanded="${menuOpen}" aria-controls="team-add-menu"><span class="org-plus" aria-hidden="true">+</span></button>${manage ? `<button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button>${orgMayBet() ? `<button type="button" class="org-tool${orgGroupBet(node.id) ? ' on' : ''}" data-group-bet="${esc(node.id)}" title="Bet" aria-label="Bet for ${esc(node.name)}" aria-expanded="${ORG_BET === node.id}"><span class="nav-icon" aria-hidden="true">flag</span></button>` : ''}<button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button>` : ''}</span>` : ''}</div>${orgConfirmHTML(key)}
         ${manage && ORG_BET === node.id && orgMayBet() ? orgBetPopHTML({id: node.id, bet_id: orgGroupBet(node.id)}) : ''}
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
@@ -682,12 +814,10 @@ function renderTree() {
       const kids = !flat && !isTop && byParent[key], isCol = kids && collapsed.has(key);
       return `<li class="${kids ? 'dept' : isTop ? 'org-top' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
-        <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+        <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
-        ${moveMenu(key, p.name || p.id, at)}
-        ${!flat && p.id === myId && MY_AGENT === false ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
-        ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
+        ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     const e = node, key = 'b:' + e.name, st = stateOf(e.name), n = needN(e.name), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
@@ -696,11 +826,11 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.name);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+      <a class="node ${e.status} ${st}" href="#/bot/${e.name}" title="${esc(e.display_name || e.name)}" data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
         ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.name)}${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
+        ${botPausedBadge(e.name)}${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -712,66 +842,57 @@ function renderTree() {
       .map(node => row(node, 0, true)).join('');
   };
   renderOnboardingNav();
-  renderLibrarians();
   const historyOn = orgHistoryOn();
   $('#org-history').setAttribute('aria-pressed', String(historyOn));
   $('#org-mine').setAttribute('aria-pressed', String(orgMineOn()));
   $('#tree').classList.toggle('history', historyOn);
   const manage = orgCanGroups() && !historyOn;
   teamAddRefresh();
-  // Bot status events redraw the tree several times a minute: only the rows that changed are replaced (patchHTML).
+  // Bot status events redraw the tree several times a minute: only the rows that changed are replaced (patchHTML). A
+  // redrawn strip keeps the button that had focus.
+  const confirmFocus = document.activeElement?.closest?.('#tree [data-org-confirm]')?.dataset.orgConfirm;
   patchHTML($('#tree'), historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + recTop()
       + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : ''));
+  if (confirmFocus && !document.activeElement?.closest?.('#tree [data-org-confirm]')) $(`#tree [data-org-confirm="${confirmFocus}"]`)?.focus({preventScroll: true});
+  navCurSync($('#tree'));
+  orgPendingMark($('#tree'));
   renderInboxNav();                                   // after the tree, which places what it can
   orgDragWire($('#tree'));
   orgGroupFieldWire();
   const betSelect = $('#tree [data-group-bet-select]');
   if (betSelect) betSelect.onchange = () => void orgBetSave(betSelect);
-  // The Move menu by keyboard: arrows between its items, Escape back to its button.
+  // Escape closes a group's Bet box, back on its button.
   $('#tree').onkeydown = ev => {
     if (ev.key === 'Escape' && ev.target.closest('.org-bet-pop')) {
       ev.preventDefault(); ev.stopPropagation();
       const id = ORG_BET; ORG_BET = null; renderTree();
       $('#tree').querySelector(`[data-group-bet="${CSS.escape(id)}"]`)?.focus();
-      return;
-    }
-    const menu = ev.target.closest('.org-order-menu'); if (!menu) return;
-    const items = [...menu.querySelectorAll('button:not([disabled])')], i = items.indexOf(ev.target);
-    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); items[(i + (ev.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
-    if (ev.key === 'Escape') {
-      ev.preventDefault(); ev.stopPropagation();
-      const key = ORG_MENU; ORG_MENU = null; renderTree();
-      $('#tree').querySelector(`[data-org-menu="${CSS.escape(key)}"]`)?.focus();
     }
   };
   $('#tree').onclick = ev => {
-    if (ev.target.closest('[data-connect-agent]')) { ev.preventDefault(); window.connectAgent?.(); return; }
     const seat = ev.target.closest('[data-seat-open]');
     if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
-    const opener = ev.target.closest('[data-org-menu]'), step = ev.target.closest('[data-org-step]');
-    if (step) {
-      ev.preventDefault();
-      const btn = step.closest('.org-order').querySelector('[data-org-menu]');
-      void orgMoveStep(btn.dataset.orgMenu, btn.dataset.orgIn, Number(step.dataset.orgStep));
-      return;
-    }
-    if (opener) {
-      ev.preventDefault();
-      const key = opener.dataset.orgMenu; ORG_MENU = ORG_MENU === key ? null : key; renderTree();
-      const tree = $('#tree');
-      (tree.querySelector('.org-order-menu button:not([disabled])') || tree.querySelector(`[data-org-menu="${CSS.escape(key)}"]`))?.focus();
-      return;
-    }
+    const confirm = ev.target.closest('[data-org-confirm]');
+    if (confirm) { ev.preventDefault(); if (confirm.dataset.orgConfirm === 'go') void orgPendingSave(); else orgPendingCancel(); return; }
+    if (ev.target.closest('.org-confirm')) return;
     if (ev.target.closest('.org-bet-pop')) return;
     const betTool = ev.target.closest('[data-group-bet]');
     if (betTool) { ev.preventDefault(); void orgBetOpen(betTool.dataset.groupBet); return; }
-    if (ORG_MENU) { ORG_MENU = null; renderTree(); }
     if (ORG_BET) { ORG_BET = null; renderTree(); }
     const remove = ev.target.closest('[data-group-delete]');
     if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
-    const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');
-    if (add || rename) { ev.preventDefault(); orgGroupEdit(add ? {add: add.dataset.groupAdd} : {rename: rename.dataset.groupRename}); return; }
+    const plus = ev.target.closest('[data-group-plus]');
+    if (plus) { ev.preventDefault(); teamAddToggle(plus.dataset.groupPlus); return; }
+    const rename = ev.target.closest('[data-group-rename]');
+    if (rename) { ev.preventDefault(); orgGroupEdit({rename: rename.dataset.groupRename}); return; }
+    // A group's name opens its page and unfolds it; only the arrow folds it again.
+    const label = ev.target.closest('a.dept-label');
+    if (label) {
+      const k = label.closest('[data-org]')?.dataset.org;
+      if (k && collapsed.delete(k)) { saveCollapsed(); renderTree(); }
+      return;
+    }
     const b = ev.target.closest('[data-toggle]'); if (!b) return;
     ev.preventDefault(); const k = b.dataset.toggle; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k);
     saveCollapsed();

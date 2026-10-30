@@ -11,7 +11,8 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 - **Computers**: your Macs or Linux and Docker machines, with the runner. Each bot is a Git repository with its
   Instructions and memory, on one computer.
 - **Team**: humans and bots are teammates on one team chart, in groups.
-- **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper; BotOps sets up and
+- **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper and their one chat,
+  the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
   and the [Health Monitor](health-monitor.md) are built-in helpers outside the chart: once an hour they look for tasks
@@ -28,7 +29,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
-| Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals | “Why is this goal yellow?” |
+| Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
 | Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; Settings → System | `hub task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: chat or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
@@ -119,7 +120,7 @@ not retry this action; leave a note for a person if you still need it."
 
 **hub.acme.example** — the record, the interface and the clock. A FastAPI backend (`backend/`) on one
 EC2 instance with SQLite on an encrypted EBS volume, attachments in a private S3 bucket, backed up
-to S3 twice over (Litestream replicates every ten seconds; a verified bundle of the database and
+to S3 twice over (Litestream replicates about every minute; a verified bundle of the database and
 every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, approval, routine, run and
 bot setting, serves the web interface (`ui/`), and runs the scheduler that turns due routines into
 tasks. It never runs a bot. It runs from the Docker image ([install.md](install.md)). Beside it
@@ -135,7 +136,8 @@ Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Bot and the Task Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** chat, opened by **Ask** on every page
 (also its own page, `#/assistant`, and the first tab on their own page): it looks things up at once, does low-risk things as that human, and
-proposes anything with a side effect for their own click ([The Assistant](assistant.md)). There is no shared
+proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's chat is the
+Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
 MCP ([Connect an external agent](connect-an-agent.md)).
 The database itself is readable with plain SQL (`hub sql`, the SQL page, `POST /api/v2/sql`):

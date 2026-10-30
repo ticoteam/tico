@@ -4,6 +4,9 @@
 # Existing findings are listed by (file, rule) in ruff-baseline.toml, which this file extends. That list only
 # shrinks: `python3 scripts/lint_baseline.py --check` fails on new findings and on entries that no longer fire.
 extend = "ruff-baseline.toml"
+# Tico Recorder's benchmarks are uv scripts that shell out to `security` and to paid speech APIs. They are run by hand
+# (recorder/bench/README.md), not part of the product, and their subprocess calls are left as written.
+extend-exclude = ["recorder/bench"]
 target-version = "py312"
 line-length = 120
 

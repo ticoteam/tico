@@ -51,7 +51,7 @@
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
     const by = action.proposer || action.proposed_via;
-    // A card the owner's Strategy Bot proposed names it (`by_name`), never "the Assistant".
+    // A card the Strategy Bot put in the owner's earlier chat with it names it (`by_name`), never "the Assistant".
     const name = action.by_name || {assistant: 'The Assistant', botops: 'BotOps'}[by] || 'A bot';
     const what = String(action.description || '').trim();
     const title = what && !RAW_TITLE.test(what) ? what : `${name} asks to make a change for you. Details shows exactly what it sends.`;
@@ -172,11 +172,6 @@
     if (!host) return;
     style();
     const {post, esc, after} = deps;
-    if (info.strategy_bot) {
-      // The owner's Strategy Bot is never turned on here: it is always there, and paused or waiting for a computer.
-      host.innerHTML = `<div class="asst-off"><p><strong>${esc(info.name)} is not answering right now.</strong> It answers once it is running again (Settings > Bots).</p></div>`;
-      return;
-    }
     host.innerHTML = `<div class="asst-off asst-row"><span>The Assistant is off.${info.can_turn_on ? '' : ' Ask the owner to turn it on.'}</span>
       ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on</button><span class="asst-state" data-turn-status></span>' : ''}</div>`;
     const on = host.querySelector('[data-turn-on]');

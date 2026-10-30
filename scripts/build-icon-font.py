@@ -11,7 +11,7 @@ after adding an icon or a template:
     python3 scripts/build-icon-font.py --check  # rescan only; exit 1 if icons.txt or the font's URL is stale
 
 The font is a ligature font: an icon missing from it shows as its raw name. The axes match the
-CSS in ui/styles/ (FILL 0, wght 200, GRAD 0, opsz 24).
+CSS in ui/styles/ (FILL 0, wght 300, GRAD 0, opsz 24).
 
 Every URL of the font carries `?v=<hash of the font>`, rewritten here with each new font. A browser, a desktop app's web
 view or a proxy that kept the old subset would otherwise serve it under the same URL after an update, and an icon the
@@ -28,7 +28,7 @@ UI = ROOT / "ui"
 FONT_DIR = UI / "vendor" / "fonts"
 MANIFEST = FONT_DIR / "icons.txt"
 FONT = FONT_DIR / "material-symbols-outlined.woff2"
-AXES = "opsz,wght,FILL,GRAD@24,200,0,0"
+AXES = "opsz,wght,FILL,GRAD@24,300,0,0"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 

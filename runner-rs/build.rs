@@ -14,7 +14,17 @@ fn main() {
     for p in ["build.rs", "Cargo.toml", "Cargo.lock", "src", "../runner/harnesses"] {
         println!("cargo:rerun-if-changed={p}");
     }
+    println!("cargo:rerun-if-env-changed=TICO_VERSION");
     println!("cargo:rustc-env=TICO_BUILD_ID={}", source_id(&root));
+    println!("cargo:rustc-env=TICO_RUNNER_RELEASE={}", release_version());
+}
+
+/// The release this build is for, from TICO_VERSION (the image build and release validation set it as vX.Y.Z), else
+/// "dev" for a source build. runner.rs RUNNER_RELEASE reports it; RUNNER_VERSION (the protocol version) does not change.
+fn release_version() -> String {
+    let version = std::env::var("TICO_VERSION").unwrap_or_default();
+    let version = version.trim().trim_start_matches('v');
+    if version.is_empty() { "dev".to_string() } else { version.to_string() }
 }
 
 fn files(root: &Path) -> Vec<(String, PathBuf)> {

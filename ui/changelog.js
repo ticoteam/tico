@@ -8,7 +8,7 @@ window.renderChangelogNotice = function () {
     notice.hidden = !count;
     notice.querySelector('.changelog-notice-label').textContent = `What's new · ${count} ${count === 1 ? 'update' : 'updates'}`;
   }
-  if (badge) { badge.hidden = !count; badge.textContent = count; }
+  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = count; }   // ticks (ui/app/motion.js)
 };
 
 // The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the

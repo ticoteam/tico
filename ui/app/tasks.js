@@ -386,7 +386,7 @@ function taskCard(it) {
   const t = it.task, st = TASKS_ST;
   const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '', refused = taskRefused(st, t);
   void st;   // selection, cursor and peek are painted on (task-list.js), so the card's signature only changes with its content
-  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
+  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}"${t?.status === 'done' ? ' data-done' : ''}>${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}

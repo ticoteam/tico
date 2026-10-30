@@ -2,35 +2,51 @@
 'use strict';
 
 const teamAddCanBot = () => !!S.me?.id && settingsCanCreateBots();
+const teamAddCanExisting = () => !!S.me?.id && settingsCanMakeTokens();
 const teamAddCanHuman = () => orgCanGroups() || !!S.me?.can_add_people;
+// One menu for the Team header's plus and each group's plus (ui/app/sidebar.js). In a group it recruits into that group
+// and adds a group inside it; people are added from the header only.
+let TEAM_ADD_GROUP = null;
 const TEAM_ADD_MENU = document.createElement('div');
 TEAM_ADD_MENU.id = 'team-add-menu';
 TEAM_ADD_MENU.setAttribute('role', 'menu');
 TEAM_ADD_MENU.setAttribute('aria-label', 'Add to team');
 TEAM_ADD_MENU.hidden = true;
-TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="section">Add section</button>
-  <button type="button" role="menuitem" data-team-add="bot">Add bot</button>
+TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="bot">Recruit a bot</button>
+  <button type="button" role="menuitem" data-team-add="existing">Add existing bot</button>
+  <button type="button" role="menuitem" data-team-add="section">Add section</button>
   <button type="button" role="menuitem" data-team-add="human">Add human</button>`;
 document.body.append(TEAM_ADD_MENU);
 
+function teamAddAllowed(group = null) {
+  return {bot: teamAddCanBot(), existing: teamAddCanExisting(), section: orgCanGroups(), human: group === null && teamAddCanHuman()};
+}
+function teamAddAny(group = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
+function teamAddOpenFor(group) { return !TEAM_ADD_MENU.hidden && TEAM_ADD_GROUP === group; }
+const teamAddAnchor = () => TEAM_ADD_GROUP === null ? $('#org-add-group')
+  : document.querySelector(`#tree [data-group-plus="${CSS.escape(TEAM_ADD_GROUP)}"]`);
 function teamAddRefresh() {
-  const allowed = {section: orgCanGroups(), bot: teamAddCanBot(), human: teamAddCanHuman()};
+  const allowed = teamAddAllowed(TEAM_ADD_GROUP);
   TEAM_ADD_MENU.querySelectorAll('button').forEach(button => { button.hidden = !allowed[button.dataset.teamAdd]; });
-  $('#org-add-group').hidden = !Object.values(allowed).some(Boolean);
-  if ($('#org-add-group').hidden || TEAM_ADD_MENU.contains(document.activeElement) && document.activeElement.hidden) teamAddClose(true);
+  TEAM_ADD_MENU.querySelector('[data-team-add=section]').textContent = TEAM_ADD_GROUP === null ? 'Add section' : 'Add group';
+  $('#org-add-group').hidden = !teamAddAny();
+  if (!teamAddAny(TEAM_ADD_GROUP) || TEAM_ADD_MENU.contains(document.activeElement) && document.activeElement.hidden) teamAddClose(true);
 }
 function teamAddClose(returnFocus = false) {
   const open = !TEAM_ADD_MENU.hidden;
   TEAM_ADD_MENU.hidden = true;
-  $('#org-add-group').setAttribute('aria-expanded', 'false');
+  teamAddAnchor()?.setAttribute('aria-expanded', 'false');
   if (open && returnFocus) teamAddReturnFocus();
 }
 function teamAddReturnFocus() {
-  (drawerMedia.matches && !document.body.classList.contains('drawer') ? $('#mobile-more') : $('#org-add-group')).focus();
+  if (drawerMedia.matches && !document.body.classList.contains('drawer')) $('#mobile-more').focus();
+  else (teamAddAnchor() || $('#org-add-group')).focus();
 }
 function teamAddPosition() {
   if (TEAM_ADD_MENU.hidden) return;
-  const anchor = $('#org-add-group').getBoundingClientRect(), menu = TEAM_ADD_MENU.getBoundingClientRect();
+  const el = teamAddAnchor();
+  if (!el) { teamAddClose(); return; }
+  const anchor = el.getBoundingClientRect(), menu = TEAM_ADD_MENU.getBoundingClientRect();
   const rail = $('.side-scroll').getBoundingClientRect();
   if (anchor.bottom < rail.top || anchor.top > rail.bottom || drawerMedia.matches && !document.body.classList.contains('drawer')) {
     teamAddClose(); return;
@@ -38,14 +54,21 @@ function teamAddPosition() {
   TEAM_ADD_MENU.style.left = Math.max(8, Math.min(anchor.left, innerWidth - menu.width - 8)) + 'px';
   TEAM_ADD_MENU.style.top = Math.max(8, anchor.bottom + menu.height + 8 <= innerHeight ? anchor.bottom + 4 : anchor.top - menu.height - 4) + 'px';
 }
-function teamAddOpen(last = false) {
+function teamAddOpen(last = false, group = null) {
+  if (!TEAM_ADD_MENU.hidden) teamAddClose();
+  TEAM_ADD_GROUP = group;
   teamAddRefresh();
-  if ($('#org-add-group').hidden) return;
+  const anchor = teamAddAnchor();
+  if (!anchor || anchor.hidden || !teamAddAny(group)) return;
   TEAM_ADD_MENU.hidden = false;
-  $('#org-add-group').setAttribute('aria-expanded', 'true');
+  anchor.setAttribute('aria-expanded', 'true');
   teamAddPosition();
   const items = [...TEAM_ADD_MENU.querySelectorAll('button:not([hidden])')];
   items[last ? items.length - 1 : 0]?.focus();
+}
+// A group's plus: opens the menu there, or closes it when it is already open there.
+function teamAddToggle(group) {
+  if (teamAddOpenFor(group)) teamAddClose(true); else teamAddOpen(false, group);
 }
 $('#org-add-group').onclick = () => TEAM_ADD_MENU.hidden ? teamAddOpen() : teamAddClose(true);
 $('#org-add-group').onkeydown = event => {
@@ -63,21 +86,25 @@ TEAM_ADD_MENU.onkeydown = event => {
     items[next]?.focus();
   }
 };
-document.addEventListener('click', event => { if (!event.target.closest('#org-add-group, #team-add-menu')) teamAddClose(); });
-document.addEventListener('focusin', event => { if (!event.target.closest('#org-add-group, #team-add-menu')) teamAddClose(); });
+const TEAM_ADD_KEEP = '#org-add-group, #team-add-menu, [data-group-plus]';
+document.addEventListener('click', event => { if (!event.target.closest(TEAM_ADD_KEEP)) teamAddClose(); });
+document.addEventListener('focusin', event => { if (!event.target.closest(TEAM_ADD_KEEP)) teamAddClose(); });
 window.addEventListener('hashchange', () => teamAddClose());
 window.addEventListener('resize', teamAddPosition);
 $('.side-scroll').addEventListener('scroll', teamAddPosition, {passive: true});
 TEAM_ADD_MENU.onclick = event => {
   const action = event.target.closest('[data-team-add]')?.dataset.teamAdd;
   if (!action) return;
+  const group = TEAM_ADD_GROUP;
   teamAddClose();
   if (action === 'section' && orgCanGroups()) {
+    if (group !== null) { orgGroupEdit({add: group}); return; }
     if (orgHistoryOn()) $('#org-history').click();
     const toggle = $('[data-section-toggle="organisation"]');
     if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
     orgGroupEdit({add: ''});
-  } else if (action === 'bot' && teamAddCanBot()) teamAddBot();
+  } else if (action === 'bot' && teamAddCanBot()) teamAddBot(group);
+  else if (action === 'existing' && teamAddCanExisting()) { setDrawer(false); window.connectAgent?.(); }
   else if (action === 'human' && teamAddCanHuman()) teamAddHuman();
 };
 
@@ -99,10 +126,16 @@ function teamAddDialog(title, body) {
   dialog.showModal();
   return dialog;
 }
-// Add bot makes a Recruiting seat first, then goes through the same flow as opening a seat (ui/app/recruit.js).
-function teamAddBot() {
+// Recruit a bot makes a Recruiting seat first, then goes through the same flow as opening a seat (ui/app/recruit.js).
+// From a group's plus the seat is in that group and reports to its head: the bot in it whose manager is outside it.
+function teamAddBot(group = null) {
   setDrawer(false);
-  void recruitNewSeat();
+  if (group === null) { void recruitNewSeat(); return; }
+  const bots = (S.emps || []).filter(e => e.team === group && e.status !== 'archived' && !isHelperBot(e));
+  const names = new Set(bots.map(e => 'b:' + e.name));
+  const head = bots.find(e => !names.has(orgBossKey({kind: 'bot', ...e})));
+  void recruitNewSeat({team: group, reports_to: head?.name || '',
+    teamName: (S.orgGroups || []).find(g => g.id === group)?.name || ''});
 }
 function teamAddHuman() {
   const dialog = teamAddDialog('Add human', `<form id="team-add-human">

@@ -1,11 +1,13 @@
 """Transactions and additive cloud schema over the existing Hub domain layer."""
 
 import hashlib
+import heapq
 import logging
 import json
 import os
 import sqlite3
 import threading
+import time
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
@@ -287,6 +289,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(
  subject, body, from_addr, to_text, mailbox UNINDEXED, msg_id UNINDEXED, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS credential_uses(
+ credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', at TEXT NOT NULL,
+ logged TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(credential_id, actor, bot));
+CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, at);
 CREATE TABLE IF NOT EXISTS credentials(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
@@ -489,7 +496,7 @@ def sweep_idempotency(store, now=None, batch=5000):
             return deleted
 
 
-DELTA_RETENTION_DAYS = 14
+DELTA_RETENTION_DAYS = 1
 DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
 
 
@@ -497,10 +504,12 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
     than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
 
-    A finished run's text is whole in its `message` events and `attempts.final_text`; the pieces only typed the live
-    reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
+    A run's pieces go only when its reply is whole elsewhere: `attempts.final_text` or a final `message` event holds
+    it. A run still held for review (a job 'uncertain') keeps them: review_jobs shows its output, and
+    auto_reconcile reads the deltas (hop_failed, empty_fallback_interruption) to decide. The pieces only typed the
+    live reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
     Attempts are walked in creation order from a mark kept in registry_metadata, so a pass never rescans the table;
-    one created before the cutoff and still unfinished is passed over for good."""
+    one created before the cutoff and still unfinished, or not whole, is passed over for good (its pieces stay)."""
     at = now or H.now()
     cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
     created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
@@ -510,9 +519,15 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     deleted = 0
     while deleted < most:
         with store.read() as c:
-            rows = c.execute("SELECT id,created,finished FROM attempts WHERE created<? AND (created,id)>(?,?) "
-                             "ORDER BY created,id LIMIT 200", (created_before, *mark)).fetchall()
-        done = [r["id"] for r in rows if r["finished"] and r["finished"] < cutoff]
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,"
+                "((a.final_text IS NOT NULL AND a.final_text<>'') OR EXISTS(SELECT 1 FROM attempt_events m "
+                "WHERE m.attempt_id=a.id AND m.kind='message' AND json_valid(m.payload_json) "
+                "AND json_extract(m.payload_json,'$.final')=1)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS whole "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        done = [r["id"] for r in rows if r["whole"] and r["finished"] and r["finished"] < cutoff]
         while done and deleted < most:
             with store.transaction() as c:
                 removed = c.execute(
@@ -537,13 +552,72 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     return deleted
 
 
+TOKEN_RETENTION_DAYS = 7
+
+
+def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+    """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
+    transactions like `sweep_deltas`; returns the count.
+
+    Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
+    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result_json. The rows go only
+    once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
+    and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
+    sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
+    at = now or H.now()
+    cutoff = H.shift(at, days=-TOKEN_RETENTION_DAYS)
+    created_before = H.shift(at, days=-TOKEN_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    with store.read() as c:
+        mark = c.execute("SELECT value_json FROM registry_metadata WHERE key='tokens-sweep-mark'").fetchone()
+    mark = json.loads(mark[0]) if mark else ["", ""]
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute(
+                "SELECT a.id,a.created,a.finished,EXISTS(SELECT 1 FROM turns t WHERE t.id=a.id AND t.finished IS NOT NULL "
+                "AND (t.input_tokens IS NOT NULL OR t.usage_reason IS NOT NULL)) "
+                "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
+                "FROM attempts a WHERE a.created<? AND (a.created,a.id)>(?,?) ORDER BY a.created,a.id LIMIT 200",
+                (created_before, *mark)).fetchall()
+        if not rows:
+            break
+        done = [r["id"] for r in rows if r["recorded"] and r["finished"] and r["finished"] < cutoff]
+        while done:
+            with store.transaction() as c:
+                removed = c.execute("DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
+                                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
+                                    (*done, batch)).rowcount
+            deleted += removed
+            if removed < batch:
+                break
+        mark = [rows[-1]["created"], rows[-1]["id"]]
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES('tokens-sweep-mark',?) "
+                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        if len(rows) < 200:
+            break
+    return deleted
+
+
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
-# than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
+# than their tier's days. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source), `credential.revealed` (credentials.last_used reads the
-# newest use of a credential, however old).
-EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
-                       "message.notice")
+# runtime of an old limited run that kept no limit_source), `judge.call` (a budget counts its day, decide_readout reads
+# 31 days, and the row repeats the cost), `mcp.call` (tool-call stats up to 90 days, and the weekly SQL view),
+# `github.token` and `inbound.read` (security and read audits, like `mail.read`). `credential.revealed` and
+# `credential.sent_to_computer` are not swept: they are the credential's audit trail, and their repeats are written less
+# often (credentials.record_use). Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
+# Seven days: writers only, or readers that look back no further than a week (bot.drain: deploy_draining reads the
+# last hour, release_deploy_drains a week at most).
+EVENT_NOISE_ACTIONS = ("sql.query", "wake.skipped", "message.delivered", "message.read", "status.set", "turn.start",
+                       "turn.finish", "github.checks_read", "rate_limit.set", "attempt.fallback", "attempt.lease-held",
+                       "job.suppress", "bot.drain", "operator.deployment-undrain", "listen.judgment",
+                       "bot.repository_read")
+EVENT_NOISE_RETENTION_DAYS = 7
+# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
+# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
+# since the old one had walked past every github.pull_request row already on disk.
+EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
 # held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
@@ -552,23 +626,38 @@ EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger ba
 
 
 def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
-    """Delete the EVENT_SWEEP_ACTIONS rows older than EVENT_RETENTION_DAYS; returns the count.
+    """Delete the bookkeeping rows past their tier's days (EVENT_NOISE_ACTIONS after EVENT_NOISE_RETENTION_DAYS,
+    EVENT_SWEEP_ACTIONS after EVENT_RETENTION_DAYS); returns the count. The tiers share no action and keep separate
+    marks, so each one's walk is its own. The noise tier goes first within the one `most` budget, so a large first
+    backlog drains there and the 30-day tier follows."""
+    at = now or H.now()
+    deleted = 0
+    for key, actions, days in (("events-noise-mark", EVENT_NOISE_ACTIONS, EVENT_NOISE_RETENTION_DAYS),
+                               ("events-sweep-30-mark", EVENT_SWEEP_ACTIONS, EVENT_RETENTION_DAYS)):
+        deleted += _sweep_event_tier(store, key, actions, H.shift(at, days=-days), batch, most - deleted)
+    return deleted
 
-    The scan walks the `events_ts` index forward from a mark kept in registry_metadata, so a pass reads only the
-    time since the last one (and not the kept rows before it again). The scan runs outside the write lock; each
-    batch's delete is its own short transaction, like `sweep_idempotency`. Events are only ever written with the
-    current time, so once a pass has reached the cutoff, nothing older than it is left behind."""
-    cutoff = H.shift(now or H.now(), days=-EVENT_RETENTION_DAYS)
-    marks = ",".join("?" * len(EVENT_SWEEP_ACTIONS))
+
+def _sweep_event_tier(store, key, actions, cutoff, batch, most):
+    """One tier of sweep_events: the `actions` rows older than `cutoff`, walked forward on `events_ts` from the mark
+    kept under `key`; returns the count.
+
+    The scan walks the index from the mark, so a pass reads only the time since the last one (and not the kept rows
+    before it again). The scan runs outside the write lock; each batch's delete is its own short transaction, like
+    `sweep_idempotency`. Events are only ever written with the current time, so once a pass has reached the cutoff,
+    nothing older than it is left behind."""
+    if most <= 0:
+        return 0
+    marks = ",".join("?" * len(actions))
     with store.read() as c:
-        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key='events-sweep-mark'").fetchone()
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
     mark = json.loads(saved[0]) if saved else ""
     deleted = 0
     while deleted < most:
         with store.read() as c:
             rows = c.execute(f"SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? "
                              f"AND action IN ({marks}) ORDER BY ts LIMIT ?",
-                             (mark, cutoff, *EVENT_SWEEP_ACTIONS, batch)).fetchall()
+                             (mark, cutoff, *actions, batch)).fetchall()
         if not rows:
             mark = cutoff
             break
@@ -583,9 +672,185 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
         if not removed:
             break               # the rows left the table under the scan: the next pass starts again from the mark
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES('events-sweep-mark',?) "
-                  "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (key, json.dumps(mark)))
     return deleted
+
+
+# Credential use rows written before credentials.record_use kept one per run, not one per USE_WINDOW. This one-time
+# trim brings them to that grain: per (credential, actor, bot), in ts order, a row is kept when it is the pair's first
+# or USE_WINDOW after the last kept one, which is the rule record_use applies from now on. A row record_use always
+# writes (a reveal with no attempt, a computer send by a model key) is kept and counts as the pair's last write, as it
+# did then. Person reveals are never touched. Rows at or after the first pass's time are not walked: the deploy's rows
+# are already at the new grain. Passes resume from the credential after the last finished one (registry_metadata).
+# Paced, not back to back: a batch of 500 deletes plus the WAL checkpoint it triggers held the writer gate for 5-7 s on
+# TIDY's first pass (scheduler.py:437), so writers waited up to 9 s against the 10 s WRITE_WAIT. 200 rows per write, then
+# a pause, lets writers in between batches.
+TRIM_BATCH = 200           # deletes per write transaction
+TRIM_PAUSE = 0.5           # seconds slept after each write transaction
+TRIM_PAGE = 2000           # rows read per read transaction
+TRIM_READ_PAUSE = 0.05     # seconds slept between read pages
+TRIM_MAX = 50_000          # deletes one hourly pass makes at most
+_sleep = time.sleep        # the pauses go through this so tests can run without waiting
+TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
+TRIM_MARK = "credential-use-trim"
+
+
+def _use_key(actor, detail_json):
+    """(bot, windowed) of one row, as credentials.record_use keys it and decides whether it writes."""
+    try:
+        detail = json.loads(detail_json) if detail_json else {}
+    except ValueError:
+        detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+    bot = str(detail.get("bot") or "") or (actor[4:] if actor.startswith("bot:") else "")
+    windowed = detail.get("use") == "watcher" or bool(detail.get("attempt"))
+    return bot, windowed
+
+
+def _trim_stream(store, action, target, before, page):
+    """One action's rows of one credential before `before`, oldest first, a page per read transaction. Keyset on ts
+    (events_action_target: action, target, ts); ids already yielded at the page's last ts are skipped on the next."""
+    last, seen = "", set()
+    while True:
+        limit = page + len(seen)
+        with store.read() as c:
+            rows = c.execute("SELECT rowid,id,ts,actor,detail_json FROM events WHERE action=? AND target=? "
+                             "AND ts>=? AND ts<? ORDER BY ts LIMIT ?", (action, target, last, before, limit)).fetchall()
+        fresh = [row for row in rows if not (row["ts"] == last and row["id"] in seen)]
+        yield from fresh
+        if len(rows) < limit or not fresh:
+            return
+        _sleep(TRIM_READ_PAUSE)
+        last = rows[-1]["ts"]
+        seen = {row["id"] for row in rows if row["ts"] == last}
+
+
+def _trim_target(store, target, before, batch, budget, page):
+    """Walk one credential's rows in ts order and delete the ones record_use would not have written. Returns
+    (deleted, finished). When `budget` runs out first the walk stops, and the next pass walks the credential again:
+    the rows it kept decide the same again, so nothing already passed is deleted twice."""
+    from .credentials import USE_WINDOW
+    last, doomed, deleted = {}, [], 0
+    streams = [_trim_stream(store, action, target, before, page) for action in TRIM_ACTIONS]
+    for row in heapq.merge(*streams, key=lambda row: (row["ts"], row["id"])):
+        actor = row["actor"] or ""
+        if actor.startswith("human:"):
+            continue
+        bot, windowed = _use_key(actor, row["detail_json"])
+        key = (actor, bot)
+        prev = last.get(key)
+        gap = None
+        if prev is not None and windowed:
+            at, was = H.parse_ts(row["ts"]), H.parse_ts(prev)
+            gap = (at - was).total_seconds() if at and was else None
+        if not windowed or prev is None or gap is None or gap >= USE_WINDOW:
+            last[key] = row["ts"]
+            continue
+        doomed.append(row["rowid"])
+        if len(doomed) >= min(batch, budget - deleted):
+            deleted += _trim_flush(store, doomed)
+            doomed = []
+            if deleted >= budget:
+                return deleted, False
+    if doomed:
+        deleted += _trim_flush(store, doomed)
+    return deleted, True
+
+
+def _trim_flush(store, rowids):
+    with store.transaction() as c:
+        deleted = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rowids))})", rowids).rowcount
+    _sleep(TRIM_PAUSE)
+    return deleted
+
+
+def _trim_next_target(store, after):
+    """The next credential after `after` (in id order) with a row of a trimmed action, or None."""
+    found = []
+    for action in TRIM_ACTIONS:
+        with store.read() as c:
+            row = c.execute("SELECT target FROM events WHERE action=? AND target>? ORDER BY target LIMIT 1",
+                            (action, after)).fetchone()
+        if row:
+            found.append(row[0])
+    return min(found) if found else None
+
+
+def _trim_save(store, mark):
+    with store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (TRIM_MARK, json.dumps(mark)))
+
+
+def sweep_credential_uses(store, now=None, batch=TRIM_BATCH, most=TRIM_MAX, page=TRIM_PAGE):
+    """One pass of the credential-use trim (see TRIM_BATCH above): deletes at most `most` rows and returns the count.
+    The mark holds the pass's `before` (fixed at the first pass), the last finished credential, and `done` once every
+    credential is finished; a finished trim costs one read. Each pass is a few read transactions and one short write
+    per `batch` rows, so writers wait about as long as they do for sweep_events."""
+    with store.read() as c:
+        saved = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (TRIM_MARK,)).fetchone()
+    mark = json.loads(saved[0]) if saved else None
+    if mark and mark.get("done"):
+        return 0
+    if mark is None:
+        mark = {"before": now or H.now(), "after": ""}
+        _trim_save(store, mark)
+    before, after, deleted = mark["before"], mark["after"], 0
+    while deleted < most:
+        target = _trim_next_target(store, after)
+        if target is None:
+            _trim_save(store, {"before": before, "after": after, "done": True})
+            break
+        count, finished = _trim_target(store, target, before, batch, most - deleted, page)
+        deleted += count
+        if not finished:
+            break
+        after = target
+        _trim_save(store, {"before": before, "after": after})
+    return deleted
+
+
+# Pages returned to the disk per write transaction: 2000 x 4 KB = 8 MB. The writer gate is held for one step at a time.
+VACUUM_STEP_PAGES = 2000
+# Free pages kept in the file for reuse, so the next writes take them without growing the file again.
+VACUUM_FLOOR_PAGES = 1000
+VACUUM_PASS_MAX = 256 * 1024 * 1024      # bytes one hourly pass returns at most; the rest waits for the next pass
+_vacuum_hint_logged = False
+
+
+def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, most=VACUUM_PASS_MAX):
+    """Return the free pages the sweeps leave behind to the disk (PRAGMA incremental_vacuum); returns the pages returned.
+
+    Only a file with auto_vacuum=INCREMENTAL (hubdb.connect sets it on every new file) is touched, and any other file
+    costs one read. Never a full VACUUM. Each step is its own write transaction, and the pass stops at `floor` free
+    pages or `most` bytes, whichever comes first."""
+    global _vacuum_hint_logged
+    with store.read() as c:
+        mode = c.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if mode != 2:
+            if not _vacuum_hint_logged:
+                _vacuum_hint_logged = True
+                logging.getLogger(__name__).info(
+                    "hub database has auto_vacuum=%s: a VACUUM would let the sweeps' freed pages go back to the disk",
+                    mode)
+            return 0
+        page = c.execute("PRAGMA page_size").fetchone()[0]
+    budget = most // page
+    returned = 0
+    while returned < budget:
+        # The freelist is read inside the write transaction, so a concurrent delete's pages are counted too.
+        with store.transaction() as c:
+            free = c.execute("PRAGMA freelist_count").fetchone()[0]
+            n = min(step, free - floor, budget - returned)
+            if n <= 0:
+                break
+            removed = len(c.execute(f"PRAGMA incremental_vacuum({int(n)})").fetchall())
+        returned += removed
+        if not removed:
+            break
+    return returned
 
 
 def sweep_mail(store, now=None, batch=5000):
@@ -951,6 +1216,8 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
+            H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -1583,6 +1850,10 @@ class Store:
                                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
                                    ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
+                                   # One action's rows in a time window, with no target (Health's limited runs, the
+                                   # judge's month, MCP calls): events_action_target walks every row of the action
+                                   # (911 ms on TIDY), events_ts every action's rows in the window.
+                                   ("events_action_ts", "events(action, ts)"),
                                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
                                    # expression word for word, or SQLite sorts every conversation.
                                    ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),
@@ -1603,11 +1874,23 @@ class Store:
                                    # so Health's silent_waits keeps a good plan.
                                    ("messages_open_ask_to",
                                     "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                   # Replaced asks to someone (views.went_away, on every Needs you read).
+                                   ("messages_superseded_asks_to",
+                                    "messages(to_actor, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
                                    # PRs at a commit (github.pr_signal, on every check and status webhook): the
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
+                                   # A message's runs: task_delete counts them on every delete, and topic_change
+                                   # and the run visibility (sql.py) look them up by message.
+                                   ("turns_message", "turns(message_id)"),
+                                   # A conversation's runs: task_delete counts them, the foreign key check of a
+                                   # deleted conversation reads them, and stream_capture looks them up.
+                                   ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),
+                                   # A task's file activity: task_delete counts it, and the activity a person may
+                                   # see by task (sql.py) reads it.
+                                   ("bot_file_activity_task", "bot_file_activity(task_id)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
                                    # version of every file a bot's Files tab lists and for each download.
                                    ("message_assets_blob", "message_assets(blob_id)"),
@@ -1641,6 +1924,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.
                 c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")
+                # Redundant with events_action_target (action, target, ts): every action-and-target read plans on it
+                # (backend/tests/test_events_indexes.py), and no read is target-only. 118 MB on TIDY. An older release
+                # recreates it when it starts; the next start drops it again.
+                c.execute("DROP INDEX IF EXISTS events_target_action")
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
@@ -1679,6 +1966,10 @@ class Store:
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
                 StrategyBot.migrate(c)
+                # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
+                # (backend/assistant.py: one Assistant for everyone). Idempotent.
+                from . import assistant as Assistant
+                Assistant.migrate(c, self.settings)
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)

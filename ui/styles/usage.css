@@ -12,7 +12,7 @@
 .use-seg button[aria-selected=true],.use-tabs button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .use-total{font-size:var(--t-xl);margin-bottom:var(--s4)}
 .use-total strong{font-weight:600}
-.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:.02em}
+.use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:var(--track-normal)}
 .use-sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;white-space:nowrap}
 .use-total .use-sub{display:block;margin-top:2px}
 .use-total .use-low{white-space:normal}
@@ -24,7 +24,7 @@
 .use-who{display:flex;align-items:center;gap:var(--s2);min-width:0}
 .use-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .use-runs,.use-tok{color:var(--muted);font-size:var(--t-base)}
-.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:1.25}
+.use-cost{display:flex;flex-direction:column;align-items:flex-end;text-align:right;line-height:var(--lh-tight)}
 .use-est{font-weight:600}
 .use-share{display:block;height:6px;border-radius:3px;background:var(--surface2)}
 .use-row:hover .use-share,.use-line[aria-expanded=true] .use-share{background:var(--line)}
@@ -67,7 +67,7 @@ span.use-limit{display:block}
 .use-dialog p.muted{margin:0;font-size:var(--t-sm)}
 /* An amount: "$" inside the box, hidden while the box shows its hint. */
 .use-money{display:flex;align-items:center;gap:2px;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);cursor:text}
-.use-money:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
+.use-money:focus-within{border-color:var(--accent);outline:var(--focus-halo);outline-offset:0}
 .use-money:has(input:placeholder-shown)>span{visibility:hidden}
 .use-money input{flex:1;min-width:0;width:100%;height:100%;padding:0;border:0;background:none;box-shadow:none;outline:0;text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 .use-money input::placeholder{color:color-mix(in srgb,var(--muted) 75%,transparent)}
@@ -116,7 +116,7 @@ span.use-limit{display:block}
   .use-lim-cell{flex:1 1 0;min-width:0}
   .use-lim-cell:empty{display:none}
   .use-lim-h{display:block;font-size:var(--t-xs);color:var(--muted)}
-  .use-money{height:36px;padding:0 6px;gap:1px}
+  .use-money{height:40px;padding:0 6px;gap:1px}
   .use-money input{font-size:16px}
   .use-lim-add{flex:1 1 100%}
   .use-check{margin-left:0}

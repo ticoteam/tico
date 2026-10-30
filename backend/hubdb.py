@@ -258,7 +258,9 @@ CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started);
 from .meetings_schema import (MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA, MEETING_ITEMS_SCHEMA,
                               MEETING_SCHEMA, RECORDING_SOURCES_SCHEMA, MEETING_REVIEW_SCHEMA,
                               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA)
+                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
+                              LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA,
+                              LIVE_MEETING_TURN_RETRY_SCHEMA)
 
 # Goals and KPIs (backend/goals.py). A task may name the goal
 # it serves; the column is optional and nothing requires it.
@@ -885,7 +887,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
               WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA,
               TASK_CAPS_SCHEMA, TASK_CAP_LOG_SCHEMA, TASK_LINK_ACTIVITY_SCHEMA,
-              RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA]
+              RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
+              LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA]
 
 
 class Refused(Exception):
@@ -1006,8 +1009,14 @@ def connect(path=None, adopt_legacy=False):
     target = Path(target).expanduser()
     if str(target) != ":memory:":
         target.parent.mkdir(parents=True, exist_ok=True)
+    # A file that does not exist yet (or is empty) is new: it takes auto_vacuum=INCREMENTAL before its first table, so
+    # the sweeps' freed pages can go back to the disk (store.reclaim_free_pages). An existing file keeps its mode;
+    # changing that needs a VACUUM.
+    fresh = str(target) == ":memory:" or not target.exists() or target.stat().st_size == 0
     conn = sqlite3.connect(str(target), timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    if fresh:
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
@@ -1023,6 +1032,26 @@ def connect(path=None, adopt_legacy=False):
 
 class UnknownDatabase(RuntimeError):
     """The file has Tico's tables but no version record: not a database this code made."""
+
+
+def backfill_credential_uses(conn):
+    """Once: each credential's newest use per (actor, bot), from the events log (the rule credentials.record_use
+    applies from now on: a bot's run or a computer sent it, never a person's reveal). One grouped read: a per-credential
+    loop measured 62 s cold on TIDY against 16 s for this (2 s each warm). Reads events by (target, action)."""
+    if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
+        return
+    known = {row[0] for row in conn.execute("SELECT id FROM credentials")}
+    rows = conn.execute("SELECT target, actor, COALESCE(NULLIF(CASE WHEN detail_json LIKE '{%' "
+                        "THEN json_extract(detail_json,'$.bot') END,''), "
+                        "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(ts) "
+                        "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
+                        "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot").fetchall()
+    # The newest event row of a pair is both its newest use and the last one logged.
+    conn.executemany("INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) "
+                     "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=MAX(at,excluded.at),logged=MAX(logged,excluded.logged)",
+                     [(target, actor, bot or '', at, at) for target, actor, bot, at in rows
+                      if at and target in known])
+    conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
 def add_column(conn, table, column, declaration):
@@ -1457,7 +1486,6 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS events_target_action ON events(target,action)")
     # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
     # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
     conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail_json) WHERE action='tag.attach'")
@@ -5006,9 +5034,11 @@ def check_model(conn, task_id, bot=None):
     if bot is None:
         return _one(conn, "SELECT runtime,model,harness,effort,role FROM task_check_models WHERE task_id=?", (task_id,))
     actor = "bot:" + bot
-    return _one(conn, "SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task_check_models m "
-                      "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner=?",
-                (task_id, actor, actor))
+    return _one(conn, CHECK_MODEL_SQL, (task_id, actor, actor))
+
+
+CHECK_MODEL_SQL = ("SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task_check_models m "
+                   "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner=?")
 
 
 def _subtask_result_parent(conn, row):
@@ -5783,7 +5813,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False, routine=False):
+                quiet_notice=False, from_private=False, routine=False, same=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5899,7 +5929,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         dup = twins[0] if twins else None
     else:
         dup = _same_title(conn, scope + " ORDER BY created,id",
-                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
+                          (requester, target, parent_id or "", *ACTIVE_STATUSES), title, keep=same)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -6046,10 +6076,12 @@ def title_key(title):
     return " ".join(str(title or "").split()).casefold()
 
 
-def _same_title(conn, sql, args, title):
-    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None."""
+def _same_title(conn, sql, args, title, keep=None):
+    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None. `keep(conn, task_id)`, when
+    given, also has to say it is the same work: a file review asks the same words about other versions."""
     key = title_key(title)
-    return next((r for r in _rows(conn.execute(sql, args)) if title_key(r["title"]) == key), None)
+    return next((r for r in _rows(conn.execute(sql, args))
+                 if title_key(r["title"]) == key and (keep is None or keep(conn, r["id"]))), None)
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
@@ -6789,7 +6821,8 @@ def fold_question(conn, actor, found, question, ask, *, title=None, body=None):
     was = ((old.get("questions") or [{}])[0].get("question") or asked.get("body") or "").strip()
     earlier = [*(old.get("earlier") or []), {"question": was, "at": ask_clock(asked)}][-EARLIER_ASKS_KEPT:]
     at = now()
-    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who")}
+    # A review's files and spend are the latest wording's: an ask without them drops the earlier ones.
+    refs = {k: v for k, v in old.items() if k not in ("questions", "if_no_answer", "who", "review", "attachments", "spend")}
     # Each wording is its own question id ("decision-2"...): an answer the person picked on the wording before is
     # keyed by the old id and refused (task_review.answer_task), never taken as an answer to this one.
     questions = [{**q, "id": f"decision-{len(earlier) + 1}"} if not i else q for i, q in enumerate(ask["questions"])]
@@ -7052,11 +7085,8 @@ def wait_detail(conn, row, *, children=True):
     `children=False` leaves out its open subtasks, as children and as blockers: what still holds a subtask's
     result back from it (auto_tasks.waiting with `result`).
     """
-    live = "('done','closed','declined')"
-    asks = _rows(conn.execute(
-        "SELECT m.id, m.to_actor FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? ORDER BY m.created",
-        (row["owner"], row["id"])))
+    from .read_cache import rows as cached_rows
+    asks = [dict(r) for r in cached_rows(conn, WAIT_ASKS_SQL, (row["owner"], row["id"]))]
     if asks:
         answered = answers_to(conn, [a["id"] for a in asks])
         open_ask = next((a for a in asks if a["id"] not in answered), None)
@@ -7064,9 +7094,7 @@ def wait_detail(conn, row, *, children=True):
             return {"why": "an unanswered question", "on": open_ask["to_actor"]}
     from . import profiles, review_gate
     engineering = review_gate.engineering(conn, row)
-    open_children = _rows(conn.execute(
-        f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
-        "ORDER BY created,id", (row["id"],))) if children else []
+    open_children = [dict(r) for r in cached_rows(conn, OPEN_CHILDREN_SQL, (row["id"],))] if children else []
     check = None
     for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
@@ -7269,6 +7297,14 @@ def unheld_sql(alias="j"):
 
 
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
+# wait_detail's and answers_to's one-task reads (auto_tasks.prime_waits seeds them for many tasks)
+WAIT_ASKS_SQL = ("SELECT m.id, m.to_actor FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                 f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? "
+                 "ORDER BY m.created")
+ANSWER_SQL = "SELECT * FROM messages WHERE in_reply_to=? AND kind='answer' AND deleted_at IS NULL ORDER BY created LIMIT 1"
+ANSWERED_BY_SQL = "SELECT answered_by FROM messages WHERE id=?"
+OPEN_CHILDREN_SQL = (f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN ('done','closed','declined') "
+                     "ORDER BY created,id")
 
 
 def _mirror_task_note(conn, actor, task_row, note):
@@ -8999,10 +9035,9 @@ def answers_to(conn, message_ids):
     """
     out = {}
     for mid in message_ids or []:
-        row = _one(conn, "SELECT * FROM messages WHERE in_reply_to=? AND kind='answer' AND deleted_at IS NULL "
-                         "ORDER BY created LIMIT 1", (mid,))
+        row = _one(conn, ANSWER_SQL, (mid,))
         if not row:
-            asked = _one(conn, "SELECT answered_by FROM messages WHERE id=?", (mid,))
+            asked = _one(conn, ANSWERED_BY_SQL, (mid,))
             if asked and asked.get("answered_by"):
                 row = _one(conn, "SELECT * FROM messages WHERE id=? AND deleted_at IS NULL", (asked["answered_by"],))
         if row:
@@ -9084,20 +9119,22 @@ def notices(conn, actor, at=None):
 TASK_SQL = "SELECT * FROM tasks WHERE id=?"
 
 
-def prime_tasks(conn, ids):
+def prime_tasks(conn, ids, with_tags=True):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
-    (a Needs you card reads its task, its ancestors and what they block, one at a time)."""
+    (a Needs you card reads its task, its ancestors and what they block, one at a time). `with_tags=False`: the rows only."""
     from .read_cache import cache, prime, prime_rows
     values = cache(conn)
     if values is None:
         return
     wanted = {tid for tid in ids if tid}
-    wanted = {tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values
-              or (TASK_TAGS_SQL % "?", (tid,)) not in values}
-    for part in chunks(sorted(wanted)):
+    # A row already read in this snapshot (prime_task_rows) is not read again; only its missing tags are.
+    unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
+    for part in chunks(unread):
         marks = ",".join("?" * len(part))
         found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
+    for part in chunks(sorted(tid for tid in wanted if with_tags and (TASK_TAGS_SQL % "?", (tid,)) not in values)):
+        marks = ",".join("?" * len(part))
         tags = {tid: [] for tid in part}
         for row in conn.execute(TASK_TAGS_SQL % marks, part):
             tags[row["task_id"]].append(row)
@@ -9391,12 +9428,22 @@ def needs_you(conn, who):
     # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
     # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
     by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
+    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None)
+    # The rows just read are this snapshot's task rows: a card's task, its ancestors and what they block are primed
+    # from them (prime_tasks), not read again by id. Copies, so nothing the caller adds to a row reaches the cache.
+    prime_task_rows(conn, [*owned, *asked, *waited, *declined])
     return {"actor": actor,
             "tasks": [t for t in asked + owned if t["id"] not in merged],
             "waiting": [t for t in waited if t["id"] not in merged],
             "approvals": pending,
-            "declined": [t for t in tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide",
-                                          limit=None) if (t.get("type_id") or GENERAL_TYPE) not in by_step]}
+            "declined": [t for t in declined if (t.get("type_id") or GENERAL_TYPE) not in by_step]}
+
+
+def prime_task_rows(conn, rows):
+    """Seed the snapshot's task reads (`task`, `prime_tasks`) with rows already read from `tasks` in this snapshot,
+    as stored: the tags `tasks()` hydrated are left out, as a read by id would have them."""
+    from .read_cache import prime
+    prime(conn, TASK_SQL, {(row["id"],): {k: v for k, v in row.items() if k != "tags"} for row in rows})
 
 
 def approval(conn, approval_id):

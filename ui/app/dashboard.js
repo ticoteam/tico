@@ -91,30 +91,41 @@ function dashAudienceWords(aud) {
 }
 
 // ---- the page
+// A place seen before is drawn at once from what it showed last (S.lastRead.places), then read again; the grid is drawn
+// again only when the answer differs, so its page widgets are not reloaded for nothing.
 async function pageDashboard(place) {
-  const team = place.startsWith('team:');
+  const team = place.startsWith('team:'), kept = (S.lastRead.places ||= {})[place];
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
       <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
-    <div class="dash-grid" id="dash-grid">${skelRows(4, {card: true})}</div>
+    <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
   const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null};
   dashWire(state);
-  try { state.view = await get(dashApi(place)); }
+  if (kept) { state.view = kept; dashDraw(state); }
+  let view;
+  try { view = await get(dashApi(place)); }
   catch (e) {
     if (DASH !== state) return;
+    if (kept) delete S.lastRead.places[place];
     $('#dash-grid').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
     return;
   }
-  if (DASH !== state) return;
-  if (!Array.isArray(state.view?.pins)) state.view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
+  if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
+  // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
+  if (DASH !== state) { S.lastRead.places[place] ||= view; return; }
+  // A write made while the read was out already drew its own answer.
+  if (state.view !== kept && state.view) return;
+  if (kept && sameData(view, kept)) return;
+  state.view = view;
   dashDraw(state);
 }
 function dashDraw(state) {
   const v = state.view, root = state.root;
+  S.lastRead.places[state.place] = v;
   if (v.kind === 'team') { root.querySelector('h1').textContent = v.name; }
   const actions = root.querySelector('.dash-actions');
   actions.hidden = !v.can_edit;

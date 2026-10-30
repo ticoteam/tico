@@ -1,0 +1,53 @@
+/* ui/styles/tree-lines.css — The connector lines of every tree: the team list (sidebar.css), Updates' threads
+   (updates.css), the Org chart's stacks (redesign-strategy.css) and the Goals tree (goals.css).
+   One pattern: a rail hangs from the parent's avatar, and an elbow turns off it, round, into each child's avatar,
+   stopping just short of it so the line is seen to meet it. The rail ends in the last child's elbow, never past it.
+   Three pieces, all pseudo-elements on the trees' own elements:
+   - the stub (::after on the parent's row): from the bottom of its avatar to the bottom of the row;
+   - the elbow (::before on each child's row): from the row above, or the stub, down to the child's avatar centre and
+     across to it;
+   - the rail (::after on each child but the last, its row and reports together): on down to the next child.
+   The selectors below say which elements draw which piece; each area file says where its avatars are with the
+   variables, measured from the element that draws the piece, so nothing here knows a tree's sizes. :where() keeps
+   these rules at no weight, and this file comes right after base.css, so an area's own rules always win. */
+:root{
+  /* one step above the hairlines (--line): a connector reads as a path between avatars, not as a divider */
+  --tree-line:var(--g4);
+  --tree-w:1.5px;
+  --tree-r:8px;
+  /* the room between an elbow's end and the avatar it points at: one pixel, so the two read as joined, never overlap */
+  --tree-gap:1px;
+}
+/* The geometry, set by each area on the element that draws the piece:
+   --tree-x       the rail's centre, from the child's left edge (negative: left of it); the elbow and the rail
+   --tree-elbow   from the rail's centre to the elbow's end: the child avatar's left edge less --tree-gap
+   --tree-y       the child avatar's centre, from the child row's top (default 50%: the row's middle)
+   --tree-up      how far above the child its line starts: the space between it and the row before
+   --tree-stub-x  the parent avatar's centre, from the parent row's left edge; the stub
+   --tree-from    the parent avatar's bottom, from the parent row's top
+   --tree-down    how far below the parent row the stub runs: the space before its first child */
+:where(
+  .tree ul:not(.node-sources)>li>.noderow,
+  .upd-sub>.upd-node:has(>.upd-card),.upd-sub>.upd-node>.upd-none,
+  .rdo-stack>li,
+  .gt-ind.gt-elbow
+)::before{content:"";position:absolute;box-sizing:border-box;pointer-events:none;
+  left:calc(var(--tree-x) - var(--tree-w) / 2);top:calc(-1 * var(--tree-up,0px));
+  width:calc(var(--tree-elbow) + var(--tree-w) / 2);height:calc(var(--tree-up,0px) + var(--tree-y,50%) + var(--tree-w) / 2);
+  border:0 solid var(--tree-line);border-left-width:var(--tree-w);border-bottom-width:var(--tree-w);
+  border-bottom-left-radius:min(var(--tree-r),var(--tree-elbow))}
+:where(
+  .tree ul:not(.node-sources)>li:not(:last-child),
+  .upd-sub>.upd-node:not(:last-child),
+  .rdo-stack>li:not(:last-child),
+  .gt-rail
+)::after{content:"";position:absolute;pointer-events:none;
+  left:calc(var(--tree-x) - var(--tree-w) / 2);top:calc(-1 * var(--tree-up,0px));bottom:0;
+  border-left:var(--tree-w) solid var(--tree-line)}
+:where(
+  .tree li:has(>ul:not(.node-sources):not([hidden])>li)>:is(.noderow,.node-sources,.org-bet-pop),
+  .upd-node:has(>.upd-sub>.upd-node)>:is(.upd-card,.upd-none),
+  .gt-ind.gt-kids
+)::after{content:"";position:absolute;pointer-events:none;
+  left:calc(var(--tree-stub-x) - var(--tree-w) / 2);top:var(--tree-from);bottom:calc(-1 * var(--tree-down,0px));
+  border-left:var(--tree-w) solid var(--tree-line)}

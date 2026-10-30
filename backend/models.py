@@ -416,6 +416,32 @@ class QuestionChoice(Contract):
     recommended: StrictBool = False
 
 
+class ReviewFile(Contract):
+    """One file version a question puts under review (backend/file_reviews.py); no version means the current one."""
+    file: ID
+    version: Annotated[int, Field(strict=True, ge=1)] | None = None
+
+
+class FileReview(Contract):
+    """A verdict given directly on one file version (`hub file review`, backend/file_reviews.py): by file id, or by a
+    path and the SHA-256 of its bytes."""
+    file: ID | None = None
+    version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    path: Annotated[str, Field(max_length=1000)] | None = None
+    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    task: ID
+    verdict: Literal["approve", "changes"]
+    note: Annotated[str, Field(max_length=4000)] = ""
+
+
+class QuestionSpend(Contract):
+    """Picking `label` also approves this spend for the asking bot, decided by the person who picks it."""
+    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
+    amount: Annotated[StrictStr, Field(min_length=1, max_length=40)]
+    what: Annotated[StrictStr, Field(min_length=1, max_length=200)]
+    account: Annotated[StrictStr, Field(min_length=1, max_length=80)] = "gateway"
+
+
 class TaskQuestion(Contract):
     """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
@@ -433,6 +459,11 @@ class TaskQuestion(Contract):
     # One open question per topic: a second question to the same person on this topic, while the first is open, is
     # folded into it (hubdb.open_question). Without one, an earlier question under the same parent task with no topic.
     topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
+    # File versions under review: shown on the card, judged by the answer (backend/file_reviews.py). With no options
+    # the options are Approve and Request changes; `pick` makes each file its own option, plus Request changes.
+    review: list[ReviewFile] = Field(default_factory=list, max_length=10)
+    pick: StrictBool = False
+    spend: QuestionSpend | None = None
 
     @model_validator(mode="after")
     def unique_labels(self):
@@ -441,6 +472,10 @@ class TaskQuestion(Contract):
             raise ValueError("Option labels must be unique")
         if self.options and not 2 <= len(self.options) <= 6:
             raise ValueError("A question has 2 to 6 options, or none for Yes / No")
+        if self.pick and (self.options or self.multi or not 2 <= len(self.review) <= 5):
+            raise ValueError("A pick reviews 2 to 5 files and makes its own options")
+        if self.review and self.multi:
+            raise ValueError("A review is one pick, not several")
         return self
 
 
@@ -708,7 +743,7 @@ class LearnedEdit(Contract):
 
 
 class GoalReadBack(Contract):
-    """Up to 20 changes the Strategy Bot reads back in the owner's chat (backend/goal_read_back.py): each one an object
+    """Up to 20 changes the owner's Assistant reads back in their chat (backend/goal_read_back.py): each one an object
     with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."""
     changes: list[dict] = Field(min_length=1, max_length=20)
 
@@ -1382,7 +1417,7 @@ class Heartbeat(Contract):
         "assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1",
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
-        "turns_at_once_v1"]] = Field(
+        "turns_at_once_v1", "private_lanes_v1"]] = Field(
         default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
@@ -1971,6 +2006,8 @@ class ProvidersUpdate(Contract):
     preset: str | None = Field(default=None, max_length=40)
     # How hard the Tico AI Gateway thinks on a decision (low, medium, high); None keeps the saved one.
     decide_level: str | None = Field(default=None, max_length=10)
+    # The model live-meeting replies run on: '' for the bot's own model; None keeps the saved one.
+    meeting_model: str | None = Field(default=None, max_length=100)
 
 
 class GatewaySearch(Contract):
@@ -1981,6 +2018,14 @@ class GatewaySearch(Contract):
 class GatewayFetch(Contract):
     url: str = Field(min_length=1, max_length=2000, pattern=r"^https?://")
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
+
+
+class GatewayImage(Contract):
+    prompt: str = Field(min_length=1, max_length=4000)
+    category: Literal["storyboard", "photo", "character", "graphic"]
+    images: list[str] = Field(default_factory=list, max_length=4)       # base64 data URLs, checked by the Gateway
+    size: str | None = Field(default=None, max_length=20)
+    count: int = Field(default=1, ge=1, le=4)
 
 
 class SystemUpdate(Contract):
@@ -2501,7 +2546,8 @@ class AssistantMessage(Contract):
 
 
 class AssistantUpload(Contract):
-    """A message with files in the owner's Strategy Bot chat (POST /api/v2/uploads/assistant/messages)."""
+    """A message with files in a person's Assistant chat (POST /api/v2/uploads/assistant/messages), which takes text
+    only: the route refuses it (`text_only`)."""
     text: Annotated[str, Field(min_length=1, max_length=8000)]
     # Each file's caption, in upload order.
     titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)

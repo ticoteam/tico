@@ -576,7 +576,8 @@ def add_segment(conn, actor, name, parent_id=None, summary=""):
         raise Problem("definition", "Define the market and its root first: PUT /api/v2/market/definition with root_name", 422)
     parent = _segment(conn, parent_id or root)
     seg_id = "segment/" + MK.slug(name)
-    if MK.entity(conn, seg_id):
+    old = MK.entity(conn, seg_id)
+    if old and (old["type"] != "segment" or old["status"] != "retired"):
         raise Problem("exists", f"{seg_id} already exists", 409, extra={"id": seg_id})
     if parent["id"] != root:
         found = _tree(conn, root)
@@ -584,6 +585,16 @@ def add_segment(conn, actor, name, parent_id=None, summary=""):
             raise Problem("tree", f"{parent['id']} is not under the market's root", 422)
         if found["depth"][parent["id"]] >= MAX_DEPTH:
             raise Problem("tree", f"The tree is at most {MAX_DEPTH} levels deep", 422)
+    if old:
+        # A segment removed earlier comes back under the parent named now, keeping its id and its history.
+        MK.update_entity(conn, actor, seg_id, status="active")
+        day = _today()
+        held = conn.execute("SELECT 1 FROM market_edges WHERE src=? AND rel='member_of' AND (since IS NULL OR "
+                            "substr(since,1,10)<=?) AND (until IS NULL OR substr(until,1,10)>=?)", (seg_id, day, day)).fetchone()
+        if not held:
+            MK.create_edge(conn, actor, src=seg_id, rel="member_of", dst=parent["id"], since=day,
+                           evidence_ids=[definition_evidence(conn, actor)])
+        return MK.entity(conn, seg_id)
     made = _new_segment(conn, actor, name, summary=str(summary or ""), parent=parent["id"])
     return made
 
@@ -596,7 +607,7 @@ def _tree(conn, root):
     """The segments under the root by `member_of`, depth first: {order, depth, parent, rows}."""
     day = _today()
     rows = {r["id"]: r for r in H._rows(conn.execute(
-        "SELECT id, name, summary FROM market_entities WHERE type='segment' AND status='active'"))}
+        "SELECT id, name, summary, properties FROM market_entities WHERE type='segment' AND status='active'"))}
     children = {}
     for edge in conn.execute("SELECT src, dst FROM market_edges WHERE rel='member_of' AND (since IS NULL OR substr(since,1,10)<=?) "
                              "AND (until IS NULL OR substr(until,1,10)>=?)", (day, day)):
@@ -704,7 +715,8 @@ def spend(conn, dimension="offering", basis="product", year=None):
             "size": {**chosen, "accepted": chosen["status"] == "accepted"} if chosen else None,
             "rolled_usd": rolled[seg_id],
             "estimates": mine, "disagree": _disagree(mine),
-            "bases": sorted({r["basis"] for r in rows}), "players": players, "self": seg_id in own})
+            "bases": sorted({r["basis"] for r in rows}), "players": players, "self": seg_id in own,
+            "next": bool(MK.loads(tree["rows"][seg_id]["properties"], {}).get("next"))})
     result["total"] = {k: round(v, 2) for k, v in total.items()}
     return result
 

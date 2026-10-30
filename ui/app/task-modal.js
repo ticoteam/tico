@@ -331,7 +331,7 @@ function taskSessionsHTML(t) {
 let TASK_RUN_ROWS = null, TASK_RUN_LOADING = null;
 function taskRunCatalog() {
   TASK_RUN_LOADING ||= get('/v2/models').then(d => {
-    TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !/^tico-/.test(m.id || ''));
+    TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));
     return TASK_RUN_ROWS;
   }, () => { TASK_RUN_LOADING = null; return []; });
   return TASK_RUN_LOADING;

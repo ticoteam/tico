@@ -10,7 +10,7 @@ module system. Every script shares the page's globals (`S`, `$`, `esc`, `get`, `
     app/*.js          the app: routing, state, sidebar and one file per page or feature
     *.js              features that mount into a page through a small `window.*` API
                       (docs-page.js, goals-kpis.js, first-run.js, support.js, ...)
-    assets/, vendor/  images, the icon font, marked
+    assets/, vendor/  images, the text font (Inter) and the icon font, marked
     tests/*.cjs       browser tests (`npm run test:ui`)
     sw.js             the service worker; it caches nothing (it lets the hashed bundle through to the browser cache)
 
@@ -60,7 +60,7 @@ Every file in `app/` and every feature file starts with `'use strict'`, as the o
 | File(s) in `app/` | What |
 | --- | --- |
 | core, markdown, viewer, format, api, state, notices | routes, `$`/`esc`/`md`, `safeMd`, the file viewer, formatting, `get`/`post`, the state `S` and team names, the new-version and usage notices |
-| avatars, sidebar, heartbeat, tooltip | bot avatars and blobs, the team tree, heartbeat and account menu, hover status |
+| avatars, liquid-dot, sidebar, heartbeat, tooltip | bot avatars and blobs, the Liquid Dot (Tico's own mark, `styles/liquid-dot.css`), the team tree, heartbeat and account menu, hover status |
 | issues, hub-v2, needs-you, bot-tasks | shared request rows and tables, hub v2 helpers, Needs you, a bot's tasks |
 | chat, pill, bot-page, bot-conversation, person-page, assistant-page | bot chat and its live reply, the composer, the bot and human pages, your Assistant |
 | tasks, task-board, task-modal, task-code, task-runs, tasks-page, pull-refresh, decide, recurring | Tasks: rows and cards, dragging on the board and its folds, the modal and its conversation (the session as a chat), the modal's Code and Subtasks rail and the PR badge, its Runs section (checkpoint, attempts, subagents, background work), the page and its pull to refresh, Decide (one card at a time), routines |

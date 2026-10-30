@@ -1,8 +1,10 @@
 /* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
-   (ui/market-page.js), the page's contents rail and reading column, the bets, and the Versions drawer. */
+   (ui/market-page.js), the page's cards (the line on top, Where we play, the bets, Competitors, Related news, the
+   sections), the bet form Setup uses, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
-.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
-.strat-head h1{margin:0;font-size:var(--t-lg);line-height:1.2}
+/* one height on every tab, with or without a button in it: a control (--ctl), the 8px under it and the rule */
+.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:calc(var(--ctl) + 9px);margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.strat-head h1{margin:0;font-size:var(--t-lg);line-height:var(--lh-tight)}
 .strat-head .spacer{flex:1}
 /* On Market the page has no padding of its own: the heading brings the same gutters, so switching tabs never moves it. */
 #main.market-layout .strat-head{flex:none;margin:0;padding:8px 28px}
@@ -21,28 +23,14 @@
 .strat-publish{display:flex;gap:8px;align-items:center;max-width:760px;margin:0 0 12px}
 .strat-publish input{flex:1 1 auto;min-width:0}
 
-.strat-grid{display:grid;grid-template-columns:176px minmax(0,760px);gap:28px;align-items:start}
-.strat-toc{position:sticky;top:0;display:flex;flex-direction:column;gap:1px;padding-top:6px}
-.strat-toc-link{display:block;width:100%;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.strat-toc-link:hover{background:var(--surface2);color:var(--ink)}
-.strat-toc-link:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-
 .strat-doc{min-width:0}
-.strat-sec{padding:14px 0;border-top:1px solid var(--line);scroll-margin-top:8px}
-.strat-sec:first-of-type,.strat-none+.strat-sec{border-top:0;padding-top:4px}
 .strat-sec-head{display:flex;align-items:center;gap:8px;min-height:26px;margin:0 0 6px}
 .strat-sec-head .strat-k{margin:0}
 .strat-sec-head .cnt{color:var(--muted);font-size:var(--t-sm)}
 .strat-k{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:1.3}
+.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:var(--lh-tight)}
 .strat-empty{margin:0;font-size:var(--t-base)}
 .strat-text{margin:0;font-size:var(--t-md);line-height:var(--lh-read);white-space:pre-line;overflow-wrap:anywhere}
-.strat-summary .strat-text,.strat-summary .strat-field{font-size:var(--prose)}
-/* The owner's Summary and Vision read as text and become a field on hover and focus. */
-.strat-field{display:block;width:calc(100% + 14px);margin:0 -7px;padding:4px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh-read)}
-.strat-field:hover{border-color:var(--line)}
-.strat-field:focus{border-color:var(--accent);background:var(--surface);outline:none}
-.strat-field::placeholder{color:var(--muted)}
 .strat-md{font-size:var(--t-md);line-height:var(--lh-read);overflow-wrap:anywhere}
 .strat-md>:first-child{margin-top:0}.strat-md>:last-child{margin-bottom:0}
 .strat-sec-form textarea{width:100%;min-height:140px;resize:vertical;font:inherit;font-size:var(--t-md);line-height:var(--lh-read)}
@@ -53,12 +41,10 @@
 .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
 .strat-bet-top{display:flex;align-items:baseline;gap:8px;min-width:0}
 .strat-bet-n{flex:none;width:16px;color:var(--muted);font-size:var(--t-sm)}
-.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
 .strat-retired .strat-bet-st{font-weight:500;color:var(--g7)}
 .strat-pill{flex:none}
 .pill.proposed{background:var(--wait-bg);color:var(--wait-ink)}
-.strat-bet-tools{flex:none;display:flex;gap:2px;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
-.strat-bet:hover .strat-bet-tools,.strat-bet:focus-within .strat-bet-tools{opacity:1}
 /* Why, Rules out, Wrong if and Goals: a label column and the words, aligned under the statement. */
 .strat-bet-lines{display:grid;gap:4px;margin:6px 0 0 24px}
 .strat-bet-line{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;margin:0;color:var(--g7);font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere;white-space:pre-line}
@@ -82,14 +68,112 @@
 .strat-wrong-fields input[name="threshold"]{flex:0 0 110px}
 .strat-wrong-by{max-width:200px}
 .strat-form-why{margin:0;color:var(--wait-ink);font-size:var(--t-sm)}
-.strat-add-sec{padding:12px 0;border-top:1px solid var(--line)}
 .strat-sec-form input[name="title"]{box-sizing:border-box;width:100%;height:36px;margin:0 0 8px;font-size:var(--t-md)}
-.strat-retired{margin-top:8px}
-.strat-retired>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
-.strat-retired .cnt{margin-left:4px}
 .strat-flash{animation:stratflash 1.6s var(--ease-out)}
 @keyframes stratflash{from{background:color-mix(in srgb,var(--accent) 16%,transparent)}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.strat-flash{animation:none}}
+
+/* ---------------------------------------------------------------- the page: cards */
+.strat-memo{display:flex;flex-direction:column;gap:14px;min-width:0}
+.strat-memo section.card.strat-card{display:flex;flex-direction:column;gap:8px;min-width:0;margin:0;padding:14px 16px;scroll-margin-top:8px}
+.strat-card[hidden]{display:none!important}
+.strat-card-head,.strat-sec-head{display:flex;align-items:center;gap:8px;min-height:24px;margin:0}
+.strat-card-head .strat-k,.strat-sec-head .strat-k{margin:0}
+.strat-card-head .strat-add{margin-left:auto}
+.strat-hint{margin-left:auto;color:var(--muted);font-size:var(--t-xs)}
+.strat-row{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+@media (min-width:1100px){.strat-row{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}}
+.strat-secs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
+.strat-secs:empty{display:none}
+.strat-add-sec:empty{display:none}
+.strat-none-s{margin:0;color:var(--muted);font-size:var(--t-base)}
+.strat-cap{margin:0;color:var(--muted);font-size:var(--t-sm)}
+/* Text that is its own field: a border on hover and focus. */
+.strat-ed{display:block;width:calc(100% + 12px);margin:-3px -6px;padding:3px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh)}
+.strat-ed:hover{border-color:var(--line)}
+.strat-ed:focus{border-color:var(--accent);background:var(--bg);outline:var(--focus-halo);outline-offset:0}
+.strat-ed::placeholder{color:var(--muted)}
+.strat-big{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-snug);overflow-wrap:anywhere}
+.strat-memo section.card.strat-top{padding:16px 18px}
+/* × to remove: on hover or focus with a mouse, always on a touch screen. */
+.strat-x{display:grid;place-items:center;flex:none;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.strat-x svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.strat-x:hover{background:var(--fail-bg);color:var(--fail)}
+.strat-x:focus-visible{opacity:1}
+:is(.strat-bets-card .strat-bet,.strat-chip,.strat-tm):hover .strat-x,:is(.strat-bets-card .strat-bet,.strat-chip):focus-within .strat-x{opacity:1}
+@media (hover:none){.strat-x{opacity:1}}
+.strat-add{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-tight);cursor:pointer;white-space:nowrap}
+.strat-add:hover{border-color:var(--accent);color:var(--accent)}
+.strat-addrow{display:flex;gap:6px;margin:2px 0 0}
+.strat-addrow input{flex:1 1 auto;min-width:0;height:30px;padding:0 12px;border-radius:999px;font-size:var(--t-base)}
+
+/* The bets: number (the drag handle), statement, then health, status and ×. */
+.strat-bets-card .strat-bet{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 0;border-top:1px solid var(--line)}
+.strat-bets-card .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
+.strat-bets-card .strat-bet-n{width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:700;line-height:24px;text-align:center}
+.strat-bets-card button.strat-bet-n{cursor:grab;touch-action:none}
+.strat-bets-card button.strat-bet-n:hover{background:var(--surface2)}
+.strat-bets-card .strat-bet.dragging{opacity:.7}
+.strat-bets-card .strat-bet.dragging .strat-bet-n{cursor:grabbing}
+.strat-bet-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+.strat-bets-card .strat-bet-st{font-size:var(--t-md);font-weight:600;line-height:var(--lh);letter-spacing:var(--track-snug);overflow-wrap:anywhere}
+.strat-bets-card span.strat-bet-st{padding-top:2px}
+.strat-bets-card .strat-bet-st{flex:none}
+.strat-sec-head .strat-mini{margin-left:auto}
+.strat-bet-side{display:flex;align-items:center;gap:6px;min-height:24px}
+.strat-bets-card .strat-none-row{display:block}
+button.strat-pill{border:0;cursor:pointer;font:inherit;font-size:var(--t-xs)}
+button.strat-pill:hover{filter:brightness(1.1)}
+.strat-retired{margin-top:2px}
+.strat-retired>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
+.strat-retired .cnt{margin-left:4px}
+.strat-retired-list{list-style:none;margin:0;padding:0}
+.strat-retired-list li{display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line);color:var(--g7);font-size:var(--t-base)}
+.strat-retired-list li>span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+
+/* Where we play: a treemap, each tile a button that cycles Us, Next, neither. */
+.strat-map{position:relative;aspect-ratio:2/1;width:100%;border-radius:6px;overflow:hidden}
+.strat-tm,.strat-tm-group{position:absolute;box-sizing:border-box}
+.strat-tm{display:block;padding:5px 7px;border:2px solid var(--surface);border-radius:5px;background:var(--surface2);color:var(--g7);font-size:var(--t-xs);line-height:var(--lh-tight);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strat-tm b{font-weight:600;color:var(--ink)}
+.strat-tm span{color:var(--muted)}
+.strat-tm em{margin-right:6px;font-style:normal;font-weight:700}
+.strat-tm.ours{background:var(--accent);color:var(--accent-ink)}
+.strat-tm.ours :is(b,span){color:var(--accent-ink)}
+.strat-tm.next{background:var(--surface);border:2px dashed var(--accent);color:var(--accent)}
+.strat-tm.next b{color:var(--accent)}
+.strat-tm-group{z-index:1;border:1.5px solid var(--g5);border-radius:6px;pointer-events:none}
+.strat-tm.pick{cursor:pointer;padding-right:22px}
+.strat-tm.pick:hover{border-color:var(--g5)}
+.strat-tm.pick:focus-visible{outline:var(--focus-ring);outline-offset:-2px}
+.strat-tm .strat-x{position:absolute;top:2px;right:2px;width:18px;height:18px;color:inherit}
+.strat-tm-plain{display:flex;flex-wrap:wrap;gap:4px}
+.strat-tm-plain .strat-tm{position:relative;border:1px solid var(--line);padding:5px 8px;max-width:100%}
+.strat-tm-plain .strat-tm.pick{padding-right:24px}
+.strat-tm-plain .strat-tm.ours{border-color:var(--accent)}
+.strat-tm-plain .strat-tm.next{border:1px dashed var(--accent)}
+
+/* Competitors: chips that link out. */
+.strat-chips{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}
+.strat-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:2px 4px 2px 11px;border:1px solid var(--line);border-radius:999px;font-size:var(--t-base)}
+.strat-chip>:is(a,span){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.strat-chip a{color:var(--ink);text-decoration:none}
+.strat-chip a:hover{text-decoration:underline}
+.strat-chip:not(:has(.strat-x)){padding-right:11px}
+.strat-chip .strat-x{width:20px;height:20px}
+
+/* Related news */
+.strat-posts{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:10px 20px;list-style:none;margin:0;padding:0}
+.strat-posts li{min-width:0;font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
+.strat-posts a{color:var(--ink);text-decoration:none}
+.strat-posts a:hover{text-decoration:underline}
+.strat-posts small{display:block;margin-top:2px;color:var(--muted);font-size:var(--t-xs)}
+.strat-tag{margin-right:6px;font-weight:700}
+.strat-tag.hot{color:var(--wait-ink)}
+.strat-tag.lead{color:var(--accent)}
+
+/* The sections: cards in a grid */
+.strat-memo .strat-sec .strat-md{font-size:var(--t-base)}
 
 /* Versions: a drawer on the right (the Goals panel's shape), the whole screen on a phone. */
 .strat-versions .tmodal-head h2{margin:0;font-size:var(--t-md)}
@@ -109,22 +193,18 @@
 .strat-sv-bets li{margin:0 0 6px}
 
 @media (max-width:760px){
-  #main.strategy-layout{padding-left:16px;padding-right:16px;padding-top:12px}
-  #main.market-layout .strat-head{padding:12px 16px 8px}
+  #main.strategy-layout{padding-left:12px;padding-right:12px;padding-top:12px}
+  #main.market-layout .strat-head{padding:12px 12px 8px}
   .strat-head{gap:8px 12px}
   .strat-head .spacer{display:none}
   .strat-actions{flex-basis:100%}
   .strat-actions .primary{margin-left:auto}
-  .strat-grid{grid-template-columns:minmax(0,1fr);gap:0}
-  .strat-toc{display:none}
-  .strat-bet-tools{opacity:1}
   /* Number and statement on one line; the status and the tools share the next, so the number never sits alone. */
   .strat-bet-top{flex-wrap:wrap;row-gap:6px}
   .strat-bet-st{flex-basis:calc(100% - 24px)}
   .strat-pill{margin-left:24px}
-  .strat-bet-tools{margin-left:auto}
   .strat-mini{min-height:32px;padding:4px 10px}
-  .strat-field,.strat-sec-form textarea,.strat-publish input{font-size:16px}
+  .strat-sec-form textarea,.strat-publish input{font-size:16px}
   .strat-publish{flex-wrap:wrap}.strat-publish input{flex-basis:100%}
   .strat-bet-lines{margin-left:0}
   .strat-bet-line{grid-template-columns:68px minmax(0,1fr)}
@@ -134,4 +214,10 @@
   .strat-wrong-fields input,.strat-wrong-fields select{height:44px;font-size:16px}
   .strat-wrong-fields select[name="kpi_id"]{flex-basis:100%}
   .strat-wrong-by{max-width:none}
+  .strat-ed,.strat-addrow input{font-size:16px}
+  .strat-big{font-size:var(--t-lg)}
+  .strat-memo section.card.strat-card{padding:12px}
+  .strat-map{aspect-ratio:1.4/1}
+  .strat-addrow input{height:40px}
+  .strat-add{padding:6px 12px}
 }

@@ -71,7 +71,9 @@ MINUTE_DAYS = 2                 # request minutes older than this become hours
 SHORT_DAYS = 14                 # requests, slow requests, process minutes
 LONG_DAYS = 90                  # SQL hours, database sizes, events
 SQL_TOP = 100                   # query shapes kept per hour; the rest are one "(other)" row
-DBSTAT_EVERY = 86400            # minimum interval between table/index page scans
+SIZES_EVERY = 86400             # minimum interval between table/index size estimates
+SAMPLE_WINDOWS = 3              # runs of rows sampled per table for its record size, spread over its rowid range
+SAMPLE_ROWS = 100              # rows per sampled run
 BUFFER = 200_000                # samples waiting for the background thread, at most
 # The tables that grow, counted each hour; with the column that dates their oldest row, read by rowid or an index.
 BIG = {"events": "ts", "messages": "created", "attempt_events": "created", "attempts": "created", "jobs": "created",
@@ -733,10 +735,10 @@ def _rows(c, table):
     return 0 if high is None else high - low + 1
 
 
-def db_stats(store, use_dbstat=True):
-    """The database's size and the detail `size_db` keeps. Every read is its own short snapshot: a whole-file dbstat scan
-    or a run of row counts held one read open for minutes, which stopped WAL checkpoints. A per-object dbstat query
-    (`name=?`) reads only that object's pages, so each object is one short read of its own."""
+def db_stats(store, sizes=True):
+    """The database's size and the detail `size_db` keeps. Every read is its own short snapshot, so none holds a read
+    open for minutes, which stopped WAL checkpoints. Object sizes are estimated from sampled rows (`_object_sizes`); no
+    page is walked, where dbstat walked every page of the file once a day."""
     path = str(store.settings.db_path)
     size = os.path.getsize(path) if os.path.exists(path) else 0
     wal = os.path.getsize(path + "-wal") if os.path.exists(path + "-wal") else 0
@@ -744,10 +746,10 @@ def db_stats(store, use_dbstat=True):
     with store.read() as c:
         page_size = c.execute("PRAGMA page_size").fetchone()[0]
         free = c.execute("PRAGMA freelist_count").fetchone()[0] * page_size
-        objects = c.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','index')").fetchall()
-    present = {name for name, kind in objects if kind == "table"}
-    if use_dbstat:
-        detail["objects"] = _object_pages(store, ["sqlite_schema"] + [name for name, _ in objects])
+        objects = c.execute("SELECT name, type, tbl_name FROM sqlite_master WHERE type IN ('table','index')").fetchall()
+    present = {name for name, kind, _ in objects if kind == "table"}
+    if sizes:
+        detail["objects"] = _object_sizes(store, page_size, objects)
     for table, column in BIG.items():
         if table not in present:
             continue
@@ -759,18 +761,48 @@ def db_stats(store, use_dbstat=True):
     return size, wal, free, detail
 
 
-def _object_pages(store, names):
-    """The 40 objects with the most pages, `{name: pages}`; None when this SQLite has no dbstat. One short read each."""
-    pages = {}
-    for name in names:
+def _quote(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _sample(c, table):
+    """`(rows, {column: average bytes})` for `table`: `rows` as `_rows` counts them, and the averages from SAMPLE_WINDOWS
+    runs of SAMPLE_ROWS rows spread over its rowid range. Only the values' lengths are read, never sent anywhere."""
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({_quote(table)})")]
+    rows = _rows(c, table)
+    q = _quote(table)
+    exprs = ", ".join(f"coalesce(length(CAST({_quote(col)} AS BLOB)), 0)" for col in cols)
+    sample = []
+    if rows and cols:
+        try:
+            low, high = c.execute(f"SELECT (SELECT min(rowid) FROM {q}), (SELECT max(rowid) FROM {q})").fetchone()
+            for i in range(SAMPLE_WINDOWS):
+                start = low + (high - low) * i // SAMPLE_WINDOWS
+                sample += c.execute(f"SELECT {exprs} FROM {q} WHERE rowid >= ? ORDER BY rowid LIMIT ?",
+                                    (start, SAMPLE_ROWS)).fetchall()
+        except sqlite3.OperationalError:                # a table without rowids: its first rows
+            sample = c.execute(f"SELECT {exprs} FROM {q} LIMIT ?", (SAMPLE_ROWS * SAMPLE_WINDOWS,)).fetchall()
+    averages = {col: sum(r[i] for r in sample) / len(sample) if sample else 0.0 for i, col in enumerate(cols)}
+    return rows, averages
+
+
+def _object_sizes(store, page_size, objects):
+    """Estimated bytes of the 40 largest tables and indexes, `{name: bytes}`. A table is its rows times its record size
+    (the column averages from `_sample`, plus a few header bytes per row). An index is its table's rows times its
+    columns' averages and a rowid, 8 bytes for an expression. Partial indexes count every row, so they read high.
+    Every object is at least one page, as a b-tree always is. Each table and its indexes are one short read."""
+    sizes = {}
+    tables = [("sqlite_schema", "table", "sqlite_schema")] + [obj for obj in objects if obj[1] == "table"]
+    for name, _, _ in tables:
         with store.read() as c:
-            try:
-                row = c.execute("SELECT sum(pgsize) FROM dbstat WHERE name=? AND aggregate=TRUE", (name,)).fetchone()
-            except sqlite3.OperationalError:
-                return None                         # dbstat or its aggregate mode is unavailable
-        if row and row[0]:
-            pages[name] = row[0]
-    return dict(sorted(pages.items(), key=lambda kv: -kv[1])[:40])
+            rows, averages = _sample(c, name)
+            sizes[name] = rows * (len(averages) + 3 + sum(averages.values()))
+            for index, kind, table in objects:
+                if kind == "index" and table == name:
+                    columns = [r[2] for r in c.execute(f"PRAGMA index_info({_quote(index)})")]
+                    sizes[index] = rows * (5 + sum(averages.get(col, 8) for col in columns))
+    sizes = {name: max(page_size, round(size)) for name, size in sizes.items()}
+    return dict(sorted(sizes.items(), key=lambda kv: -kv[1])[:40])
 
 
 # ---------------------------------------------------------------------------- retention
@@ -993,8 +1025,8 @@ class Flight(threading.Thread):
         previous = json.loads(latest["detail_json"] or "{}") if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
         objects_at = previous.get("objects_at", latest["ts"] if latest else None)
-        scan = objects_at is None or now - objects_at >= DBSTAT_EVERY
-        size, wal, free, detail = db_stats(self.store, use_dbstat=scan)
+        scan = objects_at is None or now - objects_at >= SIZES_EVERY
+        size, wal, free, detail = db_stats(self.store, sizes=scan)
         detail["objects_at"] = int(now) if scan else objects_at
         if not scan:
             detail["objects"] = previous.get("objects")

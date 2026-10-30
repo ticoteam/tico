@@ -56,9 +56,9 @@
 .conv-older{margin-bottom:6px}
 .conv-older[hidden]{display:none}
 /* Side traffic (bots between themselves, relays, notices, notes): one muted line per run, opened in place. */
-.chat-side{margin:4px 0;color:var(--muted);font-size:var(--t-sm);line-height:1.4}
+.chat-side{margin:4px 0;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh)}
 /* A task's start or milestone in the main chat: one quiet line like a folded side line; a tap opens the task's thread */
-.chat-task-row{display:flex;align-items:baseline;gap:.4em;width:100%;min-width:0;margin:4px 0;padding:5px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);line-height:1.4;text-align:left;cursor:pointer}
+.chat-task-row{display:flex;align-items:baseline;gap:.4em;width:100%;min-width:0;margin:4px 0;padding:5px 0;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);line-height:var(--lh);text-align:left;cursor:pointer}
 .chat-task-row:hover .ct-title{color:var(--accent)}
 .chat-task-row .ct-dot{flex:none;align-self:center;width:7px;height:7px;margin:0 .45em 0 .2em;border-radius:50%;background:var(--run)}
 .chat-task-row .ct-dot.done{background:var(--ok)}
@@ -69,9 +69,7 @@
 .chat-task-row .chat-time{flex:none;margin-left:8px}
 .chat-task-more{cursor:default}
 .chat-side>summary{padding:5px 0;cursor:pointer;display:flex;align-items:baseline;min-width:0}
-.chat-side>summary::before{content:"▶";flex:none;width:1.6em;font-size:.72em}
-.chat-side[open]>summary::before{content:"▼"}
-.chat-side>summary::-webkit-details-marker{display:none}
+.chat-side>summary::before{align-self:center}
 .chat-side>summary b{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-weight:500}
 .chat-side>summary .cs-gist{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.3em}
 .chat-side>summary .chat-time{flex:none;margin-left:8px}
@@ -82,7 +80,7 @@
 .cs-head b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
 .chat-side .cs-head .chat-time{flex:none;margin-left:auto}
 .cs-text{margin-top:1px;overflow-wrap:anywhere}
-.chat-side .cs-text.md{font-size:inherit;line-height:1.4;max-width:none}
+.chat-side .cs-text.md{font-size:inherit;line-height:var(--lh);max-width:none}
 .cs-text.md>:first-child{margin-top:0}
 .cs-text.md>:last-child{margin-bottom:0}
 .cs-text.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;max-height:2.8em}
@@ -136,7 +134,7 @@
 .conv-act>summary:hover{color:var(--ink)}
 .conv-ev{border-left:2px solid var(--line);padding:5px 0 5px 10px;margin:4px 0;font-size:var(--t-sm);min-width:0;overflow-x:auto}
 .conv-ev code{font-family:var(--mono);font-size:var(--t-sm);overflow-wrap:anywhere}
-.conv-ev pre{background:var(--surface2);border-radius:6px;padding:8px 10px;margin:5px 0 0;max-height:260px;overflow:auto;font:var(--t-sm)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.conv-ev pre{background:var(--surface2);border-radius:6px;padding:8px 10px;margin:5px 0 0;max-height:260px;overflow:auto;font:var(--t-sm)/var(--lh) var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .conv-deliv{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;margin:6px 0 2px}
 .conv-deliv img{max-width:min(100%,340px);border:1px solid var(--line);border-radius:8px;display:block}
 .conv-deliv .file{background:var(--surface2);border-radius:10px;padding:2px 9px;font-size:var(--t-sm)}
@@ -177,7 +175,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .ref-pr{--ref-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='4' cy='3.5' r='1.6'/%3E%3Ccircle cx='4' cy='12.5' r='1.6'/%3E%3Ccircle cx='12' cy='12.5' r='1.6'/%3E%3Cpath d='M4 5.1v5.8M12 10.9V7a2.5 2.5 0 0 0-2.5-2.5H7'/%3E%3C/g%3E%3C/svg%3E")}
 .ref-issue{--ref-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5.8' fill='none' stroke='black' stroke-width='1.8'/%3E%3Ccircle cx='8' cy='8' r='1.7' fill='black'/%3E%3C/svg%3E")}
 /* What a reply's turn did: muted one-line rows under it, then its steps folded to one line (#524). */
-.run-did{display:flex;flex-direction:column;align-items:flex-start;gap:1px;margin:3px 0 0;max-width:100%;font-size:var(--t-sm);line-height:1.5;color:var(--muted)}
+.run-did{display:flex;flex-direction:column;align-items:flex-start;gap:1px;margin:3px 0 0;max-width:100%;font-size:var(--t-sm);line-height:var(--lh);color:var(--muted)}
 .run-did .did{display:flex;align-items:baseline;gap:5px;max-width:100%;min-width:0;padding:0;border:0;background:none;color:var(--muted);font:inherit;text-align:left;text-decoration:none;white-space:nowrap}
 .run-did button.did,.run-did a.did{cursor:pointer}
 .run-did button.did:hover .did-what,.run-did a.did:hover .did-what{color:var(--ink);text-decoration:underline}
@@ -187,10 +185,8 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .run-did .did.failed .did-arrow{color:var(--fail)}
 .run-did .ref{white-space:nowrap}
 .run-steps{max-width:100%}
-.run-steps>summary{list-style:none;cursor:pointer;padding-left:calc(1em + 5px);color:var(--muted)}
-.run-steps>summary::-webkit-details-marker{display:none}
-.run-steps>summary::before{content:'▸';display:inline-block;width:1em;margin-left:calc(-1em - 5px);margin-right:5px;text-align:center}
-.run-steps[open]>summary::before{content:'▾'}
+.run-steps>summary{cursor:pointer;padding-left:calc(1em + 5px);color:var(--muted)}
+.run-steps>summary::before{margin-left:calc(-1em - 5px);margin-right:calc(1em + 1px)}   /* hangs in the indent */
 .run-steps>summary:hover{color:var(--ink)}
 .steps-list{display:flex;flex-direction:column;gap:1px;margin:2px 0 4px calc(1em + 5px);padding-left:8px;border-left:1px solid var(--line)}
 .steps-list .step{display:flex;gap:8px;min-width:0;white-space:nowrap}
@@ -213,9 +209,9 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-outline .co-list{overflow-y:auto;overscroll-behavior:contain;padding:4px 0}
 .chat-outline .co-row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;align-items:baseline;width:100%;padding:5px 12px;border:0;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .chat-outline .co-row:hover,.chat-outline .co-row:focus-visible{background:var(--hover);outline:none}
-.chat-outline .co-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:18px}
+.chat-outline .co-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base);line-height:var(--lh)}
 .chat-outline .co-row time{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
-.chat-outline .co-task{grid-column:1/-1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent-quiet);font-size:var(--t-sm);line-height:16px}
+.chat-outline .co-task{grid-column:1/-1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent-quiet);font-size:var(--t-sm);line-height:var(--lh)}
 .chat-outline .co-empty{padding:10px 12px;color:var(--muted);font-size:var(--t-sm)}
 @media (max-width:760px){
   .chat-outline{inset:auto 0 0 0;width:100%;max-width:none;max-height:70dvh;border-radius:14px 14px 0 0;padding-bottom:env(safe-area-inset-bottom)}
@@ -255,7 +251,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .chat-thumb:not(.ready){cursor:progress}
 .chat-thumb img{width:100%;height:auto;max-height:240px;object-fit:contain;display:block}
 .chat-thumb img[hidden]{display:none}
-.chat-thumb:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chat-thumb:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .chat-titled{display:inline-flex;flex-direction:column;gap:2px;width:calc((100% - 18px) / 4);min-width:64px}
 .chat-titled>.chat-thumb{width:100%}
 .chat-file-title{font-size:var(--t-sm);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -270,10 +266,10 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 #chat-composer{margin-top:12px}
 #chat-composer .ask{margin-bottom:0}
 .bot-chat-tasks{position:relative;flex:none;margin:0 0 8px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
-.bot-chat-task-groups{max-height:calc(2 * 1.4em + 12px);overflow-y:auto;overscroll-behavior:contain;padding:6px 34px 6px 11px;font-size:var(--t-base);line-height:1.4}
+.bot-chat-task-groups{max-height:calc(2 * 1.4em + 12px);overflow-y:auto;overscroll-behavior:contain;padding:6px 34px 6px 11px;font-size:var(--t-base);line-height:var(--lh)}
 .bot-chat-task-row{display:block;width:100%;padding:0;border:0;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .bot-chat-task-row+.bot-chat-task-row{margin-top:4px}.bot-chat-task-row:hover{color:var(--accent)}
-.bot-chat-tasks-x{position:absolute;top:2px;right:2px;width:30px;height:30px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:18px;line-height:1;cursor:pointer}
+.bot-chat-tasks-x{position:absolute;top:2px;right:2px;width:30px;height:30px;border:0;border-radius:6px;background:none;color:var(--muted);font-size:18px;line-height:var(--lh-none);cursor:pointer}
 .bot-chat-tasks-x:hover{color:var(--ink);background:var(--surface2)}
 /* Composer notices and attachment state sit above the input, so the input itself owns the edge. */
 /* The shared .ask class also styles task questions; chat needs no question-card surround. */
@@ -305,8 +301,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
    sit in #main's own grid. */
 #main.bot-split-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-right);grid-template-rows:auto auto minmax(0,1fr);padding:0;position:relative}
 #main.bot-split-layout>#bot-work:not([hidden]){display:contents}
-/* An empty top strip (no app nudge) takes no room, so the rail starts at the window's top edge. */
-body:has(#main.bot-split-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
+/* An empty top strip (no app nudge) takes no room (ui/styles/layout.css), so the rail starts at the window's top edge. */
 #main.bot-split-layout>#bot-top{grid-column:1;grid-row:1;margin:18px var(--s4) var(--s3) 28px}   /* 18px: the empty top strip (10px) and #main's 8px it replaces, so the header does not jump between tabs */
 body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8px}
 #main.bot-split-layout>#bot-banners{grid-column:1;grid-row:2;margin:0 var(--s4) 0 28px}
@@ -342,7 +337,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
   #chat-composer .p-go .caret{padding:0 7px}
 }
 .p-bot{display:none}
-.chat-system{margin:10px 0;padding:0 2px;font-size:var(--t-base);color:var(--muted);line-height:1.45}
+.chat-system{margin:10px 0;padding:0 2px;font-size:var(--t-base);color:var(--muted);line-height:var(--lh)}
 .chat-system b{color:var(--ink);font-weight:600}
 .chat-fold>summary{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-fold>summary:hover{color:var(--ink)}
@@ -362,9 +357,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 /* the Assistant page (ui/app/assistant-page.js): an empty chat offers a few things to ask, just above the composer */
 .asst-empty{display:flex;min-height:100%;align-items:flex-end;justify-content:center;padding:16px 0 4px}
 .asst-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
-.asst-hints button{border-radius:999px;font-size:var(--t-base);padding:6px 12px}
-/* "Earlier chats" on the owner's Strategy Bot page (ui/app/assistant-page.js): their Assistant chats from before,
-   read-only. */
+/* "Earlier chats" on the Assistant page (ui/app/assistant-page.js): the owner's old Strategy Bot chat, read-only. */
 .asst-earlier{margin:0 0 var(--s2)}
 .asst-earlier>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 .asst-earlier-list{max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s2);padding:var(--s2) 0}

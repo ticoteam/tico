@@ -237,6 +237,46 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     assert after == before and more == steps and steps
 
 
+def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api, monkeypatch):
+    # Tico Team: the status task read stepped 1,100 rows a page (850 of them private tasks), each step the GIL given up
+    # and taken back; with other requests running Python it took 100 ms to 1 s for 2 ms of SQLite work. The rows now
+    # come back as one row of JSON: the same rows, values and types, for many bots and for one.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 4)
+    store = api.app.state.store
+    finish_private(store, "busy-1")                         # finished private tasks: one it owns, one it asked for
+    with store.transaction() as c:
+        guest = H.task_create(c, "human:ben", "Guest copy", "Read along.", "bot:busy-2", private=True)
+        c.execute("UPDATE tasks SET guest='human:cara', status='waiting', waiting_on='human:ben' WHERE id=?",
+                  (guest["id"],))
+        H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)   # requester only
+        done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (done["id"],))
+    actors = [f"bot:busy-{n}" for n in range(4)]
+    marks = " IN (" + ",".join("?" * len(actors)) + ")"
+
+    def typed(rows):
+        return sorted(tuple((k, type(v).__name__, v) for k, v in row.items()) for row in rows)
+
+    with store.read_transaction() as c:
+        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 4)]
+        seen = []
+        c.set_trace_callback(seen.append)
+        packed = privacy.status_tasks(c, marks, actors * 4)
+        c.set_trace_callback(None)
+        assert len(seen) == 1 and len(c.execute(seen[0]).fetchall()) == 1
+        assert [list(row) for row in packed] == [privacy.STATUS_TASK_COLUMNS.split(",")] * len(packed)
+        assert typed(packed) == typed(stepped)
+        for bot in actors:
+            assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
+                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4))
+    ids = {row["id"] for row in packed}
+    assert guest["id"] in ids and done["id"] not in ids
+    assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
+    assert any(row["guest"] == "human:cara" and row["waiting_on"] == "human:ben" for row in packed)
+    assert any(row["owner"] == "human:cara" and row["requester"] == "bot:busy-3" for row in packed)
+
+
 def finish_private(store, slug):
     """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
     with store.transaction() as c:

@@ -101,7 +101,7 @@ const goals = [
     // A proposer may bring their dropped proposal back without silently accepting it themselves.
     await rows.first().locator('[data-fin-reopen]').click();
     const proposalForm = panel.locator('[data-fin-reopen-form="g-proposed"]');
-    assert.deepEqual(await proposalForm.locator('select option').allInnerTexts(), ['Choose…', 'Let Strategy Bot set it']);
+    assert.deepEqual(await proposalForm.locator('select option').allInnerTexts(), ['Choose…', 'Let the Assistant set it']);
     await proposalForm.locator('select').selectOption('auto');
     await proposalForm.locator('input[name=note]').fill('The proposal is back');
     await proposalForm.locator('button[type=submit]').click();
@@ -113,7 +113,7 @@ const goals = [
     const form = panel.locator('[data-fin-reopen-form="g-b2"]');
     await form.locator('button[type=submit]').click();
     assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no colour chosen: nothing sent');
-    assert.deepEqual(await form.locator('select option').allInnerTexts(), ['Choose…', 'On track', 'At risk', 'Off track', 'Let Strategy Bot set it']);
+    assert.deepEqual(await form.locator('select option').allInnerTexts(), ['Choose…', 'On track', 'At risk', 'Off track', 'Let the Assistant set it']);
     await form.locator('select').selectOption('green');
     await form.locator('button[type=submit]').click();
     assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no reason: nothing sent');

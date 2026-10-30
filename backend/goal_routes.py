@@ -189,7 +189,7 @@ def install(app, store, auth, mutate, settings):
         return names
 
     def in_words(who):
-        """The owner's yes to a goal read-back, saved by the Strategy Bot in their chat (backend/goal_read_back.py)."""
+        """The owner's yes to a goal read-back, saved by their Assistant in their chat (backend/goal_read_back.py)."""
         return who.role == "owner" and who.via == "assistant" and bool(GR.active())
 
     def decider(c, who, item):
@@ -871,17 +871,17 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/goals/read-back")
     def goal_read_back(request: Request, body: M.GoalReadBack):
-        """The Strategy Bot, in the owner's own chat: Tico writes the read-back of up to 20 changes as its reply and
+        """The owner's Assistant, in their own chat: Tico writes the read-back of up to 20 changes as its reply and
         stores the exact saves; the owner's yes to it is what lets them through (backend/goal_read_back.py)."""
         who = request.state.identity
         if not GR.strategy_turn(who):
-            raise Problem("forbidden", "Only the Strategy Bot, in the owner's own chat, reads back goal changes", 403)
+            raise Problem("forbidden", "Only the owner's Assistant, in their own chat, reads back goal changes", 403)
 
         def work(c):
             from . import assistant
-            room = assistant.find_strategy_room(c, who.actor)
+            room = assistant.find_room(c, who.actor)
             if not room:
-                raise Problem("not_found", "No Strategy Bot chat", 404)
+                raise Problem("not_found", "No Assistant chat", 404)
             changes = [read_back_plan(c, who, n, raw) for n, raw in enumerate(body.changes, 1)]
             seen = set()
             for change in changes:
@@ -895,7 +895,7 @@ def install(app, store, auth, mutate, settings):
             # message answers this and nothing else.
             turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
                              (who.attempt_id,)).fetchone()
-            msg = H._write_message(c, "bot:" + strategy_bot.SLUG, who.actor, text, room, "say",
+            msg = H._write_message(c, who.task_actor, who.actor, text, room, "say",
                                    {"assistant": True, "read_back": True, "goal_read_back": True},
                                    turn["message_id"] if turn else None, None, delivered_at=H.now())
             H.event(c, who.actor, GR.EVENT, msg["id"], {"changes": changes})
@@ -910,7 +910,7 @@ def install(app, store, auth, mutate, settings):
         the owner's reply started, whether their reply says yes to it and why not."""
         who = request.state.identity
         if not (GR.strategy_turn(who) or company_editor(who)):
-            raise Problem("forbidden", "The owner or the Strategy Bot in their chat reads a goal read-back", 403)
+            raise Problem("forbidden", "The owner or their Assistant in their chat reads a goal read-back", 403)
         with store.read() as c:
             back = GR.stored(c, mid)
             if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:

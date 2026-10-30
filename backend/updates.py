@@ -655,15 +655,9 @@ def writer_for(c, settings, store=None, vault=None):
 
 
 def drafter(c, settings, author, assistant):
-    """Whose draft a person's update is labelled: their Assistant's, and for the owner the Strategy Bot's, which is the
-    owner's Assistant (backend/assistant.py). The draft is written the same way for both."""
-    from . import access, strategy_bot
-    from .assistant import strategy_on
-    if not is_person(author) or not strategy_on(c):
-        return assistant
-    human = H.human(c, H.actor_id(author)) or {}
-    owner = access.load_owner(c, settings)["email"]
-    return strategy_bot.SLUG if owner and str(human.get("email") or "").strip().lower() == owner else assistant
+    """Whose draft a person's update is labelled: their Assistant's, the owner's included (backend/assistant.py: one
+    Assistant for everyone)."""
+    return assistant
 
 
 def write_draft(store, author, write, assistant):
@@ -1231,13 +1225,22 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
                      (actor, actor, H.shift(H.now(), days=-14), *values, *([kind] if kind else []))).fetchone()[0]
 
 
+def off_tree():
+    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Bot, the
+    Librarian) and the Task Manager. Nobody talks to them and they are not on the org chart."""
+    from . import assistant, task_manager
+    return frozenset((*assistant.HELPERS, task_manager.SLUG))
+
+
 def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
     """One day's updates nested by the org chart, for the Updates page: each person and bot the
     caller may read, its update or none, and the ones below it. `scope` below starts at the caller
     (the default when someone reports to them), all at the top of the chart. Only direct reports
     are `direct`, the one level that alerts; `unread` counts just those. Archived updates are left out as
     in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced.
-    Without `meetings` (`meeting_reader`), an update flagged `meetings` is left off its node, as in the feed."""
+    Without `meetings` (`meeting_reader`), an update flagged `meetings` is left off its node, as in the feed.
+    The built-ins off the org chart that work behind the Assistant (`OFF_TREE`) get no node, so no empty row; their
+    reports hang from the next node up, and an update they did post stays in the feed (List, Archive)."""
     from . import people as P
     from . import report_order
     roster, entries, archived = _chart(c)
@@ -1251,9 +1254,10 @@ def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
         parent_of["p:" + p["id"]] = p["org_parent"]
         if H.human_actor(p["id"]) in readable:
             nodes["p:" + p["id"]] = {"key": "p:" + p["id"], "author": H.human_actor(p["id"]), "name": p["name"] or p["id"]}
+    hidden = off_tree()
     for b in view["bots"]:
         parent_of["b:" + b["id"]] = b["org_parent"]
-        if b["id"] in readable:
+        if b["id"] in readable and b["id"] not in hidden:
             nodes["b:" + b["id"]] = {"key": "b:" + b["id"], "author": b["id"], "name": names.get(b["id"]) or b["id"]}
     authors = [n["author"] for n in nodes.values()]
     marks = ",".join("?" * len(authors)) or "''"

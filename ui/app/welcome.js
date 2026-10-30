@@ -108,10 +108,6 @@ function onbSeedPicks(state) {
 function onbApplyRecommended(state) {
   for (const card of state.catalog.cards) if (card.required) state.catalog.picked.add(card.slug);
 }
-const onbBotOpsName = state => {
-  const card = state.catalog.cards.find(row => row.required && row.slug !== assistantBot());
-  return card ? catalogName(state.catalog, card) : 'BotOps';
-};
 function onbRender(state) {
   if (ONB !== state) return;
   const host = $('#onb'); if (!host) return;
@@ -382,7 +378,6 @@ function onbDoneHTML(state) {
       <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button></div>`;
 }
 function onbBotRowsHTML(state) {
-  const botOps = onbBotOpsName(state);
   const chosen = new Set(Object.keys(state.record.selected || {}));
   const groups = frBotGroups((state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)));
   const sample = state.record.sample;
@@ -391,7 +386,7 @@ function onbBotRowsHTML(state) {
     `<details class="fr-starter-tasks"><summary>${tasks.length} starter ${tasks.length === 1 ? 'task' : 'tasks'} created</summary><ul>${tasks.map((id, i) =>
       `<li><a href="#/task/${encodeURIComponent(id)}">Starter task ${i + 1}</a></li>`).join('')}</ul></details>` : ''}` : '';
   const rows = groups.map(group => {
-    const content = group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('');
+    const content = group.bots.map(bot => frBotRowHTML(state, bot)).join('');
     return group.id === 'built-in' ? `<details class="onb-group onb-builtins" data-onb-group="built-in"><summary>Built-in helpers: ${group.bots.map(bot => esc(bot.display_name || bot.slug)).join(', ')}</summary>${content}</details>`
       : `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}${content}</section>`;
   }).join('');

@@ -62,11 +62,20 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     const editor = page.locator('#bot-editor');
+    // The bot page draws its editor once its settings load (bot-details.js botSettingsMount); a choice made before
+    // that would be drawn over, so each opening waits for that drawing.
     const open = async slug => {
-      await page.evaluate(name => settingsEditBot(name), slug);
-      await page.locator('#pane-settings').waitFor();
-      await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
-      await page.evaluate(name => settingsEditBot(name, true), slug);
+      const drawn = await page.evaluate(() => {
+        if (!window.editorDrawn) {
+          const draw = window.settingsEditBot;
+          window.editorDrawn = 0;
+          window.settingsEditBot = (...args) => { const out = draw(...args); if (args[1]) window.editorDrawn++; return out; };
+        }
+        return window.editorDrawn;
+      });
+      // Already on its page, nothing draws it again: draw it here.
+      await page.evaluate(name => location.hash === `#/bot/${name}/settings` ? settingsEditBot(name, true) : settingsEditBot(name), slug);
+      await page.waitForFunction(count => window.editorDrawn > count && BOT?.slug && !!document.querySelector('#bot-editor [data-bot-status]'), drawn);
       await editor.locator('[data-bot-machine]').waitFor({state: 'attached'});
       calls = [];
     };

@@ -57,6 +57,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
+from .files import raw_media
 from clients import gateway as gateway_client
 from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
@@ -295,6 +296,11 @@ def create_app(settings=None):
                     import logging
                     logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                 try:
+                    # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py).
+                    await asyncio.to_thread(app.state.live_meeting_routing.sweep)
+                except Exception as exc:
+                    telemetry.capture("live_meeting_sweep", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass
@@ -354,6 +360,7 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            app.state.live_meeting_routing.stop()
             if inbound_task:
                 await inbound_task
             if hook_relay_task:
@@ -653,9 +660,14 @@ def create_app(settings=None):
                             and request.state.identity.role == "runner")
                 memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
                                  and request.state.identity.role == "runner")
-                streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
+                # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
+                media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
+                streamed = media_raw or bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
+                recorder_audio = (request.url.path == "/api/v2/recorder/audio/transcriptions"
+                                  and request.state.identity.role in ("human", "owner"))
+                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -703,10 +715,10 @@ def create_app(settings=None):
                     # A direct setting from the catalogue the person asked for runs on their words the same way.
                     setting = (not approves and request.state.identity.via == "assistant"
                                and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (the Strategy Bot's suggestion they said to make) runs the same way.
+                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
                     org = (not approves and request.state.identity.via == "assistant"
                            and assistant_mod.instructed_org(request.method, request.url.path, raw))
-                    # The owner's yes to a goal read-back in their Strategy Bot chat (backend/goal_read_back.py): the
+                    # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
@@ -732,7 +744,7 @@ def create_app(settings=None):
                                     record = assistant_instruction(c, request.state.identity, asked)
                                 except Problem as exc:
                                     raise goal_read_back.not_agreed(exc.detail.split(";")[0]) from None
-                                # Recorded on every save as the owner, via the Strategy Bot, citing their yes and the
+                                # Recorded on every save as the owner, via their Assistant, citing their yes and the
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
@@ -750,7 +762,7 @@ def create_app(settings=None):
                                                                     settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                                # The bot whose turn it is: the person's Assistant, or the owner's Strategy Bot.
+                                # The bot whose turn it is: the person's Assistant.
                                 acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
                                 record = {**record, "assistant": acting,
                                           **assistant_mod.approval_words(c, request.state.identity, record["cited"],
@@ -826,6 +838,11 @@ def create_app(settings=None):
             elif request.url.path in ui_bundle.PATHS and response.status_code in (200, 304) \
                     and "immutable" in str(response.headers.get("cache-control", "")):
                 pass                    # a hashed script or stylesheet (ui_bundle): kept for a year
+            elif request.query_params.get("v") and response.status_code in (200, 304) \
+                    and re.fullmatch(r"/(?:tico/ui/)?vendor/fonts/[\w.-]+\.woff2", request.url.path):
+                # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
+                # optional, so a font that had to be revalidated first could miss the first paint.
+                response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = ("private, max-age=3600" if request.url.path.startswith("/assets/")
                                                      else "private, no-cache")
@@ -1313,7 +1330,6 @@ def create_app(settings=None):
                 raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
             if body.conversation_id and not assistant_room(c, who, body.conversation_id):
                 raise Problem("forbidden", "Use your own Assistant room", 403)
-            # The owner's is the Strategy Bot (backend/assistant.py).
             info = assistant_mod.availability(c, settings, who)
             if not info["available"]:
                 raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
@@ -1334,14 +1350,17 @@ def create_app(settings=None):
                                       "(/api/v2/assistant); message one of your bots here", 403)
                     in_assistant_room = True
                 elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
-                    # Of people, only the owner talks to the Strategy Bot, in the Strategy Bot chat (their menu tab).
-                    # Bots still message it; that is its goals session, never the owner's chat. The owner's post with no
-                    # room (the Goals page, `hub chat`) goes to that one chat.
-                    if not body.conversation_id and not who.via and assistant_mod.strategy_seat(c, who):
-                        body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
-                    if not assistant_room(c, who, body.conversation_id) or not assistant_mod.strategy_seat(c, who):
-                        raise Problem("forbidden", "Only the company's owner talks to the " + strategy_bot.name(c)
-                                      + ", in their own chat with it; talk to your Assistant", 403)
+                    # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
+                    # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
+                    # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
+                    if body.conversation_id or who.via:
+                        raise Problem("forbidden", "Nobody chats with the " + strategy_bot.name(c) + " directly; ask "
+                                      "your " + settings.assistant_name + ", which hands it the work", 403)
+                    info = assistant_mod.availability(c, settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    to = "bot:" + info["bot"]
+                    body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
         auth.require_bot_contact(c, who, to, body.conversation_id,
@@ -1461,7 +1480,7 @@ def create_app(settings=None):
         """Everything a client needs to name this environment and reach its runner."""
         from .onboarding import config_view
         with store.read_transaction() as c:
-            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True}}
+            return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True, "file_media_stream": True}}
 
     def updater_only(who, what):
         """The owner, or an `update` service key (backend/service_keys.py) held by a release bot on another install."""
@@ -1558,11 +1577,11 @@ def create_app(settings=None):
             raise Problem("forbidden", "Only the owner may choose the company's AI providers", 403)
 
         def work(c):
-            before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            before, after = Providers.save(c, who.actor, body.model_dump(), H.now(), settings)
             model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
-                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")},
-                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")}})
+                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")},
+                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level", "meeting_model")}})
             return Providers.view(after)
         return mutate(request, body, work)
 
@@ -1639,6 +1658,28 @@ def create_app(settings=None):
             raise Problem("gateway_fetch_failed", f"Fetch failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
         return answer
 
+    @app.post("/api/v2/gateway/images")
+    def gateway_images(request: Request, body: M.GatewayImage):
+        """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
+        bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Images are off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.image(base, key, body.prompt, body.category, body.images, body.size,
+                                                    body.count, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_image_unavailable", "The Tico AI Gateway does not make images yet", 503)
+            raise Problem("gateway_image_failed", f"Image failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
+
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):
         """Save the gateway key (and URL), then ask the Gateway about it. The owner only; the key is sealed at once and
@@ -1652,6 +1693,8 @@ def create_app(settings=None):
                                                     "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
+        if cloud_access.cell():
+            cloud_access.sync_later(store, vault, settings)  # a Tico Cloud cell's new key: its access answer, now
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=True)
 
@@ -3561,7 +3604,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, ingest=None, same=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3601,11 +3644,14 @@ def create_app(settings=None):
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
         asked_botops = None
         if request_id and who.via == "assistant":
-            # The Assistant handing BotOps what the person asked for in their own Assistant chat, citing that message
-            # (`--request-id turn`): BotOps then acts with the person's rights (delegated_identity, `assistant`).
-            # Only BotOps carries it, and only while the owner lets the Assistant act without asking.
-            if owner != "bot:" + BOTOPS:
-                raise Problem("request_id", "Only a task for BotOps carries the person's request", 422)
+            # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
+            # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
+            # owner lets the Assistant act without asking. BotOps then acts with the person's rights
+            # (delegated_identity, `assistant`); the Strategy Bot and the Librarian work it with their own rights, so
+            # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
+            if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
+                raise Problem("request_id", "Only a task for BotOps, the " + strategy_bot.name(c)
+                              + " or the Librarian carries the person's request", 422)
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
@@ -3720,7 +3766,8 @@ def create_app(settings=None):
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live,
-                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept))
+                            quiet_notice=bool(joins) or bool(gate and gate["acts"]), from_private=bool(kept),
+                            same=same)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         due = None
         if body.next_run and H.is_bot(owner):
@@ -3766,7 +3813,12 @@ def create_app(settings=None):
             raise Problem("request_id", "Only a task for BotOps carries a person's request", 422)
         if asked_botops:
             request_id = asked_botops["cited"]
-            H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            # BotOps' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
+            # which helper, and lends nothing.
+            if owner == "bot:" + BOTOPS:
+                H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
+            else:
+                H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_botops, "helper": owner})
             words = (H.message(c, request_id) or {}).get("body") or ""
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             H._write_message(c, H.KEEPER, owner, f"{name} asked the {settings.assistant_name} for this, in their words:\n\n> "
@@ -4544,10 +4596,10 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/delete")
     def task_delete(request: Request, tid: str, body: M.Empty):
-        """A person deletes a task made by mistake: its human requester, or anyone who may move any
-        task. Bots and delegated sessions close instead. A task carrying work (a bot turn, a bot's own file,
-        an approval, a subtask) is refused, so deleting never takes away what someone did. The task
-        goes to the trash, from which it can be restored."""
+        """A person deletes a task: its human requester, or anyone who may move any task. Bots and
+        delegated sessions close instead. Closing reads as finished work, so a person can always delete,
+        whatever bots did on the task: that work stays in place, unreadable while the task is gone
+        (task_delete.delete_tasks keep_work). The task goes to the trash, from which it can be restored."""
         who = request.state.identity
         person_only(who, "deletes a task; close it instead")
         def work(c):
@@ -4556,7 +4608,7 @@ def create_app(settings=None):
             row = auth.task(c, who, task_id)
             if row["requester"] != who.actor and not mover(c, who):
                 raise Problem("forbidden", "Only the task's requester, or someone who may move any task, deletes it", 403)
-            report = delete_tasks(c, [task_id], apply=True, actor=who.actor)
+            report = delete_tasks(c, [task_id], apply=True, actor=who.actor, keep_work=True)
             if not report["applied"]:
                 reasons = ", ".join(sorted(report["refused"])) or "unknown task"
                 raise Problem("has_work", "This task carries work (" + reasons + "); close it instead", 409)
@@ -6845,6 +6897,35 @@ def create_app(settings=None):
     def stop_turn(request: Request, bot: str, body: M.StopTurn):
         return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.attempt_id, body.redirect))
 
+    @app.get("/api/v2/bots/{bot}/pause-state")
+    def bot_pause_state(request: Request, bot: str):
+        """The public pause banner, without billing amounts or unreadable task counts."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            auth.require_see(c, who, bot)
+            row = H.bot(c, bot)
+            config = c.execute("SELECT operator,revision FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            operator = (H.human(c, config["operator"]) or {}) if config else {}
+            record = c.execute("SELECT actor,ts,action FROM events WHERE target=? "
+                               "AND action IN ('bot.pause','bot.resume') ORDER BY ts DESC,rowid DESC LIMIT 1", (bot,)).fetchone()
+            paused_by = None
+            if row["state"] == "paused" and record and record["action"] == "bot.pause":
+                person = H.human(c, H.actor_id(record["actor"])) if record["actor"].startswith("human:") else None
+                if person:
+                    paused_by = {"name": person["name"], "at": record["ts"]}
+            tasks = H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing','waiting')",
+                                     ('bot:' + bot,)))
+            count = sum(1 for task in tasks if privacy.task_readable(c, who, task))
+            value = {"state": row["state"], "revision": config["revision"] if config else None,
+                     "can_control": bool(auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)),
+                     "operator": operator.get("name") or (config["operator"] if config else "its operator"),
+                     "paused_by": paused_by, "open_tasks": count}
+            key, base = gateway_connection.target(c, app.state.vault, settings)[:2]
+        # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
+        value["company_paused"] = company_billing.paused(key, base)
+        return value
+
     @app.post("/api/v2/bots/{bot}/control")
     def control(request: Request, bot: str, body: M.BotControl):
         who = request.state.identity
@@ -7079,6 +7160,8 @@ def create_app(settings=None):
     install_market_briefing(app, store, auth, mutate)
     from .market_spend import install as install_market_spend
     install_market_spend(app, store, auth, mutate)
+    from .strategy_market import install as install_strategy_market
+    install_strategy_market(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
     from .strategy_setup import install as install_strategy_setup
@@ -7139,6 +7222,8 @@ def create_app(settings=None):
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
+    from .recorder_relay import install_recorder_relay
+    install_recorder_relay(app, store, auth, settings)
     from .mail import install_mail
     install_mail(app, store, auth)
     from .messaging import install_messaging

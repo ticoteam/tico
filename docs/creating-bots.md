@@ -23,7 +23,7 @@ For another template, a task goes to BotOps to build the repository, apply the r
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
 Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
 
-The 98 role templates, in nine groups with a Leadership extra, are described in
+The 99 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -56,6 +56,23 @@ Built-in bots cannot be archived.
 ![Archive confirmation naming Account Executive as the recipient of the bot’s open tasks](images/settings-stage1/settings-archive-bot-confirm.png)
 
 *Synthetic Acme example. The confirmation names who gets the work; Cancel leaves the bot unchanged.*
+
+## Pause or unpause a bot
+
+Open the bot's page to stop it from taking new work or to start it again.
+
+1. Click **Pause** in the strip at the top of the bot's page. The strip stays above the tabs; an active bot shows **Running** or **Idle** beside the button.
+2. To start the bot again, click **Unpause** in the full-width amber banner, which says **<Bot name> is paused**.
+
+The strip changes state after one click, without a confirmation. For example, `hub bot pause support-helper` pauses Support helper; `hub bot resume support-helper` starts it again.
+
+While paused, the bot will not start tasks, answer messages or run work from its Automations. A turn in progress is interrupted when the computer receives the pause. If the bot has open tasks assigned to it, the banner links to them and says how many are waiting.
+
+When Tico has a pause record, the banner shows who paused the bot and when, in UTC. If there is no record, it says **Paused**. The strip uses the existing bot-management permissions: if you can see the bot but cannot manage it, you see the banner without a button and a prompt to ask its operator to unpause it. The existing command-line controls remain available to people with their current permissions: `hub bot pause <bot>` and `hub bot resume <bot>`.
+
+A company pause for billing is separate from a bot pause. Its banner links to **Add credit** in **Settings > Billing**. While company billing is paused, bot-level controls are unavailable; the bot's own paused state remains separate.
+
+If a control fails, the strip keeps the current state, shows the reason and offers **Retry**.
 
 ## Edit Instructions
 

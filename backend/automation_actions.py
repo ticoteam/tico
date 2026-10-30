@@ -340,7 +340,7 @@ def _post_update(c, auto, run_id, args, values):
         out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, [], source=source)["week"]
         text = _pointer(c, poster, title)
     if "updates" in to:
-        posted = updates.post(c, poster, text, kind="daily" if "market" in to else None, source=source)
+        posted = updates.post(c, poster, text, kind="daily", source=source)
         out["update"] = (posted or {}).get("id")
     return out
 

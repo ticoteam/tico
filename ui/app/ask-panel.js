@@ -2,25 +2,37 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Ask (docs/assistant.md). The one way in to the Assistant (the owner's Strategy Bot), to BotOps behind it, and to Tico
-// support. On a computer a round button at the bottom left of the page (or ⌘J) opens a panel above it; on a phone the
-// Ask tab opens it as a sheet over the page, and the tab closes it again. It is the same conversation as the Assistant
-// page (#/assistant, "Show chat"): GET /v2/assistant reads it and POST /v2/assistant/messages sends with the page the
-// person is on (`page`), so the turn knows what "this" means. Like the Updates chat it keeps its own small state, never
-// the bot pages' (chat.js V2C), and drops the Assistant page's cached copy when it sends.
-// The + adds Tico support (free) or the Tico team (full management) to the conversation: both open Support
-// (ui/support.js). While a request is open it is in this chat: its messages flow in with the Assistant's as green
-// bubbles, its name at the top shows only them (and the box then writes to support), and its × takes it out.
+// Ask (docs/assistant.md). The one way in to the Assistant, to the helpers behind it (BotOps, the Strategy Bot, the
+// Librarian), and to Tico support. On a computer the "Ask Tico" pill at the bottom left of the page (or ⌘J) opens a
+// panel above it; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over the page, and closes
+// it again. It is the same conversation as the Assistant page (#/assistant, "Show chat"): GET /v2/assistant reads it
+// and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this" means.
+// Like the Updates chat it keeps its own small state, never the bot pages' (chat.js V2C), and drops the Assistant
+// page's cached copy when it sends.
+// "Loop in Tico Support", one switch under the thread, brings Tico support into the chat over its existing requests
+// (ui/support.js, ask-rules.js askSupportState): while one of the person's open requests is in the chat its messages
+// flow in with the Assistant's, the box writes to it, and its chip in the header (or the switch) takes it out again.
+// Turning it on shares the chat (ask-rules.js askSupportSwitch): its last 20 turns, scrubbed of keys, go to the request
+// (a new one, sent at once, when none is open). Off, nothing more from this chat goes; the request stays open.
+// The + still opens Support itself (every request, diagnostics, a new request) or asks the Tico team to manage the company.
 // What waits on the person from anyone else comes at the end as cards: a Confirm card a bot such as BotOps left in its
 // own chat (GET /v2/assistant `pending`), and bots' questions (Needs you), answered here or by telling the Assistant.
+// A peek beside the closed dot points at the first of those questions (askPeek).
 const ASK_HIDDEN = 'tico.ask.hidden';
+const ASK_PEEKS = 'tico.ask.peek';
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
+const ASK_SUP_IN = 'You added Tico Support. They can now see chats.';
+const ASK_SUP_OUT = 'Tico Support can no longer see chats.';
 let ASK = null;
 const ASK_CARDS_MAX = 3;
+const ASK_LOADED = Date.now();
 const askPhone = () => matchMedia('(max-width:760px)').matches;
 const askHiddenKey = () => ASK_HIDDEN + '.' + (S.me?.id || 'me');
 function askHiddenTickets() {
   try { const v = JSON.parse(localStorage.getItem(askHiddenKey()) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function askSetHidden(ids) {
+  try { localStorage.setItem(askHiddenKey(), JSON.stringify([...new Set(ids)].slice(-50))); } catch { /* this page only */ }
 }
 // The page the person is looking at: its heading, else the address.
 function askPage() {
@@ -37,12 +49,16 @@ function askSync() {
   fab.hidden = away;
   panel.hidden = !open;
   document.body.classList.toggle('ask-open', open);
+  fab.title = name + ' (⌘J)';
+  askPill(open);
+  // While the panel is open a close mark holds the phone tab's dot place (ask.css).
   for (const el of [fab, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
-    el.setAttribute('aria-label', open ? 'Close ' + name : name);
+    if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
   }
-  fab.title = name + ' (⌘J)';
-  const label = tab?.querySelector('.mobile-nav-label'); if (label) label.textContent = open ? 'Close' : 'Ask';
+  for (const el of document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]')) ldotWatch(el);
+  askDot();
+  askPeek();
   panel.setAttribute('aria-label', name);
   panel.querySelector('#ask-title').textContent = name;
   if (!open) return;
@@ -50,18 +66,93 @@ function askSync() {
   sees.hidden = !page.title;
   sees.querySelector('[data-ask-sees-name]').textContent = page.title;
   sees.title = 'Sees ' + page.title;
-  askMembers();
+  askPeople();
 }
+// The pill scales away as the panel opens (its dot is flying into the panel) and pops back as it closes. Web
+// Animations of transform and opacity; with reduced motion it just goes and comes back.
+function askPill(open) {
+  const fab = $('#ask-fab');
+  if (!fab || open === (fab.dataset.gone === '1')) return;
+  fab.dataset.gone = open ? '1' : '';
+  fab.getAnimations().forEach(a => a.cancel());
+  fab.classList.remove('ask-gone');
+  if (fab.hidden || askPhone() || ldotCalm() || typeof fab.animate !== 'function') { fab.classList.toggle('ask-gone', open); return; }
+  if (open) {
+    const run = fab.animate([{transform: 'scale(1)', opacity: 1}, {transform: 'scale(.7)', opacity: 0}],
+      {duration: 220, delay: 120, fill: 'forwards', easing: 'ease-in'});
+    run.onfinish = () => { if (fab.dataset.gone === '1') fab.classList.add('ask-gone'); run.cancel(); };
+  } else {
+    fab.animate([{transform: 'scale(.7)', opacity: 0}, {transform: 'scale(1.06)', opacity: 1, offset: .7}, {transform: 'scale(1)', opacity: 1}],
+      {duration: 320, easing: 'cubic-bezier(.3,0,.2,1)'});
+  }
+}
+// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the pill's (or the phone tab's) while the
+// panel is closed; while it is open, the newest Tico turn's (askTurn), else the panel's own beside its name; the rest
+// hold still. With reduced motion the dot is still and the closed pill says the state in a word; the open panel says
+// it in the thread already ("Thinking…", the reply itself).
+function askDot() {
+  const state = ASK?.dotState || 'idle', open = !$('#ask-panel')?.hidden, turn = ASK?.turn?.isConnected ? ASK.turn : null;
+  document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]').forEach(el => ldotSet(el, open ? 'still' : state));
+  ldotSet($('#ask-panel [data-ask-dot]'), open && !turn ? state : 'still');
+  ldotSet(turn, open ? state : 'still');
+  const word = $('#ask-fab [data-ask-word]');
+  if (word) { word.textContent = open ? '' : ldotWord(state); word.hidden = !word.textContent; }
+}
+// Where the dot is now: the open panel's live dot, else the pill's (whichever pill shows).
+const askPillDot = () => [...document.querySelectorAll('#ask-fab [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
+function askLiveDot() {
+  if ($('#ask-panel')?.hidden === false) return ASK?.turn?.isConnected ? ASK.turn : $('#ask-panel [data-ask-dot]');
+  return askPillDot();
+}
+// Where `el` will be once the panel has finished sliding in: its box less the panel's translate right now.
+function askSettled(el) {
+  const r = el.getBoundingClientRect(), t = getComputedStyle($('#ask-panel')).translate;
+  const [, y = '0'] = t && t !== 'none' ? t.split(' ') : [];
+  const dy = parseFloat(y) || 0;
+  return dy ? {left: r.left, top: r.top - dy, width: r.width, height: r.height} : r;
+}
+// The newest Tico turn in the thread takes the dot, in the slot beside its words (or its "Thinking…"); `replies` are
+// the ids of the Assistant's own messages, so a bot's card or Tico support never does. Returns that turn's key.
+function askTurn(chat, thread, replies) {
+  const turns = [...thread.querySelectorAll(':scope > [data-ask-live], :scope > p[role="status"], :scope > .conv-run[data-message]')]
+    .filter(el => !el.matches('.conv-run') || (replies.has(el.dataset.message) && el.querySelector('.bubble.bot')));
+  const last = turns.at(-1), spot = last && (last.matches('p') ? last : last.querySelector('.bubble.bot'));
+  if (!spot) { chat.turn?.remove(); return ''; }
+  if (!chat.turn) {
+    chat.turn = Object.assign(document.createElement('template'), {innerHTML: ldotHTML({size: 20, cls: 'ask-turn-dot'})}).content.firstChild;
+    ldotWatch(chat.turn);
+  }
+  spot.prepend(chat.turn);
+  return last.matches('[data-ask-live]') ? 'live' : last.matches('p') ? 'status' : last.dataset.message;
+}
+// Open: the pill's dot flies into the panel (to the newest turn once the thread is drawn); close: back to the pill.
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
+  // Both ends measured before anything moves: the pill pops back by a scale, so its dot is measured before that.
+  const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askPillDot()?.getBoundingClientRect();
   ASK.open = open;
   askMenu(false);
   askSync();
+  ASK.flyFrom = open && !ASK.drawn ? from : null;
+  if (!ASK.flyFrom) { const to = askLiveDot(); ldotFly(to, from, {to: open ? to && askSettled(to) : back}); }
   if (open && !ASK.mounted) { ASK.mounted = true; void askLoad(ASK); }
   else if (open) void ASK.refresh?.();       // cards answered or confirmed elsewhere meanwhile
   // A phone keeps its keyboard down until the person taps the box.
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
   else if (!open && focus && $('#ask-panel')?.contains(document.activeElement)) (askPhone() ? $('#mobile-ask') : $('#ask-fab'))?.focus();
+}
+// Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
+function askDraft(text) {
+  ASK ||= {open: false, mounted: false};
+  ASK.draft = text;
+  askToggle(true);
+  askFillDraft(ASK);
+}
+function askFillDraft(chat) {
+  const box = chat.draft && chat.composer ? pq(chat.composer, '.p-text') : null;
+  if (!box) return;
+  if (!box.value.trim()) { box.value = chat.draft; box.dispatchEvent(new Event('input', {bubbles: true})); }
+  chat.draft = '';
 }
 function askMenu(open) {
   const menu = $('#ask-panel [data-ask-menu]'), add = $('#ask-add');
@@ -70,74 +161,158 @@ function askMenu(open) {
   add.setAttribute('aria-expanded', String(open));
   if (open) menu.querySelector('button')?.focus();
 }
-// Tico support while a request is open and not taken out of the panel.
-function askMembers() {
-  const strip = $('#ask-panel [data-ask-members]');
-  if (!strip) return;
-  const hidden = askHiddenTickets(), open = (window.supportState?.().open || []).filter(t => !hidden.includes(t.id));
-  strip.hidden = !open.length;
-  if (!open.length) { if (ASK?.only) askOnly(false); return; }
-  const ticket = open[0], unread = open.filter(t => t.unread).length;
-  strip.dataset.ticket = ticket.id;
-  const chip = strip.querySelector('[data-ask-ticket]');
-  chip.textContent = 'Tico support' + (unread ? ` · ${unread} new` : '');
-  chip.setAttribute('aria-pressed', String(!!ASK?.only));
-  chip.title = ASK?.only ? 'Show the whole chat' : 'Show only Tico support';
+
+// ---- Tico Support in the chat
+// Whether support is in the chat now, from the person's open requests (ui/support.js) and the ones taken out here.
+function askSupport() {
+  const s = window.supportState?.() || {};
+  return askSupportState({enabled: !!window.supportOn?.(true), open: s.open || [], hidden: askHiddenTickets()});
 }
-// The request in this chat, whole (its messages), or null.
-function askTicket() {
-  const id = $('#ask-panel [data-ask-members]:not([hidden])')?.dataset.ticket;
-  return id ? window.supportTicket?.(id) || null : null;
-}
-// Only Tico support in the thread, and the box writes to it; or the whole chat again.
-function askOnly(on) {
-  if (!ASK) return;
-  ASK.only = on && !!askTicket();
-  $('#ask-panel')?.classList.toggle('ask-only', ASK.only);
+const ASK_CHIP = '<span class="ask-sup-chip"><span class="ask-sav"><span class="nav-icon" aria-hidden="true">headset_mic</span></span>Tico Support'
+  + '<button type="button" class="ask-supx" data-ask-sup-x aria-label="Remove Tico Support" title="Remove Tico Support">'
+  + '<span class="nav-icon" aria-hidden="true">close</span></button></span>';
+// The header chip, the switch and the box follow support in or out; a change while the panel shows plays its motion.
+function askPeople() {
+  const panel = $('#ask-panel');
+  if (!panel || !ASK) return;
+  const sup = askSupport(), people = panel.querySelector('[data-ask-people]'), loop = panel.querySelector('[data-ask-loop]');
+  loop.hidden = !sup.available || !ASK.live;
+  if (!sup.available && ASK.supId === undefined) return;     // support's requests not read yet
+  panel.querySelector('[data-ask-switch]').setAttribute('aria-checked', String(sup.on));
+  const id = sup.on ? sup.ticket.id : '', was = ASK.supId;
   const box = ASK.composer && pq(ASK.composer, '.p-text');
   if (box) {
-    box.placeholder = ASK.only ? 'Message Tico support' : 'Ask anything…';
-    box.setAttribute('aria-label', ASK.only ? 'Message Tico support' : 'Message ' + myChatName());
+    box.placeholder = sup.on ? 'Message Tico Support' : 'Ask anything…';
+    box.setAttribute('aria-label', sup.on ? 'Message Tico Support' : 'Message ' + myChatName());
   }
-  $('#ask-panel [data-ask-ticket]')?.setAttribute('aria-pressed', String(ASK.only));
-  if (ASK.only) void window.supportPoll?.();
-  ASK.draw?.();
+  if (id === (people.dataset.ticket || '') && was !== undefined) return;
+  const shows = !panel.hidden && !!ASK.drawn && was !== undefined, chip = people.querySelector('.ask-sup-chip');
+  if (!id && chip && shows) askChipOut(chip);
+  people.dataset.ticket = id;
+  people.innerHTML = id ? ASK_CHIP : '';
+  ASK.supId = id;
+  if (was === undefined || !!was === !!id) return;
+  // In or out since the chat last looked: a line in the thread says so, at this moment.
+  ASK.sys ||= [];
+  if (id) ASK.sys.push({at: new Date().toISOString(), text: ASK_SUP_IN, id, key: 'sys:in:' + id + ':' + ASK.sys.length});
+  else {
+    const gone = window.supportTicket?.(was);
+    (ASK.gone ||= []).push({id: was, at: new Date().toISOString(), ticket: gone ? {...gone, messages: [...(gone.messages || [])]} : null});
+    ASK.sys.push({at: new Date().toISOString(), text: ASK_SUP_OUT, id: was, key: 'sys:out:' + was + ':' + ASK.sys.length});
+  }
+  if (shows && id) askChipIn(people.querySelector('.ask-sup-chip'));
+  if (shows && !id) setTimeout(() => ldotMove(askLiveDot(), 'hop'), 300);
 }
-function askDrop(id) {
-  const ids = [...new Set([...askHiddenTickets(), id])].slice(-50);
-  try { localStorage.setItem(askHiddenKey(), JSON.stringify(ids)); } catch {}
-  askMembers();
-  askOnly(false);
+// Support comes in: the dot squashes and a bubble pops out of it, then arcs up into the header and lands as the chip.
+function askChipIn(chip) {
+  const sav = chip?.querySelector('.ask-sav'), dot = askLiveDot();
+  if (!sav || !dot || ldotCalm() || typeof sav.animate !== 'function') return;
+  ldotMove(dot, 'split');
+  const from = dot.getBoundingClientRect(), to = sav.getBoundingClientRect();
+  const b = sav.cloneNode(true);
+  b.classList.add('ask-fly');
+  Object.assign(b.style, {left: `${to.left}px`, top: `${to.top}px`});
+  document.body.append(b);
+  chip.style.visibility = 'hidden';
+  const dx = from.left + from.width / 2 - (to.left + to.width / 2), dy = from.top + from.height / 2 - (to.top + to.height / 2);
+  const arc = Math.min(90, Math.hypot(dx, dy) * .3) + 30;
+  const run = b.animate([
+    {transform: `translate(${dx}px,${dy}px) scale(.2)`},
+    {transform: `translate(${dx + 14}px,${dy - 10}px) scale(1.1)`, offset: .22},
+    {transform: `translate(${dx * .45}px,${dy * .45 - arc}px) scale(1)`, offset: .6},
+    {transform: 'translate(0,0) scale(1.25,.8)', offset: .88},
+    {transform: 'none'},
+  ], {duration: 820, easing: 'cubic-bezier(.45,0,.4,1)'});
+  ASK.rowDelay = 820;                         // the line in the thread follows the chip down
+  const land = () => {
+    b.remove();
+    chip.style.visibility = '';
+    chip.animate?.([{transform: 'scale(.6)', opacity: 0}, {transform: 'scale(1.08)', opacity: 1, offset: .6}, {transform: 'none', opacity: 1}],
+      {duration: 280, easing: 'cubic-bezier(.3,0,.2,1)'});
+  };
+  run.onfinish = land; run.oncancel = land;
 }
-// Support opening from the panel: on a computer the + keeps focus, so closing Support lands back there; a phone has
-// room for one sheet, so Ask's gives way to Support's and focus waits on the Ask tab.
-function askHandOff() {
+// Support goes out: its bubble jumps out of the panel (up and to the right, spinning, fading) and the chip folds away.
+// Both are copies on top of the page; the chip itself is already gone.
+function askChipOut(chip) {
+  if (ldotCalm() || typeof chip.animate !== 'function') return;
+  const r = chip.getBoundingClientRect(), sav = chip.querySelector('.ask-sav'), s = sav.getBoundingClientRect();
+  const fold = chip.cloneNode(true), b = sav.cloneNode(true);
+  fold.classList.add('ask-fly'); b.classList.add('ask-fly');
+  fold.querySelector('.ask-sav').style.visibility = 'hidden';
+  fold.querySelector('button')?.remove();
+  Object.assign(fold.style, {left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`});
+  Object.assign(b.style, {left: `${s.left}px`, top: `${s.top}px`});
+  document.body.append(fold, b);
+  fold.animate([{transform: 'scale(1)', opacity: 1}, {transform: 'scale(1.06)', opacity: 1, offset: .25}, {transform: 'scale(.4)', opacity: 0}],
+    {duration: 300, fill: 'forwards', easing: 'ease-in'}).onfinish = () => fold.remove();
+  const run = b.animate([
+    {transform: 'none'},
+    {transform: 'translate(0,4px) scale(1.25,.75)', offset: .15},
+    {transform: 'translate(60px,-70px) scale(1) rotate(30deg)', offset: .55},
+    {transform: 'translate(150px,-30px) scale(.4) rotate(120deg)', opacity: 0},
+  ], {duration: 760, easing: 'cubic-bezier(.3,0,.5,1)'});
+  run.onfinish = run.oncancel = () => b.remove();
+}
+// The switch (or the chip's ×): take the request out of the chat, or bring support in, sharing the chat with it (a
+// request taken out comes back; with none open, a new one is sent). The switch waits while that is on its way.
+async function askFlip() {
+  const panel = $('#ask-panel'), sw = panel?.querySelector('[data-ask-switch]'), error = panel?.querySelector('[data-ask-error]');
+  if (!ASK || ASK.flipping) return;
+  ASK.flipping = true;
+  if (sw) sw.disabled = true;
+  try {
+    const act = await askSupportSwitch(askSupport(), {
+      share: () => ASK?.share?.() || askShareText([], myChatName()),
+      file: text => window.supportFile(text),
+      reply: (id, text) => window.supportReply(id, text),
+      hide: id => askSetHidden([...askHiddenTickets(), id]),
+      show: id => askSetHidden(askHiddenTickets().filter(x => x !== id)),
+    });
+    if (act.do !== 'none') { askPeople(); ASK?.draw?.(); }
+  } catch (e) {
+    if (error) { error.textContent = 'Tico Support was not added. ' + (e?.message || 'Try again in a moment.'); error.hidden = false; }
+  } finally {
+    ASK.flipping = false;
+    if (sw) sw.disabled = false;
+  }
+}
+// Support opening from the panel: on a computer focus stays where it was asked from, so closing Support lands back
+// there; a phone has room for one sheet, so Ask's gives way to Support's and focus waits on the Ask tab.
+function askHandOff(back = '#ask-add') {
   askMenu(false);
   if (askPhone()) { askToggle(false, false); $('#mobile-ask')?.focus(); }
-  else $('#ask-add').focus();
+  else $('#ask-panel').querySelector(back)?.focus();
 }
+// Tico support's messages as the thread draws them: support's blue-gray under its headset, the person's on the right.
+// `until`: a request taken out of the chat keeps what it said before then.
+function askSupportRows(t, until = '') {
+  const end = Date.parse(until || '') || Infinity;
+  const row = (body, staff, at, i) => ({at, staff, html: staff
+    ? `<div class="ask-sup them" data-ask-row="sup:${esc(t.id)}:${i}"><span class="ask-sav"><span class="nav-icon" aria-hidden="true">headset_mic</span></span><div><small>Tico Support</small><div class="ask-sup-body">${esc(body)}</div></div></div>`
+    : `<div class="ask-sup you" data-ask-row="sup:${esc(t.id)}:${i}"><div class="ask-sup-body">${esc(body)}</div></div>`});
+  // What the switch shared is the chat already on screen: not drawn again.
+  return [row(t.message, false, t.created, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created, i + 1))]
+    .filter((r, i) => (Date.parse(r.at || '') || 0) <= end && !(!r.staff && askShared(i ? t.messages[i - 1].body : t.message)));
+}
+const askSysRow = s => ({at: s.at, sys: true, html: `<div class="ask-sys" data-ask-row="${esc(s.key)}" role="status">${esc(s.text)}</div>`});
 function askClick(ev) {
   const t = ev.target;
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
   if (t.closest('#ask-add')) { askMenu($('#ask-panel [data-ask-menu]').hidden); return; }
   if (t.closest('#ask-support')) { askHandOff(); window.supportOpen?.(); return; }
   if (t.closest('#ask-manage')) { askHandOff(); window.supportStart?.(ASK_MANAGE); return; }
-  if (t.closest('[data-ask-ticket]')) { askOnly(!ASK?.only); return; }
+  if (t.closest('[data-ask-switch], [data-ask-sup-x]')) { askFlip(); return; }
   const pick = t.closest('[data-ask-pick]');
   if (pick) { void askAnswer(pick.closest('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
-  if (t.closest('[data-ask-drop]')) { askDrop($('#ask-panel [data-ask-members]').dataset.ticket); return; }
   const hint = t.closest('[data-ask-hint]');
   if (hint) { ev.preventDefault(); void ASK?.send?.(hint.dataset.askHint); return; }
   // A link followed from the panel: on a phone the sheet gets out of the way of the page it opens.
   const a = t.closest('a[href^="#/"]');
   if (a && askPhone() && !a.getAttribute('href').startsWith('#/support')) askToggle(false, false);
 }
-// Tico support's messages as the thread draws them: green bubbles, the person's on the right.
-function askSupportRows(t) {
-  const bubble = (body, staff, at) => ({at, html: `<div class="ask-sup ${staff ? 'them' : 'you'}"><span class="ask-sup-who">${
-    staff ? 'Tico support' : 'You · to Tico support'}</span><div class="ask-sup-body">${esc(body)}</div></div>`});
-  return [bubble(t.message, false, t.created), ...(t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created))];
-}
+
+// ---- Bots' questions
 // Bots' questions to this person (Needs you), the first few: one pick of two to six answered with a tap, any other
 // question with a line of words; several picks at once, or several questions, open the task.
 function askQuestions() {
@@ -145,6 +320,7 @@ function askQuestions() {
   return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.to_actor === me
     && it.ask.from_actor !== me).slice(0, ASK_CARDS_MAX);
 }
+const askQuestionText = it => plainActors(it.kind === 'question' ? qcardQuestion(it)?.question || it.ask.body : it.ask.body);
 function askQuestionHTML(it) {
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = qcardAsker(it.ask.from_actor);
   const body = `<div class="ask-card-who">${esc(who)} asks</div><div class="ask-card-q">${esc(plainActors(q ? q.question : it.ask.body))}</div>`;
@@ -177,6 +353,61 @@ async function askAnswer(card, {pick, text}) {
     card.querySelectorAll('button, input').forEach(el => { el.disabled = false; });
   }
 }
+
+// ---- Peeks (ask-rules.js askPeekPick): one line beside the closed dot about the first question waiting on the person
+const askPeekKey = () => ASK_PEEKS + '.' + (S.me?.id || 'me');
+function askPeekStore() {
+  try { const v = JSON.parse(localStorage.getItem(askPeekKey()) || '{}'); return askPeekTidy(v && typeof v === 'object' ? v : {}); }
+  catch { return askPeekTidy({}); }
+}
+function askPeekSave(store) {
+  try { localStorage.setItem(askPeekKey(), JSON.stringify(askPeekTidy(store))); } catch { /* this page only */ }
+}
+const askTypes = a => !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(a.type)));
+const askTyping = () => askTypes(document.activeElement);
+let ASK_PEEK_TIMER = 0;
+function askPeek() {
+  const el = $('#ask-peek');
+  if (!el) return;
+  clearTimeout(ASK_PEEK_TIMER);
+  const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
+  const items = away ? [] : askQuestions().map(it => ({...it, id: String(it.id)}));
+  const store = askPeekStore(), cur = el.dataset.item;
+  if (open || away) { el.hidden = true; delete el.dataset.item; return; }
+  if (cur && !el.hidden && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) return;
+  const it = askPeekPick(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown});
+  if (!it) {
+    el.hidden = true; delete el.dataset.item;
+    if (now - ASK_LOADED < ASK_PEEK_WAIT_MS) ASK_PEEK_TIMER = setTimeout(askPeek, ASK_PEEK_WAIT_MS - (now - ASK_LOADED) + 50);
+    return;
+  }
+  const who = qcardAsker(it.ask.from_actor);
+  el.querySelector('[data-peek-text]').textContent = `${who} asks: ${askQuestionText(it)}`;
+  el.querySelector('[data-peek-act]').textContent = 'Answer';
+  el.querySelector('[data-peek-go]').setAttribute('aria-label', `${who} asks: ${askQuestionText(it)}. Answer in Ask Tico`);
+  el.dataset.item = it.id;
+  el.hidden = false;
+  askPeekSave({...store, shown: {...store.shown, [it.id]: now}});
+  ldotMove(askLiveDot(), 'hop');
+}
+function askPeekDone(id) {
+  const store = askPeekStore();
+  askPeekSave({...store, dismissed: [...store.dismissed, id]});
+  const el = $('#ask-peek');
+  el.hidden = true; delete el.dataset.item;
+}
+$('#ask-peek')?.addEventListener('click', ev => {
+  const el = $('#ask-peek'), id = el.dataset.item;
+  if (!id) return;
+  if (ev.target.closest('[data-peek-x]')) { askPeekDone(id); return; }
+  if (!ev.target.closest('[data-peek-go]')) return;
+  askPeekDone(id);
+  ASK ||= {open: false, mounted: false};
+  ASK.focusQ = id;
+  askToggle(true, false);
+  ASK.draw?.();
+});
+
 async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
@@ -186,35 +417,68 @@ async function askLoad(chat) {
   chat.stop = stopStream;
   const isReply = m => m.from_actor === 'bot:' + info?.bot;
   let pending = [], readFor = '';
+  const seenRows = new Set();
   const draw = () => {
     if (!current() || !info?.available) return;
-    const ticket = askTicket(), only = !!chat.only && !!ticket, at = x => Date.parse(x || '') || 0;
-    const rows = (only ? [] : messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})})))
-      .concat(ticket ? askSupportRows(ticket) : [])
+    const sup = askSupport(), at = x => Date.parse(x || '') || 0;
+    const ticket = sup.on ? window.supportTicket?.(sup.ticket.id) || null : null;
+    // Support's lines: the request in the chat now, and any taken out this visit up to when they left; then the lines
+    // that say who came in or went (and, for a request already in the chat, when it came in).
+    const shown = (ticket ? [{t: ticket, until: ''}] : []).concat((chat.gone || []).filter(g => g.id !== ticket?.id)
+      .map(g => ({t: window.supportTicket?.(g.id) || g.ticket, until: g.at})).filter(x => x.t));
+    const supRows = [].concat(...shown.map(x => askSupportRows(x.t, x.until)));
+    const sys = [...(chat.sys || [])];
+    for (const {t} of shown) if (!sys.some(s => s.id === t.id && s.text === ASK_SUP_IN))
+      sys.push({at: new Date(at(t.created) - 1).toISOString(), text: ASK_SUP_IN, id: t.id, key: 'sys:in:' + t.id});
+    // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not;
+    // waiting on Tico Support's answer, it listens.
+    const streaming = !!(execution && execution.state !== 'completed' && execution.text);
+    const replying = streaming || (messages.length > 0 && !isReply(messages.at(-1)));
+    const ownSup = ticket ? askSupportRows(ticket) : [], waiting = ownSup.length > 0 && !ownSup.at(-1).staff;
+    chat.dotState = replying ? ldotChatState({replying, streaming}) : waiting ? 'listening' : 'idle';
+    askDot();
+    const rows = messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})}))
+      .concat(supRows, sys.map(askSysRow))
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
-    if (!only) {
-      const live = execution && execution.state !== 'completed' ? execution.text : '';
-      if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-      else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Thinking…')}</p>`);
-      // What waits on the person: Confirm cards left in other chats (BotOps'), then bots' questions.
-      const here = new Set(messages.map(m => m.refs?.action).filter(Boolean));
-      rows.push(...pending.filter(a => !here.has(a.id)).map(a =>
-        `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`));
-      rows.push(...askQuestions().map(askQuestionHTML));
-    }
-    const html = rows.join('') || (only ? '<p class="muted">No messages yet.</p>' : `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
-      `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`);
+    const live = execution && execution.state !== 'completed' ? execution.text : '';
+    if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Thinking…')}</p>`);
+    // What waits on the person: Confirm cards left in other chats (BotOps'), then bots' questions.
+    const here = new Set(messages.map(m => m.refs?.action).filter(Boolean));
+    rows.push(...pending.filter(a => !here.has(a.id)).map(a =>
+      `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`));
+    rows.push(...askQuestions().map(askQuestionHTML));
+    const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
+      `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
     // A reply from support seen here is read, as in Support itself.
     const seen = ticket?.unread && chat.open && !$('#ask-panel').hidden && document.hasFocus() ? ticket.id + ':' + (ticket.messages || []).length : '';
     if (seen && seen !== readFor) { readFor = seen; void window.supportRead?.(ticket.id); }
-    if (html === rendered) return;
-    stickScroll(thread).update(() => {
-      thread.innerHTML = html;
-      if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
-    }, {fresh: !!rendered});
-    rendered = html;
+    if (html !== rendered) {
+      // A newer Tico turn takes the dot from the older one: it flies there, from inside the thread's view.
+      const box = thread.getBoundingClientRect(), was = chat.turn?.isConnected ? chat.turn.getBoundingClientRect() : null, wasKey = chat.turnKey;
+      const from = was && {left: was.left, width: was.width, top: Math.min(Math.max(was.top, box.top), box.bottom - was.height)};
+      stickScroll(thread).update(() => {
+        thread.innerHTML = html;
+        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
+        chat.turnKey = askTurn(chat, thread, new Set(messages.filter(isReply).map(m => m.id)));
+      }, {fresh: !!rendered});
+      askRowsIn(thread, seenRows, !!rendered, chat.rowDelay || 0);
+      chat.rowDelay = 0;
+      rendered = html;
+      askDot();
+      if (chat.turnKey && wasKey && chat.turnKey !== wasKey) ldotFly(chat.turn, from);
+    }
+    // The first drawing after the panel opened: the pill's dot lands where the dot now is.
+    chat.drawn = true;
+    if (chat.flyFrom && chat.open) { const to = askLiveDot(); ldotFly(to, chat.flyFrom, {to: to && askSettled(to)}); chat.flyFrom = null; }
+    // Opened from a peek: its question, in view.
+    const q = chat.focusQ && thread.querySelector(`[data-ask-q="${CSS.escape(chat.focusQ)}"]`);
+    if (q) { chat.focusQ = ''; q.scrollIntoView({block: 'nearest'}); if (!askPhone()) q.querySelector('input, button, a')?.focus(); }
   };
   chat.draw = draw;
+  // What turning Tico Support on shares: the chat's turns, Ben's and the Assistant's, scrubbed (ask-rules askShareText).
+  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.from_actor === myActor()))
+    .map(m => ({me: !isReply(m), text: plainActors(m.body)})), info?.name || 'Assistant');
   // The whole chat again, with the Confirm cards waiting in other chats.
   const snapshot = async () => {
     if (!info?.room_id || !current()) return;
@@ -241,9 +505,10 @@ async function askLoad(chat) {
     const P = chat.composer;
     if (!text || !P || P.sending) return;
     P.sending = true; pillButtons(P); fail('');
-    const ticket = chat.only && askTicket();
-    if (ticket) {
-      try { await window.supportReply(ticket.id, text); if (current()) { pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw(); } }
+    // Tico Support in the chat: the box writes to its request.
+    const to = askSendTo(askSupport());
+    if (to.to === 'support') {
+      try { await window.supportReply(to.id, text); if (current()) { pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw(); } }
       catch (e) { fail('Not sent. ' + e.message); }
       finally { P.sending = false; if (current()) pillButtons(P); }
       return;
@@ -268,7 +533,7 @@ async function askLoad(chat) {
   thread.setAttribute('aria-label', info.name + ' conversation');
   if (!info.available) {
     // Support stays a tap away in the + even then.
-    if (!info.can_turn_on && !info.strategy_bot) { thread.innerHTML = `<p class="muted">${esc(info.name)} is off. Ask the team owner to turn it on.</p>`; return; }
+    if (!info.can_turn_on) { thread.innerHTML = `<p class="muted">${esc(info.name)} is off. Ask the team owner to turn it on.</p>`; return; }
     window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
     return;
   }
@@ -277,9 +542,27 @@ async function askLoad(chat) {
                             send: (P, text) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
   el.querySelector('.ask-form').replaceChildren(chat.composer.el);
+  chat.live = true;
+  askPeople();
+  askFillDraft(chat);
   draw();
   watch();
   if (chat.open && !askPhone()) pq(chat.composer, '.p-text').focus();
+}
+// Lines new since the thread last drew come in: the person's rise, support's pop, a who-joined line rises (after the
+// chip lands, `delay`). Tico's own turns arrive by the dot and the streaming words instead. Transform and opacity only.
+function askRowsIn(thread, seen, animate, delay = 0) {
+  const rows = thread.querySelectorAll(':scope > [data-ask-row], :scope > .conv-run.from-me[data-message]');
+  for (const row of rows) {
+    const key = row.dataset.askRow || 'm:' + row.dataset.message;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!animate || ldotCalm() || typeof row.animate !== 'function') continue;
+    const pop = row.matches('.ask-sup.them');
+    row.animate(pop ? [{transform: 'translateY(6px) scale(.92)', opacity: 0}, {transform: 'scale(1.02)', opacity: 1, offset: .7}, {transform: 'none', opacity: 1}]
+      : [{transform: 'translateY(8px)', opacity: 0}, {transform: 'none', opacity: 1}],
+      {duration: pop ? 320 : 260, delay: row.matches('.ask-sys') ? delay : 0, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
+  }
 }
 $('#ask-fab')?.addEventListener('click', () => askToggle());
 $('#mobile-ask')?.addEventListener('click', () => askToggle());
@@ -309,7 +592,10 @@ document.addEventListener('click', ev => {
   ev.preventDefault();
   if (a.getAttribute('href').includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
-document.addEventListener('tico:support', () => { askMembers(); ASK?.draw?.(); });
-liveOn('needs-list', () => ASK?.draw?.());
+document.addEventListener('tico:support', () => { askPeople(); ASK?.draw?.(); });
+// Typing anywhere holds a peek back; it may come once the box is left.
+document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
+liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 addEventListener('resize', () => askSync());
+setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);

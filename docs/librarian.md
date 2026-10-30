@@ -222,7 +222,9 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   work it out again and scale the range by the same ratio; the stored row is not rewritten. If that puts the spend below
   zero or past the cap, the estimate reads with no spend and an `error`, and the total leaves it out. The owner changing a
   parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
-  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`.
+  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`. It also carries
+  `self` (`company/self` operates in it, **Us**) and `next` (the segment the team means to enter, **Next**), which the
+  Strategy page sets ([Strategy](strategy.md#the-page)).
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

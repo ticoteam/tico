@@ -19,7 +19,12 @@ use crate::state::State;
 use crate::util::{log, mark, text_of};
 use crate::wire::{decode, ClaimAnswer, EventsAnswer, HeartbeatAnswer};
 
+/// The protocol and source version: what the shim matches against runner/version.py and what Health checks (a
+/// semver). Not the release; see RUNNER_RELEASE.
 pub const RUNNER_VERSION: &str = "0.5.4";
+/// The release this binary was built for: build.rs stamps TICO_VERSION ("dev" for a source build). Used where the
+/// runner reports what it is: the startup log, `--release`, and panic reports.
+pub const RUNNER_RELEASE: &str = env!("TICO_RUNNER_RELEASE");
 const CLAIM_EVERY: f64 = 0.25;
 const CLAIM_IDLE_MAX: f64 = 2.0;
 const CLAIM_HINT_S: f64 = 150.0;
@@ -88,6 +93,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// Persistent Antigravity processes kept between a conversation's turns.
     pub warm: crate::warm::WarmSessions,
+    /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
+    pub pi: Arc<crate::hosts::pi::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -167,6 +174,7 @@ impl Runner {
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
+            pi: Arc::new(crate::hosts::pi::Pool::new(state.directory.join("pi"), capacity.max(8))),
             state,
             perbot: crate::perbot::PerBot::default(),
         }
@@ -819,6 +827,7 @@ impl Runner {
             m.abort();
         }
         self.warm.prune(true).await;
+        self.pi.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
@@ -860,6 +869,7 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.warm.prune(false).await;
+        self.pi.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!("Tico runner: heartbeat failed ({}); will retry", describe(&e)));

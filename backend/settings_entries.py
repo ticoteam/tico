@@ -26,7 +26,7 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
-INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > Strategy bot"
+INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -222,9 +222,9 @@ ENTRIES = TEAM_RULES + [
           "workflows starts CI, which uses the repository's secrets"),
     # Strategy bot
     S("strategy.checks", "Strategy bot regular checks", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/checks", "on", card=_card("strategy-bot")),
+      "strategy-bot/checks", "on", card=_card("system", "set-strategy-bot-card")),
     S("strategy.level", "How much the Strategy bot does", STRATEGY, "owner", "confirm", "POST",
-      "strategy-bot/level", "level", "int", _card("strategy-bot")),
+      "strategy-bot/level", "level", "int", _card("system", "set-strategy-bot-card")),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
       card=_card("repos", "set-repos")),

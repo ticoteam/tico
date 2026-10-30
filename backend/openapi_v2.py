@@ -164,6 +164,8 @@ STABLE = [
     ("/api/v2/bots/{bot}", "get", "Bots", "getBot",
      "One bot: its profile for anyone who can see it; status, computer, queue and goals too for anyone who can read it",
      "BotDetail"),
+    ("/api/v2/bots/{bot}/pause-state", "get", "Bots", "getBotPauseState",
+     "Pause state and recorded person/time, readable open-task count and company billing pause; no billing amounts", None),
     ("/api/v2/bots/{bot}/access", "get", "Bots", "getBotAccess",
      "Who may see, read and write to a bot (its managers only; docs/permissions.md)", "BotAccessView"),
     ("/api/v2/bots/{bot}/access", "put", "Bots", "setBotAccess",
@@ -256,7 +258,7 @@ STABLE = [
      "follow_up), or take the relation off with remove", "TaskResult"),
     ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
      "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
-     "as themselves; a task carrying work is refused (409 has_work)", None),
+     "as themselves, whatever bots did on it: that work stays in place, hidden until a restore", None),
     ("/api/v2/tasks/{tid}/model", "post", "Tasks", "setTaskModel",
      "Set the model this task's runs use, with its effort and harness (backend/task_run_models.py): an absent `model` "
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
@@ -1069,16 +1071,13 @@ SCHEMAS = {
                       "actions": {"type": "object", "description": "{action id: proposal} for every card in `messages` "
                                   "(a message whose refs.action names one is a Confirm / Cancel card)"},
                       "pending": "a",
-                      "strategy_bot": {"type": "boolean", "description": "True for the owner, "
-                                                                         "who talks to the Strategy Bot "
-                                       "in place of an Assistant: `bot` is the Strategy Bot and `name` its name"},
                       "earlier": {"oneOf": [obj({"room_id": "s", "bot": "s", "name": "s"},
                                                 required=["room_id", "bot", "name"]), {"type": "null"}],
-                                  "description": "The owner's own earlier Assistant chats, read-only (GET "
+                                  "description": "The owner's earlier chat with the Strategy Bot, read-only (GET "
                                   "/api/v2/conversations/{room_id}/messages); null for everyone else, or none"}},
                      required=["available", "state", "bot", "name", "can_turn_on", "room_id", "messages",
-                               "has_more", "next_before", "execution", "actions", "pending", "strategy_bot",
-                               "earlier"], actors=ACTORS),
+                               "has_more", "next_before", "execution", "actions", "pending", "earlier"],
+                     actors=ACTORS),
     "Librarian": obj({"available": "b", "state": "s", "bot": "s", "name": "s", "can_turn_on": "b"},
                      required=["available", "state", "bot", "name", "can_turn_on"]),
     "DocsAsked": obj({"conversation_id": "s", "message_id": "s",

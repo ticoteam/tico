@@ -1,8 +1,8 @@
-// Settings > Strategy Bot (ui/app/settings-strategy-bot.js): the owner sees the regular checks, on, and the three levels with
+// Settings > System > Strategy Bot (ui/app/settings-strategy-bot.js), a helper's card beside the Task Manager's: the owner sees the regular checks, on, and the three levels with
 // their sentences, Suggests actions current (the level every install starts at); picking another shows its sentence
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
-// once. Only the owner has the tab: an admin or a member has none. The tab and headings use the bot's name. Fixtures
-// only.
+// once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and
+// headings use the bot's name. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,7 +10,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const LEVELS = [
-  {level: 1, name: 'Passive', sentence: 'It keeps the regular checks running and otherwise acts only when you talk to it.', ready: true},
+  {level: 1, name: 'Passive', sentence: 'It keeps the regular checks running and otherwise acts only when asked through your Assistant.', ready: true},
   {level: 2, name: 'Suggests actions', sentence: 'It also asks goal owners and suggests how your bots could recover a goal.', ready: true},
   {level: 3, name: 'Acts on its own', sentence: 'It also decides on its own: it makes, moves up, reassigns and closes bot tasks, each with an Undo.', ready: true},
 ];
@@ -79,17 +79,18 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     {
-      // An old settings address (#/settings/ceo, in links and bookmarks) opens the tab at its new address.
+      // Old settings addresses (#/settings/ceo, #/settings/strategy-bot, in links and bookmarks) open its card in System.
       const {page, errors} = await open(browser);
       await page.evaluate(() => { location.hash = '#/settings/ceo'; });
       await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
-      assert.equal(await page.evaluate(() => location.hash), '#/settings/strategy-bot');
+      assert.match(await page.evaluate(() => location.hash), /^#\/settings\/system/);
+      assert.equal(await page.locator('[data-settings-tab="strategy-bot"]').count(), 0, 'no tab of its own');
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
       const {page, errors, posted} = await open(browser);
-      await page.locator('[data-settings-tab="strategy-bot"]').click();
+      await page.evaluate(() => { location.hash = '#/settings/system'; });   // System sits under More
       const levels = page.locator('#set-strategy-bot [data-strategy-level]');
       await levels.first().waitFor();
       assert.equal(await levels.count(), 3);
@@ -116,7 +117,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
       await levels.nth(0).click();
       const confirm = page.locator('#set-strategy-bot .strategy-confirm');
       await confirm.waitFor();
-      assert.match(await confirm.innerText(), /Change to Passive\?[\s\S]*acts only when you talk to it/);
+      assert.match(await confirm.innerText(), /Change to Passive\?[\s\S]*acts only when asked through your Assistant/);
       await confirm.locator('[data-strategy-cancel]').click();
       await confirm.waitFor({state: 'detached'});
       assert.deepEqual(posted, []);
@@ -136,11 +137,11 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
       await page.close();
     }
     {
-      // Named by the owner: the tab and the heading use that name.
+      // Named by the owner: the card and the heading use that name.
       const {page, errors} = await open(browser, {name: 'Atlas'});
-      assert.equal((await page.locator('[data-settings-tab="strategy-bot"]').innerText()).trim(), 'Atlas');
-      await page.locator('[data-settings-tab="strategy-bot"]').click();
+      await page.evaluate(() => { location.hash = '#/settings/system'; });   // System sits under More
       await page.locator('#set-strategy-bot [data-strategy-level]').first().waitFor();
+      assert.equal((await page.locator('#set-strategy-bot-card h2').innerText()).trim(), 'Atlas');
       assert.match(await page.locator('#set-strategy-bot').innerText(), /How much your Atlas does/);
       assert.deepEqual(errors, []);
       await page.close();
@@ -162,7 +163,10 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot'} = {}) {
     }
     for (const opts of [{role: 'admin'}, {role: 'viewer'}]) {
       const {page, errors} = await open(browser, opts);
-      assert.equal(await page.locator('[data-settings-tab="strategy-bot"]').count(), 0, JSON.stringify(opts));
+      // Even its old address shows no card for them (a member may not see System at all).
+      await page.evaluate(() => { location.hash = '#/settings/strategy-bot'; });
+      await page.waitForFunction(() => !location.hash.endsWith('/strategy-bot'));
+      assert.equal(await page.locator('#set-strategy-bot-card, [data-settings-tab="strategy-bot"]').count(), 0, JSON.stringify(opts));
       assert.deepEqual(errors, []);
       await page.close();
     }

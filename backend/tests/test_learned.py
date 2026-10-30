@@ -1,5 +1,5 @@
 """What a person's chat bot has learned, in two layers (backend/learned.py; spec: Strategy Bot v3, sections 10.7 and
-10.9 test 29): the company layer only the owner reads and changes, and only the Strategy Bot uses in the owner's chat; a
+10.9 test 29): the company layer only the owner reads and changes, and only their Assistant uses in the owner's chat; a
 personal layer per person that nobody else reads, the owner and admins included. Teaching happens in the person's own
 chat, and each turn there is handed both layers as they are when it starts, so an entry deleted now is gone from the
 next turn."""
@@ -131,16 +131,16 @@ def test_an_assistant_learns_in_its_persons_chat_and_reads_it_fresh_each_turn(ap
     assert bens["learned"] == {"personal": []}
 
 
-def test_the_strategy_bot_learns_both_layers_in_the_owners_chat_and_nowhere_else(api):
+def test_the_owners_assistant_learns_both_layers_in_the_owners_chat_and_nowhere_else(api):
     strategy_bot(api)
     post(api, "company", {"vision": "Every team runs on bots"})
     post(api, "goals", {"owner": "company", "title": "Ship the desktop app"})
     learn(api, "Short summaries, numbers first")
     r = runner(api)
-    for bot in ("ops", "goal-manager"):
+    for bot in ("ops", "goal-manager", "coo"):
         assign(api, r, bot)
-    ready(api, r, ["ops", "goal-manager"])
-    turn = claim_turn(api, r, "goal-manager", "ana-test", "Launches matter more than hiring news")
+    ready(api, r, ["ops", "goal-manager", "coo"])
+    turn = claim_turn(api, r, "coo", "ana-test", "Launches matter more than hiring news")
     assert turn["learned"]["personal"] == ["Short summaries, numbers first"]
     assert (turn["learned"]["company"]["vision"], turn["learned"]["company"]["priorities"],
             turn["learned"]["company"]["taught"]) == ("Every team runs on bots", ["Ship the desktop app"], [])
@@ -149,12 +149,12 @@ def test_the_strategy_bot_learns_both_layers_in_the_owners_chat_and_nowhere_else
     assert (entry["layer"], entry["taught_in_chat"]) == ("company", True)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT created_by, via FROM learned_entries WHERE id=?", (entry["id"],)).fetchone()
-    assert (row["created_by"], row["via"]) == ("human:ana", "bot:goal-manager")
+    assert (row["created_by"], row["via"]) == ("human:ana", "bot:coo")
     finish(api, r, turn)
-    again = claim_turn(api, r, "goal-manager", "ana-test", "What's the top update today?")
+    again = claim_turn(api, r, "coo", "ana-test", "What's the top update today?")
     assert again["learned"]["company"]["taught"] == ["Launches matter more than hiring news"]
     finish(api, r, again)
-    # Its goals session (a bot's message) is handed neither layer, and the bot on its own reads none.
+    # The Strategy Bot's goals session (a bot's message) is handed neither layer, and it reads none on its own.
     post(api, "chat/ops", {"text": "Check the launch goal"})
     ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
     post(api, "messages", {"to": "goal-manager", "text": "The launch goal slipped", "needs_action": True},
@@ -180,17 +180,17 @@ def test_an_owner_who_hands_ownership_on_keeps_their_layer_and_the_company_layer
     learn(api, "Hiring matters most", "company", ana, expected=403)
 
 
-def test_the_owners_assistant_never_reaches_the_company_layer(api):
-    # A turn of her Assistant from before the Strategy Bot came: it acts as the owner, but only the Strategy Bot uses
-    # the company layer, so it is handed none and may not add to it; her own layer is hers wherever she talks.
+def test_without_the_strategy_bot_the_owners_assistant_has_no_company_layer(api):
+    # The company layer comes with the Strategy Bot: before it, the owner's Assistant turn is handed none and may not
+    # add to it; her own layer is hers either way.
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
     old = claim_turn(api, r, "coo", "ana-test", "Launches matter more than hiring news")
-    strategy_bot(api)
     assert old["learned"] == {"personal": []}
     assert get(api, "assistant/learned", old["token"])["company"] is None
     learn(api, "Launches matter more than hiring news", "company", old["token"], expected=403)
     learn(api, "Launches matter more than hiring news", token=old["token"])
+    strategy_bot(api)
     assert [e["text"] for e in get(api, "assistant/learned")["personal"]] == ["Launches matter more than hiring news"]
     assert get(api, "assistant/learned")["company"]["entries"] == []

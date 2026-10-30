@@ -382,6 +382,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
     hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
+    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+                                           make an image (storyboard, photo, character or graphic) and save it;
+                                           PATH.json beside it says how it was made
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -880,6 +883,19 @@ def parser():
     s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
     s.add_argument("id")
     s.set_defaults(fn="file delete")
+    s = files.add_parser("approved", help="exit 0 when a person approved this exact version on a review question, "
+                                          "1 when not, 2 on bad input")
+    s.add_argument("target", help="a path in this checkout (its bytes now), or FILE[@N] (the current version without @N)")
+    s.add_argument("--by", help="whose verdicts count: human (default), any, or bot:SLUG")
+    s.set_defaults(fn="file approved")
+    s = files.add_parser("review", help="approve or ask for changes on another bot's file version, on a task you read")
+    s.add_argument("target", help="FILE[@N] (the current version without @N), or a path in this checkout (its bytes now)")
+    verdict = s.add_mutually_exclusive_group(required=True)
+    verdict.add_argument("--approve", dest="verdict", action="store_const", const="approve")
+    verdict.add_argument("--changes", dest="verdict", action="store_const", const="changes")
+    s.add_argument("--task", required=True, help="the task the review is for")
+    s.add_argument("--note", help="what to change, or why it is approved")
+    s.set_defaults(fn="file review")
     page = sub.add_parser("page", help="pages: HTML a bot keeps up to date, with Tico's updated line").add_subparsers(dest="sub")
     s = page.add_parser("publish", help="publish an .html file from this checkout; again adds a version")
     s.add_argument("path")
@@ -1168,6 +1184,14 @@ def parser():
                    help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
                         "ahead on its own: a send, spending or a delete waits for an answer")
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
+    s.add_argument("--review", action="append", metavar="PATH|FILE[@N]",
+                   help="a file version for them to review, shown on the card: a path here (published first, as "
+                        "hub file publish does) or a file id; repeat. Without --option: Approve / Request changes")
+    s.add_argument("--pick", action="store_true", default=None,
+                   help="each --review file is its own option (2 to 5), plus Request changes")
+    s.add_argument("--spend", metavar="LABEL=AMOUNT:WHAT",
+                   help="picking LABEL also approves spending AMOUNT on WHAT: a spend approval you consume once")
+    s.add_argument("--spend-account", dest="spend_account", help="the account --spend comes from (default gateway)")
     s.set_defaults(fn="task question")
     s = task.add_parser("update", description="Move your task; to reopen, set doing or open; the requester closes. "
                         "Putting it back to open requires a note. Automatic starts wait 60 minutes unless it gets "
@@ -2505,6 +2529,17 @@ def parser():
     s.add_argument("url")
     s.add_argument("--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)")
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
+    s.add_argument("prompt")
+    s.add_argument("--category", required=True, choices=("storyboard", "photo", "character", "graphic"),
+                   help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)")
+    s.add_argument("--ref", dest="refs", action="append", default=[], metavar="FILE",
+                   help="a reference image (PNG, JPEG or WebP, 2 MiB at most); up to 4")
+    s.add_argument("--size", help="WxH, for example 1920x1080 (the nearest aspect ratio is asked for)")
+    s.add_argument("--count", type=int, help="how many images, 1 to 4 (1 by default)")
+    s.add_argument("--out", required=True, metavar="PATH",
+                   help="the file for the first image; more are saved as name-2.png, name-3.png...")
+    s.set_defaults(fn="gateway image")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(dest="sub")
     s = decision.add_parser("ask", help="ask the decision model typed questions about a JSON state (questions/README.md)")
     s.add_argument("--set", dest="question_set", help="a question set: questions/<name>.json in the Tico checkout")

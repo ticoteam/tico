@@ -6,7 +6,7 @@
 .bothead .botid{min-width:0;flex:1}
 .bothead .meta{display:inline-block;vertical-align:middle;margin-left:8px;font-size:var(--t-base)}
 .bothead .actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
-.role{color:var(--muted);font-size:var(--t-base);line-height:1.5;max-width:72ch;white-space:pre-wrap;margin-top:6px}
+.role{color:var(--muted);font-size:var(--t-base);line-height:var(--lh);max-width:72ch;white-space:pre-wrap;margin-top:6px}
 .bot-request-head{font-size:var(--t-md);margin:14px 2px 6px}
 .bot-setup{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;margin:0;font-size:var(--t-base);align-items:center}
 .bot-setup dt{color:var(--muted)}.bot-setup dd{margin:0;min-width:0;overflow-wrap:anywhere}.bot-setup .pchip{margin-left:0;margin-right:4px}
@@ -22,7 +22,7 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
   .bothead{gap:10px;margin-bottom:18px}
   .bothead .actions{display:none}       /* the same two links live in the More tab */
   .bothead .av{width:32px!important;height:32px!important;font-size:var(--t-sm)!important}
-  .bothead h1{font-size:var(--t-lg);line-height:1.2}
+  .bothead h1{font-size:var(--t-lg);line-height:var(--lh-tight)}
   .bothead .meta{font-size:var(--t-sm);margin-left:6px}
   .role{font-size:var(--t-base);margin-top:4px;cursor:pointer}
   .role:not(.open){display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal}
@@ -43,12 +43,12 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
 .bot-back-arrow{display:none}
 .bot-ident{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;order:1}
 .bot-ident .botid{min-width:0;flex:1}
-.bot-ident h1{font-size:var(--t-lg);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bot-ident h1{font-size:var(--t-lg);line-height:var(--lh-tight);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bot-ident .meta{margin-top:2px;min-width:0}.bot-ident .meta:empty{display:none}
 .bot-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 var(--s3);padding:8px 14px;border:1px solid color-mix(in srgb,var(--fail) 35%,var(--line));border-radius:var(--radius);background:var(--fail-bg);color:var(--fail);font-weight:600}
 .bot-limit a{color:inherit;text-decoration:underline}
 .bot-alert{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:1px 7px;border-radius:9px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bot-stop{display:inline-block;border:0;cursor:pointer;white-space:normal;text-align:left;line-height:1.35;font-family:inherit}
+.bot-stop{display:inline-block;border:0;cursor:pointer;white-space:normal;text-align:left;line-height:var(--lh);font-family:inherit}
 .bot-stop.soft{background:var(--surface2);color:var(--muted);font-weight:500}
 .bot-alert-resume{margin-left:8px;padding:1px 10px;font-size:var(--t-sm)}
 .bot-quarantine-text{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--line);background:var(--surface2);font-family:var(--mono);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
@@ -80,7 +80,7 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .rail-sec{padding:var(--s2) 0 10px;border-top:1px solid var(--line)}
 .rail-sec:first-child{border-top:0}
 .rail-h{display:flex;align-items:center;gap:6px;min-height:22px;margin:0 0 2px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.rail-h .cnt{font-weight:400;letter-spacing:0;font-variant-numeric:tabular-nums}
+.rail-h .cnt{font-weight:400;letter-spacing:var(--track-normal);font-variant-numeric:tabular-nums}
 .rail-head{display:flex;align-items:center;gap:6px;min-height:22px;margin:0 0 2px}
 .rail-head .rail-h{margin:0;min-height:0}
 .rail-head .spacer{flex:1}
@@ -97,18 +97,18 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:2px 0 6px;gap:2px}
 .bot-task-tabs::-webkit-scrollbar{height:4px}
 .bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
-.bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;padding:3px 8px;font-size:var(--t-sm)}
+.bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;padding:3px 7px;font-size:var(--t-sm)}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
-.rail-more:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.rail-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .bot-rail a{color:var(--accent-quiet)}
 .bot-rail a:hover{color:var(--accent)}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
 .rail-fold>summary{cursor:pointer;list-style:none;margin:0}
 .rail-fold>summary::-webkit-details-marker{display:none}
-.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
-.rail-fold[open]>summary::before{transform:rotate(90deg)}
+.rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent}
+.rail-fold[open]>summary::before{transform:var(--chev-open)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
 /* The sidebar's widgets (ui/app/bot-sidebar.js), in the bot's order. A hidden one is not drawn; a set height is the
@@ -137,7 +137,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .editing>.bot-w>.rail-sec{border-top:0}
 .editing .bot-w-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 0;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 .bot-w-bar .spacer{flex:1}
-.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
+.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label);font-weight:600}
 .bot-w:not([data-off]):has(>.rail-sec:not([hidden]))>.bot-w-bar>.bot-w-name{visibility:hidden}   /* its own heading says it, just below */
 .bot-w-grip{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:grab;touch-action:none}
 .bot-w-grip:hover,.bot-w-grip:focus-visible{color:var(--ink);background:var(--surface2)}
@@ -150,7 +150,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-w-size{flex:1;position:relative;height:12px;cursor:ns-resize;touch-action:none;border-radius:4px}
 .bot-w-size::after{content:"";position:absolute;left:calc(50% - 16px);width:32px;top:5px;height:2px;border-radius:1px;background:var(--muted);opacity:.5}
 .bot-w-size:hover::after,.bot-w-size:focus-visible::after{opacity:1}
-.bot-w-size:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bot-w-size:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 /* While Done saves, nothing in the draft moves (bot-sidebar.js botDrafting). */
 #pane-tasks[data-saving] :is(.bot-w-size,.bot-w-bar,.bot-task-tabs){pointer-events:none;opacity:.6}
 .bot-w-reset{flex:none;padding:0 6px;font-size:var(--t-sm)}
@@ -163,20 +163,20 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 #main.bot-split-layout .editing>.bot-w{margin-left:8px;margin-right:6px}
 #main.bot-split-layout .editing>.bot-w>.rail-sec{padding-left:6px;padding-right:6px}
 /* Updates: the latest one's text in small type; a long one folds behind "More". */
-.bot-latest .upd-body{margin:0;font-size:var(--t-sm);line-height:1.5;cursor:auto;max-height:9em;overflow:hidden}
+.bot-latest .upd-body{margin:0;font-size:var(--t-sm);line-height:var(--lh);cursor:auto;max-height:9em;overflow:hidden}
 .bot-latest .upd-body.open{max-height:none}
 .bot-latest .upd-body ul{padding-left:16px}.bot-latest .upd-body li{margin:1px 0}.bot-latest .upd-body p{margin:0 0 4px}
 .bot-latest .upd-body h1,.bot-latest .upd-body h2,.bot-latest .upd-body h3{font-size:var(--t-sm)}
 /* The bot's tasks: one flat list, the state in words, the title, and the avatar of whoever holds it;
    no lines between rows */
 #pane-tasks .trow{border-bottom:0}
-#pane-tasks .trow :is(summary,.trow-head){padding:4px;margin:0 -4px;min-height:28px;font-size:var(--t-base);line-height:18px}
+#pane-tasks .trow :is(summary,.trow-head){padding:4px;margin:0 -4px;min-height:28px;font-size:var(--t-base);line-height:var(--lh)}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head){grid-template-columns:minmax(0,1fr) auto auto auto;grid-template-areas:"ttl pr status who";gap:0 8px;align-items:center}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .pill,#pane-tasks .trow[data-task-version] :is(summary,.trow-head) .tnum,#pane-tasks .trow[data-task-version] :is(summary,.trow-head) .tags{display:none!important}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .task-status{grid-area:status;display:inline-block;max-width:80px}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .who-av{grid-area:who;display:inline-flex}
 #pane-tasks .trow :is(summary,.trow-head) .who-av .av{width:18px!important;height:18px!important;font-size:8px!important}
-#pane-tasks .trow[data-task-version] :is(summary,.trow-head) .ttl{grid-area:ttl;min-width:0;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:18px}
+#pane-tasks .trow[data-task-version] :is(summary,.trow-head) .ttl{grid-area:ttl;min-width:0;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:var(--lh)}
 #pane-tasks .trow .tbody{padding:2px 0 10px 24px;font-size:var(--t-sm)}
 #main.bot-split-layout #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .ttl{display:block;white-space:nowrap;text-overflow:ellipsis}
 /* the top bar: the bot's name, its runtime mark and the tool stack on one line */
@@ -195,7 +195,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   body.mobile-composer-focus #main.bot-chat-layout .bot-top{display:none}
 }
 @media (max-width:760px){
-  .bot-back-arrow{display:inline-flex;align-items:center;justify-content:center;order:0;flex:none;width:30px;height:32px;margin-left:-6px;border:0;background:none;color:var(--ink);font-size:28px;line-height:1;cursor:pointer}
+  .bot-back-arrow{display:inline-flex;align-items:center;justify-content:center;order:0;flex:none;width:30px;height:32px;margin-left:-6px;border:0;background:none;color:var(--ink);font-size:28px;line-height:var(--lh-none);cursor:pointer}
   .bot-switch button{padding:5px 8px}
 }
 .bot-switch .bt-icon{display:none}
@@ -204,7 +204,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   #bot-tool-strip{display:none}               /* no room beside the name; the Tools card under More lists them */
   .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
   .bot-top .bot-switch{margin-left:auto;border:0;background:none;padding:0;gap:0}
-  .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:38px;height:36px;padding:0;border-radius:8px}
+  .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border-radius:8px}
   .bot-switch .bt-label{display:none}
   .bot-switch .bt-icon{display:inline;font-size:20px}
   .bot-switch button.cur{background:var(--surface2);color:var(--accent)}
@@ -224,10 +224,10 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-more-top:empty,.more-cut{display:none!important}
 .more-all{display:block;margin:6px 0 0;padding:2px 0;border:0;background:none;font:inherit;font-size:var(--t-sm);color:var(--muted);cursor:pointer}
 .more-all:hover{color:var(--ink)}
-.more-all:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.more-all:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 /* Status history: one tight line a change, newest first */
 .sh-list{list-style:none;margin:0;padding:0}
-.sh-row{display:flex;align-items:center;gap:8px;min-height:28px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:18px}
+.sh-row{display:flex;align-items:center;gap:8px;min-height:28px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh)}
 .sh-row:first-child{border-top:0}
 .sh-row .pill{flex:none;margin:0}
 .sh-focus{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -248,7 +248,6 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-more-top>#bot-branches{flex:1 1 100%}
   :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card{padding:12px 14px;margin-bottom:10px;border-radius:12px}
   :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header{margin-bottom:6px;align-items:center}
-  :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header h2{font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
   :is(#pane-more,#pane-docs,#pane-history,#pane-settings) section.card>header :is(.ghost,.linkish){margin-left:auto;font-size:var(--t-base);padding:3px 8px}
   #bot-goals-card .bot-goal-row{padding:6px 0}
   /* tables as one line a row, no column heads */
@@ -275,12 +274,12 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-editor-inline .bot-editor-body{padding:12px 0}
 .bot-editor-inline .bot-editor-foot{position:static;padding:12px 0 0}
 .bot-editor-inline .sb-rows{background:none}
-.bot-role summary{cursor:pointer;line-height:1.5}
+.bot-role summary{cursor:pointer;line-height:var(--lh)}
 .bot-role[open] summary{font-size:0}
 .bot-role-less{display:none}
 .bot-role[open] .bot-role-more{display:none}
 .bot-role[open] .bot-role-less{display:inline;font-size:var(--t-sm)}
-.bot-role>div{white-space:pre-wrap;line-height:1.5;margin-top:4px}
+.bot-role>div{white-space:pre-wrap;line-height:var(--lh);margin-top:4px}
 .bot-instructions-form{display:grid;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .bot-instructions-form textarea{width:100%;min-height:140px;resize:vertical}
 .bot-instructions-form p{margin:0;font-size:var(--t-sm)}
@@ -299,3 +298,15 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-settings-panel :is(.owner-picker-body,.access-body){padding:14px}
 
 .bot-settings-panel .access-body{max-height:none;overflow:visible}
+
+/* Always above the bot name and tabs; a personal pause and company pause stay separate. */
+.bot-control-strip{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:10px 16px;margin-bottom:12px;border:1px solid var(--line);border-radius:8px}
+.bot-control-state{display:flex;align-items:center;gap:9px}
+.bot-running-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#24984b}
+.bot-control-strip.is-paused,.bot-company-pause{background:#fff0c2;color:#563800;border:1px solid #b87d15;padding:22px;margin-bottom:12px;border-radius:8px}
+.bot-control-strip.is-paused strong{font-size:1.2rem}
+.bot-control-strip p,.bot-company-pause p{margin:8px 0 0}
+.bot-control-strip.is-paused a,.bot-company-pause a{color:inherit;text-decoration:underline}
+.bot-control-strip.is-paused>button{min-height:48px;min-width:110px}
+.bot-control-copy{min-width:0;overflow-wrap:anywhere}
+@media(max-width:600px){.bot-control-strip{align-items:stretch;flex-direction:column;gap:12px}.bot-control-strip>button{width:100%;min-height:44px}}

@@ -29,7 +29,7 @@
 .support-item-body{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);color:var(--muted)}
 .support-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
 .support-item-meta{display:flex;align-items:center;gap:8px;font-size:var(--t-xs);color:var(--muted)}
-.support-badge{display:inline-block;font-size:var(--t-2xs);font-weight:600;padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:.01em}
+.support-badge{display:inline-block;font-size:var(--t-2xs);font-weight:600;padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:var(--track-normal)}
 .support-badge.s-open{background:var(--run-bg);color:var(--run)}.support-badge.s-answered{background:var(--ok-bg);color:var(--ok)}
 /* The chat: the request's title and status in a thin line, the bubbles, then the box. */
 .support-view{display:flex;flex-direction:column;min-height:0;flex:1;position:relative}
@@ -45,9 +45,9 @@
 .support-body{white-space:pre-wrap}
 .support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}.support-msg.you .support-who{text-align:right}
 .support-delivered{align-self:flex-end;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
-.support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:1.5}
+.support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
 .support-empty p{margin:0 0 6px}
-.support-sent{font-size:var(--t-sm);color:var(--muted);line-height:1.5;overflow-wrap:anywhere;margin:6px 0}
+.support-sent{font-size:var(--t-sm);color:var(--muted);line-height:var(--lh);overflow-wrap:anywhere;margin:6px 0}
 .support-closed{padding:0 16px}
 .support-write{display:grid;gap:6px;flex:none;padding:10px 12px 12px;border-top:1px solid var(--line)}
 .support-input{display:flex;align-items:flex-end;gap:8px}
@@ -67,7 +67,7 @@
 .support-access{display:grid;gap:6px;flex:none;padding:8px 16px;border-top:1px solid var(--line);font-size:var(--t-sm)}.support-access p{margin:0}.support-access>button{justify-self:start}
 .support-access-log ol{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto;overflow-wrap:anywhere;color:var(--muted)}
 .support-modal{width:min(760px,calc(100vw - 32px));max-height:90vh}.support-modal .tmodal-body{display:grid;gap:10px;overflow:auto}
-.support-modal p{margin:0;font-size:var(--t-base)}.support-json{width:100%;min-height:280px;box-sizing:border-box;font:var(--t-sm)/1.5 var(--mono);white-space:pre;resize:vertical}
+.support-modal p{margin:0;font-size:var(--t-base)}.support-json{width:100%;min-height:280px;box-sizing:border-box;font:var(--t-sm)/var(--lh) var(--mono);white-space:pre;resize:vertical}
 .support-sections{display:flex;gap:8px 16px;flex-wrap:wrap}.support-sections label{display:flex;align-items:center;gap:5px;font-size:var(--t-sm)}
 /* A phone: a bottom sheet that fills most of the screen, swiped down (from its top) to close. Its bottom sits on the
    bottom of what is visible (support.js fit() sets --support-visible and --support-bottom), so with the keyboard up it
@@ -85,7 +85,7 @@
 }
 /* Report this (ui/support.js): a link beside what failed. */
 .report-this{font-size:var(--t-sm)}
-button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:1;cursor:pointer}button.report-this-icon:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}button.report-this-icon:hover{color:var(--accent)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+button.report-this-icon{all:unset;display:inline-flex;align-items:center;padding:0 2px;color:var(--muted);line-height:var(--lh-none);cursor:pointer}button.report-this-icon:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}button.report-this-icon:hover{color:var(--accent)}.report-this-icon .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
 .truns-report{margin:4px 0 0}
 .support-report{margin:6px 0 0;font-size:var(--t-sm);color:var(--muted)}
 .support-report strong{color:var(--ink)}

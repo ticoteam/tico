@@ -5,19 +5,22 @@
 <title>Tico</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<meta name="theme-color" content="#121417">
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=33c472c80ec5" as="font" type="font/woff2" crossorigin>
+<meta name="theme-color" content="#101513">
+<link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 <link rel="icon" type="image/svg+xml" href="/assets/tico/tico-mark.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
-<!-- Icons: ui/vendor/fonts/material-symbols-outlined.woff2 is the Material Symbols Outlined subset (Apache-2.0, see ui/vendor/fonts/LICENSE-material-symbols.txt).
+<!-- Text: ui/vendor/fonts/inter-variable.woff2 is an Inter subset (OFL-1.1, see ui/vendor/fonts/LICENSE-inter.txt), built by scripts/build-text-font.py.
+     Icons: ui/vendor/fonts/material-symbols-outlined.woff2 is the Material Symbols Outlined subset (Apache-2.0, see ui/vendor/fonts/LICENSE-material-symbols.txt).
      Add an icon anywhere in the UI, then run scripts/build-icon-font.py: it rewrites ui/vendor/fonts/icons.txt and the font. -->
 <!-- bundle:css:start -->
 <link rel="stylesheet" href="/tico/ui/styles/tokens.css">
 <link rel="stylesheet" href="/tico/ui/styles/base.css">
+<link rel="stylesheet" href="/tico/ui/styles/tree-lines.css">
 <link rel="stylesheet" href="/tico/ui/styles/sidebar.css">
 <link rel="stylesheet" href="/tico/ui/styles/team-add.css">
 <link rel="stylesheet" href="/tico/ui/styles/avatars.css">
@@ -78,7 +81,9 @@
 <link rel="stylesheet" href="/tico/ui/styles/strategy-budget.css">
 <link rel="stylesheet" href="/tico/ui/styles/redesign-library.css">
 <link rel="stylesheet" href="/tico/ui/styles/pages.css">
+<link rel="stylesheet" href="/tico/ui/styles/liquid-dot.css">
 <link rel="stylesheet" href="/tico/ui/styles/ask.css">
+<link rel="stylesheet" href="/tico/ui/styles/motion.css">
 <!-- bundle:css:end -->
 </head>
 <body>
@@ -96,8 +101,8 @@
   <header class="side-head">
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
-  <!-- The rail is Tasks, the Assistant, BotOps, Goals, Docs, Strategy (with Market) and Meetings, then the team and
-       the message bots. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
+  <!-- The rail is Overview, Updates, Tasks, Docs, Strategy (with Market) and Meetings, then the team and the message
+       bots; the Assistant is Ask, and its helpers have no row. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
        The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
@@ -105,7 +110,6 @@
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome" hidden><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
-    <!-- The Librarian's settings are on the Docs page (ui/docs-page.js), not beside Docs here. -->
     <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
     <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
@@ -156,7 +160,6 @@
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
         </nav>
       </div>
-      <button class="help-link" id="connect-agent" type="button" hidden aria-label="Connect an external agent" title="Connect an external agent: Grok, Dots, Muse or any MCP agent"><span class="nav-icon" aria-hidden="true">power</span></button>
     </div>
   </footer>
 </aside>
@@ -168,27 +171,28 @@
   <div id="app-nudge" hidden><span class="app-nudge-text"></span><a class="app-nudge-get" href="/download/mac">Download</a><button type="button" class="app-nudge-close" aria-label="Not now">✕</button></div>
 </div>
 <main id="main"></main>
-<button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Assistant" hidden><span class="nav-icon" aria-hidden="true">auto_awesome</span></button>
+<button class="ask-fab" id="ask-fab" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word hidden></span></button>
+<div class="ask-peek" id="ask-peek" hidden><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span><span class="ask-peek-act" data-peek-act></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" hidden>
-  <header class="ask-head"><span class="nav-icon ask-mark" aria-hidden="true">auto_awesome</span><h2 id="ask-title">Assistant</h2>
+  <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Assistant</h2>
     <span class="ask-sees" data-ask-sees hidden><span data-ask-sees-name></span></span>
+    <span class="ask-people" data-ask-people></span>
     <button type="button" class="ask-ib" id="ask-add" aria-haspopup="menu" aria-expanded="false" aria-label="Add to this chat" title="Add to this chat">+</button>
     <a class="ask-full" href="#/assistant">Show chat</a>
     <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
   <div class="ask-menu" data-ask-menu role="menu" hidden>
     <button type="button" role="menuitem" id="ask-support">Tico support<span>Free</span></button>
     <button type="button" role="menuitem" id="ask-manage">Tico team<span>Full management</span></button></div>
-  <div class="ask-members" data-ask-members hidden><span class="muted">In this chat</span>
-    <button type="button" class="ask-member" data-ask-ticket aria-pressed="false">Tico support</button>
-    <button type="button" class="ask-ib ask-drop" data-ask-drop aria-label="Remove Tico support from this chat">✕</button></div>
   <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
+  <div class="ask-loop" data-ask-loop hidden><span class="ask-loop-label" id="ask-loop-label"><span class="nav-icon" aria-hidden="true">headset_mic</span>Loop in Tico Support</span>
+    <button type="button" class="ask-switch" data-ask-switch role="switch" aria-checked="false" aria-labelledby="ask-loop-label"></button></div>
   <div class="ask-form"></div>
   <p class="err" data-ask-error role="alert" hidden></p>
 </section>
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
-  <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false" aria-label="Assistant"><span class="mobile-ask-mark"><span class="mobile-nav-icon" aria-hidden="true">auto_awesome</span></span><span class="mobile-nav-label">Ask</span><span class="nav-badge" data-support-badge aria-hidden="true" hidden></span></button>
+  <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Ask Tico</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
   <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
   <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span></button>
@@ -203,7 +207,6 @@
 <script src="/tico/ui/bot-tools.js"></script>
 <script src="/tico/ui/docs-search.js"></script>
 <script src="/tico/ui/docs-editor.js"></script>
-<script src="/tico/ui/docs-ask.js"></script>
 <script src="/tico/ui/docs-page.js"></script>
 <script src="/tico/ui/market-briefing.js"></script>
 <script src="/tico/ui/market-page.js"></script>
@@ -232,6 +235,7 @@
 <script src="/tico/ui/replay-player.js"></script>
 <script src="/tico/ui/app/rails.js"></script>
 <script src="/tico/ui/app/core.js"></script>
+<script src="/tico/ui/app/motion.js"></script>
 <script src="/tico/ui/app/stick-scroll.js"></script>
 <script src="/tico/ui/app/markdown.js"></script>
 <script src="/tico/ui/app/viewer.js"></script>
@@ -243,6 +247,7 @@
 <script src="/tico/ui/app/notices.js"></script>
 <script src="/tico/ui/app/cloud-access.js"></script>
 <script src="/tico/ui/app/avatars.js"></script>
+<script src="/tico/ui/app/liquid-dot.js"></script>
 <script src="/tico/ui/app/sidebar.js"></script>
 <script src="/tico/ui/app/heartbeat.js"></script>
 <script src="/tico/ui/app/issues.js"></script>
@@ -327,6 +332,7 @@
 <script src="/tico/ui/app/welcome.js"></script>
 <script src="/tico/ui/app/updates.js"></script>
 <script src="/tico/ui/app/updates-chat.js"></script>
+<script src="/tico/ui/app/ask-rules.js"></script>
 <script src="/tico/ui/app/ask-panel.js"></script>
 <script src="/tico/ui/app/goals.js"></script>
 <script src="/tico/ui/app/automations.js"></script>
@@ -334,7 +340,6 @@
 <script src="/tico/ui/app/automations-editors.js"></script>
 <script src="/tico/ui/app/automations-runs.js"></script>
 <script src="/tico/ui/app/automations-overview.js"></script>
-<script src="/tico/ui/app/automations-bot.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/computer-screen.js"></script>
