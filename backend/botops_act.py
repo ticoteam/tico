@@ -565,7 +565,7 @@ OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher
                  r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?)")
 
 
-def default_delegable(method, path, body=None):
+def default_delegable(method, path, body=None, query=None):
     """Whether a BotOps call with no explicit `on_behalf_of` acts as the person who asked: only the routes BotOps
     may do or propose for a person, and never its own plumbing or its own messages."""
     path = normalize(path)
@@ -573,6 +573,8 @@ def default_delegable(method, path, body=None):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False
+    if path == API + "rules" and str(method).upper() == "GET" and str((query or {}).get("mine", "")).lower() == "true":
+        return False      # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
     # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
     # header too, not BotOps' own 403.
     if any(m == str(method).upper() and p.fullmatch(path) for m, p in ALWAYS) or person_only(method, path):

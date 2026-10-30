@@ -40,12 +40,19 @@ def test_an_occurrence_is_overdue_only_after_the_end_of_its_day_in_the_zone():
     assert next_day["status"] == "overdue" and next_day["due_on"] == "2026-10-30"
 
 
-def test_a_satisfied_occurrence_reads_satisfied_until_the_next_one_is_open():
+def test_a_satisfied_repeating_occurrence_moves_on_to_the_next_one():
     due = row("2026-10-30", repeats="monthly")
-    marked = D.state(due, {"2026-10-30"}, date(2026, 10, 30))
-    assert marked["status"] == "satisfied"
-    # The next monthly occurrence (Nov 30) falls inside the 30-day window from Oct 30 and is open then.
+    # Nothing is open and the next monthly occurrence (Nov 30) is past the 30-day window: it is what is due now.
+    moved = D.state(due, {"2026-10-30"}, date(2026, 10, 30))
+    assert moved["status"] == "upcoming" and moved["due_on"] == "2026-11-30" and moved["open"] == 0
+    # Inside the window, the next one is open, so it is due soon.
     assert D.state(due, {"2026-10-30"}, date(2026, 11, 1))["status"] == "due_soon"
+
+
+def test_a_satisfied_once_stays_satisfied():
+    once = row("2026-10-30")
+    marked = D.state(once, {"2026-10-30"}, date(2026, 10, 30))
+    assert marked["status"] == "satisfied" and marked["due_on"] == "2026-10-30"
 
 
 def test_an_occurrence_past_the_window_is_upcoming():

@@ -10,7 +10,7 @@ from backend import org_rules as O
 from backend import rule_due as D
 from backend.auth import Identity
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (the api fixture)
 
 
 def set_roster(api, doc):
@@ -232,18 +232,6 @@ def test_the_rules_list_is_paged(api):
     assert len(get(api, "rules?limit=2&cursor=2")["rules"]) == 1
 
 
-def test_a_page_of_long_rules_stays_under_its_byte_budget(api):
-    org(api)
-    long_text = "x" * 2000
-    for n in range(50):
-        rule(api, {"kind": "internal", "text": f"Rule {n} says hello.", "description": long_text,
-                   "who": {"bots": ["ops"]}})
-    page = api.get("/api/v2/rules?limit=50", headers=headers())
-    assert page.status_code == 200 and len(page.content) <= 256 * 1024
-    bot = api.get("/api/v2/bots/ops/rules", headers=headers())
-    assert bot.status_code == 200 and len(bot.content) <= 256 * 1024
-
-
 def test_a_turn_limit_set_on_the_bot_reads_back_as_its_sentence(api):
     org(api)
     with api.app.state.store.transaction() as c:
@@ -261,3 +249,248 @@ def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
         c.execute("INSERT INTO bots(slug, display_name, state) VALUES('intern', 'Intern', 'active')")
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator,reports_to) VALUES('intern','{}','','ana','finance')")
     assert support in matched(api, "bot:intern")
+
+
+def _lead(api, gid, lead):
+    with api.app.state.store.transaction() as c:
+        raw = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0]
+        doc = json.loads(raw)
+        doc["org_groups"][gid]["lead"] = lead
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+
+
+def _add_group(api, gid):
+    with api.app.state.store.transaction() as c:
+        raw = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0]
+        doc = json.loads(raw)
+        doc["org_groups"][gid] = {"name": gid.title()}
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+
+
+def _ids(items):
+    return [item["id"] for item in items]
+
+
+def _access(api, bot, everyone, people):
+    grant = {"everyone": everyone, "people": people, "teams": [], "bots": []}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+                  (json.dumps({"see": grant, "read": grant, "write": grant}), bot))
+
+
+def test_a_co_owner_of_the_bot_can_edit_and_retire_its_rule(api):
+    org(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET bot_owners_json=? WHERE bot='ops'", (json.dumps(["cara"]),))
+    r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
+    edited = edit(api, r["id"], {"version": 1, "text": "Ops answers today."}, token="cara-test")
+    assert edited["text"] == "Ops answers today."
+    retired = post(api, f"rules/{r['id']}/retire", {"version": 2}, token="cara-test")
+    assert retired["rule"]["status"] == "retired"
+
+
+def test_a_conversation_member_of_the_bot_cannot_edit_or_retire_its_rule(api):
+    org(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_ids_json=? WHERE bot='ops'", (json.dumps(["cara"]),))
+    r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
+    edit(api, r["id"], {"version": 1, "text": "Ops answers today."}, token="cara-test", expected=403)
+    post(api, f"rules/{r['id']}/retire", {"version": 1}, token="cara-test", expected=403)
+
+
+def test_a_replayed_write_checks_the_quote_again_once_file_access_is_revoked(api):
+    org(api)
+    _lead(api, "support", "person:cara")
+    _access(api, "ops", True, [])
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at)"
+                  " VALUES('receipt-file','ops','bot','ops','Receipts','document','receipts','2026','2026')")
+    r = rule(api, {"kind": "external", "text": "Keep receipts for seven years.", "who": {"groups": ["support"]},
+                   "source_id": _source(api)})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET cite_json=? WHERE id=?",
+                  (json.dumps({"file_id": "receipt-file", "version": 1, "quote": "QUOTE-IN-THE-FILE"}), r["id"]))
+    body = {"version": 1, "text": "Keep receipts for seven years, then discard them."}
+    key = "replay-after-revoke"
+    first = api.post(f"/api/v2/rules/{r['id']}", json=body, headers=headers("cara-test", key))
+    assert first.status_code == 200, first.text
+    assert first.json()["cite"]["quote"] == "QUOTE-IN-THE-FILE"
+    _access(api, "ops", False, ["ana"])
+    replay = api.post(f"/api/v2/rules/{r['id']}", json=body, headers=headers("cara-test", key))
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["cite"] == {"hidden": True}
+    assert "QUOTE-IN-THE-FILE" not in replay.text
+    fresh = api.get(f"/api/v2/rules/{r['id']}", headers=headers("cara-test"))
+    assert fresh.json()["cite"] == {"hidden": True}
+
+
+def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
+    org(api)
+    r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
+    start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
+    post(api, f"rule-due/{due['id']}/satisfied", {})
+    second = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})["id"]
+    listed = get(api, f"rules/{r['id']}")
+    assert listed["due"] and all("chain" not in d for d in listed["due"])
+    third = post(api, f"rule-due/{second}", {"first_due": "2027-06-01"})["id"]
+    old = get(api, f"rule-due/{due['id']}")
+    assert old["replaced_by"] == second and old["replaces"] is None
+    assert old["chain"][0]["ended_on"] is not None
+    assert [link["id"] for link in old["chain"]] == [due["id"], second, third]
+    assert old["chain"][0]["satisfied"][0]["due_on"] == start
+    mid = get(api, f"rule-due/{second}")
+    assert mid["replaces"] == due["id"] and mid["replaced_by"] == third
+    assert [link["id"] for link in mid["chain"]] == [due["id"], second, third]
+    post(api, f"rule-due/{third}/remove", {})
+    removed = get(api, f"rule-due/{third}")
+    assert removed["chain"][-1]["retired_at"] is not None
+    assert get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"][0]["due_on"] == start
+
+
+def test_a_page_of_the_longest_rules_stays_under_the_byte_cap(api):
+    org(api)
+    text = "\U0001F642" * O.TEXT_MAX          # four bytes each in UTF-8
+    description = "\U0001F642" * O.DESCRIPTION_MAX
+    for n in range(100):
+        rule(api, {"kind": "internal", "text": text, "description": description, "who": {"bots": ["ops"]}})
+    seen, cursor, pages = [], None, 0
+    while True:
+        r = api.get("/api/v2/rules?limit=100" + (f"&cursor={cursor}" if cursor else ""), headers=headers())
+        assert r.status_code == 200, r.text
+        assert len(r.content) <= O.LIST_BYTES + 16_000
+        body = r.json()
+        assert body["rules"]
+        seen += [item["id"] for item in body["rules"]]
+        pages += 1
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert pages > 1 and len(seen) == 100 == len(set(seen))
+    cursor, internal = None, []
+    while True:
+        r = api.get("/api/v2/bots/ops/rules" + (f"?internal_cursor={cursor}" if cursor else ""), headers=headers())
+        assert r.status_code == 200 and len(r.content) <= O.LIST_BYTES + 16_000
+        part = r.json()["internal"]
+        assert len(part["rules"]) <= O.BOT_LIST_MAX
+        internal += [item["id"] for item in part["rules"]]
+        cursor = part["next_cursor"]
+        if cursor is None:
+            break
+    assert len(set(internal)) == 100
+
+
+def test_every_external_rule_that_applies_to_a_bot_is_reachable_by_its_cursor(api):
+    org(api)
+    source = _source(api)
+    for n in range(101):
+        rule(api, {"kind": "external", "text": f"Source rule {n} applies.", "who": {"bots": ["ops"]},
+                   "source_id": source})
+    collected, cursor = [], None
+    while True:
+        body = get(api, "bots/ops/rules" + (f"?external_cursor={cursor}" if cursor else ""))
+        collected += [item["id"] for item in body["external"]["rules"]]
+        cursor = body["external"]["next_cursor"]
+        if cursor is None:
+            break
+    assert len(collected) == 101 == len(set(collected))
+
+
+def test_an_owner_or_admin_everyone_rule_is_active_at_once(api):
+    org(api)
+    mine = rule(api, {"kind": "internal", "text": "Everyone logs time.", "who": {"everyone": True}})
+    admin = rule(api, {"kind": "internal", "text": "Everyone uses the shared inbox.", "who": {"everyone": True}},
+                 token="ben-test")
+    assert mine["status"] == "active" and admin["status"] == "active"
+    assert {mine["id"], admin["id"]} <= set(matched(api, "bot:ops"))
+    rule(api, {"kind": "internal", "text": "Everyone has a badge.", "who": {"everyone": True}},
+         token="cara-test", expected=403)
+
+
+def test_a_group_and_a_bot_with_one_name_need_a_prefix(api):
+    org(api)
+    _add_group(api, "ops")
+    bot_rule = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"names": ["bot:ops"]}})
+    assert _ids(bot_rule["who"]["bots"]) == ["ops"] and _ids(bot_rule["who"]["groups"]) == []
+    rule(api, {"kind": "internal", "text": "Ops team meets Mondays.", "who": {"names": ["ops"]}}, expected=400)
+    group_rule = rule(api, {"kind": "internal", "text": "Ops team meets Mondays.",
+                            "who": {"names": ["group:ops"]}})
+    assert _ids(group_rule["who"]["groups"]) == ["ops"]
+    rule(api, {"kind": "internal", "text": "Ops team meets Mondays.", "who": {"groups": ["bot:ops"]}}, expected=422)
+    assert api.get("/api/v2/rules?who=ops", headers=headers()).status_code == 400
+    assert api.get("/api/v2/rules?who=bot:ops", headers=headers()).status_code == 200
+
+
+def test_spend_sentences_cover_the_company_default_and_the_pools_with_edit_links(api):
+    org(api)
+    put(api, "usage/limits", {"monthly_usd": 25})
+    put(api, "usage/limits/ops", {"daily_usd": 5})
+    put(api, "usage/pools/groups/support", {"weekly_usd": 40})
+    put(api, "usage/pools/company", {"weekly_usd": 400})
+    ops = {s["text"]: s for s in get(api, "bots/ops/rules")["settings"]}
+    finance = {s["text"]: s for s in get(api, "bots/finance/rules")["settings"]}
+    assert "Spends up to $5 a day" in ops
+    assert ops["Spends up to $5 a day"]["edit"]["path"] == "/api/v2/usage/limits/ops"
+    assert "Spends up to $400 a week across the team" in ops
+    assert ops["Spends up to $400 a week across the team"]["edit"]["path"] == "/api/v2/usage/pools/company"
+    assert "Follows the company limit: up to $25 a month" in finance
+    assert finance["Follows the company limit: up to $25 a month"]["edit"]["path"] == "/api/v2/usage/limits"
+    support = [s for s in finance if "across the Support group" in s]
+    assert support and finance[support[0]]["edit"]["path"] == "/api/v2/usage/pools/groups/support"
+
+
+def _routine_due(api):
+    r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
+    start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE rule_due_dates SET routine_id='routine-1' WHERE id=?", (due["id"],))
+    return r, due, start
+
+
+def _done(start, **over):
+    return {"id": "task-1", "status": "done", "owner": "ops", "refs": {"routine_id": "routine-1", "due_on": start},
+            **over}
+
+
+def test_a_routine_task_closed_by_a_person_marks_the_day_for_that_person_with_an_audit_row(api):
+    org(api)
+    r, due, start = _routine_due(api)
+    before = len(audit(api, r["id"]))
+    with api.app.state.store.transaction() as c:
+        assert D.on_due_task_completed(c, _done(start), closed_by="human:ben") == [due["id"]]
+    marks = get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"]
+    assert [m["satisfied_by"] for m in marks] == ["human:ben"]
+    assert len(audit(api, r["id"])) == before + 1
+
+
+def test_a_keeper_close_a_cancel_and_an_open_task_mark_nothing(api):
+    org(api)
+    r, due, start = _routine_due(api)
+    with api.app.state.store.transaction() as c:
+        assert D.on_due_task_completed(c, _done(start), closed_by=H.KEEPER) == []
+        assert D.on_due_task_completed(c, _done(start, status="cancelled"), closed_by="human:ben") == []
+        assert D.on_due_task_completed(c, _done(start, status="open"), closed_by="human:ben") == []
+    assert get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"] == []
+
+
+def test_reopening_the_routine_task_removes_its_mark_and_writes_an_audit_row(api):
+    org(api)
+    r, due, start = _routine_due(api)
+    with api.app.state.store.transaction() as c:
+        D.on_due_task_completed(c, _done(start), closed_by="human:ben")
+    before = len(audit(api, r["id"]))
+    with api.app.state.store.transaction() as c:
+        assert D.on_due_task_reopened(c, _done(start, status="open"), reopened_by="human:ben") == [due["id"]]
+    assert get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"] == []
+    assert len(audit(api, r["id"])) == before + 1
+
+
+def test_two_marks_of_one_day_that_race_answer_the_same_conflict(api, monkeypatch):
+    org(api)
+    _, due, start = _routine_due(api)
+    post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start})
+    # The second mark reads the day as open (as a racing request would), so the insert meets the stored mark.
+    monkeypatch.setattr(D, "satisfied_days", lambda c, due_id: set())
+    refused = post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start}, expected=409)
+    assert refused is not None

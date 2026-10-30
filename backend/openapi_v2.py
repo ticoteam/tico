@@ -1858,6 +1858,7 @@ STABLE.extend([
     ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
     ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
     ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
+    ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
     ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
     ('/api/v2/rules/{rule_id}/accept', 'post', 'Rules', 'acceptRule', 'Accept a suggestion, optionally changing its Who; a person only', None),
     ('/api/v2/rules/{rule_id}/skip', 'post', 'Rules', 'skipRule', 'Set a suggestion aside', None),
@@ -1868,7 +1869,7 @@ STABLE.extend([
     ('/api/v2/rule-due/{due_id}/satisfied', 'post', 'Rules', 'markRuleDueSatisfied', 'Mark the current occurrence satisfied; due_on when two are open', None),
     ('/api/v2/rule-sources', 'get', 'Rules', 'listRuleSources', 'Where external rules come from (From), by name', None),
     ('/api/v2/rule-sources', 'post', 'Rules', 'addRuleSource', 'Add a From; one that exists by name is returned', None),
-    ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, internal rules, external rules', None),
+    ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages']},

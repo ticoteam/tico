@@ -2,7 +2,7 @@
 
 These sit alongside `handoffs.md` and `approvals.md`.
 
-- Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`.
+- Rules apply to you. Read them: `hub rules list --mine`.
 
 - **Use judgment within the assigned goal.** Choose and complete useful authorized work. Ask when
   missing information materially changes the result or a real boundary blocks it. Never invent
