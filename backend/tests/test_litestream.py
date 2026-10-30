@@ -146,6 +146,7 @@ def litestream_binary():
     return binary
 
 
+@pytest.mark.slow
 def test_a_moved_replica_never_takes_new_writes_without_the_reset(tmp_path):
     binary = litestream_binary()
     config, source, replica, _ = stale_state_setup(tmp_path, binary)
@@ -157,6 +158,7 @@ def test_a_moved_replica_never_takes_new_writes_without_the_reset(tmp_path):
     assert ids is None or 109 not in ids, "the new writes reached the replica without the reset"
 
 
+@pytest.mark.slow
 def test_a_moved_replica_takes_new_writes_after_the_reset(tmp_path):
     binary = litestream_binary()
     config, source, replica, state = stale_state_setup(tmp_path, binary)
@@ -169,6 +171,7 @@ def test_a_moved_replica_takes_new_writes_after_the_reset(tmp_path):
     assert restored_ids(binary, replica, tmp_path) == list(range(5)) + list(range(100, 110))
 
 
+@pytest.mark.slow
 def test_a_populated_replica_is_left_alone_by_the_reset(tmp_path):
     binary = litestream_binary()
     config, source, replica, state = stale_state_setup(tmp_path, binary)
