@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from setup import cell, cell_wake as W
-from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, record  # noqa: F401
+from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, record, utc_in  # noqa: F401
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -271,3 +271,65 @@ def test_the_wake_unit_runs_this_module():
     assert "ExecStart=/usr/bin/python3 -m setup.cell_wake --root /srv/tico-cell" in unit
     assert "Restart=always" in unit and "RestartSec=1" in unit
     assert (W.__name__, cell.WAKE_PORT) == ("setup.cell_wake", 8082)
+
+
+# --- timed wakes: the record's wake_at starts the company without a request (WAKE_SWEEP loop) ----------------------
+
+def settled(svc, slug="boatyard"):
+    """The start the last sweep began (or joined) has finished, one way or the other."""
+    a = svc.attempts.get(slug)
+    assert a is not None and a.done.wait(30)
+    return a
+
+
+def test_a_timed_wake_due_within_a_minute_starts_the_company(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))     # already asleep: only the time changes
+    assert svc.sweep() == ["boatyard"]
+    assert settled(svc).ok
+    assert record(asleep)["state"] == "running" and "wake_at" not in record(asleep)
+    assert slow.ups == 1 and svc.starts == 1
+    assert "reverse_proxy 127.0.0.1:20000" in (asleep.root / "router" / "Caddyfile").read_text()
+
+
+def test_a_timed_wake_not_yet_due_leaves_the_company_asleep(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    later = utc_in(3600)
+    asleep("sleep", "--company", "boatyard", "--wake-at", later)
+    assert svc.sweep() == [] and svc.starts == 0 and slow.ups == 0
+    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"] == later
+
+
+def test_a_stored_wake_at_that_is_not_a_time_wakes_nothing(asleep):
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    c = record(asleep)
+    c["wake_at"] = "soon"
+    (asleep.root / "companies" / "boatyard" / "company.json").write_text(json.dumps(c))
+    assert svc.sweep() == [] and svc.starts == 0 and slow.ups == 0 and record(asleep)["state"] == "sleeping"
+
+
+def test_a_failed_timed_wake_is_tried_again_on_a_later_sweep_not_at_once(asleep):
+    asleep.system.health["boatyard.tico.team"] = 500
+    slow = Slow(asleep.system)
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(10))
+    assert svc.sweep() == ["boatyard"] and not settled(svc).ok
+    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"]      # the time stays until it works
+    assert svc.sweep() == ["boatyard"] and svc.starts == 1                     # within FAILED_FOR: no start loop
+    asleep.system.health.pop("boatyard.tico.team")
+    svc.failed_for = 0                                                         # as if FAILED_FOR had passed
+    assert svc.sweep() == ["boatyard"] and settled(svc).ok
+    assert slow.ups == 2 and svc.starts == 2 and record(asleep)["state"] == "running"
+    assert "wake_at" not in record(asleep)
+
+
+def test_the_timed_wake_loop_sweeps_at_once_and_returns_when_stopped(asleep):
+    svc = asleep.start()
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(5))
+    stopping = threading.Event()
+    stopping.set()
+    svc.timed_wakes(stopping)                                                  # one sweep, then it returns
+    assert settled(svc).ok and record(asleep)["state"] == "running"

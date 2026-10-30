@@ -72,7 +72,7 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
-python3 -m setup cell sleep --company boatyard --json
+python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
@@ -193,6 +193,15 @@ moment or asleep.
 - **Sleep.** `sleep` points the company's hosts at the wake service, then stops its server (Docker must say it is
   stopped). The record's state is `sleeping`. If the stop fails, the company is left as it was. When to sleep a
   company (idle rules) is up to the caller.
+- **Sleep requests and timed wakes.** A company's server can ask its updater to sleep it: `POST /sleep` on its updater
+  address with its updater token ([Updates](#updates)), body `{"wake_at": "2026-10-30T18:00:00Z" | null, "reason":
+  "idle"}`. The answer is `202 {"state": "sleeping", "wake_at"}` at once, and the sleep itself runs a second later, so
+  the answer gets back before the server stops. `409 {"error": "busy"}` means an update or another cell command holds
+  the company, and nothing changes. A `wake_at` that is not an ISO-8601 UTC time, or is more than 31 days out, is
+  `422 {"error": "bad_wake_at"}`. `sleep --wake-at` does the same from the command line. The record keeps the time, and
+  the wake service starts the company once that time is within a minute, checking every 20 s; a start that fails is
+  logged and tried again at a later check, not at once. Starting, waking or stopping the company clears the time, and
+  a sleep without one clears a time an earlier sleep set.
 - **Wake.** The wake service (`tico-cell-wake.service`, `setup/cell_wake.py`) listens on `127.0.0.1:8082`. The
   router reaches it for a sleeping company's hosts only, and the route itself names the company in a header
   (`X-Tico-Cell-Wake`; a copy the visitor sent is replaced). The service also checks that the request's `Host` is one

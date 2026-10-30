@@ -8,6 +8,12 @@ body, streamed both ways), and the server's answer is the answer. Many requests 
 wake that fails, or does not finish within WAKE_HOLD, is answered 503 with Retry-After and a short plain body; so is a
 request over a cap. Nothing here answers 502.
 
+Timed wakes: a sleeping company's record can name the time it should wake (`sleep --wake-at`, or the updater's POST
+/sleep). Every WAKE_SWEEP seconds, `timed_wakes` starts each sleeping company whose wake_at is at or before now plus
+WAKE_AHEAD, through the same `attempt` a request uses, so a request that comes meanwhile shares that start. A start that
+fails is logged and tried again on a later sweep (not at once: `attempt` keeps a failure for FAILED_FOR). The loop holds
+no lock while it waits, and a sweep only reads the records.
+
 Which company: the router's route for a sleeping company sets WAKE_HEADER to that company's slug (`header_up` replaces
 any copy the visitor sent), and the request's Host must be one of that company's own hosts. Nothing in the request
 picks another company, and the listener is on loopback, where only the router (and root on the host) can reach it.
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import http.client
 import os
 import signal
@@ -46,6 +53,8 @@ WAKE_HOLD = 30.0                 # how long a request waits for its company to w
 WAKE_START = 300                 # how long the start itself may take (a pending update's migration); later requests join
 WAKE_LOCK_WAIT = 300.0           # for the company's lock, held by another cell command (an update, `sleep`)
 FAILED_FOR = 10.0                # a failed wake is answered 503 at once this long, so a flood is not a start loop
+WAKE_SWEEP = 20.0                # how often the timed wakes are checked
+WAKE_AHEAD = 60.0                # a timed wake starts this long before its time, so the server is up when it is due
 MAX_CONNECTIONS = 512
 MAX_HELD = 256
 MAX_HELD_PER_COMPANY = 64
@@ -99,6 +108,36 @@ class Service:
         if not c or c.get("state") == "removed" or name not in C.hosts_of(c):
             return None
         return c
+
+    def sweep(self) -> list[str]:
+        """Starts every sleeping company whose timed wake (its record's wake_at) is at or before now + WAKE_AHEAD,
+        through `attempt` (one start however many sweeps or requests ask). Returns the companies it started or
+        joined."""
+        now, started = time.time(), []
+        for c in self.make_cell().companies():
+            if c.get("state") != "sleeping" or not c.get("wake_at"):
+                continue
+            try:
+                due = datetime.datetime.strptime(c["wake_at"], C.WAKE_AT_FORMAT).replace(
+                    tzinfo=datetime.timezone.utc).timestamp()
+            except (TypeError, ValueError):
+                log(f"{c.get('slug')}: wake_at {c.get('wake_at')!r} is not a time; not woken on it")
+                continue
+            if due <= now + WAKE_AHEAD:
+                self.attempt(c["slug"])
+                started.append(c["slug"])
+        return started
+
+    def timed_wakes(self, stopping: threading.Event) -> None:
+        """The timed-wake loop: a sweep, then WAKE_SWEEP seconds asleep, until `stopping` is set. A sweep that raises is
+        logged and the loop goes on. The first sweep is at once, so a company due while the service was down wakes."""
+        while True:
+            try:
+                self.sweep()
+            except Exception as e:  # noqa: BLE001  logged; the next sweep tries again
+                log(f"timed wakes: {type(e).__name__}: {e}")
+            if stopping.wait(WAKE_SWEEP):
+                return
 
     def body_limit(self, slug: str) -> int:
         values = envfile.parse(C._read(self.root / "companies" / slug / ".env"))
@@ -399,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         log(f"cannot listen on {C.WAKE_ADDRESS}:{args.port}: {e.strerror or e}")
         return 1
     log(f"serving {args.root} on {C.WAKE_ADDRESS}:{args.port}")
+    threading.Thread(target=service.timed_wakes, args=(stopping,), name="timed-wakes", daemon=True).start()
     stopping.wait()
     listener.shutdown()
     listener.server_close()

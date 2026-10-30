@@ -6,6 +6,13 @@ POST /update {"version": "1.2.3" | "v1.2.3" | "latest", "from": "1.2.2"}   start
 GET  /status                           {"state", "from", "to", "message", "snapshot", "restored"}; state is idle,
                                        pulling, restarting, healthy, rolled_back or failed
 GET  /diagnostics                      {"mode": "cell", "version", "docker", "compose", "containers", "errors"}
+POST /sleep {"wake_at": "2026-10-30T18:00:00Z" | null, "reason": "idle"}   put the company to sleep (`cell sleep`), with
+                                       a timed wake at wake_at when given: 202 {"state": "sleeping", "wake_at"} and the
+                                       work a second later, so the answer gets back before the server stops; 409
+                                       {"error": "busy"} while an update runs or another cell command holds the company;
+                                       422 {"error": "bad_wake_at"} for a time that is not ISO-8601 UTC or is more than
+                                       31 days out (and {"error": "bad_body"} for a body that is not a JSON object).
+                                       The body is at most MAX_BODY bytes; a key other than wake_at is ignored.
 All need `Authorization: Bearer <token>`: the company's own <company>/control/updater-token (setup/cell.py
 `updater_token`), which its server reads as /control/updater-token. The server cannot tell this from the sidecar, so
 Update now, an update service key (the Release Manager's rollout), Tico support's idle-time target
@@ -15,6 +22,8 @@ The work is setup/cell.py's own `update` for that company: the image pulled firs
 server stopped, the new release health-checked through the router, and the old release and database put back when it
 does not come up. A release is refused (state failed, nothing changed) unless it is published (its SHA256SUMS
 downloads, as the sidecar's bundle check needs); older than the company runs is refused as the sidecar refuses it.
+POST /sleep's work is setup/cell.py's own `sleep` for that company, with its wake_at recorded (a timed wake, which
+the wake service runs: setup/cell_wake.py).
 
 A company's compose.yaml is the core's own file (`update` rewrites it from there), and a later release may need
 settings or mounts an older core's file does not pass. So a release newer than this host's core runs with that
@@ -73,6 +82,7 @@ from . import cell as C
 STABLE = re.compile(r"v?([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})")
 UNDER_WAY = ("pulling", "restarting")
 MAX_BODY = 1024
+SLEEP_LEAD = 1.0                 # how long POST /sleep's work waits after its answer, so the answer gets back first
 TOKEN_MIN, TOKEN_MAX = 32, 4096
 STATUS_FILE = "updater-status.json"
 RESCAN = 5.0                     # how soon a new company's listener is up, and a removed one's gone
@@ -188,14 +198,16 @@ class Service:
     """Every company's updater state, the listeners, and the update threads. `make_cell` gives a fresh setup/cell.py
     Cell per use (tests pass one on a fake System); `core` is this host's core release ("" when unknown); `bind` and
     `subnet` are company i's address and the peers it answers (tests move both to loopback); `cores`, `fetch` and
-    `run_core` are where release cores go, the download, and the child run of a core's `cell update`."""
+    `run_core` are where release cores go, the download, and the child run of a core's `cell update`; `lead` is the
+    wait before POST /sleep's work."""
 
     def __init__(self, root: Path, system: C.System | None = None, *, make_cell=None, core=None, bind=None,
-                 subnet=None, cores=None, fetch=None, run_core=None):
+                 subnet=None, cores=None, fetch=None, run_core=None, lead=SLEEP_LEAD):
         self.root, self.system = Path(root), system or C.System()
         self.make_cell = make_cell or (lambda: C.Cell(self.root, self.system))
         self.core = core or host_core
         self.cores, self.fetch, self.run_core = Path(cores or CORES), fetch or fetch_archive, run_core or run_child
+        self.lead = lead                        # POST /sleep's work waits this long after its answer
         self.installing = threading.Lock()      # one core install at a time: two companies to one release share it
         self.bind = bind or (lambda index: (C.networks(index)["default_gateway"], C.UPDATER_PORT))
         self.subnet = subnet or (lambda index: C.networks(index)["default_subnet"])
@@ -285,6 +297,8 @@ class Service:
         return 404, {"error": "not found"}
 
     def post(self, slug: str, index: int, path: str, body: bytes) -> tuple[int, dict]:
+        if path == "/sleep":
+            return self.sleep(slug, index, body)
         if path != "/update":
             return 404, {"error": "not found"}
         try:
@@ -322,6 +336,55 @@ class Service:
             self.workers.add(worker)
         worker.start()
         return 202, accepted
+
+    # --- sleep ------------------------------------------------------------------------------------------------
+
+    def sleep(self, slug: str, index: int, body: bytes) -> tuple[int, dict]:
+        """POST /sleep: the company's `cell sleep`, with its timed wake. The answer is 202 as accepted, and the work
+        runs in a thread after `lead` seconds, so the server gets its answer before its own container stops. Refused
+        (409 busy) while an update runs for the company or another cell command holds its lock, as /update refuses."""
+        try:
+            asked = json.loads(body or b"{}")
+        except ValueError:
+            return 422, {"error": "bad_body"}
+        if not isinstance(asked, dict):
+            return 422, {"error": "bad_body"}
+        try:
+            wake_at = C.wake_at_text(asked.get("wake_at"))
+        except C.CellError as e:
+            return 422, {"error": e.code}
+        if self.company(slug, index) is None:
+            return 404, {"error": "not found"}
+        with self.guard:
+            if self.state(slug)["state"] in UNDER_WAY:
+                return 409, {"error": "busy"}
+        try:                            # the same probe /update makes: staff's command holds the company, not now
+            with self.make_cell().lock("company-" + slug, timeout=0):
+                pass
+        except C.CellError:
+            return 409, {"error": "busy"}
+        worker = threading.Thread(target=self.sleep_work, args=(slug, wake_at), name="sleep-" + slug, daemon=True)
+        with self.guard:
+            self.workers.add(worker)
+        worker.start()
+        return 202, {"state": "sleeping", "wake_at": wake_at}
+
+    def sleep_work(self, slug: str, wake_at: str | None) -> None:
+        """`cell sleep` for the company, in this thread. A lock taken since the request is refused here, not queued (as
+        `work` does); a failure is logged, since the answer was already 202 and nothing else reports it."""
+        time.sleep(self.lead)
+        cell = self.make_cell()
+        cell.lock_wait = 0
+        try:
+            cell.sleep(argparse.Namespace(company=slug, wake_at=wake_at))
+            log(f"{slug}: asleep" + (f" until {wake_at}" if wake_at else ""))
+        except C.CellError as e:
+            log(f"{slug}: sleep refused: {e.code}: {cell.scrub(e.detail)[:300]}")
+        except Exception as e:  # noqa: BLE001  logged, rather than a dead thread saying nothing
+            log(f"{slug}: sleep failed: {cell.scrub(f'{type(e).__name__}: {e}')[:300]}")
+        finally:
+            with self.guard:
+                self.workers.discard(threading.current_thread())
 
     # --- the update -------------------------------------------------------------------------------------------
 

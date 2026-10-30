@@ -40,6 +40,9 @@ is tried again every 250 ms for up to 30 s, and only then answered, with a plain
 `sleep` stops a company's server and sends its hosts to the wake service instead (setup/cell_wake.py, systemd unit
 tico-cell-wake, which `init` installs): its first request starts the server with `wake` and is answered by it, and
 `wake` sends the hosts straight to the server again. A stopped company (`stop`) is answered 503 at once.
+`sleep --wake-at` (and the updater's POST /sleep) also records a timed wake in the company's record: the wake service
+starts the company when that time is due, rather than waiting for a request. Starting, waking or stopping a company
+clears it.
 
 Each company also has an updater, so its Update now, an update service key (the Release Manager's rollout) and Tico
 support's idle-time target work as on any install: `init` runs one host service (setup/cell_updater.py, systemd unit
@@ -63,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import errno
 import fcntl
 import http.client
@@ -167,6 +171,11 @@ HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 STREAM_CLOSE_DELAY = "5m"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
 HEALTH_POLL = 0.15                      # seconds between /healthz probes while a server starts
+# A timed wake (`sleep --wake-at`): the record's wake_at, always UTC in this format, at most WAKE_AT_DAYS out when set.
+WAKE_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+WAKE_AT_DAYS = 31
+WAKE_AT_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
+                           r"(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
 class CellError(Exception):
@@ -438,6 +447,9 @@ def parser() -> Parser:
         c.add_argument("--company", required=True, metavar="SLUG")
         if name in ("start", "wake"):
             c.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT)
+        if name == "sleep":
+            c.add_argument("--wake-at", metavar="TIME", help="a timed wake: an ISO-8601 UTC time such as "
+                           "2026-10-30T18:00:00Z, at most 31 days out; the wake service starts the company then")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -1359,6 +1371,7 @@ class Cell:
             self.ensure_stopped(slug)
             route = c.get("state") != "stopped"
             c["state"] = "stopped"
+            _set_wake_at(c, None)           # no longer asleep, so no timed wake
             self.save(c)
             if route:
                 self.routed()
@@ -1372,6 +1385,7 @@ class Cell:
             before = self.containers(slug).get(slug, {})
             route = c.get("state") != "running"     # stopped (503) or sleeping (the wake service): to the server now
             c["state"] = "running"
+            _set_wake_at(c, None)
             self.save(c)
             if route:
                 self.routed()               # the router holds requests until the server answers
@@ -1381,20 +1395,30 @@ class Cell:
     def sleep(self, args) -> dict:
         """Stop the server and send its hosts to the wake service, whose first request starts it again (`wake`). The
         route moves first: a request that comes while the server stops waits for this lock in the wake service, then
-        starts it again, which is what a request should do."""
+        starts it again, which is what a request should do.
+
+        `wake_at` (`--wake-at`, or the updater's POST /sleep) is the time the wake service starts the company by itself
+        (`cell_wake.py`, `timed_wakes`). Every sleep sets it: one without a time clears the one an earlier sleep set. A
+        company already asleep gets a new time without a stop."""
         slug = check_slug(args.company)
+        wake_at = wake_at_text(getattr(args, "wake_at", None))
         with self.lock("company-" + slug):
             c = self.live(slug)
-            was = c.get("state")
+            was, before = c.get("state"), c.get("wake_at")
             if was == "sleeping" and self.containers(slug).get(slug, {}).get("state", "") in STOPPED:
+                if before != wake_at:
+                    _set_wake_at(c, wake_at)
+                    self.save(c)
                 return {"ok": True, "company": slug, "state": "sleeping", "changed": False}
             c["state"] = "sleeping"
+            _set_wake_at(c, wake_at)
             self.save(c)
             try:
                 self.routed()
                 self.ensure_stopped(slug)
             except CellError:
                 c["state"] = was
+                _set_wake_at(c, before)
                 self.save(c)
                 with contextlib.suppress(CellError):
                     self.routed()
@@ -1432,6 +1456,7 @@ class Cell:
             finally:
                 self.direct = False
             c["state"] = "running"
+            _set_wake_at(c, None)
             self.save(c)
             self.routed()
             if failed:
@@ -1599,6 +1624,40 @@ class Cell:
                 if not args.keep_data:
                     shutil.rmtree(d)
         return {"ok": True, "company": slug, "removed": True, "kept_data": bool(args.keep_data)}
+
+
+def wake_at_text(value) -> str | None:
+    """A timed wake's time as the record keeps it (WAKE_AT_FORMAT), or None when `value` is None (no timed wake).
+    The time must say what zone it is in (a Z or an offset; a naive time is refused) and be at most WAKE_AT_DAYS from
+    now. A time already past is kept: the wake service starts the company at its next sweep. CellError bad_wake_at
+    for anything else, so the updater's POST /sleep and `sleep --wake-at` refuse the same values."""
+    if value is None:
+        return None
+    bad = CellError("bad_wake_at", "wake_at is an ISO-8601 UTC time such as 2026-10-30T18:00:00Z, at most "
+                    f"{WAKE_AT_DAYS} days out")
+    if not isinstance(value, str) or not WAKE_AT_SHAPE.fullmatch(value):   # ISO-8601 shape, not a loose parse
+        raise bad
+    text = value
+    if text.endswith("Z"):              # fromisoformat takes an offset, not the Z (before Python 3.11)
+        text = text[:-1] + "+00:00"
+    try:
+        when = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        raise bad from None
+    if when.tzinfo is None:
+        raise bad
+    when = when.astimezone(datetime.timezone.utc)
+    if when.timestamp() - time.time() > WAKE_AT_DAYS * 86400:
+        raise bad
+    return when.strftime(WAKE_AT_FORMAT)
+
+
+def _set_wake_at(c: dict, wake_at: str | None) -> None:
+    """The record's timed wake: set, or removed (None). Only a sleeping company has one."""
+    if wake_at:
+        c["wake_at"] = wake_at
+    else:
+        c.pop("wake_at", None)
 
 
 def _read(path: Path) -> str:

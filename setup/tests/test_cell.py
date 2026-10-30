@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,11 @@ SECRET = "oidc-secret-" + "s" * 40
 INVITE = "inv_" + "i" * 30
 BACKUP_KEY, BACKUP_SECRET = "AKIA" + "B" * 16, "bk/" + "x" * 37
 TOKEN = "eyJ" + "t" * 80
+
+
+def utc_in(seconds):
+    """A wake time `seconds` from now, as a request or `sleep --wake-at` writes it (2026-10-30T18:00:00Z)."""
+    return time.strftime(cell.WAKE_AT_FORMAT, time.gmtime(time.time() + seconds))
 
 
 class FakeSystem:
@@ -733,6 +739,53 @@ def test_updating_a_sleeping_company_keeps_it_asleep_and_its_wake_is_guarded(rea
     assert woke["ok"] and woke["version"] == "v1.4.0" and "pending" not in record(ready)
 
 
+def test_sleep_sets_a_timed_wake_and_a_sleep_without_one_clears_it(ready):
+    ready(*add_args(ready))
+    at = utc_in(2 * 86400)
+    assert ready("sleep", "--company", "boatyard", "--wake-at", at)["changed"] is True
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
+    later = utc_in(3 * 86400)               # already asleep: the time changes, nothing is stopped again
+    assert ready("sleep", "--company", "boatyard", "--wake-at", later)["changed"] is False
+    assert record(ready)["wake_at"] == later and ready.system.ps["boatyard"][0] == "exited"
+    assert ready("sleep", "--company", "boatyard")["changed"] is False
+    assert "wake_at" not in record(ready) and record(ready)["state"] == "sleeping"
+
+
+@pytest.mark.parametrize("how", ["wake", "start", "stop", "add"])
+def test_a_timed_wake_is_cleared_by_any_path_that_starts_or_stops_the_company(ready, how):
+    ready(*add_args(ready))
+    ready("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))
+    assert record(ready)["wake_at"]
+    if how == "add":
+        assert ready(*add_args(ready))["ok"]
+    else:
+        assert ready(how, "--company", "boatyard")["ok"]
+    assert "wake_at" not in record(ready)
+
+
+@pytest.mark.parametrize("value", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", "2026-10-30", "",
+                                   "2099-01-01T00:00:00Z"])
+def test_a_wake_at_that_is_not_utc_or_is_too_far_out_changes_nothing(ready, value):
+    ready(*add_args(ready))
+    answer = ready("sleep", "--company", "boatyard", "--wake-at", value)
+    assert answer["ok"] is False and answer["error"] == "bad_wake_at"
+    assert record(ready)["state"] == "running" and "wake_at" not in record(ready)
+
+
+def test_wake_at_is_stored_in_utc_and_may_be_up_to_31_days_out():
+    assert cell.wake_at_text(None) is None
+    assert cell.wake_at_text("2026-10-30T20:00:00+02:00") == "2026-10-30T18:00:00Z"
+    assert cell.wake_at_text("2026-10-30T18:00:00.250Z") == "2026-10-30T18:00:00Z"
+    assert cell.wake_at_text("2026-10-30T18:00Z") == "2026-10-30T18:00:00Z"
+    later = utc_in(30 * 86400)
+    assert cell.wake_at_text(later) == later
+    for bad in ("2026-10-30T18:00:00", "2026-10-30T18:00:00 Z", "2026-10-30 18:00:00Z", "2026-10-30t18:00:00z",
+                "20261030T180000Z", "2026-10-30T18:00:00+0200", "2026-10-30", 1761847200, ["2026-10-30T18:00:00Z"]):
+        with pytest.raises(cell.CellError) as e:
+            cell.wake_at_text(bad)
+        assert e.value.code == "bad_wake_at"
+
+
 def test_init_installs_the_wake_service(host):
     first = host("init", "--json")
     unit = (host.etc / cell.WAKE_UNIT).read_text()
@@ -758,6 +811,7 @@ def held(root, name):
 
 def record(host, slug="boatyard"):
     return json.loads((host.root / "companies" / slug / "company.json").read_text())
+
 
 
 def test_remove_frees_the_slot_only_after_the_router_dropped_the_route(ready):
@@ -1523,6 +1577,122 @@ def test_staff_holding_the_company_gets_its_request_a_409(ready):
     finally:
         os.close(fd)
     assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"
+
+
+def test_a_sleep_request_sleeps_the_company_with_its_wake_at(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    at = utc_in(2 * 86400)
+    assert ask(svc, path="/sleep", body={"wake_at": at, "reason": "idle"}) == \
+        (202, {"state": "sleeping", "wake_at": at})
+    assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
+    assert ready.system.ps["boatyard"][0] == "exited" and "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
+
+
+@pytest.mark.parametrize("body", [{"wake_at": None}, {}])
+def test_a_sleep_without_a_time_is_an_ordinary_sleep(ready, body):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body=body) == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready)["state"] == "sleeping" and "wake_at" not in record(ready)
+    assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
+
+
+def test_the_answer_gets_back_before_the_company_stops(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0.5)
+    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready)["state"] == "running"              # the work waits its lead
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert record(ready)["state"] == "sleeping" and ready.system.ps["boatyard"][0] == "exited"
+
+
+def test_a_sleep_body_never_chooses_the_company(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    svc = service(ready, lead=0)
+    body = {"wake_at": None, "company": "bravo", "slug": "bravo", "reason": "idle"}
+    assert ask(svc, "alpha", path="/sleep", body=body) == (202, {"state": "sleeping", "wake_at": None})
+    assert record(ready, "alpha")["state"] == "sleeping" and record(ready, "bravo")["state"] == "running"
+
+
+@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
+def test_a_sleep_with_a_missing_or_wrong_token_is_refused_as_update_is(ready, auth):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body={"wake_at": None}, auth=auth) == (401, {"error": "unauthorized"})
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+@pytest.mark.parametrize("wake_at", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", 12345,
+                                     "2099-01-01T00:00:00Z"])
+def test_a_bad_wake_at_is_422_and_changes_nothing(ready, wake_at):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert ask(svc, path="/sleep", body={"wake_at": wake_at}) == (422, {"error": "bad_wake_at"})
+    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[]", b'"x"'])
+def test_a_body_that_is_not_a_json_object_is_422(ready, body):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    assert svc.post("boatyard", 0, "/sleep", body) == (422, {"error": "bad_body"})
+    assert record(ready)["state"] == "running"
+
+
+def test_a_sleep_while_an_update_runs_or_staff_hold_the_company_is_busy(ready):
+    ready(*add_args(ready))
+    svc = service(ready, lead=0)
+    svc.set("boatyard", state="pulling")
+    assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
+    svc.set("boatyard", state="idle")
+    fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)          # `cell update` (or stop, start...) run by staff, under way
+    try:
+        assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
+    finally:
+        os.close(fd)
+    assert record(ready)["state"] == "running" and status(svc)["state"] == "idle"
+    assert ask(svc, path="/sleep", body={"wake_at": None})[0] == 202 and record(ready)["state"] == "sleeping"
+
+
+def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
+    import http.client
+    ready(*add_args(ready))
+    svc = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
+    listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
+    try:
+        port = listener.server_address[1]
+
+        def call(body, auth="Bearer " + token(ready)):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("POST", "/sleep", body=body, headers={"Authorization": auth})
+            r = c.getresponse()
+            out = (r.status, json.loads(r.read()))
+            c.close()
+            return out
+        assert call(b'{"wake_at": null}', auth="Bearer nope") == (401, {"error": "unauthorized"})
+        assert call(b"x" * (U.MAX_BODY + 1))[0] == 413
+        assert call(b'{"wake_at": "soon"}') == (422, {"error": "bad_wake_at"})
+        assert call(b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
+        for worker in list(svc.workers):
+            worker.join(10)
+        assert record(ready)["state"] == "sleeping"
+    finally:
+        listener.shutdown()
+        listener.server_close()
+    strict = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+        c.request("POST", "/sleep", body=b'{"wake_at": null}', headers={"Authorization": "Bearer " + token(ready)})
+        assert c.getresponse().status == 403
+        c.close()
+    finally:
+        listener.shutdown()
+        listener.server_close()
 
 
 def load_sidecar(monkeypatch, tmp_path):
