@@ -73,8 +73,8 @@ local ticket record. Closed requests remain readable.
 - **Tico support** is under the **+** in Ask (the button at the bottom left, or the phone's Ask tab). It opens Help
   with a new request, ready to write; **Tico team** opens one asking for full management. A link to `#/support` in a
   chat opens it the same way. **Loop in Tico Support**, the switch under the Ask chat, shows an open request's
-  messages in that chat as blue-gray bubbles and writes your replies to it, or starts a request with the chat's last
-  lines when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
+  messages in that chat as blue-gray bubbles and writes your replies to it. Turning it on sends the chat's last 20
+  turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,

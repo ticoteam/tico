@@ -19,11 +19,14 @@ In the thread the Assistant's turns are plain text, with the dot beside the newe
 requests ([Support](support.md)): while one of your open requests is in the chat, its chip **Tico Support ×** sits at
 the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
 time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
-support instead of the Assistant. The chip's **×**, or the switch, takes it out: "Tico Support can no longer see chats."
-The request itself stays open in Support; only this chat stops showing it (remembered on this browser), and the
-switch brings it back. With no open request the switch opens Support with a new request holding the chat's last few
-lines, which you read, change and send yourself. The **+** still opens **Tico support** (free) or **Tico team** (full
-management of your company) for a request of its own.
+support instead of the Assistant. Turning the switch on shares the chat, as its label says: the chat's last 20 turns
+(yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
+out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
+With no open request, turning it on sends a new request holding them, with no form; a request taken out earlier comes
+back and gets them instead. The chip's **×**, or the switch, takes it out: "Tico Support can no longer see chats."
+Nothing more from this chat goes to support; the request itself stays open in Support, only this chat stops showing it
+(remembered on this browser). The **+** still opens **Tico support** (free: every request, diagnostics, a new request
+of its own) or **Tico team** (full management of your company).
 
 A **peek** is one line beside the closed dot (above the tab bar on a phone) about a bot's question waiting on you:
 "BotOps asks: …". Tap it and the chat opens on that question; × dismisses it for good. One at a time, none in the first

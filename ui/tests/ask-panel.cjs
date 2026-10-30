@@ -56,6 +56,12 @@ async function open(browser, viewport, state) {
       else t.messages.push({body: JSON.parse(route.request().postData()).message, from: 'you', created: new Date().toISOString()});
       return json(t);
     }
+    if (p === '/api/v2/support/tickets' && method === 'POST') {
+      const body = JSON.parse(route.request().postData()), t = {id: 'sup_' + (state.tickets.length + 1), status: 'open', unread: false,
+        title: body.message.slice(0, 40), message: body.message, created: new Date().toISOString(), messages: []};
+      (state.filed ||= []).push(body); state.tickets.unshift(t);
+      return route.fulfill({status: 201, contentType: 'application/json', body: JSON.stringify(t)});
+    }
     if (p === '/api/v2/support/tickets' || p === '/api/v2/support/tickets/refresh') return listing();
     if (p === '/api/v2/support/compose') return json({email: 'ben@example.test', diagnostics: {}});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -154,10 +160,13 @@ async function open(browser, viewport, state) {
     assert.equal(await box.getAttribute('placeholder'), 'Ask anything…');
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.hidden.ben'))), ['sup_1']);
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
-    // The switch brings it back, and takes it out again.
+    // The switch brings it back, sharing the chat with it (not drawn again: it is on screen), and takes it out again.
     await sw.click();
     await chip.waitFor();
     assert.equal(await sw.getAttribute('aria-checked'), 'true');
+    assert.equal(state.tickets[0].messages.at(-1).body, 'Shared from my chat with Assistant:\n\nMe: Where is the launch plan?\nAssistant: In Docs.',
+      'the chat with the Assistant went to the request');
+    assert.equal(await thread.locator('.ask-sup', {hasText: 'Shared from'}).count(), 0);
     assert.equal(await panel.locator('.ask-sys').last().innerText(), 'You added Tico Support. They can now see chats.');
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
     assert.equal(await chip.isVisible(), true, 'the chip landed');
@@ -179,7 +188,7 @@ async function open(browser, viewport, state) {
     await page.keyboard.press('Escape');
     await page.locator('#support-pop[open]').waitFor({state: 'detached'}).catch(() => {});
     await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
-    // The + offers Tico support and the Tico team; Esc closes the menu, then the panel; ⌘J opens it again.
+    // The + offers Tico support (all of Support) and the Tico team; Esc closes the menu, then the panel; ⌘J opens it again.
     await page.locator('#ask-add').click();
     const menu = panel.getByRole('menu');
     assert.deepEqual((await menu.getByRole('menuitem').allInnerTexts()).map(t => t.replace(/\s+/g, ' ')), ['Tico support Free', 'Tico team Full management']);
@@ -201,7 +210,8 @@ async function open(browser, viewport, state) {
 
     // A phone: the dot in the middle of the tab bar opens a sheet over the page, above the tab bar, and closes it.
     const ask = (id, who, body) => ({kind: 'ask', id, created: now, ask: {id, from_actor: who, to_actor: 'human:ben', body, created: now, refs: {}}});
-    state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
+    state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank'), msg('p2', 'bot:coo', 'Try a reload.')],
+      sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
@@ -245,6 +255,16 @@ async function open(browser, viewport, state) {
     await page.locator('#ask-panel .ask-card[data-ask-q="m7"]').waitFor();
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m7"]').isVisible(), true);
     assert.equal(await peek.isHidden(), true);
+    // No open request: turning Tico Support on sends a new one at once (no form), holding the chat with its key cut out.
+    const psw = page.locator('#ask-panel').getByRole('switch', {name: 'Loop in Tico Support'});
+    assert.equal(await psw.getAttribute('aria-checked'), 'false');
+    await psw.click();
+    await page.locator('#ask-panel [data-ask-people] .ask-sup-chip').waitFor();
+    assert.equal(await psw.getAttribute('aria-checked'), 'true');
+    assert.deepEqual(state.filed.map(f => f.message), ['Shared from my chat with Assistant:\n\nMe: Our key is [key], board blank\nAssistant: Try a reload.']);
+    assert.equal(await page.locator('#support-pop[open]').count(), 0, 'sent at once, no form');
+    assert.equal(await page.locator('#ask-panel .ask-sup', {hasText: 'Shared from'}).count(), 0, 'not drawn again');
+    assert.equal(await page.locator('#ask-panel .ask-sys').last().innerText(), 'You added Tico Support. They can now see chats.');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     assert.equal(await peek.isHidden(), true, 'each question peeks once');

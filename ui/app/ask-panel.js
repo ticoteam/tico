@@ -12,8 +12,9 @@
 // "Loop in Tico Support", one switch under the thread, brings Tico support into the chat over its existing requests
 // (ui/support.js, ask-rules.js askSupportState): while one of the person's open requests is in the chat its messages
 // flow in with the Assistant's, the box writes to it, and its chip in the header (or the switch) takes it out again.
-// With no open request the switch starts one in Support with the chat's last lines, which the person reads and sends.
-// The + still opens Support (free) or asks the Tico team to manage the company.
+// Turning it on shares the chat (ask-rules.js askSupportSwitch): its last 20 turns, scrubbed of keys, go to the request
+// (a new one, sent at once, when none is open). Off, nothing more from this chat goes; the request stays open.
+// The + still opens Support itself (every request, diagnostics, a new request) or asks the Tico team to manage the company.
 // What waits on the person from anyone else comes at the end as cards: a Confirm card a bot such as BotOps left in its
 // own chat (GET /v2/assistant `pending`), and bots' questions (Needs you), answered here or by telling the Assistant.
 // A peek beside the closed dot points at the first of those questions (askPeek).
@@ -253,20 +254,28 @@ function askChipOut(chip) {
   ], {duration: 760, easing: 'cubic-bezier(.3,0,.5,1)'});
   run.onfinish = run.oncancel = () => b.remove();
 }
-// The switch (or the chip's ×): take the request out of the chat, bring one taken out back, or start one in Support.
-function askFlip() {
-  const act = askSupportFlip(askSupport());
-  if (act.do === 'drop') askSetHidden([...askHiddenTickets(), act.id]);
-  else if (act.do === 'show') askSetHidden(askHiddenTickets().filter(id => id !== act.id));
-  else if (act.do === 'file') {
-    const lines = ASK?.transcript?.() || '';
-    askHandOff('[data-ask-switch]');
-    if (lines) window.supportStart?.(lines); else window.supportOpen?.();
-    return;
+// The switch (or the chip's ×): take the request out of the chat, or bring support in, sharing the chat with it (a
+// request taken out comes back; with none open, a new one is sent). The switch waits while that is on its way.
+async function askFlip() {
+  const panel = $('#ask-panel'), sw = panel?.querySelector('[data-ask-switch]'), error = panel?.querySelector('[data-ask-error]');
+  if (!ASK || ASK.flipping) return;
+  ASK.flipping = true;
+  if (sw) sw.disabled = true;
+  try {
+    const act = await askSupportSwitch(askSupport(), {
+      share: () => ASK?.share?.() || askShareText([], myChatName()),
+      file: text => window.supportFile(text),
+      reply: (id, text) => window.supportReply(id, text),
+      hide: id => askSetHidden([...askHiddenTickets(), id]),
+      show: id => askSetHidden(askHiddenTickets().filter(x => x !== id)),
+    });
+    if (act.do !== 'none') { askPeople(); ASK?.draw?.(); }
+  } catch (e) {
+    if (error) { error.textContent = 'Tico Support was not added. ' + (e?.message || 'Try again in a moment.'); error.hidden = false; }
+  } finally {
+    ASK.flipping = false;
+    if (sw) sw.disabled = false;
   }
-  if (act.do === 'none') return;
-  askPeople();
-  ASK?.draw?.();
 }
 // Support opening from the panel: on a computer focus stays where it was asked from, so closing Support lands back
 // there; a phone has room for one sheet, so Ask's gives way to Support's and focus waits on the Ask tab.
@@ -282,8 +291,9 @@ function askSupportRows(t, until = '') {
   const row = (body, staff, at, i) => ({at, staff, html: staff
     ? `<div class="ask-sup them" data-ask-row="sup:${esc(t.id)}:${i}"><span class="ask-sav"><span class="nav-icon" aria-hidden="true">headset_mic</span></span><div><small>Tico Support</small><div class="ask-sup-body">${esc(body)}</div></div></div>`
     : `<div class="ask-sup you" data-ask-row="sup:${esc(t.id)}:${i}"><div class="ask-sup-body">${esc(body)}</div></div>`});
+  // What the switch shared is the chat already on screen: not drawn again.
   return [row(t.message, false, t.created, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created, i + 1))]
-    .filter(r => (Date.parse(r.at || '') || 0) <= end);
+    .filter((r, i) => (Date.parse(r.at || '') || 0) <= end && !(!r.staff && askShared(i ? t.messages[i - 1].body : t.message)));
 }
 const askSysRow = s => ({at: s.at, sys: true, html: `<div class="ask-sys" data-ask-row="${esc(s.key)}" role="status">${esc(s.text)}</div>`});
 function askClick(ev) {
@@ -466,12 +476,9 @@ async function askLoad(chat) {
     if (q) { chat.focusQ = ''; q.scrollIntoView({block: 'nearest'}); if (!askPhone()) q.querySelector('input, button, a')?.focus(); }
   };
   chat.draw = draw;
-  // The chat's last few lines, for a new request to Tico support (the person reads them before they go).
-  chat.transcript = () => {
-    const lines = messages.filter(m => m.body && (isReply(m) || m.from_actor === myActor())).slice(-6)
-      .map(m => `${isReply(m) ? info?.name || 'Assistant' : 'Me'}: ${chatLine(plainActors(m.body), 300)}`);
-    return lines.length ? `From my chat with ${info?.name || 'the Assistant'}:\n\n${lines.join('\n')}\n\n` : '';
-  };
+  // What turning Tico Support on shares: the chat's turns, Ben's and the Assistant's, scrubbed (ask-rules askShareText).
+  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.from_actor === myActor()))
+    .map(m => ({me: !isReply(m), text: plainActors(m.body)})), info?.name || 'Assistant');
   // The whole chat again, with the Confirm cards waiting in other chats.
   const snapshot = async () => {
     if (!info?.room_id || !current()) return;
@@ -499,9 +506,9 @@ async function askLoad(chat) {
     if (!text || !P || P.sending) return;
     P.sending = true; pillButtons(P); fail('');
     // Tico Support in the chat: the box writes to its request.
-    const sup = askSupport();
-    if (sup.on) {
-      try { await window.supportReply(sup.ticket.id, text); if (current()) { pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw(); } }
+    const to = askSendTo(askSupport());
+    if (to.to === 'support') {
+      try { await window.supportReply(to.id, text); if (current()) { pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw(); } }
       catch (e) { fail('Not sent. ' + e.message); }
       finally { P.sending = false; if (current()) pillButtons(P); }
       return;
