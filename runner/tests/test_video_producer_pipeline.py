@@ -89,7 +89,7 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
 
 
 def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
-    stages = cfg(repo)
+    cfg(repo)
     (repo.root / "pipeline.yaml").write_text((repo.root / "pipeline.yaml").read_text().replace(
         "  - id: script\n    mover: owner", "  - id: script\n    mover: bot:reviewer"))
     put(repo, "brief", "brief.md", approve=True)
