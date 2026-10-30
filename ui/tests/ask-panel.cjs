@@ -42,7 +42,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
     if (p === '/api/v2/messages/m9/answer') { state.answers.push(JSON.parse(route.request().postData()).text); state.needs = []; return json({ok: true}); }
-    if (p === '/api/v2/tasks/t7/answers') { state.picked.push(JSON.parse(route.request().postData()).answers.tone); state.needs = []; return json({ok: true}); }
+    if (p === '/api/v2/tasks/t7/answers') { state.picked.push(JSON.parse(route.request().postData()).answers['tone-2']); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData());
       state.sent.push(body);
@@ -186,6 +186,12 @@ const words = text => text.trim().split(/\s+/).length;
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
     await thread.locator('.ask-card[data-ask-q="m10"]').waitFor();
     assert.equal(await tone.locator('select').inputValue(), '2', 'the pick stays across a redraw');
+    // Reworded (a new question id), the old pick is gone: the recommended option shows. Back to the pick for Send.
+    state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone-2', question: 'Which tone now?', options: [{label: 'Plain'}, {label: 'Friendly', recommended: true}, {label: 'Formal'}]}]}}), state.needs[1]];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    await tone.getByText('Which tone now?').waitFor();
+    assert.equal(await tone.locator('select').inputValue(), '1', 'a reworded question starts at its recommended option');
+    await tone.locator('select').selectOption('2');
     await tone.getByRole('button', {name: 'Send'}).click();
     await tone.waitFor({state: 'detached'});
     assert.deepEqual(state.picked, [['Formal']]);

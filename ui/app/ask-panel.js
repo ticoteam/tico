@@ -294,8 +294,9 @@ const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardA
 // A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
 // or more picks are one list and Send.
 const ASK_Q_LONG = 160;
-// A pick chosen in a list and not yet sent, by question: the thread is drawn again whenever the chat changes.
-const askPicks = new Map();
+// A pick chosen in a list and not yet sent, by the question's wording ("task:question id", a reworded ask gets a new
+// id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
+const askPicks = new Map(), askPickKey = (it, q) => `${it.id}:${q.id}`;
 function askQuestionHTML(it) {
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
   const text = plainActors(q ? q.question : it.ask.body);
@@ -303,8 +304,10 @@ function askQuestionHTML(it) {
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
   const structured = it.kind === 'question' && (it.ask.refs?.questions || []).length;
   const answer = q?.multi || (structured && !q) ? `<a href="#/task/${encodeURIComponent(it.id)}">Answer</a>`
-    : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i) =>
-      `<option value="${i}"${(askPicks.has(it.id) ? askPicks.get(it.id) === i : o.recommended) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
+    : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(askPickKey(it, q))}"><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i, all) => {
+      const kept = askPicks.get(askPickKey(it, q)), on = all.some(x => x.label === kept) ? o.label === kept : o.recommended;
+      return `<option value="${i}"${on ? ' selected' : ''}>${esc(o.label)}</option>`;
+    }).join('')}</select><button type="submit" class="ghost">Send</button></form>`
     : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
     : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
   return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
@@ -419,11 +422,13 @@ async function askLoad(chat) {
     askDot();
     // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
     // and bots' questions. One with no time comes last.
-    const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString();
+    const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
     chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
     const cards = chat.pending.map(a => ({at: a.created || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(askQuestions().map(it => ({at: it.ask?.created || it.created || late, html: askQuestionHTML(it)})));
+      .concat(asks.map(it => ({at: it.ask?.created || it.created || late, html: askQuestionHTML(it)})));
+    const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
+    for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
     const rows = messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})}))
       .concat(supRows, sys.map(askSysRow), cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
@@ -543,7 +548,7 @@ $('#mobile-ask')?.addEventListener('click', () => askToggle());
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
-  if (choose) askPicks.set(choose.closest('[data-ask-q]').dataset.askQ, Number(choose.elements.pick.value));
+  if (choose) askPicks.set(choose.dataset.askChoose, choose.elements.pick.selectedOptions[0]?.textContent || '');
 });
 $('#ask-panel')?.addEventListener('submit', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
