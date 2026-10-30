@@ -36,10 +36,9 @@
 .viewer-nav.prev{left:10px}.viewer-nav.next{right:10px}.viewer-nav:hover{background:rgba(20,24,30,.8)}
 .inline-thumb{display:block;margin:6px 0 2px;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface2);cursor:zoom-in;max-width:min(320px,100%)}
 /* linked pictures hold a sized place, shimmering, until they arrive */
-.inline-thumb:not(.ready),.md img:not(.ready){min-width:min(200px,100%);min-height:110px;background:linear-gradient(90deg,var(--surface2) 25%,var(--line) 50%,var(--surface2) 75%);background-size:200% 100%;animation:mskel 1.2s linear infinite}
+.inline-thumb:not(.ready),.md img:not(.ready){min-width:min(200px,100%);min-height:110px}
 .inline-thumb:not(.ready) img{opacity:0}
 .md img.broken{display:none}
-@media (prefers-reduced-motion:reduce){.inline-thumb:not(.ready),.md img:not(.ready){animation:none}}
 .inline-thumb img{display:block;max-width:100%;max-height:220px;object-fit:cover;background:linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 0 0/16px 16px,linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 8px 8px/16px 16px,#fff}
 .media-link::before{content:attr(data-media);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);padding:1px 5px;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);margin-right:5px;vertical-align:1px}
 .md img{max-width:100%;border-radius:8px;cursor:zoom-in}

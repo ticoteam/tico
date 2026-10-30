@@ -1119,11 +1119,14 @@ def capacity_continuation(c, job_id):
     return row[0] if row else None
 
 
+SOURCE_CONTINUATION_SQL = ("SELECT result_json FROM attempts WHERE job_id=? "
+                           "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1")
+
+
 def source_continuation(c, job_id):
     """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
-    row = c.execute("SELECT result_json FROM attempts WHERE job_id=? "
-                    "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1",
-                    (job_id,)).fetchone()
+    from .read_cache import one
+    row = one(c, SOURCE_CONTINUATION_SQL, (job_id,))
     return json.loads(row[0]).get('source_continuation') if row else None
 
 
@@ -1993,16 +1996,47 @@ def prime_claimables(c, bots, first=3):
         waiting = [job["message_id"] for queue in jobs.values()
                    for job in (queue if first is None else queue[:first])]
         privacy.prime_queued(c, H.prime_messages(c, waiting).values())
+        if first is None:
+            prime_job_checks(c, [job for queue in jobs.values() for job in queue])
 
 
-def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False):
+def prime_job_checks(c, jobs):
+    """What job_refusal reads for each of these queued jobs besides its message and task (prime_queued), one query
+    a table for all of them: the job's fallback continuation (login_refusal), its task's queue return and step
+    (auto_tasks.prime_checks) and check model (check_models.prime). A batch row carries its key after the columns
+    the one-row read selects, which are read by position or name only."""
+    from .read_cache import cache, prime
+    if cache(c) is None or not jobs:
+        return
+    ids = [job["id"] for job in jobs]
+    found = {}
+    for part in H.chunks(ids):
+        for row in c.execute("SELECT result_json,job_id FROM attempts WHERE job_id IN (%s) "
+                             "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC"
+                             % ",".join("?" * len(part)), part):
+            found.setdefault(row["job_id"], row)
+    prime(c, SOURCE_CONTINUATION_SQL, {(job_id,): found.get(job_id) for job_id in ids})
+    tasks, pairs = [], set()
+    for job in jobs:
+        message = H.message(c, job["message_id"])
+        if not message:
+            continue
+        task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
+        task = H.task(c, task_id) if task_id else None
+        tasks.append(task)
+        pairs.add((task_id, job["bot"]))
+    auto_tasks.prime_checks(c, tasks)
+    check_models.prime(c, pairs)
+
+
+def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False, *, suspect=None):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
     a builder hand-off, then the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
     neither held nor slow, and neither is an old free job behind a young chat the claim takes first.
     `oldest` diagnoses the oldest job outside a held lane; `with_job` also returns its ID for
-    observation aging and message-level authorization."""
+    observation aging and message-level authorization. `suspect`: as queued_reasons takes it."""
     def result(reason, first=None, person=None, job=None):
         values = (reason, first, person, job)
         return values if with_job else values[:3]
@@ -2036,7 +2070,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         elif not job["free"]:
             why = "uncertain"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         if why is None or (oldest and why != "lane_held"):
             return result(why, job["created"], person, job["id"])
@@ -2056,7 +2090,9 @@ def _queue_suspects(c, queue):
         task = H.task(c, task_id) if task_id else None
         if task:
             tasks.append(task)
-    return auto_tasks.maybe_waiting(c, tasks)
+    suspect = auto_tasks.maybe_waiting(c, tasks)
+    auto_tasks.prime_waits(c, [task for task in tasks if task["id"] in suspect])     # each is asked `waiting` next
+    return suspect
 
 
 def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, suspect=None):

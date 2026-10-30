@@ -433,10 +433,9 @@ state are also placed. Existing assignments and repository grants stay in place.
 
 ## Adding a bot later
 
-**Team → Add bot** makes a Recruiting seat first: a role title, who it reports to (you, or for the owner anyone on the
+**Team → + → Recruit a bot** (or a group's **+**) makes a Recruiting seat first: a role title, who it reports to (you, or for the owner anyone on the
 chart; otherwise a bot you manage) and, optionally, a job description. Then it opens the seat like any other
-([Recruiting a seat](#recruiting-a-seat)). **Ask BotOps** in the same form opens its chat with an editable request
-instead.
+([Recruiting a seat](#recruiting-a-seat)).
 
 **Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Recruit
 candidates** (the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and

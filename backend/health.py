@@ -637,14 +637,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             claimable = (('company_limit', None, False) if company_stopped else
-                         _claimable(c, settings, where[0], slug, limits))
+                         _claimable(c, settings, where[0], slug, limits, suspect=suspect))
             if claimable is None:
                 continue        # the claim's check for this bot raised: Health names that check instead
             refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True)
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, suspect=suspect)
                 if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.

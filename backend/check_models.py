@@ -114,6 +114,23 @@ def record(c, actor, task_id, check):
                   check["role"] + (f"; {check['note']}" if check.get("note") else ""))
 
 
+def prime(c, pairs):
+    """Seed H.check_model's read for these (task id, bot) pairs that have no check model, one query for all: most
+    queued work is no check subtask, and Health asks for every queued job (execution.prime_job_checks). A pair with
+    one is left to its own read, which returns exactly the columns check_model selects."""
+    from .read_cache import cache, prime as seed
+    pairs = {(tid, bot) for tid, bot in pairs if tid and bot}
+    if cache(c) is None or not pairs or not H._has_table(c, "task_check_models"):
+        return
+    have = set()
+    for part in H.chunks(sorted({tid for tid, _ in pairs})):
+        have.update((row[0], row[1]) for row in c.execute(
+            "SELECT m.task_id,m.created_by FROM task_check_models m JOIN tasks t ON t.id=m.task_id "
+            f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner=m.created_by", part))
+    seed(c, H.CHECK_MODEL_SQL, {(tid, "bot:" + bot, "bot:" + bot): None
+                                for tid, bot in pairs if (tid, "bot:" + bot) not in have})
+
+
 def of(c, task_id, bot):
     """The check model `bot`'s turns on the task run on, or None: only the bot that filed the check, while it owns it.
     While its first model would run on the default login that move_on found out of quota, and that login still is, the

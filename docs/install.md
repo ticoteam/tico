@@ -668,6 +668,10 @@ The runner enrolls, starts, and comes back by itself after a reboot or a server 
 bots' repositories live in a Docker volume, so running the line again never enrolls a second runner. If the server no
 longer knows the runner (a wiped database), start it again with a new code.
 
+**A server that moved** (a new address, such as `http://server:8765` to `https://hub.tico.team`): change `TICO_URL` in the
+runner's `.env` and restart it. The runner keeps its login and follows the new address, as long as it is the same server
+that enrolled it; any other address is left alone and the log says so.
+
 **Reinstalling a runner** (its volumes were wiped, or the server forgot it): make a new code in Settings > Computers > Add
 computer and run the installer again with it. `--code`, `--url` and `--label` given on that line replace their own keys in the
 existing `/opt/tico-runner/.env` (it says which), and every other setting stays; `--url` and `--code` are only required when there

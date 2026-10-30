@@ -60,6 +60,23 @@ def test_dead_turn_sweep_walks_live_runs(api):
     assert "attempts_created" not in text, text
 
 
+def test_health_held_totals_walk_live_runs(api):
+    # Unhinted, the GROUP BY picked attempts_runner_finished and walked every attempt ever run (48 ms on Tico Team).
+    from backend import start_places
+    tidy_stats(api)
+    assert "INDEXED BY attempts_live_lease" in start_places.HELD_TOTALS_SQL
+    text = plan(api, start_places.HELD_TOTALS_SQL, (NOW, NOW))
+    assert "USING INDEX attempts_live_lease" in text, text
+    assert "attempts_runner_finished" not in text, text
+
+
+def test_needs_you_withdrawn_count_seeks_replaced_asks(api):
+    # On messages_to_delivered it walked every message to the person (31k on Tico Team) for a few hundred asks.
+    tidy_stats(api)
+    text = plan(api, views.WITHDRAWN_ASKS_SQL, ("chris", NOW))
+    assert "SEARCH s USING INDEX messages_superseded_asks_to" in text, text
+
+
 def test_worktree_inventory_seeks_one_computers_worktrees(api):
     # worktrees.inventory runs on every heartbeat; without a computer index it scanned every worktree link ever kept.
     import sqlite3

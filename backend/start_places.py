@@ -66,15 +66,19 @@ def held(c, runner_id):
     return out
 
 
+# Without the hint SQLite walked attempts_runner_finished (every attempt ever run) to skip the GROUP BY sort:
+# 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
+HELD_TOTALS_SQL = (
+    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
+    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' "
+    "AND a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id")
+
+
 def held_totals(c):
     """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
     `held` once per runner while already walking the fleet."""
     now = H.now()
-    return {r[0]: r[1] for r in c.execute(
-        "SELECT a.runner_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id",
-        (now, now))}
+    return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
 
 
 # A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity). A runner that cannot take a

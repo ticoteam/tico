@@ -215,6 +215,8 @@ async function shot(page, name) {
       await page.locator('#tree li.org-group:has(> .noderow a.dept-label.cur) > .noderow .chev').click();
       assert.equal(await kids.isVisible(), !wasOpen, 'the arrow folds the group');
       assert.equal(await page.evaluate(() => location.hash), '#/team/eng', 'and does not open the page');
+      // Its name unfolds a folded group.
+      if (!(await kids.isVisible())) { await label.click(); await kids.waitFor(); }
       // Its audience: narrowed to chosen people.
       await page.locator('[data-dash-audience]').click();
       await page.locator('#dash-dialog[open] [name="everyone"]').uncheck();
