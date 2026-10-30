@@ -1006,8 +1006,14 @@ def connect(path=None, adopt_legacy=False):
     target = Path(target).expanduser()
     if str(target) != ":memory:":
         target.parent.mkdir(parents=True, exist_ok=True)
+    # A file that does not exist yet (or is empty) is new: it takes auto_vacuum=INCREMENTAL before its first table, so
+    # the sweeps' freed pages can go back to the disk (store.reclaim_free_pages). An existing file keeps its mode;
+    # changing that needs a VACUUM.
+    fresh = str(target) == ":memory:" or not target.exists() or target.stat().st_size == 0
     conn = sqlite3.connect(str(target), timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    if fresh:
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")

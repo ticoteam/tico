@@ -729,6 +729,47 @@ def sweep_credential_uses(store, now=None, batch=TRIM_BATCH, most=TRIM_MAX, page
     return deleted
 
 
+# Pages returned to the disk per write transaction: 2000 x 4 KB = 8 MB. The writer gate is held for one step at a time.
+VACUUM_STEP_PAGES = 2000
+# Free pages kept in the file for reuse, so the next writes take them without growing the file again.
+VACUUM_FLOOR_PAGES = 1000
+VACUUM_PASS_MAX = 256 * 1024 * 1024      # bytes one hourly pass returns at most; the rest waits for the next pass
+_vacuum_hint_logged = False
+
+
+def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, most=VACUUM_PASS_MAX):
+    """Return the free pages the sweeps leave behind to the disk (PRAGMA incremental_vacuum); returns the pages returned.
+
+    Only a file with auto_vacuum=INCREMENTAL (hubdb.connect sets it on every new file) is touched, and any other file
+    costs one read. Never a full VACUUM. Each step is its own write transaction, and the pass stops at `floor` free
+    pages or `most` bytes, whichever comes first."""
+    global _vacuum_hint_logged
+    with store.read() as c:
+        mode = c.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if mode != 2:
+            if not _vacuum_hint_logged:
+                _vacuum_hint_logged = True
+                logging.getLogger(__name__).info(
+                    "hub database has auto_vacuum=%s: a VACUUM would let the sweeps' freed pages go back to the disk",
+                    mode)
+            return 0
+        page = c.execute("PRAGMA page_size").fetchone()[0]
+    budget = most // page
+    returned = 0
+    while returned < budget:
+        # The freelist is read inside the write transaction, so a concurrent delete's pages are counted too.
+        with store.transaction() as c:
+            free = c.execute("PRAGMA freelist_count").fetchone()[0]
+            n = min(step, free - floor, budget - returned)
+            if n <= 0:
+                break
+            removed = len(c.execute(f"PRAGMA incremental_vacuum({int(n)})").fetchall())
+        returned += removed
+        if not removed:
+            break
+    return returned
+
+
 def sweep_mail(store, now=None, batch=5000):
     """Delete mail older than the retention window, including matching FTS rows.
 
