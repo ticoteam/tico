@@ -14,7 +14,7 @@ from .settings_catalog import Setting as S
 SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
-     "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
+     "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
      "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
      "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
      "cloud-machines.js"])
@@ -27,6 +27,7 @@ def _card(tab, card=""):
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
 INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
+MAIL = "Settings > Mail"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -323,6 +324,12 @@ ENTRIES = TEAM_RULES + [
     S("inbound.phone_request.cancel", "Cancel a phone request", INBOUND, "admin", "direct", "POST",
       "inbound/phone-requests/{id}/cancel", value="json", card=_card("inbound", "set-inbound")),
     # Usage
+    S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
+      value="json", card=_card("mail", "settings-mail-addresses"),
+      words="physical mail mailbox postal address registered agent office lease form 1583"),
+    S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
+      value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
+      words="physical mail scans email in postal provider"),
     S("team.limit.usd", "Company spend limit", "Usage > Company", "admin", "confirm", "PUT", "usage/limits",
       value="json", card="#/usage", read="usage/limits#default", words="usd dollars spend " + _USD),
     S("pool.limit.usd", "Pool spend limit", "Usage > Pools", "admin", "confirm", "PUT", "usage/pools/{id}",
@@ -337,7 +344,7 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
-               "bot.cloud_machine", "cloud.shared_machine")
+               "bot.cloud_machine", "cloud.shared_machine", "mail.address.order")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]
@@ -373,4 +380,5 @@ NOT_SETTINGS = {
     ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",
     ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
     ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",
+    ("POST", "postal/items/{x}/retry"): "tries one failed letter again",
 }

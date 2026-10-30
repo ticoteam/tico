@@ -1,7 +1,7 @@
 # Physical mail
 
-> **Unreleased**: the install side is built; Tico Gateway's mailboxes are not on sale yet, and Settings > Mail is still
-> to come. The API below may change.
+> **Unreleased**: the install side and Settings > Mail are built; Tico Gateway's mailboxes are not on sale yet. The API
+> below may change.
 
 Tico Mail brings the company's paper mail into Tico. Each scanned letter is saved as a file, read, sorted by kind and
 sent to whoever handles that kind. Legal papers reach the owner at once.
@@ -50,6 +50,12 @@ A letter whose scan or reading fails is marked `failed` and tried again after 1 
 last try a scan that still cannot be read is filed for the owner unread, so nobody misses it. A retry never makes a
 second task.
 
+## Settings > Mail
+
+Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
+Pending; Get an address (owner or admin: state, kind and price; an office lease only in California, Delaware and
+Florida); Bring your own (the intake inbox); Recent letters, with Retry on a failed one for an owner or admin.
+
 ## API, CLI and MCP
 
 | | |
@@ -57,7 +63,7 @@ second task.
 | `GET /api/v2/postal/items` (`status`, `kind`, `after`, `limit`) | Letters, newest first. Owners and admins see every letter; anyone else sees the letters whose task they can read. |
 | `GET /api/v2/postal/items/{id}` | One letter: summary, kind, sender, deadline, task, file id and scan link, mailbox flags. |
 | `POST /api/v2/postal/items/{id}/retry` | Try a failed letter again (owner or admin). |
-| `GET /api/v2/postal/addresses` | The company's addresses at Tico Gateway. |
+| `GET /api/v2/postal/addresses` | The company's addresses at Tico Gateway, its orders, and prices when Tico Gateway sends them. |
 | `POST /api/v2/postal/orders` | Order an address (`kind`: `shared`, `private` or `lease`; `state`; `company_name`), owner or admin, with an `Idempotency-Key`. Tico staff fulfil it. |
 | `GET` / `PUT /api/v2/postal/intake` | The email-in inbox. |
 

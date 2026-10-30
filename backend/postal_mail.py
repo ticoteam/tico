@@ -695,13 +695,18 @@ def install(app, settings, store, auth):
 
     @app.get("/api/v2/postal/addresses")
     def mail_addresses(request: Request):
-        """The company's mailing addresses at Tico Gateway: state, kind, registered agent and Form 1583 status."""
+        """The company's mailing addresses at Tico Gateway (state, kind, registered agent and Form 1583 status), its
+        orders, and the prices Tico Gateway sends, if any."""
         who = request.state.identity
         with store.read() as c:
             member(c, who)
         answer = hq("GET", "addresses")
-        items = answer.get("items", answer.get("addresses"))
-        return {"addresses": items[:LISTED] if isinstance(items, list) else []}
+        items, orders = answer.get("items", answer.get("addresses")), answer.get("orders")
+        out = {"addresses": items[:LISTED] if isinstance(items, list) else [],
+               "orders": orders[:LISTED] if isinstance(orders, list) else []}
+        if isinstance(answer.get("prices"), dict):
+            out["prices"] = answer["prices"]
+        return out
 
     class Order(Contract):
         kind: str = Field(pattern="^(shared|private|lease)$")

@@ -83,7 +83,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'repos', 'tasks', 'inbox',
-  'inbound', 'system',
+  'inbound', 'mail', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
 // System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab, now the Models card.
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
@@ -209,6 +209,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
+        <button type="button" data-settings-tab="mail" role="tab">Mail</button>
         <button type="button" data-settings-tab="system" role="tab">System</button>
         <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
@@ -277,6 +278,7 @@ function pageSettings() {
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
+    <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
@@ -354,7 +356,7 @@ function settingsShow(tab) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'system', 'webhooks', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'system', 'webhooks', 'inbound', 'mail', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -400,6 +402,8 @@ function settingsShow(tab) {
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
   const inboundPane = $('#settings-inbound');
   if (inboundPane) { inboundPane.hidden = SETTINGS_TAB !== 'inbound'; if (SETTINGS_TAB === 'inbound') void inboundMount(); }
+  const mailPane = $('#settings-mail');
+  if (mailPane) { mailPane.hidden = SETTINGS_TAB !== 'mail'; if (SETTINGS_TAB === 'mail' && !formBusy(mailPane)) void renderSettingsMail(); }
   const inboxPane = $('#settings-inbox');
   if (inboxPane) { inboxPane.hidden = SETTINGS_TAB !== 'inbox'; if (SETTINGS_TAB === 'inbox') void window.mountGoogleConnect?.($('#set-google')); }
   const reposPane = $('#settings-repos');
