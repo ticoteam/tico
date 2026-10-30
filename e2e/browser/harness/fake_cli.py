@@ -154,9 +154,11 @@ def record_command_line_check(results_path, leaks):
 
 def run_probe(text, servers, argv):
     # A stream-json prompt carries its newlines as \n escapes, which would run a value on into the next words.
-    found = RUN.search(text.replace("\\n", "\n"))
-    if not found:
+    # A codex turn can carry a stale harness-run line ahead of the new one: the last line is the message being answered.
+    matches = list(RUN.finditer(text.replace("\\n", "\n")))
+    if not matches:
         return None
+    found = matches[-1]
     nonce, phase, args = found.group(1), found.group(2), found.group(3)
     values = dict(part.split("=", 1) for part in args.split())
     os.makedirs(os.path.join(ROOT, "dumps"), exist_ok=True)
