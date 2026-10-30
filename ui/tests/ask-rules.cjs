@@ -122,6 +122,23 @@ const SHARED = 'Shared from my chat with Assistant:\n\nMe: The board will not lo
   assert.deepEqual(none.sent.at(-1), {id: 'sup_new', text: SHARED});
   assert.equal(none.filed.length, 1);
   assert.equal(none.state().on, true);
+  // The switch applies to the chat across every open request, including after an older request returns.
+  const many = desk(['sup_new', 'sup_old']);
+  await askSupportSwitch(many.state(), many.io);
+  assert.equal(many.state().on, false, 'one switch turns the chat off across all open requests');
+  many.type('after off');
+  assert.deepEqual(many.sent, []);
+  assert.deepEqual(many.toTico, ['after off']);
+  assert.equal(many.open.length, 2, 'requests stay open in Support');
+  await askSupportSwitch(many.state(), many.io);
+  assert.equal(many.state().ticket.id, 'sup_new', 'turning on restores the newest request');
+  assert.deepEqual(many.sent, [{id: 'sup_new', text: SHARED}]);
+  many.type('while on');
+  assert.deepEqual(many.sent.at(-1), {id: 'sup_new', text: 'while on'});
+  await askSupportSwitch(many.state(), many.io);
+  assert.equal(many.state().on, false, 'turning off again leaves the older request hidden');
+  many.type('after second off');
+  assert.deepEqual(many.toTico, ['after off', 'after second off']);
   // An open request taken out earlier: the chat goes to it first; if that fails the switch stays off.
   const held = desk(['sup_1']);
   held.hidden = ['sup_1'];
