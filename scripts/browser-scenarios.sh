@@ -240,6 +240,28 @@ sc_captcha() {
 }
 
 # Scenario 8: two runs of the same bot as two tasks, which the bot takes at once (its chat would queue them).
+# A task's turn works in its own worktree only when the bot's checkout has an upstream (runner-rs/src/sessions.rs
+# NO_UPSTREAM); without one both turns share the checkout and run one after the other. The upstream is a bare repository
+# in the runner's folder, set as origin the way a bot's first push sets it: the runner takes a checkout whose branch
+# already tracks an upstream as current and leaves its origin alone (runner-rs/src/execute.rs, the upstream check).
+bot_upstream() {
+  local dir
+  dir="$(docker exec "$RUNNER" sh -c "find /home/runner -name AGENT.md -path '*$BOT*' 2>/dev/null | head -n 1")" || true
+  [ -n "$dir" ] || { say "no checkout of $BOT on the computer"; return 1; }
+  dir="$(dirname "$dir")"
+  docker exec -i "$RUNNER" sh -s -- "$BOT" "$dir" <<'SH'
+set -e
+bot=$1 dir=$2 bare=/home/runner/upstream/$1.git
+mkdir -p /home/runner/upstream
+[ -d "$bare" ] || git init -q --bare "$bare"
+cd "$dir"
+git rev-parse --verify -q HEAD >/dev/null || git -c user.name=Tico -c user.email=scenarios@tico.invalid commit -q --allow-empty -m "scenario checkout"
+git remote get-url origin >/dev/null 2>&1 || git remote add origin "$bare"
+git push -q -u origin HEAD
+git rev-parse --abbrev-ref '@{u}'
+SH
+}
+
 task_start() {  # the phase's name: creates one task for the bot that runs the phase, and prints the run's nonce
   local name=$1 nonce text body
   nonce="$name-$RANDOM$RANDOM"
@@ -287,6 +309,9 @@ PY
 sc_concurrent() {
   local first second one two since
   since="$(date -u +%Y-%m-%dT%H:%M:%S)"
+  local upstream
+  upstream="$(bot_upstream)" || { say "the bot's checkout could not get an upstream"; return 1; }
+  say "the bot's checkout tracks $upstream"
   first="$(task_start concurrent)" || { say "the first task was not created"; return 1; }
   second="$(task_start concurrent)" || { say "the second task was not created"; return 1; }
   one="$(task_result "$first")" || { say "the first run did not finish in $PHASE_WAIT seconds"; return 1; }
