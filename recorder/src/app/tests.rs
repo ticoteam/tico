@@ -813,6 +813,143 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
 }
 
 #[test]
+fn an_update_waits_for_every_send_from_its_first_step() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    // An action item on its way to Tico, before any delivery row says "sending".
+    app.mark_sending(Some("item-1"), None);
+    assert_eq!(app.update_hold(), Some("While a meeting is being sent"));
+    // A meeting send still waiting for its last words to be transcribed.
+    app.mark_sending(None, Some("Transcribing…"));
+    assert_eq!(app.update_hold(), Some("While a meeting is being sent"));
+    app.mark_sending(None, None);
+    assert_eq!(app.update_hold(), None);
+}
+
+#[test]
+fn one_install_owns_the_reservation_and_nothing_starts_until_it_is_done() {
+    use crate::update::{Build, Intent, Step, admit};
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store.clone(), directory.path());
+    let idle = Some(std::time::Duration::from_secs(60 * 60));
+    let mut installing = false;
+    // The background thread admits an idle install...
+    let hold = app.update_hold();
+    let background = admit(
+        &mut app.updating,
+        &mut installing,
+        false,
+        Intent::Background,
+        Build::Downloaded,
+        hold,
+        idle,
+    );
+    assert_eq!(background, Step::Install);
+    assert!(installing);
+    // ...and a Restart click in the meantime neither installs too nor takes over the reservation.
+    let hold = app.update_hold();
+    let restart = admit(
+        &mut app.updating,
+        &mut installing,
+        false,
+        Intent::Restart,
+        Build::Downloaded,
+        hold,
+        idle,
+    );
+    assert_eq!(restart, Step::Wait);
+    assert!(app.updating);
+    // Until the owner is done, no recording starts.
+    assert_eq!(app.record(None), None);
+    assert!(app.error.contains("updating"));
+    assert!(store.list().unwrap().is_empty());
+    // The owner finishes; the next Restart may install and restart.
+    installing = false;
+    app.updating = false;
+    let hold = app.update_hold();
+    let restart = admit(
+        &mut app.updating,
+        &mut installing,
+        false,
+        Intent::Restart,
+        Build::Installed,
+        hold,
+        idle,
+    );
+    assert_eq!(restart, Step::InstallAndRestart);
+    assert!(app.updating);
+}
+
+#[test]
+fn quitting_joins_an_admitted_install_and_admits_no_new_one() {
+    use crate::update::{Build, Intent, Step, admit, begin_quit};
+    let idle = Some(std::time::Duration::from_secs(60 * 60));
+    let (mut updating, mut installing, mut quitting) = (false, false, false);
+    // The background thread is admitted but has not started writing when the app quits: the quit waits.
+    assert_eq!(
+        admit(
+            &mut updating,
+            &mut installing,
+            quitting,
+            Intent::Background,
+            Build::Downloaded,
+            None,
+            idle
+        ),
+        Step::Install
+    );
+    assert!(begin_quit(&mut quitting, installing));
+    // Once quitting, a background install that had not been admitted yet is not.
+    let (mut other_updating, mut other_installing) = (false, false);
+    assert_eq!(
+        admit(
+            &mut other_updating,
+            &mut other_installing,
+            quitting,
+            Intent::Background,
+            Build::Downloaded,
+            None,
+            idle
+        ),
+        Step::Wait
+    );
+    assert!(!other_updating && !other_installing);
+    // The quit's own install is still admitted when nothing else holds the app.
+    assert_eq!(
+        admit(
+            &mut other_updating,
+            &mut other_installing,
+            quitting,
+            Intent::Quit,
+            Build::Downloaded,
+            None,
+            None
+        ),
+        Step::Install
+    );
+    // A restart keeps `updating` but is no install in progress, so its own exit does not wait.
+    let (mut restart_updating, mut restart_installing, mut restart_quitting) =
+        (false, false, false);
+    assert_eq!(
+        admit(
+            &mut restart_updating,
+            &mut restart_installing,
+            false,
+            Intent::Restart,
+            Build::Installed,
+            None,
+            None
+        ),
+        Step::InstallAndRestart
+    );
+    restart_installing = false; // apply clears it before restarting
+    assert!(!begin_quit(&mut restart_quitting, restart_installing));
+    assert!(restart_updating);
+}
+
+#[test]
 fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();

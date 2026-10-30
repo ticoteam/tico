@@ -22,6 +22,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const LOOK_EVERY: Duration = Duration::from_secs(30);
 /// Without any focused window for this long, a downloaded build installs in the background.
 pub const IDLE_BEFORE_INSTALL: Duration = Duration::from_secs(10 * 60);
+/// How long quitting waits for a background install that is already running.
+const QUIT_WAIT: Duration = Duration::from_secs(60);
 
 /// Why an install is being considered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +71,39 @@ pub fn decide(intent: Intent, build: Build, hold: Option<&str>, idle: Option<Dur
     }
 }
 
+/// `decide` plus the install admission, taken under the recorder's lock and then the updates lock:
+/// - a step other than Wait takes `updating` (no recording, live meeting or send starts) and `installing`
+///   (an install is accepted, even before it writes anything);
+/// - while another call owns `updating` (the background thread and Restart can overlap) this one waits,
+///   and only the owner clears it;
+/// - once the app is quitting, only the quit itself may install.
+pub fn admit(
+    updating: &mut bool,
+    installing: &mut bool,
+    quitting: bool,
+    intent: Intent,
+    build: Build,
+    hold: Option<&str>,
+    idle: Option<Duration>,
+) -> Step {
+    if *updating || (quitting && intent != Intent::Quit) {
+        return Step::Wait;
+    }
+    let step = decide(intent, build, hold, idle);
+    if step != Step::Wait {
+        *updating = true;
+        *installing = true;
+    }
+    step
+}
+
+/// Quitting: no install is admitted from here on but the quit's own, and the answer is whether one
+/// already admitted is still going (the quit waits for it).
+pub fn begin_quit(quitting: &mut bool, installing: bool) -> bool {
+    *quitting = true;
+    installing
+}
+
 /// What `status.update` shows. Shared by the view, the check thread, window events and the commands.
 #[derive(Clone)]
 pub struct Updates(Arc<Mutex<Pending>>);
@@ -80,6 +115,10 @@ struct Pending {
     /// A downloaded build waiting to be installed.
     ready: Option<(Update, Vec<u8>)>,
     checking: bool,
+    /// An install was admitted and has not finished (quitting waits for it).
+    installing: bool,
+    /// The app is quitting: no new install starts but the quit's own.
+    quitting: bool,
     /// When no window had focus last; None while a window has focus.
     unfocused_since: Option<Instant>,
 }
@@ -92,9 +131,27 @@ impl Default for Updates {
             notes: String::new(),
             ready: None,
             checking: false,
+            installing: false,
+            quitting: false,
             // The app starts unfocused; the first focus event clears this.
             unfocused_since: Some(Instant::now()),
         })))
+    }
+}
+
+impl Pending {
+    fn build(&self) -> Build {
+        if self.state == "installed" {
+            Build::Installed
+        } else if self.ready.is_some() {
+            Build::Downloaded
+        } else {
+            Build::None
+        }
+    }
+
+    fn idle_for(&self) -> Option<Duration> {
+        self.unfocused_since.map(|at| at.elapsed())
     }
 }
 
@@ -126,18 +183,11 @@ impl Updates {
     }
 
     fn build(&self) -> Build {
-        let pending = self.lock();
-        if pending.state == "installed" {
-            Build::Installed
-        } else if pending.ready.is_some() {
-            Build::Downloaded
-        } else {
-            Build::None
-        }
+        self.lock().build()
     }
 
     fn idle_for(&self) -> Option<Duration> {
-        self.lock().unfocused_since.map(|at| at.elapsed())
+        self.lock().idle_for()
     }
 
     /// Tracks focus for the idle rule. A closed or hidden window counts as unfocused.
@@ -223,34 +273,80 @@ fn check(app: &AppHandle, updates: &Updates) {
 
 /// Applies the install policy for `intent`. Returns true when it installed or restarted.
 fn apply(app: &AppHandle, recorder: &Shared, updates: &Updates, intent: Intent) -> bool {
-    let hold = lock_shared(recorder).update_hold();
-    let step = decide(intent, updates.build(), hold, updates.idle_for());
+    // Admission happens under the recorder lock and then the updates lock, so no recording, live meeting or
+    // send can start in between, and a quit sees an admitted install even before it writes anything. Neither
+    // lock is kept: quitting (the restart below, too) takes the recorder lock on the main thread.
+    let step = {
+        let mut shared = lock_shared(recorder);
+        let hold = shared.update_hold();
+        let mut pending = updates.lock();
+        let (build, idle, quitting) = (pending.build(), pending.idle_for(), pending.quitting);
+        admit(
+            &mut shared.updating,
+            &mut pending.installing,
+            quitting,
+            intent,
+            build,
+            hold,
+            idle,
+        )
+    };
     if step == Step::Wait {
         return false;
     }
-    if let Some((update, bytes)) = updates.lock().ready.take() {
-        let version = update.version.clone();
-        if let Err(error) = update.install(&bytes) {
-            eprintln!("update install failed: {error}");
-            updates.set(
-                app,
-                "error",
-                &version,
-                "The update could not be installed. It will be tried again.",
-            );
-            return false;
+    // Taken in its own statement: the Pending lock must be free again before `updates.set` below.
+    let ready = updates.lock().ready.take();
+    let installed = match ready {
+        Some((update, bytes)) => {
+            let version = update.version.clone();
+            let result = update.install(&bytes);
+            updates.lock().installing = false;
+            match result {
+                Ok(()) => {
+                    updates.set(app, "installed", &version, "");
+                    true
+                }
+                Err(error) => {
+                    eprintln!("update install failed: {error}");
+                    updates.set(
+                        app,
+                        "error",
+                        &version,
+                        "The update could not be installed. It will be tried again.",
+                    );
+                    false
+                }
+            }
         }
-        updates.set(app, "installed", &version, "");
-    }
-    if step == Step::InstallAndRestart {
-        // Restart is the last step: the process exits and the installed build starts.
+        None => {
+            updates.lock().installing = false;
+            true
+        }
+    };
+    if installed && step == Step::InstallAndRestart {
+        // Restart is the last step: the process exits and the installed build starts. `updating` stays set.
         app.restart();
     }
-    true
+    lock_shared(recorder).updating = false;
+    installed
 }
 
 /// Called when the app exits: installs a downloaded build if nothing holds the app. No restart.
 pub fn on_quit(app: &AppHandle, recorder: &Shared, updates: &Updates) {
+    // No background install starts from here on, and one already admitted finishes first (even one that has
+    // not started writing), so the app never exits halfway through an install. Restart's own reservation is
+    // `updating`, not `installing`, so a restart does not wait here.
+    let busy = {
+        let mut pending = updates.lock();
+        let installing = pending.installing;
+        begin_quit(&mut pending.quitting, installing)
+    };
+    if busy {
+        let deadline = Instant::now() + QUIT_WAIT;
+        while updates.lock().installing && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
     apply(app, recorder, updates, Intent::Quit);
 }
 
