@@ -1306,7 +1306,10 @@ impl Runner {
             let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
             if crate::hosts::pi::is_gateway(model.as_deref()) || (own_user(&runtime, &text_of(&config["harness"])) && crate::turn_users::available()) {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
-                if let Some(held) = self.pi.reclaim(&owner).filter(|_| runtime == "pi" && session_runtime == runtime) {
+                // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
+                // would drop its lease. Left in the pool, idle eviction releases it the normal way.
+                let kept = if runtime == "pi" && session_runtime == runtime { self.pi.reclaim(&owner) } else { None };
+                if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
                 } else {
                     let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
