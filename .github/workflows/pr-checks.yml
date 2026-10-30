@@ -240,7 +240,7 @@ jobs:
           shared-key: pr-recorder
       - name: Tests with the desktop feature
         working-directory: recorder
-        run: cargo test --locked --features desktop
+        run: cargo test --locked --features desktop,cli
 
   caddy-linux:
     needs: plan

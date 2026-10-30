@@ -8,7 +8,7 @@ TICO_RECORDER_STT_KEY=<OpenRouter key> uv run bench/meeting_bench.py --check
 ```
 
 The first run downloads four AMI meetings (four headsets each, about 800 MB, CC BY 4.0) to
-`~/.cache/tico-recorder-bench` and builds `tico-recorder-cli` with `--features diarize`. A run
+`~/.cache/tico-recorder-bench` and builds `tico-recorder-cli` with `--features cli,diarize`. A run
 costs about $0.25 per scenario with the default model. `--meetings ES2004a` or
 `ES2004a:540-1020` picks meetings and windows; `--model` tries another OpenRouter model; `--save
 DIR` keeps each run's transcript and recorder data.
