@@ -128,7 +128,8 @@ async function staleReadAfterControl(browser, action) {
     await strip.getByRole('button', {name: 'Retry', exact: true}).click();
     await strip.getByRole('button', {name: 'Pause', exact: true}).waitFor();
     state.paused = true; state.record = null; state.tasks = 3;
-    await page.evaluate(() => botAlertDraw());
+    // A change made elsewhere shows once the page's last read is a minute old.
+    await page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
     await strip.getByRole('button', {name: 'Unpause', exact: true}).waitFor();
     assert.match(await strip.innerText(), /3 open tasks are waiting on it/);
     assert.equal(await strip.locator('a').getAttribute('href'), '#/bot/ops/tasks');
@@ -140,7 +141,7 @@ async function staleReadAfterControl(browser, action) {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.SHOTS) await page.screenshot({path: process.env.SHOTS + '/bot-paused-phone.png'});
     state.billing = true;
-    await page.evaluate(() => botAlertDraw());
+    await page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
     await strip.getByText('Company is paused for billing').waitFor();
     assert.equal(await strip.getByRole('button', {name: 'Unpause', exact: true}).count(), 0);
     assert.match(await strip.innerText(), /Ops is paused/);
@@ -149,7 +150,7 @@ async function staleReadAfterControl(browser, action) {
     await page.close();
     const member = await open(browser, 'member', '#/bot/ops/info');
     member.state.paused = true;
-    await member.page.evaluate(() => botAlertDraw());
+    await member.page.evaluate(() => { BOT.pauseLoadedAt = Date.now() - 60_001; botAlertDraw(); });
     await member.page.getByText('Ask Ana to unpause', {exact: true}).waitFor();
     assert.equal(await member.page.locator('#bot-control-host button').count(), 0);
     assert.deepEqual(member.errors, []);
