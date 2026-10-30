@@ -7,7 +7,8 @@ that no one else can read (mode 0600 or stricter), never from argv, and never pr
 what was saved.
 
 Each company is the server a hosted install makes (the stock image and entrypoint, `Settings.to_env()` for its .env,
-the owner link as break-glass, the recommended preset), minus its own Caddy, cloudflared, updater and EC2 instance:
+the owner link as break-glass, the recommended preset), minus its own Caddy, cloudflared, updater sidecar and EC2
+instance:
 
     <root>/cell.json                        the host: the domain every company is a name under, the router's port
     <root>/edge.yaml, router/Caddyfile      the router (Caddy, plain HTTP on 127.0.0.1:8080) and the one tunnel
@@ -19,6 +20,8 @@ the owner link as break-glass, the recommended preset), minus its own Caddy, clo
     <root>/companies/<slug>/company.json    what the cell knows about it (no secrets): port, index, version, state,
                                             aliases
     <root>/companies/<slug>/data/           the server's /data (owned by the server's user, 10001)
+    <root>/companies/<slug>/control/        the server's /control: updater-token (0600, 10001), its updater's secret
+    <root>/companies/<slug>/updater-status.json   the last outcome its updater reports (setup/cell_updater.py)
     <root>/locks/                           one lock for the host's shared files, one per company
 
 A company's index (the smallest free one, kept until `remove` without --keep-data) gives it its loopback port
@@ -30,8 +33,16 @@ restart cloudflared then (it reads its config only when it starts; every company
 a host (a proxied CNAME to the tunnel, or a record of its own that points elsewhere today) is staff's job. Containers
 cannot reach the EC2 metadata service (a DOCKER-USER rule, first in its chain, that `init` installs and `add` checks), so
 no company can use the host's AWS role. `update` snapshots the database before a new release first starts, and puts it
-back if that release does not come up. The app is told Tico runs its updates (TICO_UPDATES=tico), so it has no Update
-now of its own.
+back if that release does not come up.
+
+Each company also has an updater, so its Update now, an update service key (the Release Manager's rollout) and Tico
+support's idle-time target work as on any install: `init` runs one host service (setup/cell_updater.py, systemd unit
+tico-cell-updater) that speaks docker/updater.py's contract to each company on that company's own default-network
+gateway address only (`updater_url`), checks the token in that company's own control/updater-token, and does the work
+with this file's `update` for that company alone. The .env names it (TICO_UPDATER_URL) and marks the server a cell
+company (TICO_CELL=1, for its cloud-access cadence). `update`, even to the release a company already runs, rewrites the
+files `add` derives from the record (compose.yaml, compose.cell.yaml, the updater keys in .env, the token) from this
+core, and restarts the server only when one changed: that is how a company made by an older core picks this up.
 
 Moving an existing install here (staff only; HQ never does): `--own-domain` lets --domain be any hostname instead of
 <slug>.<domain>; `--alias` adds hostnames (its runner and visual addresses); `--env-file` carries its other settings
@@ -53,6 +64,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import stat
@@ -60,6 +72,8 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
+import urllib.request
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,7 +115,7 @@ CELL_ENV_KEYS = frozenset({
     "TICO_OWNER_LINK_HASH", "TICO_BACKUP_URL", "TICO_BACKUP_REGION", "TICO_BACKUP_ENDPOINT", "LITESTREAM_ACCESS_KEY_ID",
     "LITESTREAM_SECRET_ACCESS_KEY", "TICO_COMPANY_FILE", "TICO_COMPANY_FILE_SHA256", "TICO_COMPANY_FILE_B64",
     "TICO_COMPANY_FILE_S3", "TICO_COMPANY_FILE_S3_REGION", "TICO_COMPANY_FILE_DIR", "TICO_SAMPLE_COMPANY",
-    "TICO_UPDATES", "TICO_HOSTED", "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID",
+    "TICO_UPDATES", "TICO_CELL", "TICO_HOSTED", "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID",
     "TICO_OIDC_CLIENT_SECRET", "TICO_OIDC_LABEL", "TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE", "TICO_TRUSTED_PROXIES",
     "TICO_CLIENT_IP_HEADER", "TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE", "TICO_CLOUDFLARED_ADDRESS",
     "TICO_INSTALL_PRESET", "TICO_MODELS_PRESET", "TICO_SUPPORT",
@@ -128,8 +142,11 @@ HEALTH_TIMEOUT = 300
 SNAPSHOTS_KEPT = 2
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
 STOPPED = ("", "exited", "created", "dead")    # container states in which nothing has the database open
-# TICO_UPDATES: Tico runs this server's updates (`cell update`), so the app has no Update now (backend/releases.py).
-UPDATES_BY = "tico"
+# Each company's updater (setup/cell_updater.py): this port on its default network's gateway address, nowhere else.
+UPDATER_PORT = 8090
+UPDATER_UNIT = "etc/systemd/system/tico-cell-updater.service"
+UPDATER_SERVICE = "tico-cell-updater.service"
+TOKEN_NAME = "updater-token"            # in <company>/control, the server's /control (docker/entrypoint.sh reads it)
 
 
 class CellError(Exception):
@@ -202,6 +219,19 @@ class System:
     def latest_release(self) -> str:
         from .wizard import _latest_release
         return _latest_release()
+
+    def release_published(self, tag: str) -> bool | None:
+        """Whether `tag` (vX.Y.Z) is a published release: its SHA256SUMS downloads, the file the sidecar updater fetches
+        first. None when GitHub does not say (offline, rate-limited, a server error)."""
+        url = f"https://github.com/ticoteam/tico/releases/download/{tag}/SHA256SUMS"
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                r.read(1 << 20)
+                return r.status == 200
+        except urllib.error.HTTPError as e:
+            return False if e.code == 404 else None
+        except OSError:
+            return None
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
@@ -492,15 +522,46 @@ def edge_compose(root: Path, tunnel: bool) -> str:
 
 
 def company_override(c: dict, data_dir: Path) -> str:
+    """The control folder replaces the stock tico-control volume (Compose merges volumes by their target), so the cell
+    updater reads the token where the server reads it, and no other company's server mounts it."""
     n = networks(c["index"])
     return "\n".join([
         "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
-        "# shared host. Its own data folder, a memory limit, its own two networks (so none collide), a label for `list`.",
+        "# shared host. Its own data and control folders, a memory limit, its own two networks (so none collide), the",
+        "# cell marker, a label for `list`.",
         "services:", "  server:", f"    mem_limit: {c['memory']}", f"    memswap_limit: {c['memory']}",
-        "    environment:", "      TICO_UPDATES:", "    labels:", f"      {LABEL}: {c['slug']}",
-        "    volumes:", f"      - {data_dir}:/data",
+        "    environment:", "      TICO_CELL:", "    labels:", f"      {LABEL}: {c['slug']}",
+        "    volumes:", f"      - {data_dir}:/data", f"      - {data_dir.parent / 'control'}:/control",
         "networks:", "  default:", "    ipam:", "      config:", f"        - subnet: {n['default_subnet']}",
         f"          gateway: {n['default_gateway']}"]) + "\n"
+
+
+def updater_url(index: int) -> str:
+    """Where a company's server finds its updater: its own default network's gateway, the host side of that bridge.
+    Only that company's containers are on the network; setup/cell_updater.py also refuses any other source address."""
+    return f"http://{networks(index)['default_gateway']}:{UPDATER_PORT}"
+
+
+def cell_env(values: dict[str, str], c: dict) -> dict[str, str]:
+    """`values` (a company's .env) with the cell's updater keys: its updater's address and the cell marker, and no
+    TICO_UPDATES=tico, which an older core wrote (it turns Update now and the update keys off)."""
+    out = {k: v for k, v in values.items() if k != "TICO_UPDATES"}
+    out.update(TICO_UPDATER_URL=updater_url(c["index"]), TICO_CELL="1")
+    return out
+
+
+def updater_unit(core: Path, python: str, root: Path) -> str:
+    """The cell updater as a systemd service: it runs `update`, so it needs what `cell` needs (root, the Docker CLI,
+    the cell's files and locks, the host's bridge addresses) and nothing a container would add. Its code is the core
+    folder `init` ran from; only another `init` moves it. A stop waits for an update under way (TimeoutStopSec): the
+    main process gets SIGTERM, finishes what it runs, then exits."""
+    return "\n".join([
+        "# Written by `python3 -m setup cell init`: each company's updater (setup/cell_updater.py, docs/cell.md).",
+        "[Unit]", "Description=Tico cell: each company's updater", "After=docker.service network-online.target",
+        "Wants=docker.service", "", "[Service]", "Type=simple", f"WorkingDirectory={core}",
+        f"ExecStart={python} -m setup.cell_updater --root {root}", "Restart=always", "RestartSec=5",
+        "KillMode=mixed", "TimeoutStopSec=1800", "NoNewPrivileges=yes", "PrivateTmp=yes", "",
+        "[Install]", "WantedBy=multi-user.target"]) + "\n"
 
 
 def _installer_version() -> str:
@@ -517,6 +578,8 @@ class Cell:
         self.root, self.system, self.host = Path(root), system, Path(host_root)
         self.compose_source = compose_source or Path(__file__).resolve().parent.parent / "compose.yaml"
         self.secrets: list[str] = []
+        self.lock_wait = 900.0              # the cell updater waits for none: a held lock is another command at work
+        self.taken = ""                     # the snapshot the last `update` took or kept, for the updater's /status
 
     # paths and records
     def dir(self, slug: str) -> Path:
@@ -550,11 +613,11 @@ class Cell:
         return out
 
     @contextlib.contextmanager
-    def lock(self, name: str, timeout: float = 900):
+    def lock(self, name: str, timeout: float | None = None):
         d = self.root / "locks"
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(d / f"{name}.lock", os.O_RDWR | os.O_CREAT, 0o600)
-        deadline = self.system.monotonic() + timeout
+        deadline = self.system.monotonic() + (self.lock_wait if timeout is None else timeout)
         try:
             while True:
                 try:
@@ -818,6 +881,8 @@ class Cell:
             self.system.sleep(0.5)
         if self.write_router():
             changed.append("router")
+        if self.updater_service():
+            changed.append("updater")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
         if cell != saved:
             _write_atomic(self.root / "cell.json", json.dumps(cell, indent=2, sort_keys=True) + "\n", 0o600)
@@ -839,6 +904,21 @@ class Cell:
             return False
         _write_atomic(path, json.dumps(merged, indent=2, sort_keys=True) + "\n")
         return True
+
+    def updater_service(self) -> bool:
+        """Install and run the cell updater from this core. A changed unit (the first `init`, or one from another core
+        folder) restarts it without waiting (`--no-block`): its stop lets an update under way finish first. An unchanged
+        one is only started if it is not running."""
+        unit = updater_unit(Path(__file__).resolve().parent.parent, sys.executable, self.root)
+        if _write_atomic(self.host / UPDATER_UNIT, unit):
+            self.run(["systemctl", "daemon-reload"], "updater_failed", "systemctl daemon-reload")
+            self.run(["systemctl", "enable", UPDATER_SERVICE], "updater_failed", "enabling the cell updater")
+            self.run(["systemctl", "restart", "--no-block", UPDATER_SERVICE], "updater_failed", "starting the cell updater")
+            return True
+        if self.system.run(["systemctl", "is-active", "--quiet", UPDATER_SERVICE]).returncode:
+            self.run(["systemctl", "start", "--no-block", UPDATER_SERVICE], "updater_failed", "starting the cell updater")
+            return True
+        return False
 
     def firewall(self) -> bool:
         rule = " ".join(IMDS_RULE[1:])
@@ -1001,8 +1081,8 @@ class Cell:
                 except MissingInput as e:
                     raise CellError("bad_args", self.scrub(str(e))) from None
                 env.update(TICO_PORT=str(c["port"]), COMPOSE_PROFILES="", COMPOSE_PROJECT_NAME=project(slug),
-                           TICO_UPDATER_URL="", TICO_UPDATES=UPDATES_BY,
                            TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR))
+                env = cell_env(env, c)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
                 written = {k for k, v in env.items() if v}
                 extra = self.extra_env(slug) if carried is None else carried
@@ -1115,24 +1195,46 @@ class Cell:
 
     def write_company(self, c: dict, env_text: str, plan: str) -> bool:
         d = self.dir(c["slug"])
-        try:
-            compose = self.compose_source.read_text()
-        except OSError:
-            raise CellError("internal", f"no compose.yaml at {self.compose_source}") from None
-        data, files = d / "data", d / contract.COMPANY_FILE_DIR
-        for p in (data, files):
-            p.mkdir(exist_ok=True)
-            os.chmod(p, 0o700)
-            self.system.chown(p, SERVER_UID, SERVER_UID)
-        changed = _write_atomic(d / "compose.yaml", compose)
-        changed = _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
+        changed = self.write_compose(c)
         changed = _write_atomic(d / ".env", env_text, 0o600) or changed
+        files = d / contract.COMPANY_FILE_DIR
         if plan:
             f = files / contract.COMPANY_FILE_NAME
             if _write_atomic(f, plan + "\n", 0o600):
                 changed = True
             self.system.chown(f, SERVER_UID, SERVER_UID)
         return changed
+
+    def write_compose(self, c: dict) -> bool:
+        """The files `add` and `update` derive from the record and this core alone: the server's folders, the stock
+        compose.yaml, the override and the updater token. True when any changed (the server must be recreated)."""
+        d = self.dir(c["slug"])
+        try:
+            compose = self.compose_source.read_text()
+        except OSError:
+            raise CellError("internal", f"no compose.yaml at {self.compose_source}") from None
+        data = d / "data"
+        for p in (data, d / contract.COMPANY_FILE_DIR, d / "control"):
+            p.mkdir(exist_ok=True)
+            os.chmod(p, 0o700)
+            self.system.chown(p, SERVER_UID, SERVER_UID)
+        changed = _write_atomic(d / "compose.yaml", compose)
+        changed = _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
+        return self.updater_token(d) or changed
+
+    def updater_token(self, d: Path) -> bool:
+        """The company's own updater token, made once: 0600 and the server's (it reads it, docker/entrypoint.sh, and
+        keeps one that is there). Its updater reads it back from here, so nothing else holds a copy. True when made."""
+        path = d / "control" / TOKEN_NAME
+        with contextlib.suppress(OSError):
+            if not path.is_symlink() and path.is_file() and path.stat().st_size >= 32:
+                return False
+            path.unlink()                   # empty, short, or not a plain file: replaced
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_urlsafe(32) + "\n")
+        self.system.chown(path, SERVER_UID, SERVER_UID)
+        return True
 
     def company(self, slug: str) -> dict:
         c = self.load(check_slug(slug))
@@ -1191,11 +1293,16 @@ class Cell:
         before and the snapshot. A running company starts the new release at once; a stopped one stays stopped and
         `start` (or `add`) starts it. Either way the first start is guarded by `launch`: no /healthz, and the old
         release and database come back. `pending` is saved, so a command that dies half-way is still rolled back by the
-        next start. A stop or snapshot that fails changes nothing and the old release is started again."""
+        next start. A stop or snapshot that fails changes nothing and the old release is started again.
+
+        With the new release come this core's compose files, token and updater keys in .env (`write_compose`,
+        `cell_env`). On the release the company already runs they are rewritten alone, and a running server is
+        recreated only when one changed (`changed`): a company made by an older core picks up its updater that way."""
         started = self.system.monotonic()
         if not VERSION_RE.fullmatch(args.version or ""):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
         slug = check_slug(args.company)
+        self.taken = ""
         with self.lock("company-" + slug):
             c = self.live(slug)
             d = self.dir(slug)
@@ -1204,12 +1311,15 @@ class Cell:
             extra = self.extra_env(slug)
             running = c.get("state") != "stopped"
             pending = c.get("pending")
+            self.taken = (pending or {}).get("snapshot", "")
             if c["version"] == args.version:
-                if running and pending:
+                changed = self.write_compose(c)
+                changed = _write_atomic(d / ".env", _with_tag(env_text, c["version"], extra, c), 0o600) or changed
+                if running and (pending or changed):
                     ready = self.launch(c, started, args.timeout)
                 else:
                     ready = self.wait_healthy(c, started, args.timeout) if running else 0
-                return self.answer(c, ready, False)
+                return self.answer(c, ready, changed)
             self.pull(args.version)
             try:
                 self.ensure_stopped(slug)
@@ -1217,14 +1327,18 @@ class Cell:
                 snap = pending or {"from": c["version"], "snapshot": self.snapshot(slug, c["version"])}
             except CellError as e:
                 raise self.restarted(c, e, running) from None
+            self.taken = snap.get("snapshot", "")
             if pending and pending["from"] == args.version:
                 # Back to the release its database still belongs to: the pending update's own rollback.
                 self.rollback(c, args.timeout, restart=running)
                 return self.answer(c, self.wait_healthy(c, started, args.timeout) if running else 0, True)
             try:
-                _write_atomic(d / ".env", _with_tag(env_text, args.version, extra), 0o600)
+                self.write_compose(c)
+                _write_atomic(d / ".env", _with_tag(env_text, args.version, extra, c), 0o600)
+            except CellError as e:
+                raise self.restarted(c, e, running) from None
             except OSError as e:
-                raise self.restarted(c, CellError("internal", f"writing .env: {e}"), running) from None
+                raise self.restarted(c, CellError("internal", f"writing the company's files: {e}"), running) from None
             c["version"], c["pending"] = args.version, snap
             self.save(c)
             if not running:
@@ -1242,16 +1356,21 @@ class Cell:
 
     def snapshot(self, slug: str, version: str) -> str:
         """The stopped server's database, before a new release migrates it, in snapshots/<name>; the name, or "" when
-        there is no database yet. The last SNAPSHOTS_KEPT are kept."""
+        there is no database yet. The last SNAPSHOTS_KEPT are kept. data/ belongs to the server, and its updater lets
+        the company itself start this, so only plain files are copied: a symlink there would have root copy a host file
+        into snapshots/, and a rollback would hand it to the server."""
         data, snaps = self.dir(slug) / "data", self.dir(slug) / "snapshots"
-        if not (data / "hub.sqlite").exists():
+        found = [n for n in DB_FILES if os.path.lexists(data / n)]
+        if "hub.sqlite" not in found:
             return ""
+        if any(not stat.S_ISREG(os.lstat(data / n).st_mode) for n in found):
+            raise CellError("snapshot_failed", "the database in data/ is not plain files (a symlink or other special "
+                                               "file); nothing was copied")
         target = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
         try:
             target.mkdir(parents=True, exist_ok=True, mode=0o700)
-            for name in DB_FILES:
-                if (data / name).exists():
-                    shutil.copy2(data / name, target / name)
+            for name in found:
+                shutil.copy2(data / name, target / name, follow_symlinks=False)
         except OSError as e:
             shutil.rmtree(target, ignore_errors=True)
             raise CellError("snapshot_failed", f"copying the database to {target}: {e.strerror or e}") from None
@@ -1337,10 +1456,11 @@ def _read(path: Path) -> str:
         return ""
 
 
-def _with_tag(env_text: str, version: str, extra: dict[str, str] | None = None) -> str:
+def _with_tag(env_text: str, version: str, extra: dict[str, str] | None = None, c: dict | None = None) -> str:
     """The same .env with another release, written exactly as `add` would write it (carried settings fill only keys
-    the .env leaves unset, as in `add`)."""
-    return envfile.render({**(extra or {}), **envfile.parse(env_text), "TICO_TAG": version})
+    the .env leaves unset, as in `add`; with `c`, the cell's updater keys as `add` writes them)."""
+    values = {**(extra or {}), **envfile.parse(env_text), "TICO_TAG": version}
+    return envfile.render(cell_env(values, c) if c else values)
 
 
 def main(argv: list[str], *, system: System | None = None, root: str | Path | None = None,

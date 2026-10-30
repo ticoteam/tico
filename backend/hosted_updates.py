@@ -54,8 +54,8 @@ _ticking = threading.Lock()
 
 
 def on(settings):
-    """A hosted install that is not a demo or a rehearsal (a copy of real data never updates for HQ), and that has its
-    own updater: a cloud company (TICO_UPDATES=tico) is updated by HQ from outside, with `setup cell update`."""
+    """A hosted install that is not a demo or a rehearsal (a copy of real data never updates for HQ), and that Tico does
+    not update from outside (TICO_UPDATES=tico). A cell company has an updater of its own (docs/cell.md) and asks."""
     return getattr(settings, "hosted", "") in HOSTED and not getattr(settings, "demo", False) \
         and not getattr(settings, "rehearsal", False) and not rehearsal_on() and not releases.managed()
 

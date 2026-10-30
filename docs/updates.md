@@ -206,6 +206,10 @@ The previous files are kept in `.bundle-previous/`. A download or checksum failu
 changes; a release that does not turn healthy is rolled back, image and bundle together. Slack and the front door are
 recreated from the new file when it changes them.
 
+A cell company ([cell mode](cell.md#updates)) has no sidecar: the host's cell updater answers the same contract for it,
+so it has Update now too. It runs the cell's own `update` (no bundle to replace, since the company's `compose.yaml` is
+the host's), and a release newer than the host's core waits until Tico moves the core.
+
 Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
 `image:` would keep it on the old one. After the switch the server must run the image just pulled and report the target

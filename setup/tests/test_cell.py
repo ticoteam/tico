@@ -33,6 +33,7 @@ class FakeSystem:
         self.docker_user = None            # or the chain's rules as `iptables -S` prints them
         self.release = "v1.2.3"
         self.hosts = {}                    # host -> slug, for a host that is not <slug>.<anything>
+        self.unpublished = set()           # tags GitHub has no release for; None: GitHub does not answer
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -90,6 +91,9 @@ class FakeSystem:
 
     def latest_release(self):
         return self.release
+
+    def release_published(self, tag):
+        return None if self.unpublished is None else tag not in self.unpublished
 
     def sleep(self, seconds):
         self.t += seconds
@@ -306,13 +310,16 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     assert env["TICO_TRUSTED_PROXIES"] == "127.0.0.1/32,::1/128,10.208.0.1/32,10.224.0.1/32"
     assert env["TICO_CLIENT_IP_HEADER"] == "cf-connecting-ip" and env["TICO_EDGE_SUBNET"] == "10.224.0.0/28"
     assert env["TICO_COMPANY_FILE_DIR"] == str(d / "company-file") and env["TICO_TEAM_NAME"] == "Boatyard"
-    # No front door, updater or profile of its own: the cell's router and tunnel are the front door.
-    for key in ("COMPOSE_PROFILES", "TICO_UPDATER_URL", "CLOUDFLARE_TUNNEL_TOKEN"):
+    # No front door, updater sidecar or profile of its own: the cell's router and tunnel are the front door.
+    for key in ("COMPOSE_PROFILES", "CLOUDFLARE_TUNNEL_TOKEN"):
         assert key not in env
-    # Tico runs its updates (`cell update`): the app shows no Update now (backend/releases.py managed()).
-    assert env["TICO_UPDATES"] == "tico"
+    # Its updater is the cell's, on its own network's gateway; TICO_UPDATES=tico would turn Update now and the update
+    # keys off (backend/releases.py managed()), and TICO_CELL keeps its cloud-access cadence (backend/cloud_access.py).
+    assert env["TICO_UPDATER_URL"] == "http://10.208.0.1:8090" and env["TICO_CELL"] == "1"
+    assert "TICO_UPDATES" not in env
     override = (d / "compose.cell.yaml").read_text()
-    assert "    environment:\n      TICO_UPDATES:\n" in override     # passed to the server from .env
+    assert "    environment:\n      TICO_CELL:\n" in override        # passed to the server from .env
+    assert f"{d / 'control'}:/control" in override                    # where it reads the token its updater checks
     assert "mem_limit: 2g" in override and "memswap_limit: 2g" in override and f"{d / 'data'}:/data" in override
     assert "subnet: 10.208.0.0/24" in override and f"{cell.LABEL}: boatyard" in override
     assert (str(d / "data"), 10001, 10001) in ready.system.chowns
@@ -490,10 +497,13 @@ def test_init_sets_up_the_host_once(host):
     assert '"*.tico.team"' in (host.root / "tunnel" / "cloudflared.yml").read_text()
     calls = host.system.argv_text()
     assert "systemctl restart docker" in calls and "systemctl enable tico-cell-firewall.service" in calls
+    assert "systemctl restart --no-block tico-cell-updater.service" in calls and "updater" in first["changed"]
     n = len(host.system.calls)
     second = host("init", "--json")
     assert second["ok"] and second["changed"] == [] and second["tunnel"] is True
-    assert "systemctl" not in " ".join(" ".join(c) for c in host.system.calls[n:])
+    # Only a look at whether the updater runs: nothing restarts or is reinstalled.
+    assert [c for c in host.system.calls[n:] if c[0] == "systemctl"] == \
+        [["systemctl", "is-active", "--quiet", "tico-cell-updater.service"]]
 
 
 def test_init_without_a_token_runs_only_the_router(host):
@@ -1233,3 +1243,369 @@ def test_a_whole_move_is_idempotent(tunneled):
     assert restarts(tunneled, n) == 0
     env = envfile.parse((d / ".env").read_text())
     assert env["TICO_TEAM_NAME"] == "Tico Team" and env["TICO_OIDC_LABEL"] == "Google"
+
+
+# --- each company's updater (setup/cell_updater.py) -------------------------------------------------------------
+
+from setup import cell_updater as U  # noqa: E402
+
+UPDATER_SOURCE = ROOT / "docker" / "updater.py"
+
+
+def service(host, core="v9.0.0", **kw):
+    return U.Service(host.root, host.system, core=lambda: core, **kw,
+                     make_cell=lambda: cell.Cell(host.root, host.system, host.etc, ROOT / "compose.yaml"))
+
+
+def token(host, slug="boatyard"):
+    return (host.root / "companies" / slug / "control" / cell.TOKEN_NAME).read_text().strip()
+
+
+def peer(index=0):
+    return f"10.208.{index}.5"            # a container on company `index`'s default network
+
+
+def ask(svc, slug="boatyard", body=None, index=0, auth=None, method="POST", path="/update"):
+    """A request as Handler passes it on: the gate, then the route; then waits for any update it started."""
+    if auth is None:
+        auth = "Bearer " + svc.token(slug)
+    refused = svc.gate(slug, index, peer(index), auth)
+    if refused:
+        return refused
+    answer = svc.get(slug, path) if method == "GET" else \
+        svc.post(slug, index, path, json.dumps(body if body is not None else {"version": "v1.3.0"}).encode())
+    for worker in list(svc.workers):
+        worker.join(10)
+    return answer
+
+
+def status(svc, slug="boatyard"):
+    return svc.get(slug, "/status")[1]
+
+
+def test_each_company_has_its_own_updater_token_only_its_server_reads(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    a, b = token(ready, "alpha"), token(ready, "bravo")
+    assert a != b and len(a) >= 32
+    for slug in ("alpha", "bravo"):
+        path = ready.root / "companies" / slug / "control" / cell.TOKEN_NAME
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600 and (str(path), 10001, 10001) in ready.system.chowns
+    assert ready(*add_args(ready, "alpha"))["changed"] is False and token(ready, "alpha") == a    # kept, once made
+    assert a not in ready.system.argv_text() and a not in json.dumps(ready("status", "--company", "alpha"))
+    env = envfile.parse((ready.root / "companies" / "bravo" / ".env").read_text())
+    assert env["TICO_UPDATER_URL"] == "http://10.208.1.1:8090"             # bravo's own network, not alpha's
+
+
+def test_a_companys_updater_answers_only_that_company(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    svc = service(ready)
+    mine, theirs = "Bearer " + token(ready, "alpha"), "Bearer " + token(ready, "bravo")
+    assert svc.gate("alpha", 0, peer(0), mine) is None
+    assert svc.gate("alpha", 0, peer(0), theirs) == (401, {"error": "unauthorized"})   # bravo's token at alpha's
+    assert svc.gate("alpha", 0, peer(1), mine)[0] == 403        # bravo's container, even holding alpha's token
+    assert svc.gate("alpha", 0, "127.0.0.1", mine)[0] == 403
+    assert svc.gate("alpha", 1, peer(1), mine)[0] == 403        # a listener whose slot is no longer alpha's
+    ready("remove", "--company", "alpha", "--keep-data")
+    assert svc.gate("alpha", 0, peer(0), mine)[0] == 403
+
+
+@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer ", "Bearer wrong", "Basic abc"])
+def test_a_missing_or_wrong_token_is_refused(ready, auth):
+    ready(*add_args(ready))
+    svc = service(ready)
+    assert ask(svc, auth=auth) == (401, {"error": "unauthorized"})
+    assert ready.system.images == {f"{cell.SERVER_IMAGE}:v1.2.3"}          # nothing pulled
+
+
+@pytest.mark.parametrize("bad", ["missing", "empty", "short", "symlink"])
+def test_no_usable_token_file_refuses_every_request(ready, bad):
+    ready(*add_args(ready))
+    svc = service(ready)
+    path = ready.root / "companies" / "boatyard" / "control" / cell.TOKEN_NAME
+    old = path.read_text().strip()
+    path.unlink()
+    if bad == "empty":
+        path.write_text("")
+    elif bad == "short":
+        path.write_text("abc\n")
+    elif bad == "symlink":                  # the server owns the folder: a link to a file it can guess is no token
+        (ready.tmp / "guessable").write_text(old + "\n")
+        path.symlink_to(ready.tmp / "guessable")
+    assert svc.token("boatyard") == ""
+    for auth in ("Bearer ", "Bearer " + old, "Bearer abc"):
+        assert svc.gate("boatyard", 0, peer(0), auth) == (401, {"error": "unauthorized"})
+
+
+def test_the_body_never_chooses_the_company(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    svc = service(ready)
+    code, _ = ask(svc, "alpha", {"version": "v1.3.0", "company": "bravo", "slug": "bravo", "from": "1.2.3"})
+    assert code == 202 and status(svc, "alpha")["state"] == "healthy"
+    assert record(ready, "alpha")["version"] == "v1.3.0" and record(ready, "bravo")["version"] == "v1.2.3"
+    assert status(svc, "bravo")["state"] == "idle"
+
+
+@pytest.mark.parametrize("version", ["1.3.0-rc.1", "v1.3", "1.3.0.1", "nightly", "", "../../etc", 130, None,
+                                     "v1.3.0\n", "LATEST"])
+def test_only_a_stable_release_or_latest_is_accepted(ready, version):
+    ready(*add_args(ready))
+    svc = service(ready)
+    assert ask(svc, body={"version": version}) == (422, {"error": "version is latest or X.Y.Z"})
+    assert ask(svc, body=["v1.3.0"])[0] == 422 and status(svc)["state"] == "idle"
+
+
+def test_latest_is_the_newest_published_release(ready):
+    ready(*add_args(ready))
+    svc = service(ready)
+    ready.system.release = "v1.4.2"
+    assert ask(svc, body={"version": "latest", "from": "1.2.3"})[0] == 202
+    assert status(svc)["state"] == "healthy" and record(ready)["version"] == "v1.4.2"
+
+
+@pytest.mark.parametrize("case", ["unpublished", "github down", "newer than the core", "core unknown"])
+def test_a_release_it_may_not_run_changes_nothing(ready, case):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    before, n = (d / ".env").read_text(), len(ready.system.calls)
+    if case == "unpublished":
+        ready.system.unpublished.add("v1.3.0")
+    elif case == "github down":
+        ready.system.unpublished = None
+    svc = service(ready, core={"newer than the core": "v1.2.9", "core unknown": ""}.get(case, "v9.0.0"))
+    assert ask(svc)[0] == 202
+    s = status(svc)
+    assert s["state"] == "failed" and s["message"].startswith("Not updated: ")
+    assert {"unpublished": "not a published release", "github down": "could not check",
+            "newer than the core": "needs this host's core at v1.3.0", "core unknown": "no release recorded"}[case] \
+        in s["message"]
+    assert (d / ".env").read_text() == before and record(ready)["version"] == "v1.2.3"
+    assert not any("pull" in c or "stop" in c for c in ready.system.calls[n:])
+    assert len(svc.diagnostics("boatyard")["errors"]) == 1
+
+
+def test_an_older_release_is_refused_as_the_sidecar_refuses_it(ready):
+    ready(*add_args(ready))
+    svc = service(ready)
+    assert ask(svc, body={"version": "1.2.2"}) == (409, {"error": "older than the running version"})
+    assert ask(svc, body={"version": "1.2.3"})[0] == 202 and status(svc)["state"] == "healthy"   # the same is fine
+
+
+def test_a_second_request_while_one_runs_gets_409(ready):
+    ready(*add_args(ready))
+    svc = service(ready)
+    release, real = __import__("threading").Event(), ready.system.run
+
+    def run(argv, **kw):
+        if argv[:2] == ["docker", "pull"]:
+            release.wait(10)
+        return real(argv, **kw)
+    ready.system.run = run
+    auth = "Bearer " + token(ready)
+    assert svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')[0] == 202
+    code, body = svc.post("boatyard", 0, "/update", b'{"version": "v1.4.0"}')
+    assert code == 409 and body["error"] == "an update is already running" and body["to"] == "v1.3.0"
+    assert svc.gate("boatyard", 0, peer(0), auth) is None and status(svc)["state"] == "pulling"
+    release.set()
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert status(svc)["state"] == "healthy" and record(ready)["version"] == "v1.3.0"
+
+
+def test_staff_holding_the_company_gets_its_request_a_409(ready):
+    ready(*add_args(ready))
+    svc = service(ready)
+    fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)          # `cell update` (or add, stop...) run by staff, under way
+    try:
+        code, body = ask(svc)
+        assert code == 409 and "Another cell command" in body["message"] and status(svc)["state"] == "idle"
+    finally:
+        os.close(fd)
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"
+
+
+def load_sidecar(monkeypatch, tmp_path):
+    import importlib.util
+    for key, value in {"TICO_UPDATER_MODE": "", "TICO_PROJECT_DIR": str(tmp_path), "TICO_UPDATER_SELF": "never",
+                       "TICO_UPDATER_TOKEN_FILE": str(tmp_path / "token"), "TICO_UPDATER_BUNDLE": "never"}.items():
+        monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location("tico_updater_for_cell", UPDATER_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_status_and_diagnostics_have_the_sidecars_shape(ready, monkeypatch):
+    sidecar = load_sidecar(monkeypatch, ready.tmp / "sidecar")
+    ready(*add_args(ready))
+    svc = service(ready)
+    assert set(status(svc)) == set(sidecar.status)                          # idle, before any update
+    code, accepted = svc.post("boatyard", 0, "/update", b'{"version": "1.3.0", "from": "1.2.3"}')
+    for worker in list(svc.workers):
+        worker.join(10)
+    assert code == 202 and accepted["state"] == "pulling" and accepted["to"] == "v1.3.0" and accepted["from"] == "v1.2.3"
+    sidecar.status.update(state="pulling", to="v1.3.0", message="", snapshot="", restored=False, **{"from": "v1.2.3"})
+    assert set(accepted) == set(sidecar.status)
+    monkeypatch.setattr(sidecar, "compose", lambda *a, **k: "c1\n")
+    monkeypatch.setattr(sidecar.subprocess, "run", lambda argv, **k: subprocess.CompletedProcess(
+        argv, 0, "server|running|healthy|0" if "inspect" in argv else "27.0", ""))
+    theirs = sidecar.diagnostics()
+    ready.system.fail["ps -a -q"] = Result(0, "c1\n")
+    ready.system.fail["docker inspect"] = Result(0, "server|running|healthy|2\n")
+    ours = svc.diagnostics("boatyard")
+    assert set(ours) == set(theirs) and ours["mode"] == "cell" and ours["version"] == "v9.0.0"
+    assert ours["containers"] == [{"name": "server", "state": "running", "health": "healthy", "restarts": 2}]
+    assert set(ours["containers"][0]) == set(theirs["containers"][0])
+    # Only this company's project is asked about.
+    assert any("--project-name tico-boatyard" in " ".join(c) and "ps" in c for c in ready.system.calls)
+
+
+def test_an_update_through_it_is_cell_update_with_its_snapshot(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    svc = service(ready)
+    assert ask(svc, body={"version": "1.3.0", "from": "1.2.3"})[0] == 202
+    s = status(svc)
+    assert (s["state"], s["from"], s["to"], s["restored"]) == ("healthy", "v1.2.3", "v1.3.0", False)
+    assert s["snapshot"] and (d / "snapshots" / s["snapshot"] / "hub.sqlite").read_text() == "db v1"
+    assert envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.3.0" and "pending" not in record(ready)
+    # The outcome survives the service being restarted (`cell init` from another core folder).
+    assert status(service(ready)) == s
+    assert json.loads((d / U.STATUS_FILE).read_text())["state"] == "healthy"
+    assert stat.S_IMODE((d / U.STATUS_FILE).stat().st_mode) == 0o600
+
+
+def test_a_release_that_does_not_come_up_is_rolled_back_with_its_database(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / "data" / "hub.sqlite").write_text("db v1")
+    migrate_then_fail(ready)
+    svc = service(ready)
+    real = cell.HEALTH_TIMEOUT
+    cell.HEALTH_TIMEOUT = 1
+    try:
+        assert ask(svc, body={"version": "v2.0.0"})[0] == 202
+    finally:
+        cell.HEALTH_TIMEOUT = real
+    s = status(svc)
+    assert s["state"] == "rolled_back" and s["restored"] is True and "did not come up" in s["message"]
+    assert "back on v1.2.3" in s["message"] and (d / "data" / "hub.sqlite").read_text() == "db v1"
+    assert record(ready)["version"] == "v1.2.3" and svc.diagnostics("boatyard")["errors"][0].endswith(s["message"][:250])
+
+
+def test_an_update_left_running_by_a_stopped_service_says_so(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (d / U.STATUS_FILE).write_text(json.dumps({"state": "restarting", "from": "v1.2.3", "to": "v1.3.0", "message": ""}))
+    s = status(service(ready))
+    assert s["state"] == "failed" and "stopped while this update ran" in s["message"] and s["to"] == "v1.3.0"
+
+
+def test_a_symlinked_database_is_never_snapshotted(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    (ready.tmp / "host-secret").write_text("root's file")
+    (d / "data" / "hub.sqlite").symlink_to(ready.tmp / "host-secret")   # a server that turned on its host
+    answer = ready("update", "--company", "boatyard", "--version", "v1.3.0")
+    assert answer["error"] == "snapshot_failed" and "still on v1.2.3" in answer["detail"]
+    assert not (d / "snapshots").exists() or not any((d / "snapshots").rglob("*"))
+
+
+def test_an_older_cores_company_picks_up_its_updater_at_its_next_update(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    # What an older core wrote: no updater, TICO_UPDATES=tico, the stock control volume, no token.
+    env = envfile.parse((d / ".env").read_text())
+    env = {k: v for k, v in env.items() if k not in ("TICO_UPDATER_URL", "TICO_CELL")} | {"TICO_UPDATES": "tico"}
+    (d / ".env").write_text(envfile.render(env))
+    override = (d / "compose.cell.yaml").read_text().replace("TICO_CELL:", "TICO_UPDATES:")
+    (d / "compose.cell.yaml").write_text("\n".join(l for l in override.splitlines() if ":/control" not in l) + "\n")
+    (d / "control" / cell.TOKEN_NAME).unlink()
+    n = len(ready.system.calls)
+    answer = ready("update", "--company", "boatyard", "--version", "v1.2.3")      # the release it runs
+    assert answer["ok"] and answer["changed"] is True and answer["version"] == "v1.2.3"
+    env = envfile.parse((d / ".env").read_text())
+    assert env["TICO_UPDATER_URL"] == "http://10.208.0.1:8090" and env["TICO_CELL"] == "1" and "TICO_UPDATES" not in env
+    assert "TICO_CELL:" in (d / "compose.cell.yaml").read_text() and len(token(ready)) >= 32
+    assert any(c[-3:] == ["up", "-d", "--remove-orphans"] for c in ready.system.calls[n:])
+    assert not (d / "snapshots").exists()                  # the same release: no migration, no snapshot
+    n = len(ready.system.calls)
+    assert ready("update", "--company", "boatyard", "--version", "v1.2.3")["changed"] is False
+    assert not any("up" in c or "stop" in c for c in ready.system.calls[n:])   # nothing changed: no restart
+
+
+def test_a_carried_tico_updates_cannot_turn_the_updater_off(ready):
+    args = move_args(ready, "--env-file", secret_file(ready.tmp, "extra", "TICO_UPDATES=tico\nTICO_CELL=0\nTICO_RUNNER_URL=https://runner.tico.team"))
+    answer = ready(*args)
+    assert {"TICO_UPDATES", "TICO_CELL"} <= set(answer["ignored"])
+    env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
+    assert "TICO_UPDATES" not in env and env["TICO_CELL"] == "1"
+
+
+def test_init_runs_the_updater_from_its_own_core(host):
+    host("init", "--json")
+    unit = (host.etc / cell.UPDATER_UNIT).read_text()
+    assert f"WorkingDirectory={ROOT}" in unit and f"-m setup.cell_updater --root {host.root}" in unit
+    assert "KillMode=mixed" in unit and "TimeoutStopSec=" in unit
+    host.system.fail["is-active"] = Result(3, "inactive")
+    n = len(host.system.calls)
+    assert host("init", "--json")["changed"] == ["updater"]          # stopped by hand: started again, not reinstalled
+    assert ["systemctl", "start", "--no-block", cell.UPDATER_SERVICE] in host.system.calls[n:]
+
+
+def test_the_listener_speaks_http_with_a_size_cap(ready):
+    import http.client
+    ready(*add_args(ready))
+    svc = service(ready, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
+    listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
+    try:
+        port = listener.server_address[1]
+
+        def call(method, path, body=None, auth="Bearer " + token(ready), headers=None):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request(method, path, body=body, headers={"Authorization": auth, **(headers or {})})
+            r = c.getresponse()
+            out = (r.status, json.loads(r.read()))
+            c.close()
+            return out
+        assert call("GET", "/status") == (200, {"state": "idle", "from": "", "to": "", "message": ""})
+        assert call("GET", "/status", auth="Bearer nope")[0] == 401
+        assert call("POST", "/update", body=b"x" * (U.MAX_BODY + 1))[0] == 413
+        assert call("GET", "/nothing")[0] == 404
+        assert call("POST", "/update", body=b'{"version": "v1.3.0"}')[0] == 202
+        for worker in list(svc.workers):
+            worker.join(10)
+        assert call("GET", "/status")[1]["state"] == "healthy"
+    finally:
+        listener.shutdown()
+        listener.server_close()
+    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
+        c.request("GET", "/status", headers={"Authorization": "Bearer " + token(ready)})
+        assert c.getresponse().status == 403
+        c.close()
+    finally:
+        listener.shutdown()
+        listener.server_close()
+
+
+def test_scan_gives_each_live_company_a_listener_and_drops_removed_ones(ready):
+    ready(*add_args(ready, "alpha"))
+    ready(*add_args(ready, "bravo"))
+    svc = service(ready, bind=lambda index: ("127.0.0.1", 0))
+    try:
+        svc.scan()
+        assert {s: l.index for s, l in svc.listeners.items()} == {"alpha": 0, "bravo": 1}
+        ready("remove", "--company", "alpha")
+        svc.scan()
+        assert set(svc.listeners) == {"bravo"}
+    finally:
+        for listener in svc.listeners.values():
+            listener.shutdown()
+            listener.server_close()
