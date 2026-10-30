@@ -365,6 +365,9 @@ async function tasksLoad(state, opts = {}) {
   if (!changed) {
     if (cursor) tasksRender(state);
     [active, lab] = await Promise.all([v2Get(activeTasksPath()), ...others()]);
+    // A first read that lands after the page was left is kept for the next visit, as leaving would have kept it.
+    if (TASKS_ST !== state && state.loadSeq === seq && active && !state.read && !state.kept && !S.lastRead.tasks)
+      S.lastRead.tasks = {key: activeTasksPath(), tasks: active.tasks || [], labels: lab?.labels || [], tags: lab?.tags || []};
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
   }
   if (changed) {
