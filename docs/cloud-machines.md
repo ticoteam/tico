@@ -1,20 +1,45 @@
 # Cloud machines
 
-On Tico Cloud each bot can have a computer of its own: a boat sandbox that Tico HQ starts, stops and deletes for the
+On Tico Cloud a bot can run on a cloud machine: a boat sandbox that Tico HQ starts, stops and deletes for the
 server (`backend/cloud_machines.py` decides when; HQ talks to boat). This page is for whoever builds the machine
-image: how the base snapshot is made and refreshed, and how a new machine becomes that bot's runner.
+image: how the base snapshot is made and refreshed, and how a new machine becomes a runner.
+
+## Shared or own
+
+A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
+ops, most roles) share one machine per company, so a company pays for one machine and its starts, not one per bot.
+Heavy bots get their own: a bot made from the `video-producer` template, or one in the Engineering department of the
+team chart, starts on its own machine; every other bot starts on the shared one. That default is read once, when the
+bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
+cloud machine" under Computer).
+
+- The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
+  bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and idles to a
+  stop only once every bot on it has been idle for its size's `idle_stop_s`. Its size and Always on are the
+  company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`).
+- Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
+  assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
+  When the last bot leaves it idles to a stop like any other.
+- Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
+  bot that must not see the others' files on its own machine.
+- One noisy bot cannot starve the rest past the runner's turns-at-once limit (Settings > Computers); there is no
+  separate CPU accounting.
+- Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
+  number of bots on it.
 
 ## How a machine becomes the bot's runner
 
-1. The server mints a one-time enrollment code for the bot (15 minutes, single use; only its digest is kept, in
-   `enrollments` and `cloud_machine_codes`, with the bot it binds to) and asks HQ for a machine.
+1. The server mints a one-time enrollment code for the machine (15 minutes, single use; only its digest is kept, in
+   `enrollments` and `cloud_machine_codes`, with the machine's key: the bot, or `_shared`) and asks HQ for a machine.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`) finds the two variables, enrolls the
    runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
    as systemd user units.
-4. The server sees a cloud code: it names the computer "&lt;bot&gt; (cloud)", closes it to every other bot
-   (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns the bot to it.
+4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
+   every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
+   the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns
+   every bot on it.
 5. Later boots (a resume after an idle stop) find `~/.config/tico/runner.json` and only start the units.
 
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
@@ -30,8 +55,8 @@ and expires in 15 minutes.
 ## The runner on the machine
 
 The machine runs the native Linux runner from a checkout of the release (docs/install.md, "A Linux checkout"), as
-the sandbox's own user `user`, not the Docker runner. One machine holds one bot, so the machine is one trust group,
-and the bot may use `sudo` there: `apt-get install`, services, Docker. The Docker runner drops bot code to a user with
+the sandbox's own user `user`, not the Docker runner. The bots on a machine (one on its own machine, several on the
+shared one) are one trust group, and they may use `sudo` there: `apt-get install`, services, Docker. The Docker runner drops bot code to a user with
 no capabilities, where `sudo` can never work. The base step writes `/etc/sudoers.d/tico-runner`
 (`user ALL=(ALL) NOPASSWD:ALL`); no other install path writes it, so no other computer gets it. boat already gives
 `user` passwordless sudo; the file keeps that true if boat's default changes.
@@ -79,8 +104,8 @@ HQ makes, check:
   `TICO_BOOT_ENV_FILE` in the unit, or add that place to `env_files()`.
 - `grep -r TICO_ENROLL_TOKEN /etc/environment ~/.bashrc ~/.profile` finds nothing after the enroll, and again after a
   stop and resume (boat may write its block again; the next boot takes it out again).
-- `systemctl --user status tico-bot` is active, and the computer shows as "&lt;bot&gt; (cloud)" in Settings >
-  Computers.
+- `systemctl --user status tico-bot` is active, and the computer shows as "&lt;bot&gt; (cloud)" (or "Shared cloud
+  machine") in Settings > Computers.
 - `test ! -e /.dockerenv`: the runner takes a machine with that file for a container and would not update itself.
 - HQ creates the machines without the account's stored secrets (the API's equivalent of `--no-env`); otherwise every
   bot machine gets them.

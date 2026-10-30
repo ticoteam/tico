@@ -60,7 +60,7 @@ function botInfoRefresh(slug) {
   const values = {
     Role: botRoleHTML(String(bot.role || bot.description || '').trim()),
     Humans: userChips(bot) || '<span class="muted">Nobody assigned</span>',
-    Computer: cloudMachineOwn(bot) ? cloudMachineComputerHTML(bot) : bot.machine ? `${esc(bot.machine.label || bot.machine.runner_id)} <span class="muted">· ${bot.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>',
+    Computer: cloudMachineOn(bot) ? cloudMachineComputerHTML(bot) : bot.machine ? `${esc(bot.machine.label || bot.machine.runner_id)} <span class="muted">· ${bot.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>',
     Harness: esc(harnessWords(bot.harness || bot.runtime || bot.resolved_runtime) || 'Team default'),
     Model: !bot.agent ? esc(bot.model ? settingsChoiceLabel(bot.harness || bot.runtime, bot.model, bot.reasoning_effort || bot.effort) : settingsDefaultLabel(bot))
       + (bot.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(bot.fallback.harness, bot.fallback.model, bot.fallback.reasoning_effort || bot.fallback.effort))}</span>` : '') : null,

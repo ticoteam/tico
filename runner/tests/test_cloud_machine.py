@@ -1,4 +1,5 @@
-"""The base image step and the enroll-at-boot step of a bot's own cloud machine (runner/cloud_machine.py)."""
+"""The base image step and the enroll-at-boot step of a cloud machine, a bot's own or the shared one
+(runner/cloud_machine.py)."""
 import json
 import os
 import subprocess

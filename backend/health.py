@@ -601,8 +601,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     from .execution import _queue_suspects, queued_jobs_sql
     every_job = [job for part in H.chunks(aged_bots) for job in c.execute(queued_jobs_sql(part), part)]
     suspect = _queue_suspects(c, every_job)
-    # Bots on their own cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
-    on_cloud = {r["bot"]: r for r in c.execute("SELECT bot,runner_id,problem FROM cloud_machines WHERE mode='cloud'")}
+    # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
+    from .cloud_machines import homes
+    on_cloud = homes(c)
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))

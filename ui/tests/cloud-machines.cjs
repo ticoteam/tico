@@ -1,8 +1,10 @@
-// A bot's own cloud machine in Settings (ui/app/cloud-machines.js, backend/cloud_machines.py):
-//  - on Tico Cloud the Computer select offers Own cloud machine, and never another bot's own machine;
+// A bot's cloud machine in Settings (ui/app/cloud-machines.js, backend/cloud_machines.py):
+//  - on Tico Cloud the Computer select offers Shared and Own cloud machine, and never a cloud machine's computer;
 //  - a bot on its own machine has Size and Always on, held until Save bot, which posts each to /cloud-machine after
 //    the definition; HQ's sizes replace the plain names once read;
-//  - picking Own cloud machine for a bot on a computer is no move: Save posts mode cloud and starts no transition;
+//  - a bot on the shared machine shows the company's Size and Always on, posted to /cloud-machines/shared;
+//  - picking a cloud machine for a bot on a computer is no move: Save posts mode cloud with the placement and starts
+//    no transition;
 //  - off cloud (`cloud_machine` null) there is no such option and no Size row.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -18,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
     const catalog = {models: [{id: 'opus-5-5', label: 'opus 5 5', runtime: 'claude', provider: 'anthropic', efforts: ['high'],
       default_effort: 'high', harnesses: ['claude']}], harnesses: [{id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
       default: {runtime: 'claude', model: 'opus-5-5'}};
-    const own = {mode: 'cloud', size: 'default', always_on: false, state: 'stopped', machine_size: 'default',
+    const own = {mode: 'cloud', placement: 'own', size: 'default', always_on: false, state: 'stopped', machine_size: 'default',
       cost_month_usd: 0.42, starts_month: 3, runner_id: 'r9', problem: ''};
     const bot = (name, extra) => ({name, display_name: name[0].toUpperCase() + name.slice(1), description: '', status: 'active',
       operator: 'ana', repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5',
@@ -26,7 +28,9 @@ const {unrouted} = require('./support/routes.cjs');
     const helper = bot('helper', {machine: {runner_id: 'r9', label: 'Helper (cloud)', operator: 'ana', generation: 2}, cloud_machine: own});
     const writer = bot('writer', {machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7},
       cloud_machine: {...own, mode: 'computer', state: 'none', runner_id: null}});
-    let bots = [helper, writer], calls = [];
+    const scout = bot('scout', {machine: {runner_id: 'r8', label: 'Shared cloud machine', operator: 'ana', generation: 1},
+      cloud_machine: {...own, placement: 'shared', runner_id: 'r8', starts_month: 1}});
+    let bots = [helper, writer, scout], calls = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -42,6 +46,10 @@ const {unrouted} = require('./support/routes.cjs');
         if (write[2] === 'cloud-machine') { Object.assign(b.cloud_machine, body); return json({cloud_machine: b.cloud_machine}); }
         if (write[2] === 'transitions') return json({id: 'tr-1', bot: b.name, kind: 'machine', state: 'preparing'});
       }
+      if (req.method() === 'POST' && p === '/api/v2/cloud-machines/shared') {
+        calls.push({bot: null, what: 'shared', body: req.postDataJSON()});
+        return json({size: 'default', always_on: false, bots: ['scout']});
+      }
       if (p === '/api/v2/cloud-machines') return json({offered: true, caps: {}, sizes: [['small', 1], ['default', 2], ['large', 4], ['xlarge', 8]]
         .map(([name, cpu]) => ({name, cpu, memory_gb: cpu * 2, usd_per_hour: cpu * 0.05, start_usd: 0.04, idle_stop_s: 300}))});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
@@ -52,7 +60,8 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({services: [], machines: [
         {id: 'r1', label: 'Box', operator: 'ana', bots: ['writer']},
-        {id: 'r9', label: 'Helper (cloud)', operator: 'ana', bots: ['helper'], cloud_machine: {bot: 'helper', size: 'default', state: 'stopped'}}]});
+        {id: 'r9', label: 'Helper (cloud)', operator: 'ana', bots: ['helper'], cloud_machine: {bot: 'helper', shared: false, size: 'default', state: 'stopped'}},
+        {id: 'r8', label: 'Shared cloud machine', operator: 'ana', bots: ['scout'], cloud_machine: {bot: null, shared: true, size: 'default', state: 'stopped'}}]});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], default: catalog.default, revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
@@ -86,11 +95,11 @@ const {unrouted} = require('./support/routes.cjs');
     await page.goto('https://tico-ui.test/#/settings');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'helper') && SETTINGS_DATA.models?.length);
 
-    // Own cloud machine is a choice; another bot's own machine never is.
+    // Shared and Own cloud machine are choices; a cloud machine's computer never is.
     await open('helper');
     const select = editor.locator('[data-bot-machine]');
-    assert.equal(await select.inputValue(), 'cloud');
-    assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(o => o.value)), ['cloud', 'r1']);
+    assert.equal(await select.inputValue(), 'cloud-own');
+    assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(o => o.value)), ['cloud-shared', 'cloud-own', 'r1']);
     // HQ's sizes come in with their prices; Size and Always on wait for Save bot.
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-size] option')?.textContent.includes('CPU'));
     await editor.locator('[data-bot-cloud-size]').selectOption('large');
@@ -100,20 +109,28 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls.map(c => [c.what, c.body]), [['definition', calls[0].body], ['cloud-machine', {size: 'large'}],
       ['cloud-machine', {always_on: true}]]);
 
-    // A bot on a computer picks its own machine: mode cloud, no transition.
+    // A bot on the shared machine: its Size and Always on are the company's, posted to the shared machine.
+    await open('scout');
+    assert.equal(await editor.locator('[data-bot-machine]').inputValue(), 'cloud-shared');
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-cloud-size] option')?.textContent.includes('CPU'));
+    await editor.locator('[data-bot-cloud-size]').selectOption('small');
+    await save();
+    assert.deepEqual(calls.map(c => [c.what, c.body]), [['definition', calls[0].body], ['shared', {size: 'small'}]]);
+
+    // A bot on a computer joins the shared machine: mode cloud, placement shared, no transition.
     await open('writer');
     assert.equal(await editor.locator('[data-bot-cloud-size]').count(), 0, 'no Size row while it runs on a computer');
-    await editor.locator('[data-bot-machine]').selectOption('cloud');
+    await editor.locator('[data-bot-machine]').selectOption('cloud-shared');
     await save();
     assert.deepEqual(calls.map(c => c.what), ['definition', 'cloud-machine']);
-    assert.deepEqual(calls[1].body, {mode: 'cloud'});
+    assert.deepEqual(calls[1].body, {mode: 'cloud', placement: 'shared'});
 
-    // Off cloud: no Own cloud machine, no Size row.
+    // Off cloud: no cloud machine choice, no Size row.
     bots = bots.map(row => ({...row, cloud_machine: null}));
     await page.evaluate(() => loadSettings());
     await page.waitForFunction(() => S.emps.every(e => e.cloud_machine === null));
     await open('writer');
-    assert.equal(await editor.locator('[data-bot-machine] option[value=cloud]').count(), 0);
+    assert.equal(await editor.locator('[data-bot-machine] option[value^=cloud]').count(), 0);
     assert.equal(await editor.locator('[data-bot-cloud-size]').count(), 0);
     assert.deepEqual(errors, []);
     console.log('cloud machines ok');

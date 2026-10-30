@@ -276,14 +276,15 @@ function settingsEditBot(slug = '', inline = false) {
       if (machine) {
         const target = SETTINGS_DATA.machines.find(row => row.id === machine.value);
         machinePick = changed(machine) && target ? {id: target.id, label: target.label} : null;
-        // Its own cloud machine is not a move: it is made, and the bot goes there, when it next has work.
-        stage('cloud', 'computer', changed(machine) && machine.value === 'cloud' && cloudMachineRun(slug, {mode: 'cloud'}));
+        // A cloud machine is not a move: the bot goes there when it is up (made or started when the bot next has work).
+        const pick = cloudMachinePick(machine.value);
+        stage('cloud', 'computer', changed(machine) && pick && cloudMachineRun(slug, {mode: 'cloud', placement: pick}));
       }
       const cloudSize = event.target.closest('[data-bot-cloud-size]');
-      if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}));
+      if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}, cloudSize));
       const cloudAlways = event.target.closest('[data-bot-cloud-always]');
       if (cloudAlways) stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
-        && cloudMachineRun(slug, {always_on: cloudAlways.checked}));
+        && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const profile = event.target.closest('[data-bot-profile], [data-profile-key]');
@@ -526,8 +527,9 @@ function settingsEditOwners(slug, {stage} = {}) {
 async function settingsMoveBot(select) {
   const slug = select.dataset.botMachine, e = S.emps.find(row => row.name === slug);
   const current = select.dataset.current || '', machine = SETTINGS_DATA.machines.find(row => row.id === select.value);
-  if (e && select.value === 'cloud' && current !== 'cloud') {
-    try { await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine`, {mode: 'cloud'}); toast('Saved'); }
+  const pick = cloudMachinePick(select.value);
+  if (e && pick && select.value !== current) {
+    try { await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine`, {mode: 'cloud', placement: pick}); toast('Saved'); }
     catch (error) { select.value = current; toast(error.message); return; }
     await loadSettings();
     return;

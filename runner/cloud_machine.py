@@ -1,11 +1,12 @@
-"""A bot's own cloud machine (docs/cloud-machines.md): the base image step and the enroll-at-boot step.
+"""A cloud machine (docs/cloud-machines.md): the base image step and the enroll-at-boot step.
 
-Tico HQ starts each machine from one saved boat snapshot (`boat new --from <HQ_BOAT_BASE_SNAPSHOT>`) and gives it
-two variables: TICO_ENROLL_TOKEN, the one-time code the server minted for this bot (backend/cloud_machines.py), and
-TICO_HUB_URL, the server to enroll with. The runner is the native Linux checkout runner (docs/install.md, "A Linux
-checkout"), run as the sandbox's own user: one machine holds one bot, so the machine is one trust group and that
-user may use sudo. The Docker runner (`install.sh --runner`) drops bot code to a user with no capabilities, so a
-bot there could never use sudo.
+Tico HQ starts each machine, a bot's own or the company's shared one, from one saved boat snapshot (`boat new --from
+<HQ_BOAT_BASE_SNAPSHOT>`) and gives it two variables: TICO_ENROLL_TOKEN, the one-time code the server minted for this
+machine (backend/cloud_machines.py), and TICO_HUB_URL, the server to enroll with. Nothing here knows which bots it
+will run: the server assigns them to the computer the enroll makes. The runner is the native Linux checkout runner
+(docs/install.md, "A Linux checkout"), run as the sandbox's own user: the bots on one machine (one, or the shared
+machine's members) are one trust group, and that user may use sudo. The Docker runner (`install.sh --runner`) drops
+bot code to a user with no capabilities, so a bot there could never use sudo.
 
 `base` runs once, as root, on the sandbox the snapshot is saved from, in a checkout of the release. It builds the
 runner's venv and Rust binary as the user, gives that user passwordless sudo (/etc/sudoers.d/tico-runner: only here,
@@ -277,7 +278,8 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
 # -- base -------------------------------------------------------------------------------------------------------------
 
 def sudoers_text(user: str) -> str:
-    return (f"# Tico cloud machine (runner/cloud_machine.py base): one bot per machine, so its runner may use sudo.\n"
+    return (f"# Tico cloud machine (runner/cloud_machine.py base): its bots are one trust group, so its runner may "
+            f"use sudo.\n"
             f"{user} ALL=(ALL) NOPASSWD:ALL\n")
 
 

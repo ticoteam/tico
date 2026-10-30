@@ -2017,7 +2017,7 @@ def install_views(app, store, auth, mutate, task_view):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
         from . import cloud_machines
-        # Each bot's own cloud machine, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
+        # Each bot's cloud machine, own or shared, Tico Cloud only (backend/cloud_machines.py): one read for every bot.
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
@@ -2166,7 +2166,8 @@ def install_views(app, store, auth, mutate, task_view):
                          "app_delivery": app_delivery.view(c, config),
                          "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
                          "cloud_machine": None if cloud_rows is None or location.get("agent") else
-                         cloud_machines.shown(slug, cloud_rows.get(slug), bool(location.get("machine")))})
+                         cloud_machines.shown(slug, cloud_rows.get(slug), bool(location.get("machine")),
+                                              cloud_rows.get(cloud_machines.SHARED))})
         return rows
 
     @app.get("/api/me")
@@ -2324,8 +2325,11 @@ def install_views(app, store, auth, mutate, task_view):
             # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
             login_names = display_names(c)
             from . import cloud_machines
-            # {runner: {bot, size, state}} for computers that are a bot's own cloud machine.
-            cloud_of = {r["runner_id"]: {"bot": r["bot"], "size": r["machine_size"] or r["size"], "state": r["state"]}
+            # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
+            # company's shared one (`shared`, bot None).
+            cloud_of = {r["runner_id"]: {"bot": None if r["bot"] == cloud_machines.SHARED else r["bot"],
+                                         "shared": r["bot"] == cloud_machines.SHARED,
+                                         "size": r["machine_size"] or r["size"], "state": r["state"]}
                         for r in cloud_machines.rows(c).values() if r["runner_id"]}
             runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"

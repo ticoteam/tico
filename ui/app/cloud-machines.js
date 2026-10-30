@@ -1,17 +1,28 @@
-/* ui/app/cloud-machines.js — A bot's own cloud machine on Tico Cloud: where it runs, its size, Always on, its state
+/* ui/app/cloud-machines.js — A bot's cloud machine on Tico Cloud, shared or its own: where it runs, size, Always on, state
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // `cloud_machine` on a bot's row (/api/employees, backend/cloud_machines.py), null off Tico Cloud, so nothing here
-// shows there. `mode` cloud runs the bot on its own machine, started when it has work and stopped when idle; any other
-// computer is a machine transition, as before. A size applies at the machine's next start. The sizes are HQ's
-// (GET /v2/cloud-machines), read once; before they come the four names stand alone.
+// shows there. `mode` cloud runs the bot on a cloud machine, started when there is work and stopped when idle;
+// `placement` says which: the company's shared one or its own. The size, Always on and state are that machine's. Any
+// other computer is a machine transition, as before. A size applies at the machine's next start; the shared machine's
+// size and Always on are the company's, changed by owners and admins. The sizes are HQ's (GET /v2/cloud-machines),
+// read once; before they come the four names stand alone.
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
 const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
+// The Computer select's values for the two cloud machines; any other value is a computer's id.
+const CLOUD_CHOICES = {'cloud-shared': 'shared', 'cloud-own': 'own'};
 let CLOUD_SIZES = null;
 const cloudSizeName = name => name ? name[0].toUpperCase() + name.slice(1) : '';
-const cloudMachineOwn = e => e?.cloud_machine?.mode === 'cloud';
+const cloudMachineOn = e => e?.cloud_machine?.mode === 'cloud';
+const cloudMachineShared = e => cloudMachineOn(e) && e.cloud_machine.placement !== 'own';
+const cloudMachinePick = value => CLOUD_CHOICES[value] || null;
+const cloudMachineValue = e => cloudMachineOn(e) ? (cloudMachineShared(e) ? 'cloud-shared' : 'cloud-own') : '';
+function cloudMachineOptionsHTML(current) {
+  return Object.entries({'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'}).map(([value, label]) =>
+    `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('');
+}
 async function cloudMachineSizes() {
   if (!CLOUD_SIZES) {
     try { CLOUD_SIZES = (await get('/v2/cloud-machines')).sizes || []; } catch { return []; }
@@ -31,25 +42,30 @@ function cloudMachineStatus(m) {
   if (m.always_on) parts.push('Always on');
   return parts.filter(Boolean).join(' · ');
 }
-// The Computer value on the bot's page and in its Info for a bot on its own machine; '' for any other.
+// The Computer value on the bot's page and in its Info for a bot on a cloud machine; '' for any other.
 function cloudMachineComputerHTML(e) {
-  return cloudMachineOwn(e) ? `Own cloud machine <span class="muted">· ${esc(cloudMachineStatus(e.cloud_machine))}</span>` : '';
+  if (!cloudMachineOn(e)) return '';
+  return `${cloudMachineShared(e) ? 'Shared' : 'Own'} cloud machine <span class="muted">· ${esc(cloudMachineStatus(e.cloud_machine))}</span>`;
 }
-// Settings > Computers: whose machine a computer is.
+// Settings > Computers: which cloud machine a computer is.
 function cloudMachineFacts(machine) {
   const m = machine.cloud_machine;
-  return m ? `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}` : '';
+  if (!m) return '';
+  return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's row under Computer: size and Always on, both held until Save bot (`stage`).
+// The bot editor's row under Computer: its machine's size and Always on, both held until Save bot (`stage`). The
+// shared machine's are the company's: only owners and admins change them.
 function cloudMachineRowHTML(e) {
-  if (!cloudMachineOwn(e)) return '';
-  const m = e.cloud_machine, may = settingsCanManageBot(e) ? '' : 'disabled';
+  if (!cloudMachineOn(e)) return '';
+  const m = e.cloud_machine, scope = cloudMachineShared(e) ? 'shared' : 'own';
+  const may = (scope === 'shared' ? settingsIsAdmin() : settingsCanManageBot(e)) ? '' : 'disabled';
   const names = CLOUD_SIZES?.length ? CLOUD_SIZES : CLOUD_SIZE_NAMES.map(name => ({name}));
+  const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
-      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.name)}" data-current="${esc(m.size)}" aria-label="Cloud machine size for ${esc(e.display_name)}" ${may}>
+      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
         ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
       </select>
-      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.name)}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
 }
@@ -61,7 +77,9 @@ async function cloudMachineMount(rows, slug) {
   const value = select.value;
   select.innerHTML = sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
 }
-// One change to the bot's own machine; it moves no revision, so the next held row keeps the one it has.
-function cloudMachineRun(slug, body) {
-  return async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine`, body); return rev; };
+// One change to a cloud machine: the bot's (`/bots/<bot>/cloud-machine`), or the shared one's for a control whose
+// scope is shared. It moves no revision, so the next held row keeps the one it has.
+function cloudMachineRun(slug, body, control) {
+  const path = control?.dataset.cloudScope === 'shared' ? '/v2/cloud-machines/shared' : `/v2/bots/${encodeURIComponent(slug)}/cloud-machine`;
+  return async rev => { await post(path, body); return rev; };
 }

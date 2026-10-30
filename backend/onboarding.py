@@ -832,7 +832,7 @@ class Onboarding:
             if c.execute("SELECT 1 FROM assignments WHERE bot=?", (row["bot"],)).fetchone():
                 continue                     # a bot a person already placed is never moved
             if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
-                continue                     # it runs on its own cloud machine (backend/cloud_machines.py)
+                continue                     # it runs on a cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
                     computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
@@ -1084,7 +1084,7 @@ class Onboarding:
             from . import cloud_machines
             if not cloud_machines.offered(c, self.settings):
                 return []
-            # Tico Cloud with no computer yet: each bot runs on its own cloud machine, made when it has work.
+            # Tico Cloud with no computer yet: bots run on cloud machines (shared, or their own by role), made for work.
             for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot LEFT JOIN "
                                    "assignments a ON a.bot=bc.bot WHERE a.bot IS NULL AND b.state<>'archived' "
                                    "ORDER BY bc.bot").fetchall():

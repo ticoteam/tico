@@ -207,9 +207,13 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    # Tico Cloud: its own machine, its size and Always on all spend credit (backend/cloud_machines.py).
-    S("bot.cloud_machine", "Own cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
-      "bots/{bot}/cloud-machine", value="json", card=_card("bots"), words="cloud machine size always on computer"),
+    # Tico Cloud: a cloud machine, shared or its own, its size and Always on all spend credit
+    # (backend/cloud_machines.py). The shared machine's size and Always on are the company's, for owners and admins.
+    S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
+      "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
+      words="cloud machine shared own size always on computer"),
+    S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
+      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
@@ -333,7 +337,7 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
                "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
-               "bot.cloud_machine")
+               "bot.cloud_machine", "cloud.shared_machine")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

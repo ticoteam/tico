@@ -1,8 +1,9 @@
-"""Bots' own cloud machines (backend/cloud_machines.py): on a Tico Cloud company a bot with no computer runs on its own
-machine, made on first work with a one-time enrollment code and bound to that bot only; it is started for work, kept
-with a heartbeat, stopped after its size's break-even idle time unless Always on, never started out of credit, and
-retried with backoff when HQ refuses. A size change applies at the next start. Off cloud nothing changes. HQ is a fake
-client and the clock is a fake one."""
+"""Cloud machines (backend/cloud_machines.py): on a Tico Cloud company a bot with no computer runs on a cloud machine,
+the company's shared one or, for a developer or the video producer, its own. A machine is made on first work with a
+one-time enrollment code and bound to the bots set to run there only; it is started for work, kept with a heartbeat,
+stopped after its size's break-even idle time unless Always on (the shared one once every member is idle), never
+started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. Off cloud
+nothing changes. HQ is a fake client and the clock is a fake one."""
 
 import json
 import time
@@ -111,9 +112,12 @@ def cloud(api, monkeypatch):  # noqa: F811
     return out
 
 
-def adopt(cloud, bot="ops"):
+def adopt(cloud, bot="ops", place="own"):
+    """The bot on a cloud machine; `place` own (most tests here are of one bot's own machine) or shared."""
     with cloud.store.transaction() as c:
         assert placement.auto_place(c, cloud.api.app.state.execution, bot) is None
+        CM.save(c, bot, placement=place)
+        CM.ensure_shared(c)
     return cloud.row(bot)
 
 
@@ -122,7 +126,7 @@ def work(cloud, bot="ops", text="Please summarize the current work."):
 
 
 def enrolled(cloud, bot="ops"):
-    """Create the bot's machine for its queued work and enroll its runner with the code HQ was handed."""
+    """Create the bot's own machine for its queued work and enroll its runner with the code HQ was handed."""
     adopt(cloud, bot)
     work(cloud, bot)
     assert cloud.tick()[-1] == "create"
@@ -154,7 +158,7 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(), facts(), 1000, 300) == (None, None)
     assert CM.decide(machine_row(), facts(want="job:a"), 1000, 300) == ("start", None)
     assert CM.decide(machine_row(machine_id=None, state="none"), facts(want="job:a"), 1000, 300) == ("create", None)
-    assert CM.decide(machine_row(state="deleted"), facts(want="move"), 1000, 300) == ("create", None)
+    assert CM.decide(machine_row(state="deleted"), facts(want="move:ops"), 1000, 300) == ("create", None)
     assert CM.decide(machine_row(always_on=1), facts(), 1000, 300) == ("start", None)
     # Not active, or moved to another computer: a machine that is on stops, one that is off stays off.
     assert CM.decide(machine_row(state="running"), facts(active=False, want="job:a"), 1000, 300) == ("stop", None)
@@ -200,7 +204,7 @@ def test_off_cloud_nothing_changes(api):  # noqa: F811
         assert CM.row(c, "ops") is None
     manager.tick()
     assert fake.calls == []
-    assert get(api, "cloud-machines") == {"offered": False, "sizes": [], "caps": {}}
+    assert get(api, "cloud-machines") == {"offered": False, "sizes": [], "caps": {}, "shared": None}
     assert employee(api)["cloud_machine"] is None
     post(api, "bots/ops/cloud-machine", {"size": "large"}, expected=409)
 
@@ -392,7 +396,7 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
     assert delete.status_code == 200, delete.text
     assert cloud.hq.calls[-1] == ("delete", "m1")
-    assert cloud.row() == {**cloud.row(), "mode": "computer", "machine_id": None, "runner_id": None}
+    assert cloud.row() == {**cloud.row(), "mode": "computer", "placement": "own", "machine_id": None, "runner_id": None}
     # Choosing its own machine again makes a new one at its next work.
     post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
     assert cloud.tick(10)[-1] == "create"
@@ -420,6 +424,171 @@ def test_sizes_and_choices_are_checked(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"size": "huge"}, expected=422)
     post(cloud.api, "bots/ops/cloud-machine", {"mode": "computer"}, expected=422)
     post(cloud.api, "bots/ops/cloud-machine", {"size": "large"}, token="cara-test", expected=403)
+
+
+# ----------------------------------------------------------------------------- the shared machine
+def stamp(cloud, ago=0):
+    """The fake clock's now (less `ago` seconds) as the hub's ISO time."""
+    return H.shift(H.now(), seconds=cloud.at[0] - time.time() - ago)
+
+
+def placed(cloud):
+    with cloud.store.read() as c:
+        return {r["bot"]: r["runner_id"] for r in c.execute("SELECT bot,runner_id FROM assignments")}
+
+
+def shared_enrolled(cloud, *bots):
+    """These bots on the shared machine, made for the first one's work and enrolled; returns its computer's id."""
+    for bot in bots:
+        adopt(cloud, bot, "shared")
+    work(cloud, bots[0])
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == CM.SHARED
+    return post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm",
+                                              "platform": "linux"})["runner_id"]
+
+
+def idle(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled'")
+
+
+def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
+    execution = cloud.api.app.state.execution
+    with cloud.store.transaction() as c:
+        # coo is in Engineering on the team chart; finance was made from the video producer's template.
+        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.org_groups',json(?)) WHERE key='people'",
+                  (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','video-producer') "
+                  "WHERE bot='finance'")
+        for bot in ("ops", "coo", "finance"):
+            assert placement.auto_place(c, execution, bot) is None
+    assert [cloud.row(bot)["placement"] for bot in ("ops", "coo", "finance")] == ["shared", "own", "own"]
+    assert employee(cloud.api, "ops")["cloud_machine"]["placement"] == "shared"
+    post(cloud.api, "bots/coo/cloud-machine", {"placement": "shared"})
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    assert cloud.row("coo")["placement"] == "shared" and cloud.row("ops")["placement"] == "own"
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "big"}, expected=422)
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"}, token="cara-test", expected=403)
+    with cloud.store.read() as c:
+        assert CM.members(c) == ["coo"]
+
+
+def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
+    adopt(cloud, "ops", "shared")
+    adopt(cloud, "finance", "shared")
+    assert cloud.tick() == []                                   # no work, no machine
+    work(cloud, "finance")
+    assert cloud.tick() == ["create"]
+    _, key, size, code, _ = cloud.hq.calls[-1]
+    assert (key, size) == (CM.SHARED, "default") and cloud.row(CM.SHARED)["state"] == "starting"
+    assert cloud.row("ops")["machine_id"] is None and cloud.row("finance")["machine_id"] is None
+    # Its computer is the company's, open to members' bots, and every member is assigned to it.
+    rid = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})["runner_id"]
+    with cloud.store.read() as c:
+        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+        offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
+    assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["operator"] == "ana"
+    assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
+    assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
+        "bot": None, "shared": True, "size": "default", "state": "starting"}
+    assert employee(cloud.api, "ops")["cloud_machine"] == {**employee(cloud.api, "ops")["cloud_machine"],
+                                                           "mode": "cloud", "placement": "shared", "state": "starting"}
+    assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
+    # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
+    adopt(cloud, "coo", "shared")
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and placed(cloud)["coo"] == rid
+    # Idle, it stops; another member's new work starts it again.
+    idle(cloud)
+    cloud.tick(400)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row(CM.SHARED)["state"] == "stopped"
+    cloud.hq.calls.clear()
+    work(cloud, "ops")
+    assert cloud.tick(10) == ["start"]
+
+
+def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
+    rid = shared_enrolled(cloud, "ops", "finance")
+    idle(cloud)
+    cloud.manager.synced = None
+    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    start = cloud.row(CM.SHARED)["active_at"]
+    cloud.at[0] = start + 200
+    with cloud.store.transaction() as c:                        # finance's watcher ran there; ops did nothing
+        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,every) "
+                  "VALUES('finance','mail',?,?,?,0,3600)", (rid, stamp(cloud), stamp(cloud)))
+    cloud.hq.calls.clear()
+    cloud.at[0] = start + 300
+    cloud.tick()
+    cloud.at[0] = start + 499
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.at[0] = start + 500
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
+
+
+def test_switching_own_and_shared_moves_the_bot_and_stops_the_machine_it_left(cloud):
+    own = enrolled(cloud)["runner_id"]                          # ops on its own machine m1
+    idle(cloud)
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
+    cloud.hq.calls.clear()
+    # The shared machine is made for the bot waiting to move there; its own, with no bot of its own left, stops.
+    assert sorted(cloud.tick(10)) == ["create", "stop"]
+    assert ("stop", "m1") in cloud.hq.calls
+    code = next(call[3] for call in cloud.hq.calls if call[0] == "create")
+    rid = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})["runner_id"]
+    assert placed(cloud)["ops"] == rid and cloud.row()["mode"] == "cloud" and cloud.row()["placement"] == "shared"
+    # Its own machine can go now that it runs elsewhere.
+    delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
+    assert delete.status_code == 200, delete.text
+    assert cloud.row()["machine_id"] is None and cloud.row()["placement"] == "shared"
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (own,)).fetchone()["revoked_at"]
+    # Back to its own: a new one is made for the move, and the shared one, with no member left, stops.
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    cloud.hq.calls.clear()
+    assert sorted(cloud.tick(10)) == ["create", "stop"]
+    create = next(call for call in cloud.hq.calls if call[0] == "create")
+    assert create[1] == "ops" and ("stop", cloud.row(CM.SHARED)["machine_id"]) in cloud.hq.calls
+    again = post(cloud.api, "runners/enroll", {"code": create[3], "label": "boat-vm", "platform": "linux"})
+    assert placed(cloud)["ops"] == again["runner_id"] and cloud.row()["placement"] == "own"
+
+
+def test_a_member_moved_to_a_computer_leaves_and_the_last_one_out_stops_it(cloud):
+    shared_enrolled(cloud, "ops", "finance")
+    other = runner(cloud.api, label="Office Mac")
+    idle(cloud)
+    generations = {}
+    with cloud.store.read() as c:
+        generations = {r["bot"]: r["generation"] for r in c.execute("SELECT bot,generation FROM assignments")}
+    assign(cloud.api, other, "ops", generations["ops"])
+    assert cloud.row()["mode"] == "computer" and cloud.row()["placement"] == "shared"
+    cloud.hq.calls.clear()
+    assert "stop" not in cloud.tick(10)                         # finance is still on it, and not idle yet
+    assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance"]
+    assign(cloud.api, other, "finance", generations["finance"])
+    assert cloud.tick(10)[-1] == "stop"
+    work(cloud, "ops")
+    assert cloud.tick(10).count("start") == 0                   # its work goes to the other computer
+
+
+def test_the_shared_machines_size_and_always_on_are_the_companys(cloud):
+    adopt(cloud, "ops", "shared")
+    post(cloud.api, "cloud-machines/shared", {"size": "large"}, token="cara-test", expected=403)
+    post(cloud.api, "cloud-machines/shared", {"size": "huge"}, expected=422)
+    assert post(cloud.api, "cloud-machines/shared", {"size": "large"}, token="ben-test")["shared"]["size"] == "large"
+    # A refusal on its first start is every member's wait note and Health's.
+    post(cloud.api, "cloud-machines/shared", {"always_on": True})
+    cloud.hq.fail["create"] = [CM.Refused("unreachable")]
+    assert cloud.tick(10) == ["create"] and cloud.hq.calls[-1][1:3] == (CM.SHARED, "large")
+    with cloud.store.read() as c:
+        assert "didn't start" in CM.waiting(c, "ops") and "ops" in CM.health(c, cloud.store.settings)["summary"]
+    assert cloud.tick(20) == ["create", "create"] and cloud.row(CM.SHARED)["state"] == "starting"
+    for _ in range(3):
+        cloud.tick(600)
+    assert "stop" not in cloud.hq.actions()                     # Always on never idles
 
 
 # ----------------------------------------------------------------------------- the HTTP client
