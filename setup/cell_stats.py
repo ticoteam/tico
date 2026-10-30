@@ -13,8 +13,9 @@ container's environment, never a key.
 
 Light by design: one `docker ps -a`, one `docker inspect` (of the cell's containers, with a template that never asks for
 Config.Env) and one `docker stats --no-stream` per push, all in parallel with the /proc/stat interval; the error lines
-come from each container's json-file log on the host, not one `docker logs` per company; `docker system df` and the
-read-only SQLite reads run at most every 15 minutes (cached). The flight numbers are the core's own
+come from each container's json-file log on the host, not one `docker logs` per company; database sizes and free
+pages come from the file's header. `docker system df` and the top SQL shapes (read with SQLite inside each company's
+server container, never on the host) run at most every 15 minutes (cached). The flight numbers are the core's own
 `backend/flight_file.summary`, loaded by path (stdlib only), so they read the same while a server is stuck.
 
 Stdlib only: the host's python3 runs this from the core release folder (/opt/tico-cell/stats-core, a link `push` keeps
@@ -35,7 +36,6 @@ import os
 import re
 import signal
 import socket
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -68,7 +68,7 @@ MAX_OUTPUT = 256 * 1024         # one debug result
 WINDOW_S = 300                  # the flight window
 ERROR_SINCE_S = 70              # log lines this recent (a push a minute, with some overlap)
 ERRORS_MAX, ERROR_CHARS = 20, 300
-SLOW_EVERY = 15 * 60            # docker system df, PRAGMA page/freelist counts, top SQL shapes, attachment sizes
+SLOW_EVERY = 15 * 60            # docker system df, top SQL shapes, attachment sizes
 SLOW_ROUTE_P95_MS, SLOW_ROUTE_MAX_MS = 500, 1000
 SQL_TOP = 10
 HEALTH_TIMEOUT = 3
@@ -104,12 +104,12 @@ def _long_run(m: re.Match) -> str:
 
 
 _SCRUB = [
-    # A whole header value: a cookie or authorization line keeps nothing after its name.
-    # Keys and values may sit in JSON a log line carries as a string: quotes then come escaped, once (\") or more (\\\").
-    (re.compile(r"(?i)\b((?:set-)?cookie|authorization)((?:\\*[\"'])?\s*[=:]\s*)[^\r\n]*"), r"\1\2[redacted]"),
+    # A secret's name and its separator: the rest of that line goes, whatever it holds. No try at finding where the
+    # value ends: it may be quoted, escaped once (\") or more (\\\") inside JSON a log line carries, and hold escaped
+    # quotes itself. Losing the rest of a line that names a secret is the price.
+    (re.compile(r"(?i)\b((?:set-)?cookie|authorization|[\w-]*(?:key|token|secret|password|passwd|session))"
+                r"((?:\\*[\"'])?\s*[=:]\s*)[^\r\n]+"), r"\1\2[redacted]"),
     (re.compile(r"(?i)\bbearer\s+\S+"), "Bearer [redacted]"),
-    (re.compile(r"(?i)\b([\w-]*(?:key|token|secret|password|passwd|session))((?:\\*[\"'])?\s*[=:]\s*)"
-                r"(?:\\*\"[^\"]*\"|\\*'[^']*'|[^\s,;&\"'})\]]+)"), r"\1\2[redacted]"),
     (re.compile(r"\b(?:tch|tcs|tgi)_[A-Za-z0-9_-]{8,}"), "[redacted]"),
     (re.compile(r"\btico_[A-Za-z0-9_-]{16,}"), "[redacted]"),
     (re.compile(r"\bsk[-_][A-Za-z0-9_-]{12,}"), "[redacted]"),
@@ -625,55 +625,120 @@ def _stale(entry, now: float) -> bool:
     return not isinstance(entry, dict) or now - (entry.get("at") or 0) >= SLOW_EVERY
 
 
-def _ro(db: Path, timeout: float = 1.0) -> sqlite3.Connection:
-    c = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=timeout)
-    c.execute("PRAGMA query_only=1")
-    return c
-
-
 DB = "data/hub.sqlite"      # under the company's folder
 
 
-def safe_db(root: Path) -> Path | None:
-    """The company's database path, when it and the -wal/-shm/-journal files beside it (which SQLite opens too, the -shm
-    read-write) are regular files with no symlink on the way; None otherwise, and its numbers are skipped."""
+def parse_header(head: bytes, size: int) -> dict | None:
+    """Page size, page count and free pages from a SQLite file's 100-byte header (sqlite.org/fileformat.html); None
+    when it is not one. The header's page count is used only while its version-valid-for number matches the change
+    counter, else the file size says it. Pages still in the WAL are not counted."""
+    if len(head) < 100 or not head.startswith(b"SQLite format 3\x00"):
+        return None
+    page = int.from_bytes(head[16:18], "big")
+    page = 65536 if page == 1 else page
+    if page < 512 or page & (page - 1):
+        return None
+    pages = int.from_bytes(head[28:32], "big")
+    if not pages or head[24:28] != head[92:96]:
+        pages = size // page
+    return {"page_size": page, "page_count": pages, "freelist_count": int.from_bytes(head[36:40], "big")}
+
+
+def db_header(root: Path) -> dict | None:
+    """The database's header numbers and its and the WAL's sizes, read through safe_open: no SQLite on the host."""
     try:
-        safe_stat(root, DB)
-        for side in ("-wal", "-shm", "-journal"):
-            try:
-                safe_stat(root, DB + side)
-            except FileNotFoundError:
-                pass
+        with safe_open(root, DB, None) as f:
+            size = os.fstat(f.fileno()).st_size
+            head = parse_header(f.read(100), size)
     except OSError:
         return None
-    return root / DB
-
-
-def db_slow(root: Path, now: float) -> dict:
-    """At most every 15 minutes: free pages and the top SQL shapes of the last two hours (flight_sql), read-only."""
-    out = {"at": now, "freelist_pct": None, "sql_top": None}
-    db = safe_db(root)
-    if db is None:
-        return out
     try:
-        c = _ro(db)
+        wal = safe_stat(root, DB + "-wal").st_size
+    except FileNotFoundError:
+        wal = 0
+    except OSError:
+        wal = None
+    return {**(head or {}), "size": size, "wal": wal}
+
+
+# What reads the database with SQLite runs in the company's own server container, as the container's user (docker exec
+# with no -u), with the server's python and a read-only URI: a symlink in there reaches only the container's own
+# files. The script is fixed; its arguments are a mode, the database's path in the container and numbers this module
+# made or validated. Its answer is one JSON line, checked like anything else from a company.
+EXEC_PYTHON = "/opt/tico/.venv/bin/python"
+CONTAINER_DB = "/data/hub.sqlite"
+DB_SCRIPT = r"""
+import json, sqlite3, sys, time
+mode, db, budget = sys.argv[1], sys.argv[2], float(sys.argv[3])
+start = time.monotonic()
+c = sqlite3.connect("file:" + db + "?mode=ro", uri=True, timeout=1)
+c.execute("PRAGMA query_only=1")
+def cap(seconds):
+    stop = min(start + budget, time.monotonic() + seconds)
+    c.set_progress_handler(lambda: 1 if time.monotonic() > stop else 0, 20000)
+out = {}
+if mode == "top":
+    cap(budget)
+    try:
+        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE ts>=? "
+                                   "GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?",
+                                   (int(sys.argv[4]), int(sys.argv[5]))).fetchall()
+    except sqlite3.Error as e:
+        out["error"] = str(e)
+elif mode == "db":
+    cap(budget)
+    for p in ("page_size", "page_count", "freelist_count", "journal_mode", "wal_autocheckpoint"):
         try:
-            pages = c.execute("PRAGMA page_count").fetchone()[0]
-            free = c.execute("PRAGMA freelist_count").fetchone()[0]
-            out["freelist_pct"] = round(100 * free / pages, 1) if pages else None
-            try:
-                rows = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE ts>=? "
-                                 "GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?", (int(now) // 3600 * 3600 - 3600,
-                                                                                   SQL_TOP)).fetchall()
-                out["sql_top"] = [{"shape": scrub(r[0])[:200], "count": r[1], "total_ms": round(r[2] or 0),
-                                   "max_ms": round(r[3] or 0)} for r in rows]
-            except sqlite3.Error:
-                pass
-        finally:
-            c.close()
-    except sqlite3.Error:
-        pass
-    return out
+            out[p] = c.execute("PRAGMA " + p).fetchone()[0]
+        except sqlite3.Error as e:
+            out[p] = "stopped: %s" % e
+    cap(20)
+    try:
+        out["largest"] = [{"name": n, "mb": round(b / 1e6, 2)} for n, b in c.execute(
+            "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC LIMIT 15").fetchall()]
+    except sqlite3.Error as e:
+        out["largest"] = "not available (%s)" % e
+    cap(budget)
+    try:
+        out["quick_check"] = [r[0] for r in c.execute("PRAGMA quick_check").fetchmany(50)]
+    except sqlite3.Error as e:
+        out["quick_check"] = "stopped: %s" % e
+c.close()
+print(json.dumps(out))
+"""
+SQL_TOP_BUDGET = 5
+
+
+def exec_db(box: Box, name: str, mode: str, budget: float, *numbers: int) -> tuple[dict | None, str]:
+    """DB_SCRIPT in the server container `name`: (its answer, "") or (None, why)."""
+    if mode not in ("top", "db") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+        raise Refused("not a database read")
+    argv = ["docker", "exec", name, EXEC_PYTHON, "-I", "-c", DB_SCRIPT, mode, CONTAINER_DB, str(int(budget))]
+    r = box.run(argv + [str(int(n)) for n in numbers], timeout=budget + 5)
+    if r.returncode:
+        return None, scrub(f"the read in the server container failed ({r.returncode}): {r.stderr.strip()[-300:]}")
+    try:
+        out = json.loads(r.stdout.strip().splitlines()[-1][:MAX_OUTPUT])
+    except (ValueError, IndexError):
+        return None, "the read in the server container gave no answer"
+    return (out, "") if isinstance(out, dict) else (None, "the read in the server container gave no answer")
+
+
+def sql_top(box: Box, name: str | None, now: float) -> list | None:
+    """The top SQL shapes of this hour and the last (flight_sql), read in the server container; None without one."""
+    if not name:
+        return None
+    out, _ = exec_db(box, name, "top", SQL_TOP_BUDGET, int(now) // 3600 * 3600 - 3600, SQL_TOP)
+    rows = (out or {}).get("sql_top")
+    if not isinstance(rows, list):
+        return None
+    top = []
+    for r in rows[:SQL_TOP]:
+        if (isinstance(r, list) and len(r) == 4 and isinstance(r[0], str)
+                and all(isinstance(x, (int, float)) or x is None for x in r[1:])):
+            top.append({"shape": scrub(r[0])[:200], "count": r[1], "total_ms": round(r[2] or 0),
+                        "max_ms": round(r[3] or 0)})
+    return top
 
 
 def files_mb(root: Path, rel: str, limit: int = 200_000) -> float | None:
@@ -708,23 +773,21 @@ def files_mb(root: Path, rel: str, limit: int = 200_000) -> float | None:
     return round(total / 1e6, 1)
 
 
-def _size_mb(root: Path, rel: str) -> float | None:
-    try:
-        return round(safe_stat(root, rel).st_size / 1e6, 1)
-    except OSError:
-        return None
-
-
-def db_block(box: Box, root: Path, slug: str, cache: dict, now: float) -> dict:
+def db_block(box: Box, root: Path, slug: str, cache: dict, now: float, server: str | None = None) -> tuple:
+    """Sizes and free pages from the file each push; the top SQL shapes every 15 minutes, from the running server
+    container `server` (left out while it is not running, and asked again on the next push)."""
+    h = db_header(root)
     slow = cache.setdefault("db", {}).get(slug)
-    if _stale(slow, now):
-        slow = cache["db"][slug] = db_slow(root, now)
+    if _stale(slow, now) and server and h:
+        slow = cache["db"][slug] = {"at": now, "sql_top": sql_top(box, server, now)}
     blobs = cache.setdefault("files", {}).get(slug)
     if _stale(blobs, now):
         blobs = cache["files"][slug] = {"at": now, "mb": files_mb(root, "data/blobs")}
-    size = _size_mb(root, DB)
-    return {"size_mb": size, "wal_mb": _size_mb(root, DB + "-wal") or (0.0 if size is not None else None),
-            "freelist_pct": slow.get("freelist_pct"), "files_mb": blobs.get("mb")}, slow.get("sql_top")
+    mb = (lambda b: round(b / 1e6, 1) if isinstance(b, int) else None)
+    pages, free = (h or {}).get("page_count"), (h or {}).get("freelist_count")
+    return ({"size_mb": mb((h or {}).get("size")), "wal_mb": mb((h or {}).get("wal")),
+             "freelist_pct": round(100 * free / pages, 1) if pages and free is not None else None,
+             "files_mb": blobs.get("mb")}, (slow or {}).get("sql_top") if server else None)
 
 
 def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
@@ -754,7 +817,7 @@ def flight_summary(root: Path, since_s: float, now: float, **kw) -> dict | None:
     return flight_file().summary(root / FLIGHT, since_s, now=now, opener=flight_opener(root, FLIGHT), **kw)
 
 
-def flight_block(root: Path, now: float, sql_top) -> dict | None:
+def flight_block(root: Path, now: float, top) -> dict | None:
     s = flight_summary(root, WINDOW_S, now, stall_limit=3, stack_frames=1)
     if s is None:
         return None
@@ -772,7 +835,7 @@ def flight_block(root: Path, now: float, sql_top) -> dict | None:
         "slow_routes": slow,
         "sql": {"total_ms": round(sum(m.get("sql_ms") or 0 for m in minutes)) if minutes else None,
                 "lock_wait_ms": s["lock_waits"]["wait_ms"], "lock_hold_ms_max": s["peaks"]["hold_max"],
-                "locked_errors": s["lock_waits"]["locked"], "top": sql_top},
+                "locked_errors": s["lock_waits"]["locked"], "top": top},
         "process": {"cpu_pct": last.get("cpu"), "rss_mb": round(last["rss"] / 2 ** 20) if last.get("rss") else None,
                     "loop_lag_ms_max": s["peaks"]["lag_max"], "threads": last.get("threads")},
         "stalls": {"count": s["stalls_total"],
@@ -898,9 +961,10 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
             names = sorted(str(r.get("Names", "")).lstrip("/") for r in view.containers_of(slug))
             rows = [inspected[n] for n in names if n in inspected]
             root = view.root(slug)
-            db, sql_top = db_block(box, root, slug, cache, now)
             server = next((i for i in rows if (i.get("labels") or {}).get("com.docker.compose.service") == "server"), None)
             pid = ((server or {}).get("state") or {}).get("Pid") if server else None
+            running = server and ((server.get("state") or {}).get("Status")) == "running"
+            db, top = db_block(box, root, slug, cache, now, server["name"].lstrip("/") if running else None)
             errors = []
             for i in rows:
                 if (i.get("labels") or {}).get("com.docker.compose.service") in ("server", "updater"):
@@ -908,7 +972,7 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
                                         ((i.get("state") or {}).get("Status")) == "running")
             errors.sort(key=lambda e: e["at"] or "")
             try:
-                flight = flight_block(root, now, sql_top)
+                flight = flight_block(root, now, top)
             except Exception as e:  # noqa: BLE001  a bad flight file must not cost the rest of the snapshot
                 flight = {"window_s": WINDOW_S, "error": scrub(f"{type(e).__name__}: {e}")[:200]}
             return {"slug": slug, "version": c.get("version"), "state": view.cell.state_of(c, states),
@@ -1115,32 +1179,20 @@ def t_flight(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
 
 
 def t_db(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
-    root = view.root(a["company"])
-    db = safe_db(root)
-    if db is None:
+    """Sizes and header numbers from the file on the host; pragmas, the largest tables and quick_check from inside the
+    company's running server container."""
+    h = db_header(view.root(a["company"]))
+    if h is None:
         return False, f"no database for {a['company']} (or not a plain file)"
-    deadline = box.monotonic() + min(timeout, 60)
-    out = {"size_mb": _size_mb(root, DB), "wal_mb": _size_mb(root, DB + "-wal")}
-    c = _ro(db, timeout=5)
-    c.set_progress_handler(lambda: 1 if box.monotonic() > deadline else 0, 20000)
-    try:
-        for p in ("page_size", "page_count", "freelist_count", "journal_mode", "wal_autocheckpoint"):
-            out[p] = c.execute(f"PRAGMA {p}").fetchone()[0]
-        try:
-            stop = min(deadline, box.monotonic() + 20)
-            c.set_progress_handler(lambda: 1 if box.monotonic() > stop else 0, 20000)
-            out["largest"] = [{"name": n, "mb": round(b / 1e6, 2)} for n, b in c.execute(
-                "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC LIMIT 15").fetchall()]
-        except sqlite3.Error as e:
-            out["largest"] = f"not available ({e})"
-        c.set_progress_handler(lambda: 1 if box.monotonic() > deadline else 0, 20000)
-        try:
-            out["quick_check"] = [r[0] for r in c.execute("PRAGMA quick_check").fetchmany(50)]
-        except sqlite3.Error as e:
-            out["quick_check"] = f"stopped: {e}"
-    finally:
-        c.close()
-    return True, json.dumps(out, indent=1)
+    out = {"size_mb": round(h["size"] / 1e6, 1), "wal_mb": round(h["wal"] / 1e6, 1) if h["wal"] is not None else None,
+           "header": {k: h.get(k) for k in ("page_size", "page_count", "freelist_count")}}
+    row = view.container(a["company"], "server")
+    if not row or row.get("State") != "running":
+        out["sqlite"] = "server not running"
+        return True, json.dumps(out, indent=1)
+    got, why = exec_db(box, str(row.get("Names", "")).lstrip("/"), "db", max(1, min(timeout, 60) - 5))
+    out["sqlite"] = got if got is not None else why
+    return True, json.dumps(out, indent=1, default=str)
 
 
 def server_pid(box: Box, view: View, slug: str) -> tuple[int | None, str]:

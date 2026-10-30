@@ -112,9 +112,25 @@ class FakeBox(cs.Box):
             return Result(0, "/var/lib/docker\n")
         if argv[:2] == ["docker", "logs"]:
             return Result(0, "2026-10-30T11:59:00Z hello\n", "2026-10-30T11:59:01Z ERROR x token=abc123\n")
+        if argv[:2] == ["docker", "exec"]:
+            return self.exec(argv[2:])
         if argv[0] == "journalctl":
             return Result(0, "Oct 30 docker[1]: started with Authorization: Bearer sk-abcdefghijklmnop\n")
         return Result(0, f"{argv[0]} output\n")
+
+    def exec(self, argv):
+        """`docker exec NAME python -I -c SCRIPT …`: the script really runs (this python, its own process) against the
+        company's database, which is at /data/hub.sqlite in its container."""
+        name, python, *rest = argv
+        ps = self.containers.get(name, ({},))[0]
+        if ps.get("State") != "running":
+            return Result(1, "", f"Error response from daemon: container {name} is not running")
+        assert python == cs.EXEC_PYTHON and rest[:2] == ["-I", "-c"]
+        slug = name.removeprefix("tico-").rsplit("-", 2)[0]
+        args = [str(self.cell_root / "companies" / slug / "data" / "hub.sqlite") if a == cs.CONTAINER_DB else a
+                for a in rest[3:]]
+        p = subprocess.run([sys.executable, "-I", "-c", rest[2], *args], capture_output=True, text=True, check=False)
+        return Result(p.returncode, p.stdout, p.stderr)
 
     def http_get(self, host, path, port=cell.ROUTER_PORT, timeout=3):
         if port == cs.TUNNEL_METRICS:
@@ -304,10 +320,10 @@ def test_docker_logs_only_for_a_running_container_without_a_log_file(box):
 def test_one_broken_company_does_not_cost_the_others(box, monkeypatch):
     real = cs.db_block
 
-    def broken(box_, data, slug, cache, now):
+    def broken(box_, root, slug, *a):
         if slug == "stuck":
-            raise RuntimeError("disk on fire at /srv/x?token=abc")
-        return real(box_, data, slug, cache, now)
+            raise RuntimeError("disk on fire at /srv/x?q=abc")
+        return real(box_, root, slug, *a)
     monkeypatch.setattr(cs, "db_block", broken)
     by = {c["slug"]: c for c in cs.collect(box, {})["companies"]}
     assert by["boatyard"]["db"]["size_mb"] > 0
@@ -317,17 +333,17 @@ def test_one_broken_company_does_not_cost_the_others(box, monkeypatch):
 def test_slow_numbers_are_cached_for_15_minutes(box, monkeypatch):
     cache = {}
     opened = []
-    real = cs.db_slow
-    monkeypatch.setattr(cs, "db_slow", lambda db, now: opened.append(db) or real(db, now))
+    real = cs.sql_top
+    monkeypatch.setattr(cs, "sql_top", lambda box_, name, now: opened.append(name) or real(box_, name, now))
     cs.collect(box, cache)
     cs.collect(box, cache)
-    assert len(opened) == 2                      # once per company with a database folder, not once per push
+    assert len(opened) == 1                      # boatyard's server, once, not once per push; stuck's is not running
     assert sum(1 for c in box.calls if c[:3] == ["docker", "system", "df"]) == 1
     cache["df"]["at"] -= cs.SLOW_EVERY
     for v in cache["db"].values():
         v["at"] -= cs.SLOW_EVERY
     cs.collect(box, cache)
-    assert len(opened) == 4 and sum(1 for c in box.calls if c[:3] == ["docker", "system", "df"]) == 2
+    assert len(opened) == 2 and sum(1 for c in box.calls if c[:3] == ["docker", "system", "df"]) == 2
 
 
 def test_oom_kills_count_the_last_hour_from_the_kernel_counter(box):
@@ -443,6 +459,19 @@ SECRETS = [
     (r'{\"authorization\": \"Basic dXNlcjpwYXNz\"}', "dXNlcjpwYXNz"),
     (r'\\\"Cookie\\\": \\\"sid=feedface\\\"', "feedface"),
     (r'{"log": "{\"refresh_token\":\"rt abc 123\",\"ok\":1}"}', "rt abc"),
+    # An escaped quote inside the value itself, at each depth: nothing after it survives either.
+    (r'"password":"ab\"cdzq"', "cdzq"),
+    (r"'secret': 'it\'s minezq'", "minezq"),
+    (r'{\"password\":\"ab\\\"cdzq\"}', "cdzq"),
+    (r'{\\\"password\\\":\\\"ab\\\\\\\"cdzq\\\\\\\"efzq\\\"}', "zq"),
+    (r'{\"Authorization\": \"Bearer a\\\"zqzq\"}', "zqzq"),
+    (r'Cookie: a="x\"yzq"; b=2', "yzq"),
+    # A key followed by more fields on the same line: the rest of the line goes with it.
+    ("api_key=abc123 user=ann x=1", "user=ann"),
+    (r'{"token": "ab\"cd", "next": "x"}', '"next"'),
+    ("session: s1 started for owner 42", "owner 42"),
+    # The value on the line after its name.
+    ("password:\n  hunter2zq", "hunter2zq"),
 ]
 
 KEPT = [
@@ -474,6 +503,11 @@ def test_the_scrubber_removes_real_secret_shapes(text, secret):
 @pytest.mark.parametrize("text", KEPT)
 def test_the_scrubber_keeps_what_debugging_needs(text):
     assert cs.scrub(text) == text
+
+
+def test_the_scrubber_stops_at_the_end_of_the_line_that_names_a_secret():
+    text = "ERROR login token=abc \\\"x\\\" user=ann\nINFO kept line\r\nauthorization: Basic zz\nlast"
+    assert cs.scrub(text) == "ERROR login token=[redacted]\nINFO kept line\r\nauthorization: [redacted]\nlast"
 
 
 def test_the_scrubber_redacts_a_whole_header_and_is_idempotent():
@@ -561,13 +595,96 @@ def test_containers_hides_mounts_outside_srv_and_unknown_labels(box):
 def test_db_reads_read_only_and_flight_reads_the_files(box):
     r = cs.run_tool(box, "db", {"company": "boatyard"})
     got = json.loads(r["output"])
-    assert r["ok"] and got["journal_mode"] == "wal" and got["quick_check"] == ["ok"] and got["page_count"] > 0
-    assert isinstance(got["largest"], (list, str))
+    sq = got["sqlite"]
+    assert r["ok"] and sq["journal_mode"] == "wal" and sq["quick_check"] == ["ok"] and sq["page_count"] > 0
+    assert isinstance(sq["largest"], (list, str)) and got["header"]["page_count"] == sq["page_count"]
     r = cs.run_tool(box, "flight", {"company": "boatyard", "minutes": 60})
     got = json.loads(r["output"])
     assert r["ok"] and got["stalls_total"] == 1 and got["routes"][0]["route"] == "GET /api/v2/slow"
     r = cs.run_tool(box, "db", {"company": "stuck"})
     assert r["ok"] is False and "no database" in r["output"]
+
+
+# --- SQLite: never on the host ----------------------------------------------------------------------------------------
+
+def header(page=4096, pages=10, free=3, valid=True):
+    h = bytearray(b"SQLite format 3\x00" + bytes(84))
+    h[16:18] = (1 if page == 65536 else page).to_bytes(2, "big")
+    h[24:28] = (7).to_bytes(4, "big")
+    h[28:32] = pages.to_bytes(4, "big")
+    h[36:40] = free.to_bytes(4, "big")
+    h[92:96] = (7 if valid else 6).to_bytes(4, "big")
+    return bytes(h)
+
+
+def test_the_header_gives_page_size_count_and_free_pages():
+    assert cs.parse_header(header(), 40960) == {"page_size": 4096, "page_count": 10, "freelist_count": 3}
+    assert cs.parse_header(header(page=65536), 0)["page_size"] == 65536            # stored as 1
+    assert cs.parse_header(header(pages=99, valid=False), 4096 * 12)["page_count"] == 12   # stale count: the size says
+    assert cs.parse_header(header(pages=0), 4096 * 5)["page_count"] == 5
+    for bad in (b"", header()[:99], b"garbage" * 20, header(page=1000), header(page=256)):
+        assert cs.parse_header(bad, 40960) is None
+
+
+def test_the_header_of_a_real_database_matches_what_sqlite_says(tmp_path):
+    root = tmp_path / "co"
+    (root / "data").mkdir(parents=True)
+    make_db(root / "data", freelist=True)
+    h = cs.db_header(root)
+    c = sqlite3.connect(root / "data" / "hub.sqlite")
+    want = [c.execute(f"PRAGMA {p}").fetchone()[0] for p in ("page_size", "page_count", "freelist_count")]
+    c.close()
+    assert [h["page_size"], h["page_count"], h["freelist_count"]] == want and h["freelist_count"] > 0
+    (root / "data" / "hub.sqlite").write_bytes(b"not a database at all" * 10)
+    assert cs.db_header(root)["size"] == 210 and "page_count" not in cs.db_header(root)
+
+
+def test_nothing_on_the_host_opens_a_company_database(box, monkeypatch):
+    def no(*a, **kw):
+        raise AssertionError("sqlite3.connect on the host")
+    monkeypatch.setattr(sqlite3, "connect", no)     # the fake docker exec runs its script in another process
+    fake_process(box, 4100, 1)
+    fake_process(box, 4150, 57)
+    (box.cell_root / "companies" / "boatyard" / "data" / "flight" / "server.pid").write_text("57")
+    snap = cs.collect(box, {})
+    b = next(c for c in snap["companies"] if c["slug"] == "boatyard")
+    assert b["db"]["freelist_pct"] > 0 and len(b["flight"]["sql"]["top"]) == 2
+    for tool in cs.TOOLS:
+        args = {"journal": {"unit": "docker", "minutes": 5}, "logs": {"company": "boatyard", "role": "server",
+                "minutes": 5, "lines": 10}, "flight": {"company": "boatyard", "minutes": 5},
+                "tracemalloc": {"company": "boatyard", "action": "start"}}.get(tool)
+        if args is None:
+            args = {"company": "boatyard"} if "company" in cs.TOOLS[tool] else {}
+        r = cs.run_tool(box, tool, args)
+        assert "sqlite3.connect on the host" not in r["output"], tool
+    assert json.loads(cs.run_tool(box, "db", {"company": "boatyard"})["output"])["sqlite"]["quick_check"] == ["ok"]
+
+
+def test_the_database_reads_run_in_the_server_container_as_its_user_with_a_fixed_script(box):
+    cs.collect(box, {})
+    cs.run_tool(box, "db", {"company": "boatyard"})
+    execs = [c for c in box.calls if c[:2] == ["docker", "exec"]]
+    assert [c[7] for c in execs] == ["top", "db"]
+    for c in execs:
+        assert c[2:7] == ["tico-boatyard-server-1", cs.EXEC_PYTHON, "-I", "-c", cs.DB_SCRIPT]
+        assert "-u" not in c and "--user" not in c and not any(x.startswith("--user") for x in c)
+        assert c[8] == cs.CONTAINER_DB and all(x.isdigit() for x in c[9:])
+    with pytest.raises(cs.Refused):
+        cs.exec_db(box, "--privileged", "db", 5)
+    with pytest.raises(cs.Refused):
+        cs.exec_db(box, "tico-boatyard-server-1", "import os", 5)
+
+
+def test_a_stopped_server_says_so_for_the_sqlite_parts(box):
+    got = json.loads(cs.run_tool(box, "db", {"company": "boatyard"})["output"])
+    box.containers["tico-boatyard-server-1"][0]["State"] = "exited"
+    box.containers["tico-boatyard-server-1"][1]["state"]["Status"] = "exited"
+    r = cs.run_tool(box, "db", {"company": "boatyard"})
+    stopped = json.loads(r["output"])
+    assert r["ok"] and stopped["sqlite"] == "server not running" and stopped["header"] == got["header"]
+    snap = cs.collect(box, {})
+    b = next(c for c in snap["companies"] if c["slug"] == "boatyard")
+    assert b["db"]["size_mb"] > 0 and b["flight"]["sql"]["top"] is None
 
 
 def fake_process(box, host_pid, inner, ns="pid:[4026531999]", cmd=b"python\0-m\0backend.server\0"):

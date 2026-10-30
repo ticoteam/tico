@@ -50,16 +50,16 @@ The snapshot (`format: 1`) holds:
 | `router`, `tunnel` | The router's own health answer on `127.0.0.1:8080`; the tunnel container's state and cloudflared's `/ready` on its metrics port (`127.0.0.1:8081`) |
 | `companies[].containers` | One `docker ps -a`, one `docker inspect` of every company's containers and one `docker stats --no-stream` for the whole host. The inspect template asks only for the id, name, state, restart count, memory limit, log path and labels. It never asks for `Config.Env` or the mounts |
 | `healthz` | `/healthz` through the router with the company's `Host`, 3 s timeout, all companies in parallel. `code` is null when nothing answered |
-| `db` | Sizes of `hub.sqlite` and its `-wal` from `stat`. `freelist_pct` comes from `PRAGMA page_count`/`freelist_count` on a read-only connection. `files_mb` is the size of `data/blobs` |
+| `db` | Sizes of `hub.sqlite` and its `-wal`, and `freelist_pct` from the page and free-page counts in the database file's 100-byte header (pages still in the WAL are not counted), every push. No SQLite runs on the host. `files_mb` is the size of `data/blobs` |
 | `backup` | `last_replicated_at` from the server's own backup loop (`/tmp/tico-backup-status.json` in the server container, read through `/proc/<pid>/root`, with no `docker exec`), as `age_s`. Null when unknown |
-| `flight` | The company's flight files (`data/flight/flight.ndjson*`), summarised over the last 5 minutes by the core's own `backend/flight_file.summary`, loaded by path (stdlib only). This works while the server is stuck. Request percentiles are estimated from each route's per-minute p50, p95 and max. `slow_routes` are routes with p95 at or over 500 ms or a request over 1 s. `sql.top` is the top 10 statement shapes by time over this hour and the last, from the `flight_sql` table (literals already folded by the server) |
+| `flight` | The company's flight files (`data/flight/flight.ndjson*`), summarised over the last 5 minutes by the core's own `backend/flight_file.summary`, loaded by path (stdlib only). This works while the server is stuck. Request percentiles are estimated from each route's per-minute p50, p95 and max. `slow_routes` are routes with p95 at or over 500 ms or a request over 1 s. `sql.top` is the top 10 statement shapes by time over this hour and the last, from the `flight_sql` table (literals already folded by the server), read inside the server container (see below); null while the server is not running |
 | `errors` | Up to 20 lines from the last 70 s of the server's and updater's logs that contain ERROR, CRITICAL, Traceback or Exception, scrubbed, 300 characters each. They are read from the tail of each container's json-file log (`cell init` sets that driver). `docker logs` runs only when a running container has no log file |
 
 Memory numbers (`mem_mb`, `mem_limit_mb`, `rss_mb`, `memory_limit_mb`) are MiB. Network, disk and database sizes are
 decimal MB and GB. Any number is null when it is unknown. Readers ignore keys they do not know.
 
 The slow parts run at most every 15 minutes per host or company, and their results are kept in
-`/var/lib/tico-cell/stats-cache.json` (0600): `docker system df`, the SQLite reads and the `blobs` walk. A push on a
+`/var/lib/tico-cell/stats-cache.json` (0600): `docker system df`, the top SQL shapes and the `blobs` walk. A push on a
 host with 50 companies takes a few hundred milliseconds of the collector's own CPU, plus the three Docker calls.
 
 ### What leaves the box, and what never does
@@ -75,16 +75,24 @@ plant a symlink to `/etc/shadow`, to this host's stats key or to another company
 controls (the flight files and `stacks.txt`, `server.pid`, the memory dumps, the backup status through
 `/proc/<pid>/root`, the database and WAL sizes, the attachment total, the container log) starts from a folder the
 host made and walks down one name at a time with `O_NOFOLLOW`, then takes only a regular file of a bounded size. A
-symlink anywhere on the way, a FIFO or an oversized file is skipped: the number is left out, nothing is read. SQLite
-opens the database only after the database and its `-wal`, `-shm` and `-journal` files pass the same check.
+symlink anywhere on the way, a FIFO or an oversized file is skipped: the number is left out, nothing is read.
+
+SQLite never opens a company's database on the host: a check before opening could not stop a swap after it. What needs
+SQLite (`sql.top` and the `db` tool's pragmas, largest tables and `quick_check`) runs inside the company's own server
+container with `docker exec`, as that container's user (no `-u`), with the server's python
+(`/opt/tico/.venv/bin/python -I -c`), a fixed script and a read-only URI. Its arguments are the mode, `/data/hub.sqlite`
+and numbers the collector made; nothing from HQ. In there a symlink can reach only the container's own files. The
+script stops itself at its time cap and its JSON answer is checked and scrubbed like any other company output. While
+the server is not running, those parts say `server not running`.
 
 The scrubber runs on every free-text string that leaves the host: error lines, SQL shapes, route names and every debug
 output. It replaces these with `[redacted]`:
 
-- whole `Cookie`, `Set-Cookie` and `Authorization` values
+- everything after a `Cookie`, `Set-Cookie` or `Authorization` name, or a name ending in `key`, `token`, `secret`,
+  `password`, `passwd` or `session` (such as `api_key`), and its `=` or `:`, to the end of that line. The name may be
+  quoted, also with escaped quotes (`\"token\":`, escaped once or more, as in JSON a log line carries); the value is
+  not parsed, so escaped quotes inside it cannot end it early
 - `Bearer …`
-- `key`/`token`/`secret`/`password`/`passwd`/`session` `=` or `:` values, also in JSON, in JSON carried inside a
-  string (`\"token\": \"…\"`, escaped once or more) and with a prefix such as `api_key`
 - the key prefixes `tch_`, `tcs_`, `tgi_`, `tico_`, `sk-`, `sk_`, `ghp_`, `gho_`, `github_pat_`, `xox[abpr]-`, `AKIA`
   and `ASIA`
 - `eyJ…` JWTs
@@ -111,7 +119,7 @@ is posted to `POST {hq}/v1/cells/{host_id}/debug/{id}` as `{"ok", "ms", "output"
 | `containers` | `company` (optional) | `docker inspect` of chosen fields (no environment; mount sources outside `/srv` and `/var/lib/docker` hidden; Compose and cell labels only) and `docker stats --no-stream` |
 | `logs` | `company`, `role` (`server` or `updater`), `minutes` 1–60, `lines` 1–1000 | `docker logs --since … --tail … --timestamps` |
 | `flight` | `company`, `minutes` 1–1440 | The full `flight_file.summary`: stalls with stacks, slow requests, routes, lock holders, per-minute rows |
-| `db` | `company` | Read-only: sizes, `page_size`, `page_count`, `freelist_count`, `journal_mode`, `wal_autocheckpoint` (this connection's), the 15 largest tables and indexes (`dbstat`, when SQLite has it, 20 s cap), `PRAGMA quick_check` (60 s cap, within the tick's budget) |
+| `db` | `company` | Read-only. On the host: sizes and the header's page size, page count and free pages. In the running server container: `page_size`, `page_count`, `freelist_count`, `journal_mode`, `wal_autocheckpoint` (that connection's), the 15 largest tables and indexes (`dbstat`, when SQLite has it, 20 s cap), `PRAGMA quick_check` (55 s cap, within the tick's budget); `server not running` otherwise |
 | `stacks` | `company` | SIGUSR1 to the server process. Its host pid is found from `flight/server.pid` by `NSpid` in the container's pid namespace, and its command line must run `backend.server`. The tool returns what faulthandler appended to `flight/stacks.txt` |
 | `tracemalloc` | `company`, `action` (`start` or `dump`) | SIGUSR2 to the same process. `start` turns tracemalloc on. `dump` returns the top 50 allocation sites (`flight/memory-<time>.txt`) and turns it off. Whether it is on is read from the flight file, so `start` is refused while it is on and `dump` while it is off |
 | `journal` | `unit` (`docker`, `containerd`, `cloudflared`, `caddy` or `tico-cell-*`, optionally `.service`/`.timer`), `minutes` 1–60 | `journalctl -u … --since "<n> min ago"` |
