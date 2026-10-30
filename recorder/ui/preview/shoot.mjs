@@ -169,7 +169,7 @@ if (!only.length || only.includes('checks')) {
   await page.waitForSelector('.item');
   await page.hover('.item:has-text("Confirm the transcript link")');
   await page.click('.item:has-text("Confirm the transcript link") [data-act="send-item"]');
-  await page.waitForSelector('.item.sent:has-text("Sent to Arthur Silva")');
+  await page.waitForSelector('.item.sent:has-text("Sent to Sam Okafor")');
   // Esc goes back to the library.
   await page.keyboard.press('Escape');
   await page.waitForSelector('.lib-head');
@@ -210,13 +210,13 @@ if (!only.length || only.includes('checks')) {
   await people.keyboard.press('Meta+ArrowDown');
   await people.keyboard.type(' @ma');
   const names = await people.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => row.dataset.name));
-  if (names.join('|') !== 'Marketing Lead|Matheus Costa|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
+  if (names.join('|') !== 'Marketing Lead|Mara Novak|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
   await people.keyboard.press('ArrowDown');
   await people.keyboard.press('Enter');
   const notes = await people.locator('textarea.notes').inputValue();
-  if (!notes.endsWith(' @Matheus Costa ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
+  if (!notes.endsWith(' @Mara Novak ')) errors.push(`mention: notes end ${JSON.stringify(notes.slice(-30))}`);
   if (await people.locator('#mention').count()) errors.push('mention: list stayed open');
-  if ((await people.locator('.notes-backdrop mark').allInnerTexts()).join('|') !== '@Matheus Costa') errors.push('mention: no chip');
+  if ((await people.locator('.notes-backdrop mark').allInnerTexts()).join('|') !== '@Mara Novak') errors.push('mention: no chip');
   await people.keyboard.type('@ju');
   await people.keyboard.press('Escape');
   if (await people.locator('#mention').count()) errors.push('mention: Esc left it open');
