@@ -4,7 +4,8 @@
 # checking each image says it is this version. The server release never waits for desktop builds.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
-# and a desktop failure leaves the server release in place. See docs/releasing.md.
+# and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
+# its own updater manifest (recorder-latest.json). See docs/releasing.md.
 # Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
 # a release half-published. macOS builds stay on GitHub-hosted runners.
 name: Release
@@ -259,6 +260,9 @@ jobs:
           mkdir -p dist/desktop
           gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
+          # Tico Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
+          # overwrite a newer recorder build of this tag.
+          rm -f dist/desktop/Tico-Recorder.dmg "dist/desktop/Tico Recorder"*
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
       - name: Add the desktop files to the release
         env:
@@ -266,6 +270,96 @@ jobs:
         run: |
           find dist/desktop -type f ! -name latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
           gh release upload "$GITHUB_REF_NAME" dist/desktop/latest.json --clobber
+
+  # Tico Recorder, the same way as the desktop app: built only when recorder/ (or the manifest script) changed since the
+  # previous release, otherwise its files are carried forward. Its own jobs, so a failure here never touches the
+  # desktop or server release.
+  recorder-changes:
+    needs: validated
+    if: needs.validated.outputs.dry_run != 'true'
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+      previous: ${{ steps.diff.outputs.previous }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}
+        run: |
+          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" \
+            | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          build=true
+          if [ "$FORCE" != true ] && [ -n "$previous" ] \
+             && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder scripts/app_release.py .github/workflows/recorder.yml \
+             && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx recorder-latest.json; then
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Recorder build: $build (previous release $previous)"
+
+  recorder:
+    needs: recorder-changes
+    if: needs.recorder-changes.outputs.build == 'true'
+    uses: ./.github/workflows/recorder.yml
+    secrets: inherit   # recorder.yml reads the desktop app's signing secrets (see the desktop job)
+    permissions:
+      contents: read
+
+  # Adds the recorder files and recorder-latest.json to the published release, new or carried forward. The manifest
+  # goes last, so the recorder's updater never sees a manifest whose files are missing.
+  recorder-assets:
+    needs: [release, recorder-changes, recorder]
+    if: >-
+      ${{ !cancelled() && needs.recorder-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && (needs.recorder.result == 'success' || needs.recorder.result == 'skipped') }}
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    permissions:
+      contents: write   # uploads the recorder files to the published release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.recorder-changes.outputs.build == 'true'
+        with:
+          name: recorder
+          path: dist/recorder
+      - name: Build the recorder's updater manifest
+        if: needs.recorder-changes.outputs.build == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          flags=()
+          [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
+          [ -n "$APPLE_ID" ] && flags+=(--notarized)
+          python3 scripts/app_release.py --github --kind recorder --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
+            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/recorder
+      - name: Carry the previous release's recorder files forward
+        if: needs.recorder-changes.outputs.build != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
+        run: |
+          mkdir -p dist/recorder
+          gh release download "$PREVIOUS" --dir dist/recorder --pattern 'Tico Recorder*' --pattern Tico-Recorder.dmg \
+            --pattern recorder-latest.json
+          sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
+      - name: Add the recorder files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find dist/recorder -type f ! -name recorder-latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/recorder/recorder-latest.json --clobber
 
   company-matrix:
     needs: desktop-changes
