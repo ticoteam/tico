@@ -56,7 +56,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   const saved = await automationNamed(page, 'New automation');
   assert.deepEqual(saved.trigger, {type: 'due', first_due: '2027-03-01', repeats: 'yearly', open_days: 21, tz: 'America/New_York'});
   assert.equal(saved.next_due, '2027-03-01', `${tag}: the hub's next due day`);
-  assert.equal(saved.next_run, '2027-02-08T05:00:00Z', `${tag}: its task opens 21 days before, at midnight in New York`);
+  assert.equal(Date.parse(saved.next_run), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
   assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1, 2027 · yearly · 21d before');
 
   // Switching to a schedule and back restores the saved due date unchanged.
