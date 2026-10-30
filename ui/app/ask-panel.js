@@ -409,9 +409,10 @@ async function askLoad(chat) {
     // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString();
-    const cards = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created || late,
+    chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
+    const cards = chat.pending.map(a => ({at: a.created || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(askQuestions().map(it => ({at: it.created || it.ask?.created || late, html: askQuestionHTML(it)})));
+      .concat(askQuestions().map(it => ({at: it.ask?.created || it.created || late, html: askQuestionHTML(it)})));
     const rows = messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})}))
       .concat(supRows, sys.map(askSysRow), cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
@@ -448,7 +449,7 @@ async function askLoad(chat) {
     try {
       const d = await get('/v2/assistant');
       if (!current()) return;
-      messages = d.messages || []; execution = d.execution || null; chat.pending = pending = d.pending || []; draw(); fail('');
+      messages = d.messages || []; execution = d.execution || null; pending = d.pending || []; draw(); fail('');
     } catch (e) { fail(e.message); }
   };
   chat.refresh = snapshot;
@@ -499,7 +500,7 @@ async function askLoad(chat) {
     window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
     return;
   }
-  messages = info.messages || []; execution = info.execution || null; chat.pending = pending = info.pending || [];
+  messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];
   chat.composer = makePill({mode: 'chat', files: false, label: 'Message ' + askName(), placeholder: 'Message ' + askName(),
                             send: (P, text) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
