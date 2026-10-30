@@ -2843,7 +2843,8 @@ def parser():
     s.add_argument("--help-url", dest="help_url", help="an https page where they make one")
     s.add_argument("--kind", choices=["api_key", "token", "password", "connection", "login"])
     s.add_argument("--site", dest="sites", action="append", metavar="HOST",
-                   help="a login's website (repeat for more); with --kind login, leave out ENV")
+                   help="a login's website (repeat for more; http://HOST lets it fill on plain-http pages); "
+                        "with --kind login, leave out ENV")
     s.add_argument("--username", help="a login's username or email, when you know it")
     s.set_defaults(fn="credential request")
     s = cred.add_parser("set", help="store a credential a person gave you, for one bot; the value is read from stdin")

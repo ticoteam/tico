@@ -13,6 +13,8 @@ const phase = process.argv[2] || '';
 const env = process.env;
 const practice = env.PRACTICE || '';                   // e.g. http://login.practice.test:8080
 const host = env.HOST || 'login.practice.test';
+// The practice site is plain http, which a login fills only when its site is written http://.
+const site = practice.startsWith('http://') ? 'http://' + host : host;
 const other = env.OTHER || '';                         // another page on another host, for the refused fill
 const label = env.LABEL || 'Practice-login';
 // A login saved from a card is named after the card's label, so the bot fills it by that name.
@@ -155,7 +157,7 @@ const phases = {
 
   // The bot asks the person for the practice login: a card in the chat, saved by the person (the journey, here).
   async 'request-card'(browser, data) {
-    const r = hub(['credential', 'request', '--kind', 'login', '--site', host, '--label', label]);
+    const r = hub(['credential', 'request', '--kind', 'login', '--site', site, '--label', label]);
     data.card = (r.json && r.json.id) || '';
     check('login card requested', Boolean(data.card), why(r));
   },

@@ -105,7 +105,7 @@ def _add(rows, errors, number, name, username, password, totp, sites):
     name, username = _text(name).strip(), _text(username).strip()
     password = _text(password)                  # spaces in a password are significant: never stripped
     totp = _text(totp).strip() or None
-    name = name or (sites[0] if sites else '')
+    name = name or (sites[0].removeprefix('http://') if sites else '')
     if not sites:
         errors.append({'row': number, 'reason': 'no web address to log in to'})
     elif not password:
@@ -118,8 +118,9 @@ def _add(rows, errors, number, name, username, password, totp, sites):
 
 
 def _hosts(uris):
-    """The hostnames of web addresses, in the order given. An address without a scheme is read as https; an app's
-    own scheme (androidapp://, for one) names no website and is left out."""
+    """The hostnames of web addresses, in the order given. An address without a scheme is read as https; an http one
+    keeps `http://`, as an owner writes a plain-http site (credentials.clean_sites); an app's own scheme
+    (androidapp://, for one) names no website and is left out."""
     found = []
     for uri in uris:
         text = _text(uri).strip()
@@ -132,6 +133,7 @@ def _hosts(uris):
         except ValueError:
             continue
         host = (parts.hostname or '').lower() if parts.scheme in ('http', 'https') else ''
+        host = 'http://' + host if host and parts.scheme == 'http' else host
         if host and host not in found:
             found.append(host)
     return found

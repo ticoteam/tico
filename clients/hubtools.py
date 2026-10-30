@@ -5547,7 +5547,8 @@ def docs_fetch(api, args):
 
 @tool("hub_browser_fill", "Type a website login's username, password or current 2FA code into the focused field of your "
       "Chrome on this computer (bots with the `chrome` tool). The login must be granted to you and the page must be one "
-      "of its sites; you never see the value, only {ok: true} or {ok: false, error}: not_granted, site_mismatch, no_totp, "
+      "of its sites; you never see the value, only {ok: true} or {ok: false, error}: not_granted, site_mismatch, "
+      "insecure_page (plain http; the login's site must say http://host), focus_changed (fill again), no_totp, "
       "no_page, no_field, no_element, no_run, browser_unavailable. Click or pass `selector` for the field first; submit "
       "the form yourself. No login yet: ask with hub_credential_request kind `login`.",
       {"credential": _s("The login's name or id, as Credentials lists it"),

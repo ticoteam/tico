@@ -16,7 +16,7 @@ from pydantic import Field
 from . import reconnects
 from .auth import validate_identity
 from .credential_cards import insert_request
-from .credentials import LOGIN, clean_sites
+from .credentials import LOGIN, clean_sites, site_host
 from .models import Contract
 from .store import H, Problem
 
@@ -57,7 +57,9 @@ def install(app, store, auth):
             hosts = clean_sites([body.host])
             if not hosts:
                 raise Problem("host", "Name the website's host, like acme.example", 422)
-            host, reason = hosts[0], " ".join(body.reason.split())
+            # The card's login keeps an explicit `http://`; the reconnect is keyed by the bare host.
+            site, reason = hosts[0], " ".join(body.reason.split())
+            host = site_host(site)
             task = _task(c, body.task)
             if not task:
                 raise Problem("no_task", "A person is asked on a task: run this in a turn on a task (HUB_TASK_ID), "
@@ -76,7 +78,7 @@ def install(app, store, auth):
             insert_request(c, {"id": rid, "requester": person, "conversation_id": task["conversation_id"], "bot": bot,
                                "asker": bot, "env": "", "label": "", "format": "", "help_url": "", "kind": LOGIN,
                                "status": "pending", "created": now, "updated": now, "credential_id": None, "message_id": None,
-                               "sites_json": json.dumps([host]), "username": ""})
+                               "sites_json": json.dumps([site]), "username": ""})
             fix = {"kind": "site", "host": host, "computer": computer, "reason": reason, "request": rid}
             record = reconnects.open(c, task["id"], bot, key, "site", host, person, fix, owner=task["owner"])
             if not record:
