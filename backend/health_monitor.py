@@ -108,6 +108,7 @@ MEANING = {
     "reviewer_holds_tasks": "A bot with the Reviewer profile owns open tasks that are not review or QA requests.",
     "responder_has_tasks": "A bot with the Responder profile, which takes no tasks, has open tasks.",
     "doer_idle": "A Doer's runs for a week all did nothing: its profile may not fit what it is asked to do.",
+    "org_rules_unchecked": "A fifth or more of today's bot outputs that rules apply to went out without a rule check.",
     **{p[0]: p[4] + "." for p in LOG_PATTERNS},
 }
 # What a Tico bug report says the fix is: one constant per tico-bug check, never a finding's own text.
@@ -692,11 +693,19 @@ def _server_checks(c):
                      BUG_FIX["server_cpu"])]
 
 
+def _org_rule_checks(c, settings):
+    """Rule checks that keep going unchecked (backend/org_rule_check.py): the rules are not being enforced."""
+    from .org_rule_check import health_findings
+    return [_finding(f["key"], f["check_id"], SETUP, f["title"], f["detail"], f["fix"])
+            for f in health_findings(c, settings)]
+
+
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
     for part in (_runner_checks(c, settings), _login_checks(c, settings), _check_hold_checks(c),
-                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c)):
+                 _bot_checks(c, settings), _release_approval_checks(c, settings), _server_checks(c),
+                 _org_rule_checks(c, settings)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())

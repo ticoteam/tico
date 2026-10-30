@@ -888,7 +888,7 @@ def _runs(view, rows):
                 picked.remove(states[key])
             states[key] = row
             picked.append(row)
-    readable = {}
+    readable, watched = {}, {}
     out = []
     refs = [row["ref"] for row in picked if row["kind"] == "output"]
     outputs = {str(e["id"]): e for e in c.execute(
@@ -913,6 +913,13 @@ def _runs(view, rows):
             event = dict(event)
             if not privacy.content_readable(c, view.principal, event):
                 continue
+            if event["kind"] in ("delta", "message"):
+                # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
+                if bot not in watched:
+                    from .org_rule_check import watched as rules_watch
+                    watched[bot] = rules_watch(c, bot)
+                if watched[bot]:
+                    continue
             event["payload"] = H._json(event.pop("payload_json"), {})
             entry["output"] = event
         elif row["kind"] == "job":

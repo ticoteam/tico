@@ -225,6 +225,18 @@ def session_task_id(c, bot, config, task_id, roots):
     return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
 
 
+def reply_target(message, conversation, task):
+    """Whom a turn's reply goes to: the message's sender, or for the keeper's wake on a task, the personal room's
+    owner, else its first person, else the task's requester. The completion posts to it; the org rule check
+    (backend/org_rule_check.py) checks the reply against it before the completion's write."""
+    target = message["from_actor"]
+    if target == H.KEEPER and task:
+        humans = [p for p in conversation.get("participants") or [] if str(p).startswith("human:")]
+        target = ((conversation.get("owner_actor") if conversation.get("scope") == "personal" else None)
+                  or (humans[0] if humans else None) or task["requester"])
+    return target
+
+
 def work_task_id(message, conversation=None):
     """The work attached to a turn; parked urgent notices retain their task refs only as news.
 
@@ -4411,7 +4423,8 @@ class Execution:
                  "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
         return {"woke": woke}
 
-    def complete(self, c, who, aid, body):
+    def complete(self, c, who, aid, body, rule_check=None):
+        """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
@@ -4502,9 +4515,7 @@ class Execution:
                 target = msg["from_actor"]
                 replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
                 if target == H.KEEPER and task:
-                    humans = [p for p in conv.get("participants") or [] if str(p).startswith("human:")]
-                    target = ((conv.get("owner_actor") if conv.get("scope") == "personal" else None)
-                              or (humans[0] if humans else None) or task["requester"])
+                    target = reply_target(msg, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
                     # has marked the work done, or, for a finished turn that came in after its lease lapsed,
@@ -4536,6 +4547,31 @@ class Execution:
                                              "a private task you can't read, so it was not posted here.",
                                              conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
                     else:
+                        rule_gate = None
+                        if rule_check:
+                            from . import org_rule_check
+                            checked = rule_check if target in rule_check["recipients"] else \
+                                {**rule_check, "outcome": "unchecked", "error": "target_changed"}
+                            rule_gate = org_rule_check.apply(c, checked, text, {"attempt": aid, "message": msg["id"],
+                                                                               "text": body.text}, tell=True)
+                        if rule_gate and rule_gate.get("held"):
+                            # Not delivered: the person waiting sees one line without the text, and the run keeps
+                            # only that line (its final text, result, events and raw capture), never the reply.
+                            note = org_rule_check.held_note(c, actor, rule_gate["rule"])
+                            if H.is_human(target):
+                                H._write_message(c, H.KEEPER, target, note, conv, "notice",
+                                                 {"org_rule": {"hold": rule_gate["hold_id"], "bot": row["bot"]},
+                                                  **({"task": task["id"]} if task else {})}, None, None)
+                            body = body.model_copy(update={"text": note})
+                            c.execute("DELETE FROM attempt_events WHERE attempt_id=? AND kind='delta'", (aid,))
+                            c.execute("UPDATE attempt_events SET payload_json=? WHERE attempt_id=? AND kind='message'",
+                                      (encode({"text": note}), aid))
+                            c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
+                            replyable = False
+                        elif rule_gate and rule_gate.get("warn"):
+                            text = org_rule_check.warned_text(rule_gate, text)
+                            body = body.model_copy(update={"text": org_rule_check.warned_text(rule_gate, body.text)})
+
                         def post_reply():
                             sent = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
                                 c, actor, target, text, conversation_id=conv["id"],
@@ -4545,7 +4581,7 @@ class Execution:
                             return sent
                         # A paused or quarantined bot's full held queue withholds only this answer: the run is
                         # still done, its text kept on the attempt, so the runner's completion is not refused.
-                        reply, full = H.unless_queue_full(c, post_reply)
+                        reply, full = H.unless_queue_full(c, post_reply) if replyable else (None, False)
                         if full:
                             H.event(c, H.KEEPER, "reply.withheld", aid, {
                                 "bot": row["bot"], "to": target, "reason": "queue_full",

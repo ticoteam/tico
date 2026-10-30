@@ -2128,6 +2128,7 @@ class AccessRules(Contract):
     topic_fresh: bool | None = None
     stall_triage: bool | None = None
     managers_manage_reports: bool | None = None
+    org_rule_checks: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
     report_creates_per_week: Annotated[int, Field(strict=True, ge=0, le=50)] | None = None
     report_archives_per_week: Annotated[int, Field(strict=True, ge=0, le=50)] | None = None
