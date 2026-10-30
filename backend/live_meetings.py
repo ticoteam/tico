@@ -74,13 +74,12 @@ class Correction(Contract):
     speaker: str = Field(default="", max_length=200)
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
-    text: StrictStr = Field(min_length=1, max_length=10_000)
+    # Empty text clears a chunk the final transcript has no words for.
+    text: StrictStr = Field(default="", max_length=10_000)
 
     @model_validator(mode="after")
     def valid_span(self):
         self.text = self.text.strip()
-        if not self.text:
-            raise ValueError("Correction text is required")
         if self.end_ms < self.start_ms:
             raise ValueError("end_ms must be at or after start_ms")
         return self
@@ -194,7 +193,8 @@ def _connector(c, auth, who, rid, *, states=None):
 def _view(c, auth, who, rid):
     row = _require_read(c, auth, who, rid)
     chunks = [dict(r) for r in c.execute(
-        "SELECT seq,revision,speaker,start_ms,end_ms,text,created FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+        "SELECT seq,revision,speaker,start_ms,end_ms,text,created FROM live_meeting_chunks WHERE meeting_id=? "
+        "AND text<>'' ORDER BY seq",
         (rid,))]
     chat = [dict(r) for r in c.execute(
         "SELECT id,actor,role,text,at_ms,transcript_seq,created FROM live_meeting_chat WHERE meeting_id=? ORDER BY created,id",
@@ -272,7 +272,7 @@ def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript
     if first_seq is not None:
         prior_transcript = [dict(row) for row in c.execute(
             "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq<? "
-            "ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
+            "AND text<>'' ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
         prior_transcript.reverse()
     chat_before = c.execute("SELECT created FROM live_meeting_chat WHERE meeting_id=? AND id=?",
                             (rid, chat_id)).fetchone() if chat_id else None
@@ -324,7 +324,7 @@ def _turn_prompt(c, rid, turn_id, slug):
     turn = c.execute("SELECT transcript_seq,window_index,source_key FROM live_meeting_turns WHERE id=?", (turn_id,)).fetchone()
     transcript_seq = turn["transcript_seq"]
     chunks = c.execute("SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
-                       "AND (? IS NULL OR seq<=?) ORDER BY seq DESC LIMIT 20",
+                       "AND (? IS NULL OR seq<=?) AND text<>'' ORDER BY seq DESC LIMIT 20",
                        (rid, transcript_seq, transcript_seq)).fetchall()
     chat = c.execute("SELECT actor,role,text,at_ms,transcript_seq FROM live_meeting_chat WHERE meeting_id=? "
                      "ORDER BY created DESC,id DESC LIMIT 12", (rid,)).fetchall()
@@ -834,7 +834,7 @@ def _route_human_chat(app, rid, chat_id):
                          "display_name": (bot or {}).get("name") or row["bot"]})
         transcript = [dict(row) for row in c.execute(
             "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
-            "ORDER BY seq DESC LIMIT 20", (rid,))]
+            "AND text<>'' ORDER BY seq DESC LIMIT 20", (rid,))]
         transcript.reverse()
         decision_input = _decision_input(c, rid, source_key=source_key, source_kind="chat",
                                          window_index=None, transcript=transcript, bots=bots,
@@ -886,6 +886,22 @@ def _now():
     return H.now()
 
 
+def _chunk_range(included):
+    """`[first_seq, last_seq]` of the chunks a window took, `[]` when it took none."""
+    return [included[0]["seq"], included[-1]["seq"]] if included else []
+
+
+def _routed_through(c, rid):
+    """The last transcript seq a closed window routed or passed (its trace's `chunk_range`), 0 when none has. Windows
+    take chunks in seq order, so every chunk up to it is routed and every later one is not."""
+    for row in c.execute("SELECT trace_json FROM live_meeting_windows WHERE meeting_id=? AND status!='deciding' "
+                         "ORDER BY window_index DESC", (rid,)):
+        chunk_range = H._json(row[0], {}).get("chunk_range") or []
+        if chunk_range:
+            return chunk_range[-1]
+    return 0
+
+
 def _run_windows(app, rid, *, final=False):
     """Close every elapsed transcript window once. Model calls happen outside write transactions. A window is elapsed
     when the transcript has passed its end, or when no chunk has arrived for a window's length (+ QUIET_GRACE_MS) since
@@ -897,6 +913,7 @@ def _run_windows(app, rid, *, final=False):
             return
         last = c.execute("SELECT COALESCE(MAX(window_index),-1) FROM live_meeting_windows "
                           "WHERE meeting_id=? AND status!='deciding'", (rid,)).fetchone()[0]
+        routed = _routed_through(c, rid)
         chunks = [dict(r) for r in c.execute(
         "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (rid,))]
         received = c.execute("SELECT MAX(created) FROM live_meeting_chunks WHERE meeting_id=?", (rid,)).fetchone()[0]
@@ -911,12 +928,16 @@ def _run_windows(app, rid, *, final=False):
     latest = max(row["end_ms"] for row in chunks)
     window_ms = meeting["window_ms"]
     quiet_ms = (H.parse_ts(_now()) - H.parse_ts(received)).total_seconds() * 1000 if received else 0
+    # Chunks no closed window has taken yet. A late one (its start inside a window already closed) waits for the next
+    # window that is open, so it is routed there once and no earlier window takes it again.
+    pending = [row for row in chunks if row["seq"] > routed]
     index = last + 1
-    while index * window_ms < latest or (final and index * window_ms < latest + 1):
+    while index * window_ms < latest or pending or (final and index * window_ms < latest + 1):
         start_ms, end_ms = index * window_ms, (index + 1) * window_ms
-        included = [row for row in chunks if start_ms <= row["start_ms"] < end_ms]
+        included = [row for row in pending if row["start_ms"] < end_ms]
         if latest < end_ms and not final and (not included or quiet_ms < window_ms + QUIET_GRACE_MS):
             return (window_ms + QUIET_GRACE_MS - quiet_ms) / 1000 if included else None
+        pending = pending[len(included):]
         terminal_window = False
         with app.state.store.transaction() as c:
             current_state = _meeting(c, rid)["state"]
@@ -930,9 +951,11 @@ def _run_windows(app, rid, *, final=False):
                 timed_out = current["status"] == "deciding" and elapsed and elapsed.total_seconds() > 60
                 if ended_while_deciding or timed_out:
                     reason = "meeting_ended_during_decision" if ended_while_deciding else "interrupted decision; not retried"
+                    # Its words are passed here, so no later window routes them.
+                    trace = {"reason": reason, "chunk_range": _chunk_range(included)}
                     c.execute("UPDATE live_meeting_windows SET status='interrupted',outcome='pass',"
                               "trace_json=?,finished=? WHERE meeting_id=? AND window_index=?",
-                              (encode({"reason": reason}), H.now(), rid, index))
+                              (encode(trace), H.now(), rid, index))
                     _event(c, rid, "meeting.router", {"window_index": index, "outcome": "pass",
                                                        "trace": {"reason": reason}})
                     index += 1
@@ -944,7 +967,7 @@ def _run_windows(app, rid, *, final=False):
             if included:
                 if current_state == "ended":
                     trace = {"reason": "meeting_ended_final_window", "selected": [], "skipped": [],
-                             "chunk_range": [included[0]["seq"], included[-1]["seq"]]}
+                             "chunk_range": _chunk_range(included)}
                     c.execute("INSERT INTO live_meeting_windows(meeting_id,window_index,start_ms,end_ms,status,outcome,"
                               "trace_json,started,finished) VALUES(?,?,?,?,?,?,?,?,?)",
                               (rid, index, start_ms, end_ms, "complete", "pass", encode(trace), H.now(), H.now()))
@@ -990,7 +1013,7 @@ def _run_windows(app, rid, *, final=False):
                                          window_index=index, transcript_seq=included[-1]["seq"],
                                          at_ms=end_ms) if current_state == "live" else ([], [])
             trace = {**outcome["trace"], "selected": [r["bot"] for r in selected], "skipped": skipped,
-                     "chunk_range": [included[0]["seq"], included[-1]["seq"]]}
+                     "chunk_range": _chunk_range(included)}
             if outcome["trace"].get("model"):
                 H.event(c, meeting["owner_actor"], "judge.call", "live-meeting-route@1", {
                     "label": "live-meeting-route@1", "questions": len(bots), "types": ["noul"],
@@ -1368,9 +1391,8 @@ def install_live_meetings(app, store, auth, write):
                                                        "corrected_by": who.actor})
             return {"id": rid, "seq": seq, "revision": body.revision, "replayed": False,
                     "event_id": _meeting(c, rid)["next_event_id"]}
-        result = mutate(request, body, work)
-        routing.later(rid)
-        return result
+        # A correction never routes: only chunks that arrive do.
+        return mutate(request, body, work)
 
     @app.post("/api/v2/live-meetings/{rid}/bots")
     def attach_bots(request: Request, rid: str, body: AttachBots):
@@ -1550,7 +1572,8 @@ def install_live_meetings(app, store, auth, write):
                 return {"id": rid, "meeting_id": row["imported_meeting_id"], "existing": True,
                         "changed": False, "event_id": row["next_event_id"]}
             chunks = [dict(r) for r in c.execute(
-                "SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (rid,))]
+                "SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND text<>'' "
+                "ORDER BY seq", (rid,))]
             if not chunks:
                 raise Problem("transcript", "A live meeting needs transcript text before finalization", 409)
             duration_ms = max(chunk["end_ms"] for chunk in chunks)

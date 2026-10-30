@@ -64,7 +64,7 @@ fields are listed below.
 | `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots this human can see and contact with Write access are included; `bots` may be empty. |
 | `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, transcript-window traces, chat-route traces, named-bypass traces, and turn outcomes. |
 | `POST /api/v2/live-meetings/{id}/chunks` | Connector | Append `{chunks:[{seq,speaker,start_ms,end_ms,text}]}` (1–500 chunks). Seq starts at 1 and is contiguous. HTTP 200 body is exactly `{"id":"<live-id>","state":"live|paused|ended","seq":<highest-seq>,"accepted":[<seq>,...],"event_id":<meeting-event-id>}`. Identical duplicate seq is acknowledged without a new event; a different payload for an existing seq returns `409` with `error.code = "sequence_conflict"`; a gap returns `409` with `error.code = "sequence_gap"` and `error.expected_seq`. New chunks are accepted only in `live`; an already-stored identical retry may still be acknowledged while paused or ended. |
-| `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
+| `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. Empty `text` clears a chunk the final transcript has no words for; cleared chunks leave the transcript, bot context and finalization. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
 | `POST /api/v2/live-meetings/{id}/join` | Human who can see it | Join the connected meeting. Joined people can chat. |
 | `POST /api/v2/live-meetings/{id}/access` | Connector | `{visibility?,add?:[person],remove?:[person]}` with person ids or `human:` actors. Adding lets a person see and join a private meeting; removing also takes them out of the joined list. Returns the meeting view, whose `visibility` and `access:[{actor,name}]` show the result. |
 | `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
@@ -101,8 +101,9 @@ outcome from the event stream or the `router` view.
 
 A window also closes by the wall clock: when no chunk has arrived for the window's length plus 2 seconds since
 the last one, the server routes the open window without waiting for the next words, so a question followed by
-silence is answered. Chunks that arrive later go to the next windows by their transcript time; a late chunk whose
-`start_ms` falls inside a window already closed this way is stored and shown but is not routed again.
+silence is answered. A late chunk, one whose `start_ms` falls inside a window already closed this way, is routed by
+the next window that is open (opened if need be), once: its window's `chunk_range` names it, and no earlier window
+takes it again. Corrections (`/chunks/{seq}/corrections`) never route anything.
 
 `client` is optional on connect: omit it (or send null) for an unnamed connector, or use
 `"tico-recorder"`. Any other value is a validation error. The meeting view always includes
@@ -163,8 +164,8 @@ another decision on a retry. Fail-closed traces carry a `reason` such as
 (optionally followed by `.` or `!`) marks its existing turn skipped with reason `bot_pass`, emits the
 router trace, and creates no Chat message. Ending a meeting marks open turns skipped and suppresses
 their queued jobs. An interrupted in-flight decision emits
-`{window_index,outcome:"pass",trace:{reason:"interrupted decision; not retried"}}` without window
-timing fields. A router PASS creates no bot turn; a bot PASS settles its existing turn without
+`{window_index,outcome:"pass",trace:{reason:"interrupted decision; not retried",chunk_range:[first_seq,last_seq]}}`
+without window timing fields; its chunks are passed, not routed again by a later window. A router PASS creates no bot turn; a bot PASS settles its existing turn without
 creating visible chat.
 
 For transcript-window and chat decisions, `decision_input` has this exact structure (arrays may be

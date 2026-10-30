@@ -660,7 +660,10 @@ def create_app(settings=None):
                 media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
                 streamed = media_raw or bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
+                recorder_audio = (request.url.path == "/api/v2/recorder/audio/transcriptions"
+                                  and request.state.identity.role in ("human", "owner"))
+                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -7215,6 +7218,8 @@ def create_app(settings=None):
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
+    from .recorder_relay import install_recorder_relay
+    install_recorder_relay(app, store, auth, settings)
     from .mail import install_mail
     install_mail(app, store, auth)
     from .messaging import install_messaging
