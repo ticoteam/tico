@@ -287,3 +287,13 @@ def test_a_cut_cloudflared_recreate_is_settled_back_onto_the_restored_route(monk
     assert updater.status["state"] == "rolled_back"
     assert docker.cloudflared == "direct" and docker.tunnel_id not in docker.pending   # a fresh one, not the stopping one
     assert docker.events[-1] == ("up cloudflared", "v0.1.0")
+
+
+def test_a_cut_tunnel_stays_unsettled_while_the_restored_server_is_unhealthy(monkeypatch, tmp_path):
+    updater, docker = tunnel_install(monkeypatch, tmp_path, failure="cut")
+    answers = iter([True, True, False, True])   # target, rollback, first settle check fails, second passes
+    monkeypatch.setattr(updater, "healthy", lambda seconds: next(answers))
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert docker.cloudflared == "direct" and docker.tunnel_id not in docker.pending
+    assert next(answers, "spent") == "spent"

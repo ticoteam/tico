@@ -763,7 +763,9 @@ def settle(tag, outcome):
                         if not back:
                             raise RuntimeError("the restored server is not healthy; Caddy settlement remains pending")
                         reconcile_caddy(tag)
-                    if back and tunnel:
+                    if tunnel:
+                        if not back:
+                            raise RuntimeError("the restored server is not healthy; tunnel settlement remains pending")
                         reconcile_tunnel(tag, settling=True)   # a cut cloudflared recreate may have left it stopped or stopping
                     set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="", settle_caddy=False, settle_tunnel=False,
                                message="%s. Docker then confirmed the %s on %s%s." % (
@@ -970,8 +972,9 @@ def update(version, running=""):
             apply_bundle(files, release)
             bundled = True
         try:
-            if bundled and selected_tunnel():
+            if bundled:   # listed first: a runner, or a server without the profile, has no cloudflared to ask about
                 tunnel = tunnel_services()
+                tunnel = tunnel if tunnel and selected_tunnel() else []
             set_status(settle_tunnel=bool(tunnel))
             if PULL != "never":
                 compose("pull", SERVICE, tag=version)
