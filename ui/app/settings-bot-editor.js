@@ -18,6 +18,8 @@ function settingsBotEditorRows(e) {
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${profileRowHTML(e)}
     ${settingsKeepTasksRow(e)}
+    ${settingsTurnsAtOnceRow(e)}
+    ${settingsManagesReportsRow(e)}
     ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
@@ -57,6 +59,36 @@ function settingsKeepTasksRow(e) {
 function settingsKeepTasksRun(input) {
   const slug = input.dataset.botKeepTasks, keep_tasks_going = input.value === '' ? null : Number(input.value);
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/keep-tasks-going`, {keep_tasks_going, expected_revision: rev}))?.revision ?? rev + 1;
+}
+// The most turns a bot runs at once across all its computers. The server takes 1 to 256, and empty is no limit.
+function settingsTurnsAtOnceRow(e) {
+  if (e.agent) return '';
+  const current = e.turns_at_once == null ? '' : String(e.turns_at_once);
+  return `<div class="sb-row"><span>Turns at once</span><input type="number" min="1" max="256" step="1"
+    class="settings-inline-select" data-bot-turns-at-once="${esc(e.name)}" data-current="${esc(current)}"
+    value="${esc(current)}" placeholder="No limit" aria-label="Turns at once for ${esc(e.display_name)}"
+    ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
+    <div class="sb-sub muted">Most turns it runs at once across all computers. Empty for no limit.</div>`;
+}
+function settingsTurnsAtOnceRun(input) {
+  const slug = input.dataset.botTurnsAtOnce, turns_at_once = input.value === '' ? null : Number(input.value);
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/turns-at-once`,
+    {turns_at_once, expected_revision: rev}))?.revision ?? rev + 1;
+}
+// Whether this bot changes its direct reports (backend/report_managers.py). On by default; the owner's team rule turns
+// every manager off whatever this says. The bot cannot set its own: whoever manages it does.
+function settingsManagesReportsRow(e) {
+  if (e.agent) return '';
+  const on = e.manages_reports !== false;
+  return `<div class="sb-row"><span>Manages its reports</span><label class="settings-inline-check"><input type="checkbox" data-bot-manages-reports="${esc(e.name)}"
+    data-current="${on}" ${on ? 'checked' : ''} aria-label="Manages its reports for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+    <span>${on ? 'On' : 'Off'}</span></label><span></span></div>
+    <div class="sb-sub muted">This bot changes its direct reports' model, task model, name and description, as itself. Off: it changes none of them.</div>`;
+}
+function settingsManagesReportsRun(box) {
+  const slug = box.dataset.botManagesReports, manages_reports = box.checked;
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
+    {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
 const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
@@ -147,13 +179,13 @@ function settingsEditBot(slug = '', inline = false) {
   const machineOptions = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
     (settingsIsAdmin() || machine.accepts_member_bots)).map(machine =>
     `<option value="${esc(machine.id)}" data-operator="${esc(machine.operator)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('');
-  // The CEO Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
+  // The Strategy Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
   const ownerNamesIt = editing && e.name === 'goal-manager' && S.me?.role !== 'owner';
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)">✕</button>'}</div>
     <div class="bot-editor-body">
       <div class="bot-editor-grid">
         <h3 class="bot-editor-sec bot-editor-wide">Profile</h3>
-        <label class="bot-editor-wide">Name<input name="display_name" type="text" autocomplete="off" value="${esc(e?.display_name || '')}" placeholder="Release Captain" maxlength="100" required${ownerNamesIt ? ' readonly' : ''}>${ownerNamesIt ? '<small>Only the owner renames the CEO Bot.</small>' : ''}</label>
+        <label class="bot-editor-wide">Name<input name="display_name" type="text" autocomplete="off" value="${esc(e?.display_name || '')}" placeholder="Release Captain" maxlength="100" required${ownerNamesIt ? ' readonly' : ''}>${ownerNamesIt ? `<small>Only the owner renames the ${esc(strategyBotName())}.</small>` : ''}</label>
         <label class="bot-editor-wide">Description<textarea name="description" maxlength="2000" placeholder="What this bot owns and does">${esc(e?.description || '')}</textarea></label>
         <label>Status<select name="status">${['planned','active','paused'].map(value => `<option value="${value}" ${(e?.status || 'planned') === value ? 'selected' : ''}>${value === 'planned' ? 'Setting up' : value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></label>
         <label>Reports to<select name="reports_to"><option value="">Top level</option>${parentOptions}</select></label>
@@ -254,6 +286,15 @@ function settingsEditBot(slug = '', inline = false) {
         if (!keep.checkValidity()) settingsFieldError(keep, keep.validationMessage || 'Enter a whole number from 0 to 1000, or leave it blank.');
         stage('keep', 'keep tasks going', changed(keep) && keep.checkValidity() && settingsKeepTasksRun(keep));
       }
+      const turns = event.target.closest('[data-bot-turns-at-once]');
+      if (turns) {
+        settingsFieldClear(turns);
+        if (!turns.checkValidity()) settingsFieldError(turns,
+          turns.validationMessage || 'Enter a whole number from 1 to 256, or leave it blank.');
+        stage('turns', 'turns at once', changed(turns) && turns.checkValidity() && settingsTurnsAtOnceRun(turns));
+      }
+      const managesReports = event.target.closest('[data-bot-manages-reports]');
+      if (managesReports) stage('manages', 'manages its reports', managesReports.checked !== (managesReports.dataset.current === 'true') && settingsManagesReportsRun(managesReports));
       if (event.target.matches('[data-task-effort]')) event.target.dataset.touched = '1';
       const delivery = event.target.closest('[data-bot-app-delivery]');
       if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
@@ -276,12 +317,12 @@ function settingsEditBot(slug = '', inline = false) {
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js
   const remove = dialog.querySelector('[data-bot-remove]');
   if (remove) remove.onclick = async () => {
-    // Archive (#535): off the chart, no routines or new work; open tasks go to the picked heir. It asks first.
+    // Archive (#535): off the chart, no automations or new work; open tasks go to the picked heir. It asks first.
     const successor = form.elements.successor.value;
     const hermes = ['hermes', 'openclaw'].includes(e.agent?.harness);
     const heir = successor ? settingsBotName(successor) : settingsPersonName(e.operator);
     if (!await settingsConfirm({title: `Archive ${e.display_name}?`, ok: 'Archive bot',
-      text: `Its open tasks go to ${heir}. It leaves the team chart and its routines stop. You can restore it later from Archived bots.`})) return;
+      text: `Its open tasks go to ${heir}. It leaves the team chart and its automations stop. You can restore it later from Archived bots.`})) return;
     remove.disabled = true; status.textContent = 'Archiving…';
     try {
       const done = await post(`/v2/bots/${encodeURIComponent(slug)}/archive`, {successor: successor || null, expected_revision: e.revision,

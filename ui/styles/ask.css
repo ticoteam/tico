@@ -1,0 +1,98 @@
+/* Ask (ui/app/ask-panel.js): a round button at the bottom left of the page opens the person's chat bot in a panel
+   above it; on a phone the Ask tab opens it as a sheet over the page, above the tab bar. */
+.ask-fab{position:fixed;left:calc(var(--rail-left) + 16px);bottom:16px;z-index:25;width:44px;height:44px;border-radius:50%;
+  border:0;background:var(--accent);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28)}
+.ask-fab[hidden]{display:none}
+/* What it floats over keeps its footprint clear at the end of the scroll, so no last row hides under it. */
+@media (min-width:761px){
+  #main{padding-bottom:var(--fab-room)}
+  .tasks-pane,#main.upd-chat-layout>.upd-col,.au-rail,.lc-scroll,.dash-grid{padding-bottom:var(--fab-room)}
+  /* a bot's message box sits at the bottom too: it starts --s3 clear of the button (16px + 44px in from the rail, less
+     the page's 28px gutter) */
+  body:has(#ask-fab:not([hidden])) #main.bot-chat-layout #chat-composer{padding-left:calc(16px + 44px + var(--s3) - 28px)}
+}
+.ask-fab .nav-icon{font-size:22px;color:inherit}
+.ask-fab:hover{filter:brightness(1.08)}
+.ask-fab[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
+.ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));
+  height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
+.ask-panel[hidden]{display:none}
+.ask-head{display:flex;align-items:center;gap:6px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
+.ask-head h2{margin:0;font-size:var(--t-md);white-space:nowrap}
+.ask-mark{font-size:18px;color:var(--accent);font-variation-settings:"FILL" 1}
+.ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
+  font-size:var(--t-xs);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.ask-sees[hidden]{display:none}
+.ask-sees [data-ask-sees-name]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask-full{margin-left:auto;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet)}
+.ask-full:hover{color:var(--accent)}
+.ask-ib{width:32px;height:32px;flex:0 0 32px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;
+  align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:var(--lh-none)}
+.ask-ib:hover{background:var(--surface2);color:var(--ink)}
+#ask-add{font-size:22px;font-weight:400}
+.ask-head .ask-sees+.ask-ib,.ask-head h2+.ask-ib{margin-left:auto}
+.ask-head .ask-ib+.ask-full{margin-left:4px}
+.ask-menu{display:flex;flex-direction:column;padding:4px;border-bottom:1px solid var(--line)}
+.ask-menu[hidden]{display:none}
+.ask-menu button{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;
+  color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.ask-menu button:hover,.ask-menu button:focus-visible{background:var(--surface2)}
+.ask-menu button span{color:var(--muted);font-size:var(--t-sm)}
+.ask-menu button span::before{content:"· "}
+#ask-support[data-support-count]::after{content:attr(data-support-count);margin-left:auto;min-width:18px;height:18px;padding:0 4px;
+  box-sizing:border-box;border-radius:9px;background:var(--ink);color:var(--bg);font:600 var(--t-xs)/18px var(--sans);text-align:center}
+.ask-members{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--line);font-size:var(--t-sm)}
+.ask-members[hidden]{display:none}
+.ask-member{border:0;background:transparent;color:var(--ink);font:inherit;font-weight:600;cursor:pointer;padding:2px 4px;border-radius:6px}
+.ask-member:hover{background:var(--surface2)}
+.ask-member[aria-pressed="true"]{background:var(--ask-green);color:#fff}
+/* Tico support in the chat: green bubbles, the person's on the right, support's on the left. */
+.ask-panel{--ask-green:#15803d}
+.ask-sup{max-width:85%;margin:4px 0;display:flex;flex-direction:column;gap:2px}
+.ask-sup.you{align-self:flex-end;align-items:flex-end}
+.ask-sup.them{align-self:flex-start}
+.ask-sup-who{font-size:var(--t-xs);color:var(--muted)}
+.ask-sup-body{padding:7px 12px;border-radius:18px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ask-sup.you .ask-sup-body{background:var(--ask-green);color:#fff;border-bottom-right-radius:6px}
+.ask-sup.them .ask-sup-body{background:color-mix(in srgb,var(--ask-green) 20%,var(--surface));color:var(--ink);border-bottom-left-radius:6px}
+/* What waits on the person: a bot's question, answered here. */
+.ask-card{margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);display:flex;flex-direction:column;gap:6px}
+.ask-card-who{font-size:var(--t-xs);font-weight:600;color:var(--muted)}
+.ask-card-q{overflow-wrap:anywhere}
+.ask-picks{display:flex;flex-wrap:wrap;gap:6px}
+.ask-reply{display:flex;gap:6px}
+.ask-reply input{flex:1;min-width:0}
+.ask-drop{margin-left:auto;width:28px;height:28px;flex-basis:28px}
+.ask-drop{font-size:var(--t-base)}
+.ask-thread{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding:8px 12px;display:flex;flex-direction:column}
+.ask-thread .conv-run.chat{border:0;padding:6px 0}
+.ask-thread .conv-run-head{display:none}
+.ask-thread .bubble{margin:0}
+.ask-thread .bubble.you{border:0}
+.ask-thread .bubble.bot.reply{background:transparent;border-radius:0}
+.ask-empty{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:auto}
+.ask-form{padding:0 8px 8px;min-width:0}
+.ask-panel>.err{margin:0 12px 8px}
+.mobile-ask{display:none}
+.mobile-ask[hidden]{display:none!important}
+@media (max-width:760px){
+  .ask-fab{display:none}
+  .mobile-ask{display:flex}
+  /* The primary action: an accent circle with no word under it, filling its column. Its centre sits 2px above the other
+     tabs' icons, so the row reads as one line and the circle as raised; a close mark replaces the glyph while open. */
+  .mobile-ask{justify-content:flex-start;padding-top:0}
+  .mobile-ask-mark{flex:none;width:44px;height:44px;margin-top:-5px;border-radius:50%;background:var(--accent);color:var(--accent-ink);
+    display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.18);
+    transition:transform var(--dur-fast) var(--ease)}
+  .mobile-ask-mark .mobile-nav-icon{width:24px;height:24px;font-size:24px}
+  .mobile-ask:active .mobile-ask-mark{transform:scale(.96)}
+  .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
+    bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}
+  body.mobile-composer-focus .ask-panel{bottom:0}   /* typing: the tab bar makes way for the keyboard (layout.css) */
+  body.ask-open{overflow:hidden}
+  .ask-ib{width:44px;height:44px;flex-basis:44px}
+  .ask-menu button{min-height:48px}
+}
+/* Opening and closing move in motion.css. */

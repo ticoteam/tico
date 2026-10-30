@@ -1,0 +1,49 @@
+{
+  "created": [
+    {
+      "name": "Market posts from listening become tasks",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "listening",
+        "destination": "market"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "listening-item@5",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "pick",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "d1.market",
+                  "op": "is",
+                  "value": "yes",
+                  "min": 0.7
+                }
+              ],
+              "then": [
+                {
+                  "do": "create_task",
+                  "args": {
+                    "title": "Market post to review"
+                  }
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

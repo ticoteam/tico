@@ -151,3 +151,42 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
         assert "jane@customer.example" not in json.dumps(rows) and "555-0100" not in json.dumps(rows)
         copied = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
         assert copied != secret and len(json.loads(copied)) == 64
+
+
+def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path):
+    """`--keep-automations` (the redesign converter's rehearsal): routines, task rules, triggers, webhooks and
+    automations stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
+    source = source_db(tmp_path)
+    with closing(sqlite3.connect(source)) as c, c:
+        now = H.now()
+        c.execute("INSERT INTO schedule_occurrences(schedule_id,occurrence,outcome) VALUES('s1',?,'opened')", (now,))
+        c.execute("INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,signing_secret) "
+                  "VALUES('deploy-failed','Deploy failed','webhook','live-hash','human:morgan',?,?,'live-signing')",
+                  (now, now))
+        c.execute("INSERT INTO trigger_deliveries(trigger_id,delivery,received_at) VALUES('deploy-failed','d1',?)", (now,))
+        c.execute("INSERT INTO webhooks(id,name,url,host,secret,secret_prev,created_by,created,updated) "
+                  "VALUES('wh1','Acme CI','https://ci.acme.example/hook','ci.acme.example','whsec_live','whsec_old',"
+                  "'human:morgan',?,?)", (now, now))
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow_json,version,created,created_by,"
+                  "updated) VALUES('auto_1','Morning check','person:morgan','schedule',1,'{}',1,?,'human:morgan',?)",
+                  (now, now))
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,started,status) VALUES('run1','auto_1',1,?,"
+                  "'queued')", (now,))
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, loose = devcopy.build(source, dest, days=30, keep_automations=True)
+    devcopy.write_environment(dest, 8879, "morgan@acme.example")
+    assert loose == []
+    with closing(sqlite3.connect(dest)) as c:
+        kept = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                for t in ("schedules", "task_rules", "triggers", "webhooks", "automations")}
+        assert kept == {"schedules": 1, "task_rules": 1, "triggers": 1, "webhooks": 1, "automations": 1}
+        for table in ("schedule_occurrences", "trigger_deliveries", "automation_runs", "credentials", "human_tokens"):
+            assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+        assert c.execute("SELECT secret_hash, signing_secret FROM triggers").fetchall() == [
+            ("devcopy-revoked:deploy-failed", None)]
+        assert c.execute("SELECT secret, secret_prev FROM webhooks").fetchall() == [("", "")]
+    env = (dest.parent / "server.env").read_text()
+    assert "TICO_REHEARSAL=1" in env and "TICO_SCHEDULER=0" in env    # still a rehearsal: nothing runs on a timer
+    # Without the option the same tables are emptied, as before.
+    plain, _ = devcopy.build(source, tmp_path / "plain" / "hub.sqlite", days=30)
+    assert plain["schedules"] == 1 and plain["triggers"] == 1 and plain["automations"] == 1

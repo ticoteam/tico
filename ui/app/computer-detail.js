@@ -360,11 +360,23 @@ function machineVersionsHTML(machine, online) {
 function machineScreenSectionHTML(machine, online) {
   return screenControlHTML(machine, online);
 }
+// What the line under Turns at once says. Empty is automatic, so it gives the count the computer works out. A setting
+// above turn_limit is one an older runner cannot take, so the runner keeps its own limit and that is what is shown.
+function machineTurnsNote(machine) {
+  if (machine.turns_at_once == null) return machine.capacity != null ? `Automatic (${machine.capacity})` : 'Automatic';
+  return machine.turn_limit != null && machine.turns_at_once > machine.turn_limit
+    ? `This computer runs at most ${machine.turn_limit}` : '';
+}
 function machineSettingsHTML(machine) {
   const admin = settingsIsAdmin(), manage = !machine.revoked_at && machineCanSignIn(machine);
+  const turns = machine.turns_at_once == null ? '' : String(machine.turns_at_once);
   const rows = machine.revoked_at ? [] : [
     manage ? `<label class="computer-detail-check"><input type="checkbox" data-inbox-only="${esc(machine.id)}"${machine.inbox_only ? ' checked' : ''}> Keep for inbox bots only <span class="muted">Their mail key can open every mailbox, so no other bot goes here.</span></label>`
       : machine.inbox_only ? '<p>Kept for inbox bots only.</p>' : '',
+    admin ? `<label class="computer-detail-check">Turns at once <input type="number" class="settings-inline-select"
+      min="1" max="256" step="1" data-turns-at-once="${esc(machine.id)}" data-current="${esc(turns)}"
+      value="${esc(turns)}" aria-label="Turns at once for ${esc(machine.label)}">
+      <span class="muted" data-turns-note>${esc(machineTurnsNote(machine))}</span></label>` : '',
     admin ? `<label class="computer-detail-check"><input type="checkbox" data-member-bots="${esc(machine.id)}"${machine.accepts_member_bots ? ' checked' : ''}> Accepts members' bots</label>`
       : machine.accepts_member_bots ? '<p>Accepts members\' bots.</p>' : '',
     screenMayOpen(machine) ? `<label class="computer-detail-check"><input type="checkbox" data-performance-mode="${esc(machine.id)}"${machine.performance !== 'off' ? ' checked' : ''}> Performance diagnostics</label>` : '',

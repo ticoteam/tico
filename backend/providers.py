@@ -17,6 +17,7 @@ from clients import harness_manifests as manifests
 from clients import judge as J
 
 from . import gateway_tiers, models_preset
+from .batch_work import shared_check
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
 
@@ -459,13 +460,16 @@ def load(c, settings=None):
     """The company's choice. Before the owner has saved one, the environment's seed stands in
     (`source: environment`), so a deployment that sets TICO_ENABLED_PROVIDERS works at once."""
     from . import gateway_connection, read_cache
-    row = read_cache.metadata(c, KEY)
-    if row:
-        record = _record(row[0])
-    else:
-        seed = env_seed(settings) if settings is not None else None
-        record = _record({**seed, "source": "environment"} if seed else {})
-    return with_gateway(record, gateway_connection.connected(c, settings))
+    # The company's choice is the team's state whichever bot asks: an error reading it fails the claim for every bot,
+    # so it is marked team-wide (shared_check) rather than passing one bot over.
+    with shared_check("team"):
+        row = read_cache.metadata(c, KEY)
+        if row:
+            record = _record(row[0])
+        else:
+            seed = env_seed(settings) if settings is not None else None
+            record = _record({**seed, "source": "environment"} if seed else {})
+        return with_gateway(record, gateway_connection.connected(c, settings))
 
 
 def configured(record):

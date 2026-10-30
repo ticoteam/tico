@@ -7,7 +7,7 @@
 .lrn-n.on{background:var(--surface2)}
 .lrn-n .c{font-variant-numeric:tabular-nums;color:var(--muted)}
 .lrn-night{padding:18px 28px 48px;max-width:920px;min-width:0}
-.lrn-head h2{font-size:var(--t-lg);margin:0;font-weight:600}
+.lrn-head h2{font-size:var(--t-lg);margin:0;font-weight:600;letter-spacing:var(--track-tight)}
 .lrn-head p{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .lrn-grp{margin-top:24px}
 .lrn-grp>h3{display:flex;align-items:center;gap:7px;margin:0 0 4px}
@@ -16,12 +16,12 @@
 .lrn-subj:last-child{border-bottom:1px solid var(--line)}
 .lrn-subj summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:22px 150px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 4px;border-radius:6px;font-size:var(--t-base)}
 .lrn-subj summary::-webkit-details-marker{display:none}
-.lrn-subj summary:hover{background:var(--surface)}
+.lrn-subj summary:hover{background:var(--surface2)}
 .lrn-subj .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lrn-subj .nm a{color:var(--ink)}
 .lrn-subj .first{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 .lrn-subj .more{display:inline-flex;align-items:center;gap:2px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
-.lrn-subj[open] .more .nav-icon{transform:rotate(180deg)}
+.lrn-subj[open] .more .nav-icon{transform:var(--chev-open)}
 .lrn-sq{width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:600}
 .lrn-body{padding:0 4px 12px 36px}
 .lrn-body .saw{font-size:var(--t-sm);color:var(--muted);margin:-2px 0 8px}
@@ -35,7 +35,7 @@
 .lrn-entry .src a,.lrn-entry .src span{color:var(--g7);display:inline-flex;align-items:center;gap:4px}
 .lrn-entry .src .nav-icon{font-size:14px;color:var(--muted)}
 .lrn-entry q{color:var(--muted);font-style:italic}
-.lrn-diff{margin:6px 0 0;padding:6px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface);font:var(--t-sm)/1.55 var(--mono);overflow:auto}
+.lrn-diff{margin:6px 0 0;padding:6px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface);font:var(--t-sm)/var(--lh-read) var(--mono);overflow:auto}
 .lrn-diff>span{display:block;padding:0 12px;white-space:pre}
 .lrn-diff .add{background:var(--ok-bg);color:var(--ok)}
 .lrn-diff .del{background:var(--fail-bg);color:var(--fail)}

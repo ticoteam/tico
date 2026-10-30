@@ -130,45 +130,6 @@ function botGoalRender(slug, g, count) {
   const a = el.querySelector('[data-goal-open]');
   a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalOpen); };
 }
-// The Routines section of the bot's right rail: each routine on one line, its name and how often, and when
-// it runs next. No routines, no section. A row opens the routine: its instruction and schedule, editable by
-// whoever may edit it (ui/app/recurring.js).
-function botRecurringHTML(e, slug) {
-  const live = S.status?.schedules || [];
-  const rows = (e.schedules || live.filter(r => (r.employee || r.bot) === slug)).map(s => {
-    const st = live.find(x => (s.id ? x.id === s.id : (x.employee || x.bot) === slug && x.title === s.title)) || {};
-    return {...s, ...st, employee: slug, active: st.active != null ? st.active : s.active};
-  }).sort((a, b) => (a.active ? 0 : 1) - (b.active ? 0 : 1) || String(a.next || '~').localeCompare(String(b.next || '~')) || String(a.title).localeCompare(String(b.title)));
-  if (!rows.length) return '';
-  const words = r => { const w = cadenceZoned(r) || ''; return w.charAt(0).toUpperCase() + w.slice(1); };
-  const paused = r => r.enabled === false || r.enabled === 0;
-  const next = r => paused(r) ? '<span class="muted" title="kept, not running">paused</span>'
-    : r.held_by_bot ? '<span class="muted" title="fires again when the bot resumes">paused with the bot</span>'
-    : !r.active ? '<span class="muted">not armed</span>'
-    : r.on ? '<span class="muted">on event</span>'
-    : r.next ? `<span class="tnum" title="${esc(fmt(r.next))}">${esc(until(r.next))}</span>` : '';
-  return `<h2 class="rail-h">Routines</h2>
-    <ul class="bot-recurring-list">${rows.map(r => `<li class="${paused(r) ? 'paused' : ''}"><button type="button" data-routine="${esc(r.id || '')}" data-bot="${esc(slug)}" title="${esc(r.title + ' · ' + words(r))}">
-        <span class="ttl">${esc(r.title)}</span><span class="when">${esc(words(r))}</span>
-        <span class="bot-recurring-next">${next(r)}</span></button></li>`).join('')}</ul>`;
-}
-// One handler for the rail on the bot page and the Assistant's page.
-function bindRecurringRail(host) {
-  if (!host || host.dataset.railBound) return;
-  host.dataset.railBound = '1';
-  host.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-routine]'); if (!b || !b.dataset.routine) return;
-    const id = b.dataset.routine, bot = b.dataset.bot;
-    const r = routineById(id) || ((await get(`/v2/bots/${encodeURIComponent(bot)}/routines`).catch(() => ({}))).routines || []).find(x => x.id === id);
-    if (r) routineEditorOpen({...r, employee: bot});
-  });
-}
-function botRecurringPaint(e, slug) {
-  const host = $('#bot-recurring'); if (!host || !e) return;
-  host.innerHTML = botRecurringHTML(e, slug);
-  host.hidden = !host.innerHTML;
-  bindRecurringRail(host);
-}
 // Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
 // Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
@@ -235,11 +196,11 @@ function botQuarantineCard(slug) {
       <p class="muted" id="bot-quarantine-result"></p>
     </section>`;
 }
-// The banner at the top of a bot's page while it is over its spend limit; Usage is where a limit is raised.
+// The banner at the top of a bot's page while it is over its spend limit; Budget, open at the bot, is where a limit is raised.
 function botLimitHTML(slug) {
   const limit = overLimit(slug); if (!limit) return '';
   const usd = n => '$' + Number(n || 0).toFixed(2);
-  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/usage">Raise limit</a></section>`;
+  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/strategy/budget/${encodeURIComponent('bot:' + slug)}">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
@@ -338,7 +299,7 @@ async function pageBot(slug, tab) {
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${keeper && !botSidebarLayout(slug) ? ' data-loading' : ''}>
     ${keeper && !limited ? `<button type="button" class="rail-ico bot-sidebar-edit" id="bot-sidebar-edit" aria-label="Edit sidebar" title="Edit"${botSidebarLayout(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">edit</span></button>
     <div class="bot-rail-editbar" hidden><span class="muted" id="bot-sidebar-status" role="status"></span><span class="spacer"></span>
-      <button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
+      <button type="button" class="ghost" id="bot-sidebar-add">Add</button><button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
     <div class="bot-rail-loading rail-empty"${keeper && !botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
     ${botWidgetsHTML(slug, {
       tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2></header>
@@ -352,8 +313,7 @@ async function pageBot(slug, tab) {
     </section>`,
       ...(limited ? {} : {
         updates: '<section class="rail-sec bot-latest" id="bot-latest" aria-label="Updates" hidden></section>',
-        files: '<section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>',
-        routines: '<section class="rail-sec bot-recurring" id="bot-recurring" aria-label="Routines" hidden></section>'})})}
+        files: '<section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>'})})}
   </aside>
   ${railEdgeHTML('right')}
   </div>
@@ -364,8 +324,8 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
-    ${slug === GM && ceoBotLogShown() ? `<section class="card" id="ceo-bot-log-card"><header><h2>${esc(ceoBotName())} log</h2></header>
-      <div id="ceo-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
+    ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
+      <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
@@ -389,16 +349,13 @@ async function pageBot(slug, tab) {
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}
         ${botRepoHTML(e) ? `<dt>Repository</dt><dd>${botRepoHTML(e).replace(/^Repository /, '')}</dd>` : ''}
         ${botScreenRowHTML(slug)}
+        <dt>Automations</dt><dd><a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(slug))}" data-bot-automations>Open</a></dd>
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
     <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
         <button class="linkish" type="button" id="bot-goals-add">Add goal</button></header>
       <div id="bot-goals-list"><div class="empty">Loading…</div></div></section>
-    <section class="card" id="bot-routines"><header><h2>Routines</h2>${routineMayEdit({bot: slug}) ? `
-        <button class="linkish" type="button" data-new-routine="${esc(slug)}">New routine</button>` : ''}</header>
-      <div id="bot-routines-list">${botRoutinesHTML(e, slug)}</div>
-    </section>
 
 `}
   </div>
@@ -413,7 +370,7 @@ async function pageBot(slug, tab) {
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
       )((S.status?.recent_runs || []).filter(r => r.employee === slug).slice(0, 10))}</section>
 
-    ${S.me?.role === 'owner' ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
+    ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
@@ -437,7 +394,7 @@ async function pageBot(slug, tab) {
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
   bindChatSwipe($('#conv-thread'));
-  if (e.can_chat) {
+  if (e.can_chat && !isAssistantHelper(slug)) {
     $('#chat-composer').append(botPill(slug).el);
     chatDropZone($('#pane-chat'), BOT_PILL);
     // A restored draft sizes the box once it is on the page.
@@ -446,11 +403,10 @@ async function pageBot(slug, tab) {
   } else {
     if (BOT_PILL) chatDraftSave(BOT_PILL);
     if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    // The CEO Bot: of people, only the owner talks to it, in their menu tab; anyone's earlier chat here stays readable.
-    $('#chat-composer').innerHTML = slug === 'goal-manager' && e.my_access?.write
-      ? `<section class="card"><p class="muted">${meCeo()
-        ? `You talk to ${esc(ceoBotName())} in your own chat: <a href="${ASSISTANT}">open it</a>.`
-        : `Only the company's owner talks to ${esc(ceoBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.`}</p></section>`
+    // A helper (BotOps, the Strategy Bot, the Librarian): nobody chats with it, the Assistant hands it the work; any
+    // earlier chat here stays readable.
+    $('#chat-composer').innerHTML = isAssistantHelper(slug)
+      ? `<section class="card"><p class="muted">The Assistant hands ${esc(e.display_name || slug)} its work. <button class="linkish" type="button" data-ask-open>Ask</button></p></section>`
       : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
@@ -520,14 +476,13 @@ async function pageBot(slug, tab) {
     void botGoalsCardLoad(slug);
   }
 
-  // The right rail: Tasks with its tabs, Updates, Files and Routines, in the bot's own order (ui/app/bot-sidebar.js).
+  // The right rail: Tasks with its tabs, Updates and Files, in the bot's own order (ui/app/bot-sidebar.js).
   if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
   botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
   botSidebarApply(slug);
-  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); }
+  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); void botPinsLoad(slug); }
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
-  if (!limited) botRecurringPaint(e, slug);
   $('#pane-tasks').addEventListener('click', ev => {
     const tabButton = ev.target.closest('[data-bot-task-tab]');
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
@@ -535,7 +490,6 @@ async function pageBot(slug, tab) {
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
 
-  if (!limited) bindRoutineExpand($('#pane-more'));
   moreClampWatch();
   showBotTab(tab);
   if (typing) pq(BOT_PILL, '.p-text')?.focus();   // once the pane is shown; a hidden box cannot take it
@@ -560,7 +514,7 @@ function placeBotHead() {
 // The lists in More cut to their three newest rows on every width: [host, rows, keep the newest last]. Each
 // fills in its own time, so one observer cuts whatever has arrived; "Show more" undoes it for that list until
 // the page is redrawn, and "Show less" cuts it again.
-const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-routines-list', '.rlist>*'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
+const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
   ['#v2-history', '.sh-row'], ['#bot-recent-runs', 'tr:not(:first-child)']];
 const MORE_KEEP = 3;
 function moreClamp() {
@@ -639,11 +593,11 @@ function showBotTab(tab) {
   if (split || view === 'tasks') {
     once('tasks', isKeeper(BOT.slug) ? loadBotTasksV2 : loadBotIssues);
     if (isKeeper(BOT.slug)) once('files', slug => window.botFiles?.mount($('#bot-files'), {slug, get, esc, openFile: openFileLink}));
-    if (!BOT.limited) botRecurringPaint(S.emps.find(x => x.name === BOT.slug), BOT.slug);   // routines change under More; redraw on return
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
-  if (view === 'info' && BOT.slug === GM && ceoBotLogShown()) once('ceo-log', () => renderCeoBotLog($('#ceo-bot-log')));
+  if (view === 'info' && BOT.slug === 'goal-manager' && strategyBotLogShown())
+    once('strategy-log', () => renderStrategyBotLog($('#strategy-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {
       if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);

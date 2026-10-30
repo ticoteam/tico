@@ -1,4 +1,6 @@
 """Continuous claim observations, evaluated without holding the scheduler's write lock."""
+from typing import Any, cast
+
 from . import execution as E, hubdb as H
 
 EVENT = 'job.refusal-observed'
@@ -10,6 +12,18 @@ MAX_GAP_SECONDS = 300
 def state(c, bot):
     row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (KEY + bot,)).fetchone()
     return H._json(row[0], {}) if row else {}
+
+
+def states(c, bots):
+    """{bot: its state} for these bots, read in one query per 500 bots (a bot with no state is left out)."""
+    out = {}
+    bots = sorted(set(bots))
+    for start in range(0, len(bots), 500):
+        part = bots[start:start + 500]
+        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key IN (%s)"
+                                    % ",".join("?" * len(part)), [KEY + bot for bot in part]):
+            out[key[len(KEY):]] = H._json(value, {})
+    return out
 
 
 def targets(c):
@@ -24,15 +38,17 @@ def current(c, settings, bot):
                     "WHERE a.bot=? AND b.state='active'", (bot,)).fetchone()
     if not row:
         return {}
-    why, created, _, job = E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True)
+    # with_job=True always returns four values; cast, so the unpacking below still fails loudly if that changes.
+    why, created, _, job = cast(tuple[Any, Any, Any, Any],
+                                E.bot_claimable(c, settings, row['runner_id'], bot, oldest=True, with_job=True))
     if not job or not why or why == 'lane_held':
         return {}
     return {'bot': bot, 'runner_id': row['runner_id'], 'name': row['display_name'] or bot,
             'job': job, 'oldest': created, 'reason': why}
 
 
-def plan(c, settings, bot, at):
-    previous = state(c, bot)
+def plan(c, settings, bot, at, previous=None):
+    previous = state(c, bot) if previous is None else previous
     value = current(c, settings, bot)
     if not value:
         return (bot, previous, {}) if previous else None
@@ -46,9 +62,11 @@ def plan(c, settings, bot, at):
 
 def pending(c, settings, at, failures):
     out = []
-    for bot in targets(c):
+    bots = targets(c)
+    previous_of = states(c, bots)           # one read for every bot, as aged() does, not one per bot
+    for bot in bots:
         try:
-            change = plan(c, settings, bot, at)
+            change = plan(c, settings, bot, at, previous_of.get(bot, {}))
             if change:
                 out.append(change)
         except Exception as exc:
@@ -83,8 +101,10 @@ def observe(c, settings, at=None):
 
 def aged(c, settings):
     at = H.now()
-    for bot in targets(c):
-        previous = state(c, bot)
+    bots = targets(c)
+    previous_of = states(c, bots)           # one read for every bot, not one per queued bot
+    for bot in bots:
+        previous = previous_of.get(bot, {})
         if (not previous.get('since') or previous['since'] > H.shift(at, hours=-12)
                 or previous.get('observed_at', '') < H.shift(at, seconds=-MAX_GAP_SECONDS)):
             continue

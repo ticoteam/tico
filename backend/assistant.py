@@ -28,7 +28,7 @@ from urllib.parse import quote
 import httpx
 from fastapi import Request
 
-from . import ceo_bot
+from . import strategy_bot
 from . import models as M
 from . import visuals
 from .media import upload_contract
@@ -84,7 +84,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return False
     # Saving what the person taught it (backend/learned.py checks the layer: theirs, or the company's for the owner).
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
-                "/api/v2/assistant/read-back", "/api/v2/assistant/learned"):
+                "/api/v2/assistant/read-back", "/api/v2/assistant/learned", "/api/v2/goals/read-back"):
         return True
     # Asking the settings catalogue for a change's plan changes no setting: it answers with the request, a refusal or a
     # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
@@ -103,7 +103,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True  # free address allocation; quota and identity still apply in inbound.py
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
-        if (chatting and (settings is None or chatting.group(1) not in (settings.assistant_bot, ceo_bot.SLUG))) or (
+        if (chatting and (settings is None
+                          or chatting.group(1) not in (settings.assistant_bot, strategy_bot.SLUG))) or (
                 path == "/api/v2/messages" and to_bot(fields.get("to"))):
             return True
     commenting = re.fullmatch(r"/api/v2/tasks/([^/]+)/comments", path)
@@ -208,6 +209,29 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
         raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
                       (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + link
                       if e else "That setting needs the person's own yes", 403)
+
+
+# An org change the person asked for in their chat (the redesign's Strategy Bot suggests them in words; the person says
+# which to make): a group made, renamed, nested, filled, led or deleted, and who a teammate reports to. It runs on their
+# cited words with exactly their rights, which the route checks as for their own click: the owner changes anything, a
+# lead moves teammates inside what it leads, anyone else is refused there. A bot asking, or the Strategy Bot on its own,
+# never borrows a person's rights: its own are refused (backend/groups.py `_may_change`).
+_ORG = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/groups"), ("PATCH", r"/api/v2/groups/[^/]+"), ("DELETE", r"/api/v2/groups/[^/]+"))]
+_REPORTS = (re.compile(r"/api/v2/(?:people|humans)/[^/]+"), re.compile(r"/api/v2/bots/[^/]+/definition"))
+
+
+def instructed_org(method, path, body=None):
+    """Whether this write is an org change that may run on the person's cited words: a group write, or a change of who a
+    person or a bot reports to and nothing else."""
+    path = normalize_path(path)
+    if not path:
+        return False
+    if any(m == method and p.fullmatch(path) for m, p in _ORG):
+        return True
+    fields = _fields(body)
+    return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields
+            and not set(fields) - {"reports_to", "expected_revision"})
 
 
 def instructed_route(method, path, body=None, decides=False):
@@ -391,12 +415,11 @@ def instruction(c, who, ref):
     msg = H.message(c, message_id) if message_id else None
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
-    # The CEO Bot's turn cites the owner's words in the CEO Bot chat, an Assistant's its person's Assistant room.
-    key = rooms.CEO_ROOM if who.task_actor == "bot:" + ceo_bot.SLUG else rooms.ASSISTANT_ROOM
+    # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
     if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != key
-            or (key == rooms.CEO_ROOM and who.role != "owner") or room.get("closed_at")):
+            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
     if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
@@ -404,10 +427,10 @@ def instruction(c, who, ref):
 
 
 def require_on_task(c, auth, who, path):
-    """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester
-    or in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked
-    to. The owner's own chat (the CEO Bot's) acts as the owner, who may act on any task. A task they may not read is
-    a 404, as the route answers it: the refusal never says it is there."""
+    """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester or
+    in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked to. The
+    owner's Assistant acts as the owner, who may act on any task. A task they may not read is a 404,
+    as the route answers it: the refusal never says it is there."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|links))?", normalize_path(path) or "")
     if not m or who.role == "owner":
         return
@@ -442,17 +465,19 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
 _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/access/(limits|allow)"), ("PUT", r"/api/v2/usage/limits(/[^/]+)?"),
     ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
-    ("POST", r"/api/v2/routines/[^/]+/delete"),
+    ("DELETE", r"/api/v2/automations/[^/]+"), ("POST", r"/api/v2/automations/[^/]+/delete"),
     ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
     ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"), ("POST", r"/api/v2/system/update"),
     ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"), ("POST", r"/api/v2/support/tickets"),
     ("PUT", r"/api/v2/directory"), ("POST", r"/api/v2/directory/(sync|preview)"),
     ("POST", r"/api/v2/(slack|github/app)/disconnect"),
+    ("DELETE", r"/api/v2/files/[^/]+"),
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
 )]
-_SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
+# An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
+_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:\-/]+)")
 
 
 def normalize_path(path):
@@ -690,7 +715,7 @@ def describe(c, method, path, body):
         (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
-        (r"/api/v2/files/([^/]+)", lambda g: "Change a file's listing"),
+        (r"/api/v2/files/([^/]+)", lambda g: "Delete a file for good" if method == "DELETE" else "Change a file's listing"),
     )
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
@@ -881,8 +906,9 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
 
 # ------------------------------------------------------------------ the room
 def room_bot(settings, room):
-    """The bot that talks in this person's own room: the CEO Bot in the CEO Bot chat, else the Assistant."""
-    return ceo_bot.SLUG if (room or {}).get("room_key") == rooms.CEO_ROOM else settings.assistant_bot
+    """The bot that talks in this person's own room: the Assistant, and the Strategy Bot in the owner's earlier
+    Strategy Bot chat (its old cards and their results)."""
+    return strategy_bot.SLUG if (room or {}).get("room_key") == rooms.STRATEGY_ROOM else settings.assistant_bot
 
 
 def find_room(c, actor):
@@ -892,14 +918,12 @@ def find_room(c, actor):
 
 
 def own_room(c, who, conversation_id):
-    """Whether this conversation is the caller's own chat room: their Assistant room, or for the owner the CEO Bot chat
-    (and the caller is a person)."""
+    """Whether this conversation is the caller's own Assistant room (and the caller is a person)."""
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
     return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
-                and room.get("room_key") == (rooms.CEO_ROOM if ceo_seat(c, who) else rooms.ASSISTANT_ROOM)
-                and not room.get("closed_at"))
+                and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
 
 
 def ensure_room(c, actor, bot):
@@ -910,82 +934,96 @@ def ensure_room(c, actor, bot):
                                scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.ASSISTANT_ROOM)
 
 
-# ------------------------------------------------------------------ the owner's CEO Bot (docs/ceo-bot.md)
-# The owner talks to the CEO Bot (backend/ceo_bot.py) in place of an Assistant: the same page, rights, cards and
-# read-backs, in a room of its own (`rooms.CEO_ROOM`) that belongs to the owner seat. A transfer of ownership moves that
-# room to the new owner (`move_ceo_room`), and the old owner talks to their Assistant again. Everyone else, admins
-# included, keeps the Assistant. The owner's own Assistant room stays theirs: the CEO Bot tab shows it, read-only, under
-# "Earlier chats", and it goes back with them if they hand ownership on. Turns in the CEO Bot chat key a provider session
-# of their own (`rooms.session_config`), apart from the bot's goals session.
-def ceo_on(c):
-    """Whether this install has its CEO Bot (every install does once it is set up)."""
-    row = H.bot(c, ceo_bot.SLUG)
+# ------------------------------------------------------------------ one Assistant for everyone (docs/assistant.md)
+# Every person, the owner included, has one chat: their Assistant. The Strategy Bot, the Librarian and BotOps are
+# helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Bot
+# (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
+# "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
+# (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
+HELPERS = ("botops", strategy_bot.SLUG, "librarian")
+
+
+def strategy_on(c):
+    """Whether this install has its Strategy Bot (every install does once it is set up)."""
+    row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] not in ("archived", "planned")
 
 
-def ceo_seat(c, who):
-    """Whether this person talks to the CEO Bot rather than an Assistant: the owner, once the CEO Bot is there."""
-    return who.role == "owner" and H.is_human(who.actor) and ceo_on(c)
-
-
 def chat_bot(c, settings, who):
-    """The bot this person talks to in their own chat: the CEO Bot for the owner, else the Assistant."""
-    return ceo_bot.SLUG if ceo_seat(c, who) else settings.assistant_bot
+    """The bot this person talks to in their own chat: the Assistant, for everyone."""
+    return settings.assistant_bot
 
 
 def chat_name(c, settings, bot):
-    return ceo_bot.name(c) if bot == ceo_bot.SLUG else settings.assistant_name
+    return strategy_bot.name(c) if bot == strategy_bot.SLUG else settings.assistant_name
 
 
-def find_ceo_room(c, actor=None):
-    """The CEO Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
+def find_strategy_room(c, actor=None):
+    """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
-                    "ORDER BY created LIMIT 1", (rooms.CEO_ROOM,)).fetchone()
+                    "ORDER BY created LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
     return room if room and (actor is None or room.get("owner_actor") == actor) else None
 
 
-def move_ceo_room(c, actor, to):
-    """The CEO Bot chat goes with the owner seat to `to`, the new owner: its history and what it is in the middle of.
-    The cards it put in front of the old owner are withdrawn: they ran as that person, who is no longer the owner."""
-    room = find_ceo_room(c)
+def move_strategy_room(c, actor, to):
+    """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
+    is withdrawn: it ran as the old owner, who is no longer the owner."""
+    room = find_strategy_room(c)
     if not room or room.get("owner_actor") == to:
         return room
     before = room.get("owner_actor")
     c.execute("UPDATE conversations SET owner_actor=?, participants_json=? WHERE id=?",
-              (to, json.dumps([to, "bot:" + ceo_bot.SLUG]), room["id"]))
+              (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]))
     c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
               "AND status='pending'", (H.now(), room["id"], before))
-    H.event(c, actor, "ceo_bot.chat_moved", room["id"], {"from": before, "to": to})
+    H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
 
 
-def ensure_ceo_room(c, actor):
-    """The owner's CEO Bot chat, moved to them if it still names an earlier owner, opened on first use."""
-    room = move_ceo_room(c, actor, actor)
-    if room:
-        return room
-    return H.open_conversation(c, actor, [actor, "bot:" + ceo_bot.SLUG], kind="chat", subject=ceo_bot.NAME,
-                               scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.CEO_ROOM)
+def migrate(c, settings):
+    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Bot chat moves
+    to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
+    Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
+    earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
+    move none is left in that room."""
+    moved = 0
+    for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
+                         "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
+                         "AND a.owner=v.owner_actor ORDER BY a.created", (rooms.STRATEGY_ROOM,)).fetchall():
+        room = ensure_room(c, row["owner"], settings.assistant_bot)
+        c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
+        H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
+                         "say", {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
+        moved += 1
+    if moved:
+        H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
+    return moved
+
+
+def earlier_chat(c, settings, who):
+    """"Earlier chats" on the owner's Assistant page: their earlier Strategy Bot chat, read-only (GET
+    /api/v2/conversations/<id>/messages), once it has a message. None for anyone else."""
+    if who.role != "owner":
+        return None
+    old = find_strategy_room(c, who.actor)
+    if not old or not c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
+                                (old["id"],)).fetchone():
+        return None
+    return {"room_id": old["id"], "bot": strategy_bot.SLUG, "name": strategy_bot.name(c)}
 
 
 def chat_room(c, settings, who, create=True):
-    """This person's own chat, opened with `create`: the CEO Bot chat for the owner, else their Assistant room. In a
-    transaction: the CEO Bot chat moves to the owner here if it still names an earlier one."""
-    bot = chat_bot(c, settings, who)
-    if bot == ceo_bot.SLUG:
-        return ensure_ceo_room(c, who.actor) if create else move_ceo_room(c, who.actor, who.actor)
-    return ensure_room(c, who.actor, bot) if create else find_room(c, who.actor)
+    """This person's own Assistant room, opened with `create`."""
+    return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
 def availability(c, settings, who):
     slug = chat_bot(c, settings, who)
     bot = H.bot(c, slug)
     state = bot["state"] if bot else "missing"
-    ceo = slug == ceo_bot.SLUG
-    # The CEO Bot is not turned on from here: it is always there, and its settings are Settings > CEO Bot.
-    return {"available": state == "active", "state": state, "bot": slug, "ceo": ceo, "name": chat_name(c, settings, slug),
-            "can_turn_on": not ceo and who.role == "owner" and state != "active" and state not in ("quarantined",)}
+    return {"available": state == "active", "state": state, "bot": slug, "name": chat_name(c, settings, slug),
+            "can_turn_on": who.role == "owner" and state != "active" and state not in ("quarantined",)}
 
 
 # A repository card stored before its route had a sentence: titled "PUT /api/v2/bots/x/repositories", its summary
@@ -1003,9 +1041,9 @@ def action_view(row, c=None):
             "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
             "result": result}
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
-        # A card the CEO Bot put in the owner's chat says it is the CEO Bot's, by its name.
-        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.CEO_ROOM:
-            view["by_name"] = ceo_bot.name(c)
+        # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
+        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
+            view["by_name"] = strategy_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
     if m and c is not None:
         # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
@@ -1476,13 +1514,7 @@ def install(app, store, auth, mutate, onboarding):
         pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
         info = availability(c, settings, who)
-        earlier = None
-        if info["ceo"]:
-            # "Earlier chats": the owner's own Assistant room, read-only in the CEO Bot tab (GET .../messages on it).
-            old = find_room(c, who.actor)
-            if old and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
-                                 (old["id"],)).fetchone():
-                earlier = {"room_id": old["id"], "bot": settings.assistant_bot, "name": settings.assistant_name}
+        earlier = earlier_chat(c, settings, who)
         return {**info, "room_id": room["id"] if room else None,
                 "messages": snap["messages"], "has_more": snap["has_more"], "next_before": snap["next_before"],
                 "execution": snap["execution"], "actions": actions_for(c, who.actor, ids),
@@ -1490,18 +1522,14 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.get("/api/v2/assistant")
     def assistant(request: Request):
-        """The caller's own chat: the CEO Bot chat for the owner, an Assistant room for everyone else."""
+        """The caller's own chat: their Assistant room, the owner's included."""
         who = own(request)
         # Every chat load: read first, and take the write lock only when a confirm is overdue or the room needs
-        # opening or moving to this owner.
+        # opening.
         with store.read() as c:
             create = availability(c, settings, who)["available"]
-            if chat_bot(c, settings, who) == ceo_bot.SLUG:
-                room = find_ceo_room(c)
-                ready = room.get("owner_actor") == who.actor if room else not create
-            else:
-                room = find_room(c, who.actor)
-                ready = bool(room) or not create
+            room = find_room(c, who.actor)
+            ready = bool(room) or not create
             if ready and not expiring(c):
                 return view(c, who, room)
         with store.transaction() as c:
@@ -1515,7 +1543,7 @@ def install(app, store, auth, mutate, onboarding):
         info = availability(c, settings, who)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        if files and info["bot"] != ceo_bot.SLUG:
+        if files:
             raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
         auth.require_write(c, who, info["bot"])
         return info["bot"]
@@ -1527,6 +1555,9 @@ def install(app, store, auth, mutate, onboarding):
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
+            page = getattr(body, "page", None)
+            if page and page.path.startswith("#/"):
+                refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
             if reply is not None:
                 refs["quiet"] = True
             message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
@@ -1559,8 +1590,8 @@ def install(app, store, auth, mutate, onboarding):
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
 
-    # The owner's CEO Bot chat takes pictures and files like any bot chat (a pasted screenshot attaches); an Assistant
-    # room stays text only. Files skip the quick answers, which read words only.
+    # An Assistant room is text only: this door refuses every upload (`text_only`) before a byte is stored, for a client
+    # that still offers to attach.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
@@ -1682,7 +1713,8 @@ def install(app, store, auth, mutate, onboarding):
         def work(c):
             if normalize_path(body.path) == "/api/v2/seats/batch" and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may confirm a chart-model re-org", 403)
-            if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot, "/api/v2/chat/" + ceo_bot.SLUG) \
+            if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot,
+                                             "/api/v2/chat/" + strategy_bot.SLUG) \
                     or not valid_operation(body.method, body.path, settings):
                 raise Problem("operation", "That is not something the " + settings.assistant_name
                               + " can propose: it is not on the list of routes a person confirms (never tokens, "

@@ -1,6 +1,7 @@
-# Recoveries and merged asks (the CEO Bot, level 2)
+# Recoveries and merged asks (the Strategy Bot, level 2)
 
-Only where `hub goal ceo-bot` says `on` and `level` 2 or 3. Below that, the server refuses both; at level 1 a red goal
+Only where `hub goal strategy-bot` says `on` and `level` 2 or 3. Below that, the server refuses both; at level 1 a red
+goal
 gets a check-in (`playbooks/check-ins.md`) and nothing more. At level 3 a red or stalled goal gets a decision you
 make yourself (`playbooks/acts-on-its-own.md`) in place of a recovery; merging asks is the same at both levels.
 
@@ -24,7 +25,7 @@ in their Needs you as one item, in place of "check why it is off track".
 
 ## Merging the same question
 When several bots ask one person the same thing (an open question on a task, a task waiting on them, a task filed for
-them), make it one item: `hub goal ceo-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`
+them), make it one item: `hub goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`
 (2 to 10 tasks). Their tasks leave the person's Needs you while it is open; their one answer goes to every bot that
 asked, and the item is done. If it ends unanswered, the originals come back as they were.
 - Only questions that one answer settles for every asker. Similar but different is not the same.

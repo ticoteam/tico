@@ -1,0 +1,33 @@
+# Lint config for the Python code. Ruff is pinned: `uvx ruff@0.15.9` (scripts/lint.sh runs the checks).
+#
+# Production code is checked for bugs with these rule families. Style rules (E501, I, UP, ...) are not enforced.
+# Existing findings are listed by (file, rule) in ruff-baseline.toml, which this file extends. That list only
+# shrinks: `python3 scripts/lint_baseline.py --check` fails on new findings and on entries that no longer fire.
+extend = "ruff-baseline.toml"
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["F", "E9", "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004"]
+
+# Test code gets only undefined names (F821), unused locals (F841) and syntax errors (E9). Pytest fixtures
+# make the rest noisy (F811 redefinitions, unused fixture imports, ...).
+[lint.extend-per-file-ignores]
+"**/tests/**" = [
+    "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
+    "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
+    "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+]
+"**/test_*.py" = [
+    "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
+    "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
+    "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+]
+"**/conftest.py" = [
+    "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
+    "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
+    "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+]

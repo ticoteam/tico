@@ -107,8 +107,8 @@ function frNextStepHTML(state) {
     : waiting === 'provider' ? '<button class="primary" type="button" data-onb-go="models">Add an AI provider</button>' : '';
   return `<p class="onb-machine" id="onb-next-status" role="status">${esc(line)}</p>${button}`;
 }
-// A row's one status: a word, or the one thing to do there (Set up, Activate, the setup task BotOps is working).
-function frBotStatusHTML(state, bot, botOps) {
+// A row's one status: a word, or the one thing to do there (Set up, Activate, the setup task being worked).
+function frBotStatusHTML(state, bot) {
   const card = state.catalog.cards.find(row => row.slug === bot.slug || row.template === bot.template);
   const bootstrap = bot.slug === assistantBot() || !!card?.bootstrap;
   const ready = !!bot.repository_present, active = bot.status === 'active', parked = ['needs_setup', 'needs_onboarding'].includes(bot.onboarding_state);
@@ -118,13 +118,13 @@ function frBotStatusHTML(state, bot, botOps) {
     : '<span class="pill waiting">Setting up</span>';
   if (active) return '<span class="pill ok">Active</span>';
   if (ready && !bootstrap) return `<button class="ghost" type="button" data-onb-activate="${esc(bot.slug)}" aria-label="Activate ${name}">Activate</button>`;
-  if (!bootstrap && bot.setup_task_id) return `<a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.slug)}">${esc(botOps)} is setting it up</a>`;
+  if (!bootstrap && bot.setup_task_id) return `<a href="#/task/${esc(bot.setup_task_id)}" data-onb-task="${esc(bot.slug)}">Setting it up</a>`;
   return '<span class="pill waiting">Setting up</span>';
 }
-function frBotRowHTML(state, bot, botOps) {
+function frBotRowHTML(state, bot) {
   return `<div class="onb-bot" data-onb-bot="${esc(bot.slug)}">${avatar(bot.slug, 27)}
       <strong class="onb-bot-name">${esc(bot.display_name || bot.slug)}</strong>
-      <div class="onb-bot-actions">${frBotStatusHTML(state, bot, botOps)}</div></div>`;
+      <div class="onb-bot-actions">${frBotStatusHTML(state, bot)}</div></div>`;
 }
 // The bots in the team chart's groups and order (ui/app/sidebar.js): the bots outside any group first, as on the chart,
 // then each group, nested ones after their parent, then the built-ins. A bot the chart does not list yet joins the first.

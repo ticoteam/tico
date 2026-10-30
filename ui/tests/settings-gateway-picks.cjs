@@ -145,6 +145,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
 
     // 3. The same pick under Fallback and Task model; the harness list still offers the others.
     await page.evaluate(() => { location.hash = '#/settings'; });
+    await page.waitForFunction(() => S.route === '#/settings');   // a page change draws a frame later (its fade)
     await page.evaluate(() => { settingsShow('bots'); renderSettingsBots(); });
     await page.locator('[data-task-open=seller]').click();
     const task = page.locator('tr[data-task-row=seller] [data-bot-choice][data-kind=task]');

@@ -68,7 +68,7 @@ const goals = [
     const panel = page.locator('#goal-panel');
     const open = async owner => {
       if (await panel.evaluate(d => d.open).catch(() => false)) await panel.locator('[data-gp-close]').click();
-      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]`).first().click();
+      await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-body').waitFor();
     };
 
@@ -101,7 +101,7 @@ const goals = [
     // A proposer may bring their dropped proposal back without silently accepting it themselves.
     await rows.first().locator('[data-fin-reopen]').click();
     const proposalForm = panel.locator('[data-fin-reopen-form="g-proposed"]');
-    assert.deepEqual(await proposalForm.locator('select option').allInnerTexts(), ['Choose…', 'Let CEO Bot set it']);
+    assert.deepEqual(await proposalForm.locator('select option').allInnerTexts(), ['Choose…', 'Let the Assistant set it']);
     await proposalForm.locator('select').selectOption('auto');
     await proposalForm.locator('input[name=note]').fill('The proposal is back');
     await proposalForm.locator('button[type=submit]').click();
@@ -113,7 +113,7 @@ const goals = [
     const form = panel.locator('[data-fin-reopen-form="g-b2"]');
     await form.locator('button[type=submit]').click();
     assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no colour chosen: nothing sent');
-    assert.deepEqual(await form.locator('select option').allInnerTexts(), ['Choose…', 'On track', 'At risk', 'Off track', 'Let CEO Bot set it']);
+    assert.deepEqual(await form.locator('select option').allInnerTexts(), ['Choose…', 'On track', 'At risk', 'Off track', 'Let the Assistant set it']);
     await form.locator('select').selectOption('green');
     await form.locator('button[type=submit]').click();
     assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no reason: nothing sent');

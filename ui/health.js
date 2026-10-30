@@ -64,8 +64,9 @@ function hlCheckHtml(check) {
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
   // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  // None when Tico runs this server's updates (`managed`).
   const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
-  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+  const update = owner && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
     ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
   const result = (owner && HL_CHECK_MSG
     ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
@@ -128,13 +129,17 @@ function hlSeen(f) {
 // rule that lets it file Tico bug reports without a Needs you card.
 function hlMonitorHtml(m) {
   if (!m) return '';
-  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page.
-  const stopped = f => { const m = /^(?:run_hold|turn_budget):(.+)$/.exec(f.key || ''); return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : ''; };
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page. So does
+  // one for queued runs it could not start (claim_failed:<bot>), which the bot's page does not show.
+  const stopped = f => {
+    const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+    return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
+    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
-      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, has BotOps fix setup problems and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
+      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, gets setup problems fixed and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-rule${m.reports_without_asking ? ' checked' : ''}${m.on ? '' : ' disabled'}>
       <span>Health Monitor may file Tico bug reports without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>
     ${m.on && found ? `<ul class="hl-bots">${found}</ul>` : ''}</section>`;

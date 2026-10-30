@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 import httpx
@@ -48,15 +49,21 @@ CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, creat
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
-FRESH_S = 30                 # an open ticket is asked about at most this often
+# How often a ticket is asked about, at most. HQ counts every ask from this install (one address) together, so a ticket
+# nobody has written on for an hour is asked about less often.
+FRESH_S = 30                 # a ticket written on (or filed) within ACTIVE_S, or the one in view
+QUIET_FRESH_S = 300          # an open or answered one with nothing new for longer
 CLOSED_FRESH_S = 6 * 3600    # a closed one, in case the team reopened it
+ACTIVE_S = 3600
+ASKED = 20                   # tickets asked about in one refresh, at most
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 LISTED = 50
 HQ_WAIT = 8
 # The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
 # value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
 SOURCES = ("person", "bot_report", "botops", "health_monitor")
 TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
-CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f  ‪-‮⁦-⁩]")
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")
 
@@ -83,6 +90,10 @@ class FeedbackAnswer(Contract):
 
 class SupportFromApproval(Contract):
     approval: str = Field(min_length=1, max_length=64)     # an approved `support` approval the caller asked for
+
+
+class SupportRefresh(Contract):
+    ticket: str = Field(default="", max_length=64)          # the ticket a person has in view: asked about first
 
 
 class SupportMessage(Contract):
@@ -233,6 +244,12 @@ def _messages(value):
                         "body": str(item.get("body") or "")[:8000],
                         "has_diagnostics": item.get("has_diagnostics") is True})
     return out
+
+
+def _last_activity(row):
+    """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
+    times = [H.parse_ts(m.get("created")) for m in json.loads(row["messages_json"] or "[]")] + [H.parse_ts(row["created"])]
+    return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
 def view(row):
@@ -526,20 +543,30 @@ class Support:
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
-    def refresh(self, who):
-        """Ask HQ about the caller's tickets that are due, then list them. HQ being down keeps what was known."""
+    def refresh(self, who, ticket=""):
+        """Ask HQ about the caller's tickets that are due, the most recently written on first, then list them. `ticket`
+        is the one a person has in view: it is due every FRESH_S whatever its pace. HQ being down, or asking us to slow
+        down (429), ends the round and keeps what was known."""
         now = H.now()
         with self.store.read() as c:
             rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created DESC LIMIT 20", (who.actor,)).fetchall()
-        failed = False
+                             "ORDER BY created DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+        active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
+        rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
+        failed, asked = False, 0
         for row in rows:
-            wait = CLOSED_FRESH_S if row["status"] == "closed" else FRESH_S
+            if row["id"] == ticket or (row["status"] != "closed" and _last_activity(row) > active_since):
+                wait = FRESH_S
+            else:
+                wait = CLOSED_FRESH_S if row["status"] == "closed" else QUIET_FRESH_S
             if row["checked"] and row["checked"] > H.shift(now, seconds=-wait):
                 continue
+            if asked == ASKED:
+                break
+            asked += 1
             if not self._pull(row):
                 failed = True
-                break                                  # HQ is down: do not ask again for every ticket
+                break                                  # HQ is down or busy: do not ask again for every ticket
         result = self.listing(who)
         result["refresh_failed"] = failed
         return result
@@ -640,10 +667,10 @@ def install(app, store, settings, census):
         return support.file_approved(request.state.identity, body.approval)
 
     @app.post("/api/v2/support/tickets/refresh")
-    def support_refresh(request: Request):
+    def support_refresh(request: Request, body: SupportRefresh | None = None):
         who = person(request)
         require_on(settings)
-        return support.refresh(who)
+        return support.refresh(who, body.ticket if body else "")
 
     @app.post("/api/v2/support/tickets/{ticket_id}/messages")
     def support_write(request: Request, ticket_id: str, body: SupportMessage):

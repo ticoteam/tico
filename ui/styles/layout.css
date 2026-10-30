@@ -2,10 +2,17 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* main */
 #main{grid-column:2;grid-row:2;min-width:0;padding:8px 28px 60px;overflow-y:auto;max-width:1180px}
-#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
 /* The nudge to the desktop app: browsers only, dismissable for a week (ui: appNudge). */
 /* The top bar holds the desktop-app nudge; search lives above the account in the sidebar. */
 #topbar{grid-column:2;grid-row:1;flex-wrap:wrap;display:flex;align-items:flex-start;justify-content:flex-end;gap:12px;padding:10px 28px 0}
+/* An empty top strip (no app nudge) takes no grid row on any page, so #main's box starts at the window's top on every
+   page and a page change never moves it. The pages that sat below the strip keep its 10px as a transparent top border;
+   the Updates chat and bot pages run their rails to the top edge and place their headers themselves (18px down). */
+@media (min-width:761px){
+  body:not(:has(#app-nudge:not([hidden]))) #topbar{display:none}
+  body:not(:has(#app-nudge:not([hidden]))) #main:not(.upd-chat-layout):not(.bot-split-layout){border-top:10px solid transparent}
+}
 #app-nudge{flex:1;display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:var(--t-base)}
 #app-nudge .app-nudge-text{flex:1;min-width:0}
 #app-nudge .app-nudge-get{padding:6px 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;white-space:nowrap}
@@ -29,9 +36,8 @@ body.native #app-nudge{display:none}
   .tree a.node{font-size:var(--t-lg);min-height:46px;padding:6px 8px}
   .tree .dept-label{font-size:var(--t-base);min-height:44px;display:flex;align-items:center;cursor:pointer}
   .tree .cnt{font-size:var(--t-sm);padding:1px 8px}
-  .chev{width:44px;height:44px;font-size:24px;margin-left:-8px}
-  .tree li:not(.dept) .noderow{padding-left:36px}
-  .tree ul{margin-left:14px}
+  .chev{width:44px;height:44px;font-size:24px;margin-right:-8px}
+  .tree{--tree-lead:8px}
   .section-toggle{min-height:44px;font-size:var(--t-base)}
   /* iOS Safari zooms into any field whose text is under 16px and leaves the page zoomed, so on a
      phone every text field is 16px. Zoom itself stays allowed. */
@@ -42,13 +48,13 @@ body.native #app-nudge{display:none}
   body.drawer{overflow:hidden}
   #main{padding:18px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);max-width:none}
   #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
-  .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/1.1 var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
+  .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/var(--lh-display) var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
   .mobile-nav-item:hover{text-decoration:none}
   .mobile-nav-item.cur{color:var(--accent)}
   .mobile-nav-icon{
     width:25px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:50%;
     overflow:hidden;user-select:none;font-family:"Material Symbols Outlined";
-    font-weight:200;font-style:normal;font-size:24px;line-height:1;
+    font-weight:200;font-style:normal;font-size:24px;line-height:var(--lh-none);
     letter-spacing:normal;text-transform:none;white-space:nowrap;
     font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;
     font-feature-settings:"liga";-webkit-font-feature-settings:"liga";
@@ -64,7 +70,7 @@ body.native #app-nudge{display:none}
   .org-fan[hidden]{display:none}
   .org-fan-list{list-style:none;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:12px;max-height:100%;overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;padding:12px 24px 20px 12px;margin:0 0 -20px -12px}
   .org-fan-list>li{margin:0;padding:0;border:0;background:none}
-  .org-fan-item{display:flex;align-items:center;gap:12px;min-height:52px;min-width:180px;padding:8px 20px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-lg)/1.2 var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.22);-webkit-tap-highlight-color:transparent}
+  .org-fan-item{display:flex;align-items:center;gap:12px;min-height:52px;min-width:180px;padding:8px 20px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-lg)/var(--lh-tight) var(--sans);box-shadow:0 6px 18px rgba(0,0,0,.22);-webkit-tap-highlight-color:transparent;letter-spacing:var(--track-tight)}
   .org-fan-item .org-fan-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--wait);color:#111;font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center}
   .org-fan-row{display:flex;align-items:center;gap:10px}
   .org-fan-item.org-fan-menu{min-width:0;width:52px;padding:8px;justify-content:center}

@@ -8,7 +8,7 @@ A small pilot is what has been measured ([sizing](docs/sizing.md)).
 
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
   Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
-  routines, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
+  automations, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
   question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
   `tico-runner` image) joins with a one-time code, claims work over HTTPS, and runs each bot's run
@@ -31,7 +31,7 @@ it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Co
 API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
-   Assistant, BotOps, Librarian and CEO Bot are the four built-in bots.
+   Assistant, BotOps, Librarian and Strategy Bot are the four built-in bots.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -93,7 +93,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/updates.md](docs/updates.md) | Updating the server and its computers |
 | [docs/assistant.md](docs/assistant.md) | The built-in Assistant: what it does at once and what it proposes |
 | [docs/librarian.md](docs/librarian.md) | The built-in Librarian: answers from the team's docs, with citations |
-| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in CEO Bot: automatic colours, a human's override, readings with evidence |
+| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Bot: automatic colours, a human's override, readings with evidence |
 | [docs/connect-an-agent.md](docs/connect-an-agent.md) | Connecting an external agent (Grok, Muse, Claude, Cursor, Codex, any MCP client) with a personal token |
 | [PRIVACY.md](PRIVACY.md), [docs/telemetry.md](docs/telemetry.md) | The anonymous usage count: exactly what is sent, and how to turn it off |
 

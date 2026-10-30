@@ -109,7 +109,10 @@ def _done(c, action, row, since):
 
 
 def _hours(at, since):
-    return (H.parse_ts(at) - H.parse_ts(since)).total_seconds() / 3600
+    now, then = H.parse_ts(at), H.parse_ts(since)
+    if now is None or then is None:
+        raise ValueError(f"unreadable step time: {at!r}, {since!r}")
+    return (now - then).total_seconds() / 3600
 
 
 def _name(c, row):

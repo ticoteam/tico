@@ -30,13 +30,13 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
           "updated TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
 
 
-# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for a
-# chart model's text, the CEO Bot's actor for its draft), when the CEO Bot drafted it and the task that asked it to, and
-# the bot that filled the seat.
+# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
+# a chart model's text, the Strategy Bot's actor for its draft), when the Strategy Bot drafted it and the task that
+# asked it to, and the bot that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
            ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
-# wrote seats then, so it is kept like a person's words and the CEO Bot never drafts over it.
+# wrote seats then, so it is kept like a person's words and the Strategy Bot never drafts over it.
 EARLIER = "earlier"
 
 
@@ -114,7 +114,7 @@ def _manager_actor(c, slug):
 def _person_above(c, pid, slug):
     from . import people as P, views
     archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-    return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived)
+    return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived, True)
 
 
 def may_complete(auth, c, who, slug):
@@ -237,7 +237,8 @@ def _clean_title(value):
 
 def create_seat(auth, c, who, title, description="", reports_to="", team="", description_by=None):
     """`description_by` says whose words the job description is: the caller's by default when they wrote one, `chart`
-    for a chart model's text. Only a description no person wrote is replaced by the CEO Bot's draft (recruiting.py)."""
+    for a chart model's text. Only a description no person wrote is replaced by the Strategy Bot's draft
+    (recruiting.py)."""
     reports_to = _reports_to(c, reports_to or who.actor)
     _may_place(auth, c, who, reports_to)
     return _seat(seat(c, _insert(c, who.actor, title, description, reports_to, team, description_by)))
@@ -297,7 +298,8 @@ def update_seat(auth, c, who, seat_id, fields):
         values["title"] = _clean_title(fields["title"])
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
-        values["description_by"] = who.actor          # a person's words now: the CEO Bot's draft never replaces them
+        # a person's words now: the Strategy Bot's draft never replaces them
+        values["description_by"] = who.actor
     if fields.get("team") is not None:
         values["team"] = str(fields["team"]).strip()
     if fields.get("reports_to") is not None:
@@ -324,7 +326,7 @@ def close_seat(auth, c, who, seat_id):
     return {"id": seat_id, "closed": True}
 
 
-def org_parent(seat_row, roster, employees, archived=(), all_seats=None):
+def org_parent(seat_row, roster, employees, archived=(), all_seats=None, bare_people=False):
     """Where a seat hangs on the chart: under the open seat it reports to (`s:<id>`), else under its bot while that bot
     is on the chart, else under its person, as a bot reporting there would (backend/people.py `org_parent`). A closed
     seat above it is passed over for whatever that seat answered to. `all_seats` is {id: row}, closed seats too."""
@@ -342,7 +344,8 @@ def org_parent(seat_row, roster, employees, archived=(), all_seats=None):
         reports = str(parent["reports_to"] or "")
     probe = "seat:" + seat_row["id"]
     return P.org_parent("bot", probe, roster, {**(employees or {}), probe: {"reports_to": reports,
-                                                                           "team": seat_row["team"] or ""}}, archived)
+                                                                           "team": seat_row["team"] or ""}}, archived,
+                       bare_people)
 
 
 def all_seats(c):
@@ -354,14 +357,14 @@ def chart_seats(c, roster, employees, archived=(), may_see=lambda slug: True):
     where it hangs. One under a bot the caller may not see hangs from the nearest thing above that bot they may, as
     that bot's own reports do on the chart."""
     from . import people as P
-    every, out = all_seats(c), []
+    every, out, bare = all_seats(c), [], True
     for row in every.values():
         if row["closed_at"]:
             continue
-        parent, seen = org_parent(row, roster, employees, archived, every), set()
+        parent, seen = org_parent(row, roster, employees, archived, every, bare), set()
         while parent.startswith("b:") and parent not in seen and not may_see(parent[2:]):
             seen.add(parent)
-            parent = P.org_parent("bot", parent[2:], roster, employees, archived)
+            parent = P.org_parent("bot", parent[2:], roster, employees, archived, bare)
         out.append({"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
                     "description": row["description"], "team": row["team"], "reports_to": row["reports_to"],
                     "created": row["created"], "org_parent": parent})

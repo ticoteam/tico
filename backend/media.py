@@ -480,7 +480,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
-    # The owner's CEO Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
+    # POST /api/v2/uploads/assistant/messages uses this too; it refuses every upload (an Assistant room is text only).
     app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
                                         attach=chat_uploads,
                                         write=write)
@@ -491,7 +491,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         human_only(who)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
         def work(c):
-            message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs))
+            message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs,
+                                                           delivery=body.delivery, defer_for=body.defer_for))
             return {"conversation": H.conversation(c, message["conversation_id"]),
                     "message": chat_uploads(c, who, bot, message, uploads, body.titles)}
         return await asyncio.to_thread(write, request, body, uploads, work)

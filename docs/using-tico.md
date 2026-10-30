@@ -13,7 +13,7 @@ On **Tasks**, press **New task** and pick who it is for — any human or bot. On
 it through Tico's MCP. Each task shows who added it: you, another human, or a bot.
 
 **Where are the built-in bots?**
-**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The CEO Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+**Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
@@ -158,9 +158,9 @@ reports. The same rule decides whose profile, goals, bot settings and routines y
 your own, and anyone's below you.
 
 **How do I add a routine?**
-**Settings → Rules → New routine** (or the Routines card on the bot's page): pick the bot, a
-title, a cron (five fields, America/Los_Angeles by default) or a Tico event, and the text the bot
-is told each time. A bot can set up its own with `hub routine set`. Details: [Routines](routines.md).
+**Automations → New automation**: pick a Schedule (a cron in a time zone), an Event or a Webhook
+trigger, then add a Bot turn step with the bot and the text it is told each time. A bot can set up
+its own with `hub automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose
@@ -219,26 +219,70 @@ carry a dot in the chart; updates further down are marked read as you see them, 
 open to everyone on the team (not to external agents); a bot's are open to anyone who may read that bot. Bots read them with
 `hub update list` (`--scope direct` for just their direct reports).
 
-## Leave work for the next run
+## Steer, queue or defer
 
-A **Note** gives a bot context without starting a run. A **Task** filed with `--next-run`
-(alias `--quiet`) is work to do, with an owner, status, result and history; creating it does not
-wake the bot. Use your [personal token or external agent](connect-an-agent.md) for the CLI:
+Anything you send a bot (a chat message, a task comment, a new task) reaches it one of three ways:
+
+| Way | When the bot gets it | Wakes it |
+| --- | --- | --- |
+| **Steer** | Into its turn running there now; right after it if its harness cannot steer | Yes |
+| **Queue** | Right after its current turn there, or now when it is idle | Yes |
+| **Defer** | With its next turn there, at the latest after a deadline (`30m`, `4h`, `2d`, ... or `never`) | Only at the deadline |
+
+"There" is the session the item lands in: a task's own room for its comments, the chat for a chat message. A deferred
+task or message for the bot's next run of any kind (below) is tied to no session. A defer sent while the bot has a turn
+going in the same session goes in right after that turn, as a queue; a turn on another task does not count. A
+deadline wakes the bot, so only someone who may steer it can set one: anyone else's defer waits with no deadline.
+
+When the earliest deadline among the items waiting in a session comes, Tico starts one run there that carries them
+all; a deadline that comes while that run is still waiting joins it, and a turn there that carries everything first
+makes the run unneeded. Deferred tasks and messages tied to no session batch into one run per bot. A deadline never
+wakes a paused bot (it fires once the bot is back), and spend caps, turns at once and holds apply as to any run; a
+hosted server asleep when idle wakes for it. Each deadline fires once, across restarts. A turn's prompt counts what was
+deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
+themselves, up to 20 a turn; the rest wait for the next turn.
+
+Defaults: plain Send is Steer for a chat message and a comment on a task a bot owns, as before (when the bot is idle
+that is the same as Queue). A comment on a task a bot filed for a
+person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
+task has a 24-hour deadline unless you pick one; a deferred chat message or deferred message has none. Steer does not
+apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
+
+The web send menu (the caret beside Send, in a bot's chat and a task's conversation) offers **Steer now**, **Queue**
+and **Defer** with its durations, then **Set as goal**. The CLI and API take the same words:
 
 ```bash
-hub note create content "Use the revised tone guide for the next draft."
+hub chat send content "Skip the charts." --steer
+hub task comment <task-id> "Billing first." --defer 4h
+hub task create --owner content --title "Check the refund counts" --defer 2d
+```
+
+`POST /api/v2/chat/<bot>`, `POST /api/v2/tasks/<id>/comments` and `POST /api/v2/tasks` take `delivery` (`steer`,
+`queue` or `defer`; no `steer` on a new task) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
+`hub_message_send`, `hub_task_comment` and `hub_task_create` take the same fields.
+
+## Leave work for the next run
+
+A **deferred message** gives a bot context without starting a run. A **deferred task** (`--defer`; the older
+`--next-run` and `--quiet` still work) is work to do, with an owner, status, result and history; creating it does not
+wake the bot. Both wait for the bot's next run of any kind; `--defer <time>` sets a deadline (24 hours for a task unless
+named, none for a message). Use your [personal token or external agent](connect-an-agent.md) for the CLI:
+
+```bash
+hub note create content "Use the revised tone guide for the next draft." --defer 4h
 hub note list --to content --waiting
 hub note delete <note-id>
 hub task create --owner content --title "Draft the weekly post" \
-  --body "Use the notes attached to this task." --next-run
+  --body "Use the deferred messages on this task." --defer
 ```
 
-`--text-file notes.txt` can replace the note text; `--body-file request.txt` can replace a task's
-body. Notes are only for other bots, never a human or the sender itself. You need Write access to
+`--text-file notes.txt` can replace the message text; `--body-file request.txt` can replace a task's
+body. Deferred messages (still `note` in the CLI and API) are only for other bots, never a human or the sender itself. You need Write access to
 leave one, and the normal task/contact permissions apply to deferred work. Never put a secret in either.
 
-The next run started by chat, a Routine or another task carries waiting notes and deferred tasks.
-For a Note, the API reports `waiting`, `carried` and `cancelled_at`. `carried` means a run received
+The next run started by chat, a Routine, another task or a deadline carries waiting deferred messages and tasks.
+For a deferred message, the API reports `waiting`, `carried` and `cancelled_at`. `carried` means a run received
 it, not that the bot completed work. A failed run makes it waiting again. A sender or a human who
 can see it can cancel a waiting note; once a live or completed run carries it, it cannot be taken
 back. Cancellation keeps the history. Bots see notes sent by or to them; humans see their own
@@ -247,46 +291,48 @@ sent notes and notes between bots whose activity they may read.
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
 `hub task close <task-id> --note "Cancelled before work began"` under the normal task permissions, or choose
-**Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
-check can wake an idle bot after 30 minutes when no other work or Routine will move it.
+**Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. The
+stalled-task check leaves a deferred task alone until a run carries it.
 
 When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
-That reopening supersedes an earlier next-run choice. A later deferral, a stored resume condition,
+That reopening supersedes an earlier deferral. A later deferral, a stored resume condition,
 snooze or prerequisite still holds it. A run already carrying it finishes first; if a run picked it up
 and worked it after the reopening, the queued notice does not start duplicate work. Health shows
 `task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
 still apply, and only the requester, a person or BotOps may choose **Run now** early.
 
-The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
+The task shows where it stands, under **Deferred** on the task and as `deferred` in `hub task show`
+(`quiet`, its older name, is still sent for one release):
 
 - **Eligible**: the bot's next run carries it.
-- **Delivered**: a run carried it; which run and when are shown. **Deferred** is a delivered task whose run said
+- **Delivered**: a run carried it; which run and when are shown. **Held** is a delivered task whose run said
   when to pick it up again.
 - **Queued**: it has a run of its own, waiting or going (after **Run now**, or when its resume condition came true).
 
-A run that carries a task it will not do now says when to pick it up, rather than in its reply's words:
+A run that carries a task it will not do now says when to pick it up, rather than in its reply's words
+(`hub task later`; `hub task defer` and `hub_task_defer` are its older names and still work):
 
 ```bash
-hub task defer <task-id> --after <other-task>   # when that task is done or closed
-hub task defer <task-id> --at 2026-10-20T09:00Z # at a time
-hub task defer <task-id> --next-run             # with the next run, whatever starts it
-hub task defer <task-id> --handled              # this run is done with it for now (MCP: hub_task_defer)
+hub task later <task-id> --after <other-task>   # when that task is done or closed
+hub task later <task-id> --at 2026-10-20T09:00Z # at a time
+hub task later <task-id> --next-run             # with the next run, whatever starts it
+hub task later <task-id> --handled              # this run is done with it for now (MCP: hub_task_later)
 ```
 
 When the condition comes true the task gets one run of its own, as **Run now** gives it. A run that ends without
 working a carried task (a comment, a step, status or note change, a pull request, or `--handled`) and without a
 condition hands it back: it is eligible again and the next run carries it, with a line in its history. The bot's
-own task, or a person, may defer it (`POST /api/v2/tasks/{id}/defer`). The Health Monitor names a quiet task handed
+own task, or a person, may set it (`POST /api/v2/tasks/{id}/later`, once `/defer`). The Health Monitor names a deferred task handed
 to a run more than two hours ago and not worked since, with no condition (`quiet_unworked`).
 
 The equivalent API calls are internal routes (subject to change); use your own rights and an
 `Idempotency-Key` on writes:
 
 ```text
-POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide."}
+POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide.","defer_for":"4h"}
 GET  /api/v2/notes?to=bot:content&waiting=true
 POST /api/v2/notes/<note-id>/cancel    {}
-POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the weekly post","body":"Use the attached notes.","next_run":true}
+POST /api/v2/tasks                    {"owner":"bot:content","title":"Draft the weekly post","body":"Use the attached notes.","delivery":"defer"}
 ```
 
 **Where do files go?**

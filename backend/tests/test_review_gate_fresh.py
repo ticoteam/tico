@@ -1,5 +1,5 @@
 """All-green hosted checks at the current head count for the review gate only from a fresh GitHub read: a bot's
-question titled Review 1 or Review 2 reads GitHub as a review child does, and a review-gate hold on Blocked clears
+question titled Review 1 or Review 2 reads GitHub as a review child does, and a review-gate hold clears
 once a fresh read finds every hosted check passing (PR 1603)."""
 import uuid
 from types import SimpleNamespace
@@ -64,7 +64,7 @@ def held(api, task):
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['blocked_kind'] == 'gate'
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'Blocked'
+    assert current['step']['name'] == 'In Progress'
     return current
 
 
@@ -81,7 +81,7 @@ def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatc
     assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
     assert 'python' in response.text
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'Blocked' and 'CI failing' in current['blocked_reason']
+    assert current['step']['name'] == 'In Progress' and 'CI failing' in current['blocked_reason']
 
 
 def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
@@ -112,7 +112,7 @@ def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypat
         since = held_row['blocked_since']
     assert task_blocked.fresh(api.app.state.github_app, force=True) == []
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'Blocked' and current['blocked_since'] == since
+    assert current['step']['name'] == 'In Progress' and current['blocked_since'] == since
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cmo', check['id'], status='doing')
     current = get(api, 'tasks/' + task['id'])['task']
@@ -160,7 +160,7 @@ def test_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once
     service = api.app.state.github_app
     reads = github(api, monkeypatch, {**GREEN, 'check 3': result})
     assert task_blocked.fresh(service, force=True) == []
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'In Progress'
     count = len(reads)
     assert count and task_blocked.fresh(service, force=True) == []
     assert len(reads) == count, 'nothing the gate reads changed, so GitHub is not read again'
@@ -198,7 +198,7 @@ def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeyp
         return found
     monkeypatch.setattr(review_gate, 'snapshot', raced)
     assert task_blocked.fresh(service, force=True) == []
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'In Progress'
 
 
 def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatch):
@@ -227,6 +227,6 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
     passes = [task_blocked.fresh(service, force=True) for _ in range(2)]
     assert len(tried) == 2 and sorted(tried) == [False, True], 'one read a pass, and the failing hold does not take both'
     assert [second['id']] in passes
-    assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'Blocked'
+    assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'In Progress'
     broken.clear()          # GitHub answers again: the failed hold is read on the next pass and clears
     assert task_blocked.fresh(service, force=True) == [first['id']]

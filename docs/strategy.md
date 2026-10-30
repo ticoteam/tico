@@ -3,7 +3,7 @@
 **Strategy** (`#/strategy`) is where a team writes down the few bets it is making, keeps them honest against the
 market and the numbers, and makes the org chart and the goals follow from them. The page has one fixed shape: a
 summary every bot reads on every run, a vision, three to five **bets**, and four sections. The owner writes and
-publishes it; the [CEO Bot](ceo-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
+publishes it; the [Strategy Bot](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
 **Market views.** The Market tab shows the market in views: Players (the graph), Spend, Buyers, Value chain and
@@ -14,9 +14,9 @@ Three activities make one loop:
 
 | Activity | Who | What it produces |
 |---|---|---|
-| Craft the strategy | the owner, with the CEO Bot proposing | the Strategy page: summary, bets, four sections |
+| Craft the strategy | the owner, with the Strategy Bot proposing | the Strategy page: summary, bets, four sections |
 | Craft the market | the Librarian | the market graph and pages under the Market tab |
-| Keep it honest | the CEO Bot | a Decide card when a bet's wrong-if trips |
+| Keep it honest | the Strategy Bot | a Decide card when a bet's wrong-if trips |
 
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
@@ -75,7 +75,7 @@ may add to the draft one at a time; nothing is published or written by itself. T
 Blue Ocean, Scenarios, Seven Powers, Good Strategy, Pre-mortem and Positioning for the strategy, and Where to Play and
 Five Forces for the market. They are in [Lenses](lenses.md).
 
-The CEO Bot's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
+The Strategy Bot's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
 writing: what you make and who needs it; what you understand that others don't; how you make money and how much;
 who you fear and what stops a bigger company copying you; the wedge you enter through; the price that breaks; the
 request you turned down; the bet most people would call wrong. It is "in the style of", not theirs. The other guides
@@ -87,7 +87,7 @@ became lenses; `hub strategy guides` and `GET /api/v2/strategy/guides` are depre
 |---|---|---|---|
 | The owner | the draft and every version | yes, on the page or with `hub strategy draft` and `hub strategy bet` | yes, with a note |
 | Any human on the team | the published versions | no | no |
-| The CEO Bot | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
+| The Strategy Bot | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
 | Every other bot, and an external agent over MCP | the published versions (`hub strategy show`, `hub strategy summary`) | no | never |
 
 **The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
@@ -97,14 +97,14 @@ bot included, sees the published version. A bot never sees an unpublished "What 
 If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
 A failed bet move also reloads the list; check the order before trying again.
 
-The CEO Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
+The Strategy Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
 published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
-owner's level choice for the CEO Bot is on [Your CEO Bot](ceo-bot.md#the-three-levels).
+owner's level choice for the Strategy Bot is on [Your Strategy Bot](strategy-bot.md#the-three-levels).
 
-## What the CEO Bot does with it
+## What the Strategy Bot does with it
 
-Strategy is the CEO Bot's first job ([Your CEO Bot](ceo-bot.md#strategy)). Its playbooks are the product
+Strategy is the Strategy Bot's first job ([Your Strategy Bot](strategy-bot.md#strategy)). Its playbooks are the product
 (`templates/catalog/goal-manager/playbooks/`):
 
 - **Draft the strategy** (`draft-the-strategy.md`): a task "Draft the strategy", or the owner asking in chat. It reads
@@ -121,7 +121,7 @@ Strategy is the CEO Bot's first job ([Your CEO Bot](ceo-bot.md#strategy)). Its p
 
 The Librarian reads the strategy too: "Set up the market map" takes the team's website from `hub strategy show` when
 its task has none, and when an insight contradicts an active bet the daily curate routine says so in its report and
-sends the CEO Bot a note, so it can propose the entity as one of the bet's `cites`. The Librarian never writes the
+sends the Strategy Bot a note, so it can propose the entity as one of the bet's `cites`. The Librarian never writes the
 strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strategy Analyst template reads the bets from
 `hub strategy show` and plans each quarter against them; it keeps no strategy notes of its own.
 
@@ -140,7 +140,7 @@ Setup starts with **What are you building** and **Your bets** ([Onboarding](onbo
 3. **Org.** Recruit proposes groups and bots from the bets and names the bet each serves.
 4. Computer, agent and review as before. The screen after Create says **Strategy: a draft. Publish your strategy**
    (a link here) until a version is published, which ticks Getting started's `strategy` step; a published version
-   is when the CEO Bot suggests goals per bet. With a website, Create files the Librarian's market task.
+   is when the Strategy Bot suggests goals per bet. With a website, Create files the Librarian's market task.
 
 The wizard saves the website as `names.website` and the one line as `answers.building`
 ([Onboarding](onboarding.md#the-answers)), and `POST /api/v2/strategy/draft-from {url?, text?}` (owner only) starts
@@ -200,15 +200,15 @@ from it. Then:
 
 The server watches each active bet's wrong-if: a KPI reading crossing its threshold (from the KPI status pass), a
 change to a cited market entity or page (from market events), or a sentence bet's check-by date passing. When one
-trips, once per bet per version, it files a task for the CEO Bot, "Bet N: may be wrong", with the evidence.
+trips, once per bet per version, it files a task for the Strategy Bot, "Bet N: may be wrong", with the evidence.
 
-The CEO Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `hub market show <id>`, and the
+The Strategy Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `hub market show <id>`, and the
 goals linked to the bet, and writes **one Decide card** for the owner: a `strategy_draft` proposal that retires the
 bet, rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
-runs at every level: at Passive the server still files the task, and the CEO Bot only writes the card.
+runs at every level: at Passive the server still files the task, and the Strategy Bot only writes the card.
 
 The Librarian's [weekly briefing](market-briefing.md) feeds the same check from the other side: when it touches an active
-bet, the CEO Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
+bet, the Strategy Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
 [page monitors](market-watch.md) turn a competitor's changed pricing page into an insight; a bet trips on it only once the
 Librarian applies it to the entity.
 
@@ -262,5 +262,5 @@ rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `sou
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 
-Related: [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Librarian](librarian.md),
+Related: [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).

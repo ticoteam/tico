@@ -1,4 +1,4 @@
-/* ui/app/settings-release.js — Settings > Rules: the Releases and Task Manager cards, and the board's Release now
+/* ui/app/settings-release.js — Settings > System: the Releases, Task Manager and Screening cards, and the board's Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -172,4 +172,71 @@ async function renderTaskManagerCard() {
   // An install without the Task Manager answers 404; the card stays hidden.
   try { TASK_MANAGER_VIEW = await get('/v2/task-manager'); } catch { return; }
   if (Array.isArray(TASK_MANAGER_VIEW?.departments)) taskManagerPaint();
+}
+
+// Screening (backend/screening.py): a switch per detector (patterns, decision model), a mode per door outside text comes
+// in by, a Test of the built-in samples, and the newest holds and warnings. Owners and admins only; the card stays hidden for anyone else.
+let SCREENING_VIEW = null, SCREENING_TEST = null;
+const SCREENING_MODES = {off: 'Off', warn: 'Warn', hold: 'Hold'};
+const screeningScore = s => (typeof s === 'number' ? `${Math.round(s * 100)}%` : '—');
+function screeningSourceName(id) { return (SCREENING_VIEW?.sources || []).find(s => s.id === id)?.name || id || ''; }
+function screeningTestHTML(t) {
+  if (!t) return '';
+  const rows = t.results.map(r => `<div class="tm-row"><strong>${esc(r.name)}</strong>
+      <span class="muted">${r.attack ? 'Attack' : 'Safe'}</span>
+      <span class="tnum">${esc(r.action === 'pass' ? 'Pass' : SCREENING_MODES[r.action] || r.action)} ${screeningScore(r.score)}</span>
+      <span class="${r.ok ? 'muted' : 'err'}">${r.ok ? 'OK' : 'Wrong'}</span></div>`).join('');
+  return `<div class="tm-head"><strong class="tnum">${t.passed}/${t.total}</strong>${t.model ? '' : '<span class="muted">Patterns only</span>'}</div><div class="tm-list">${rows}</div>`;
+}
+function screeningRecentHTML(items) {
+  if (!items?.length) return '<p class="muted">No holds or warnings yet</p>';
+  return `<div class="tm-list">${items.map(r => `<div class="tm-row"><strong>${r.action === 'held' ? 'Held' : 'Warned'} · ${esc(screeningSourceName(r.source))}</strong>
+      <span class="tnum">${screeningScore(r.score)}</span>
+      <span class="tnum muted" title="${esc(fmt(r.at))}">${esc(ago(r.at))}</span>
+      ${r.task ? `<a href="#/task/${encodeURIComponent(r.task)}">Task</a>` : '<span class="muted">—</span>'}</div>`).join('')}</div>`;
+}
+function screeningHTML(v) {
+  const pick = s => `<select class="settings-inline-select" data-screening-mode="${esc(s.id)}" aria-label="${esc(s.name)}">${
+    (s.id === 'mail' ? ['off', 'warn'] : ['off', 'warn', 'hold']).map(m => `<option value="${m}"${v.modes[s.id] === m ? ' selected' : ''}>${SCREENING_MODES[m]}</option>`).join('')}</select>`;
+  const layers = v.layers || {patterns: true, model: true};
+  const layer = (id, name, extra = '') => `<div class="sb-row"><span>${name}</span><div class="rel-line"><label class="sysr-switch">${
+    peopleSwitch(`data-screening-layer="${id}"`, layers[id], false, name)}<span>${layers[id] ? 'On' : 'Off'}</span></label>${extra}</div><span></span></div>`;
+  return `<div class="sb-rows rel-rows">
+    ${layer('patterns', 'Patterns')}
+    ${layer('model', 'Model', layers.model && !v.model ? '<span class="muted">Decide is off</span>' : '')}
+    ${v.sources.map(s => `<div class="sb-row"><span>${esc(s.name)}</span>${pick(s)}<span></span></div>`).join('')}
+    <div class="sb-row"><span>Test</span><div class="rel-line"><button type="button" class="ghost" data-screening-test>Run test</button></div><span></span></div>
+  </div><p class="settings-cell-note" role="status" data-screening-status></p>
+  <div data-screening-results>${screeningTestHTML(SCREENING_TEST)}</div>
+  <h3>Recent</h3>${screeningRecentHTML(v.recent)}`;
+}
+function screeningStatus(text, failed) {
+  const box = $('#set-screening [data-screening-status]');
+  if (box) { box.textContent = text; box.classList.toggle('err', !!failed); }
+}
+function screeningPaint() {
+  const el = $('#set-screening'), card = $('#set-screening-card'); if (!el || !SCREENING_VIEW) return;
+  if (formBusy(el)) return;
+  card.hidden = false;
+  el.innerHTML = screeningHTML(SCREENING_VIEW);
+  el.onchange = async ev => {
+    const t = ev.target.closest('[data-screening-mode], [data-screening-layer]'); if (!t) return;
+    const body = t.dataset.screeningLayer ? {[t.dataset.screeningLayer]: t.checked} : {[t.dataset.screeningMode]: t.value};
+    try { SCREENING_VIEW = await put('/v2/screening', body); screeningPaint(); screeningStatus('Saved'); }
+    catch (e) { screeningPaint(); screeningStatus(e.message || 'Try again', true); }
+  };
+  el.onclick = async ev => {
+    const button = ev.target.closest('[data-screening-test]'); if (!button) return;
+    button.disabled = true; screeningStatus('Running…');
+    try {
+      SCREENING_TEST = await post('/v2/screening/test', {});
+      el.querySelector('[data-screening-results]').innerHTML = screeningTestHTML(SCREENING_TEST); screeningStatus('');
+    } catch (e) { screeningStatus(e.message || 'Try again', true); }
+    finally { if (button.isConnected) button.disabled = false; }
+  };
+}
+async function renderScreeningCard() {
+  if (!$('#set-screening')) return;
+  try { SCREENING_VIEW = await get('/v2/screening'); } catch { return; }   // not an admin: the card stays hidden
+  if (SCREENING_VIEW?.modes) screeningPaint();
 }

@@ -22,10 +22,10 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "strategy", "lens", "market", "listening", "tool", "routine", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+               "proposal", "strategy", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "rule", "service-key"]
+               "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -264,7 +264,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
-        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings")):
+        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings",
+                                              "/waits", "/snooze")):
             return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
 
@@ -361,6 +362,19 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
         self.assertEqual(posted, {"approval": "ap-1"})
 
+    def test_task_wait_and_snooze_send_their_note(self):
+        def last(method, path):
+            return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+        pr = "pr:https://github.com/acme/app/pull/9"
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", pr, "--note", "Check the migration", env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/waits"),
+                         {"on": pr, "remove": False, "note": "Check the migration"})
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", "release:v0.3.64", env=self.env)[0], 0)
+        self.assertNotIn("note", last("POST", "/api/v2/tasks/T1/waits"), "no note is sent when none is given")
+        self.assertEqual(run_hub("task", "snooze", "T1", "--until", "2026-11-02", "--note", "Ask the landlord",
+                                 env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"until": "2026-11-02", "note": "Ask the landlord"})
+
     def test_roadmap_commands_send_what_their_tools_send(self):
         def last(method, path):
             return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
@@ -438,12 +452,14 @@ class BotSetup(unittest.TestCase):
                 if self.github:
                     raise self.github
                 return {"repository": "Acme/bot-" + body["slug"], "empty": True}
-            return {"routine": {"id": path.split("/")[1] + ":" + body["key"]}}
+            return {"id": "auto_" + body["name"]}
 
         def get(self, path, **query):
             self.seen.append(path)
             if path == "config":
                 return dict(NAMES)
+            if path == "me":            # BotOps; a person's turn seeds the template's automations as that person
+                return {"actor": "bot:botops", "kind": "botops"}
             if path == "setup":
                 return json.loads(json.dumps(self.record))
             if path == "templates" and self.cards is not None:
@@ -570,6 +586,29 @@ def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
     assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
 
 
+def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_bot_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'turns-at-once', 'ops'], ['bot', 'turns-at-once', 'ops', 'unlimited'],
+                 ['bot', 'turns-at-once', 'ops', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert 'limit' not in sent[0]
+    assert [row['limit'] for row in sent[1:]] == [None, 3]
+
+
+def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['computer', 'turns-at-once', 'rig-1', 'automatic'], ['computer', 'turns-at-once', 'rig-1', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert [row['limit'] for row in sent] == [None, 3]
+    assert all(row['computer'] == 'rig-1' for row in sent)
+
+
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
     from clients import remotecli
     calls = []
@@ -611,11 +650,6 @@ WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with 
     ["trigger", "replay", "orders", "d1"], ["trigger", "recover", "orders", "--since", "6"],
     ["trigger", "relay", "create", "orders"], ["trigger", "relay", "rotate", "orders"], ["trigger", "relay", "delete", "orders"],
     ["relay", "status"], ["relay", "set", "orders", "--wake", "off"],
-    ["rule", "list", "--scope-kind", "team"],
-    ["rule", "set", "--scope-kind", "team", "--event", "webhook.received", "--then", "wake",
-     "--params", '{"bot":"ops","text":"x"}'],
-    ["rule", "update", "rul_1", "--then", "note", "--expected-revision", "2"], ["rule", "delete", "rul_1"],
-    ["rule", "suggestions"], ["rule", "apply", "sug_1"], ["rule", "dismiss", "sug_1"],
     ["webhook", "list"], ["webhook", "create", "--name", "A", "--url", "https://hooks.example.com/x"],
     ["webhook", "show", "a"], ["webhook", "update", "a", "--name", "B"], ["webhook", "rotate", "a"],
     ["webhook", "pause", "a"], ["webhook", "resume", "a"], ["webhook", "delete", "a"],

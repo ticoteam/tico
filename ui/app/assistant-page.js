@@ -6,30 +6,20 @@
 // #/assistant is laid out like a bot page: the same top line (no goal), thread and composer (ui/app/chat.js,
 // ui/app/pill.js), and on a wide window the same dense right rail (Active, Updates, Files, Recurring) when the
 // assistant has any of them; with none, the chat alone. GET /v2/assistant gives your own Assistant room with its
-// messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of the assistant bot, shown
-// live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). An Assistant room takes text only,
-// so its composer has no attach button. For the owner the page is their CEO Bot chat, by its name, with no "Assistant"
-// wording (ui/app/state.js meCeo), and it takes files like any bot chat: attach, drop or paste a screenshot
-// (/v2/uploads/assistant/messages). Their own Assistant chats from before stay readable under "Earlier chats".
+// messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of
+// the assistant bot, shown live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). An
+// Assistant room takes text only, so its composer has no attach button. The page is the same for everyone, the owner
+// included: the owner's earlier chat with the Strategy Bot, from before it became a helper, stays readable under
+// "Earlier chats" (GET /v2/assistant `earlier`), above the Assistant thread with its own older messages.
 // "What it has learned" at the top opens ui/app/learned.js.
 const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
-let ASSISTANT_PILL = null, ASSISTANT_DRAFT = '', ASSISTANT_LOAD = 0;
-// "Ask the Assistant…" in search: the words go into the box, now if the page is open, else when it opens.
-function assistantPrefill(text) {
-  const box = ASSISTANT_PILL?.el?.isConnected ? pq(ASSISTANT_PILL, '.p-text') : null;
-  if (!box) { ASSISTANT_DRAFT = text; return; }
-  box.value = text;
-  box.dispatchEvent(new Event('input'));
-  box.focus();
-}
-// `files`: the server says this chat is the CEO Bot's (GET /v2/assistant `ceo`), the only one whose uploads it takes.
-function assistantPill(files) {
+let ASSISTANT_PILL = null, ASSISTANT_LOAD = 0;
+function assistantPill() {
   const slug = myChatBot();
-  if (ASSISTANT_PILL?.slug === slug && ASSISTANT_PILL.attach === files) return ASSISTANT_PILL;
+  if (ASSISTANT_PILL?.slug === slug) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
-  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files, send: assistantSend,
-    label: meCeo() ? `Message ${myChatName()}` : 'Message the Assistant', placeholder: 'Ask anything…'}));
-  ASSISTANT_PILL.attach = files;
+  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files: false, send: assistantSend,
+    label: 'Message the Assistant', placeholder: 'Ask anything…'}));
   return ASSISTANT_PILL;
 }
 const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints" aria-label="Suggestions">${
@@ -55,7 +45,6 @@ async function pageAssistant() {
     <section class="rail-sec bot-active" id="asst-active" aria-labelledby="asst-active-h" hidden><h2 class="rail-h" id="asst-active-h">Active</h2><div class="tpane"></div></section>
     <section class="rail-sec bot-latest" id="asst-latest" aria-label="Updates" hidden></section>
     <section class="rail-sec bot-files" id="asst-files" aria-label="Files" hidden></section>
-    <section class="rail-sec bot-recurring" id="asst-recurring" aria-label="Routines" hidden></section>
   </aside></div>`;
   void assistantRail(slug, load);
   let d;
@@ -65,16 +54,14 @@ async function pageAssistant() {
     return;
   }
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT) return;
-  // Earlier chats are stored history: readable while the CEO Bot is paused too.
+  // Earlier chats are stored history: readable while the Assistant is off too.
   assistantEarlier(d.earlier, load);
   if (!d.available) {
     window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
   }
-  const files = !!d.ceo && d.bot === slug, P = assistantPill(files), thread = $('#conv-thread');
+  const P = assistantPill(), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
-  if (files) chatDropZone($('#pane-chat'), P);
-  if (ASSISTANT_DRAFT) { assistantPrefill(ASSISTANT_DRAFT); ASSISTANT_DRAFT = ''; }
   bindChatSwipe(thread);
   thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });
   void v2ChatLoad(slug, {conv: {id: d.room_id}, messages: d.messages, execution: d.execution, nextBefore: d.next_before,
@@ -102,14 +89,15 @@ async function assistantSend(P, text) {
   finally { P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P); }
 }
 
-// "Earlier chats": the owner's own Assistant chats from before the CEO Bot took its place, read-only, newest page first
-// and older pages on request. Loaded when opened; nothing is sent from here.
+// "Earlier chats": the owner's earlier chat with the Strategy Bot, by its name, read-only, newest page first and older
+// pages on request. Loaded when opened; nothing is sent from here.
 function assistantEarlier(earlier, load) {
   const box = $('#asst-earlier');
   if (!box) return;
   box.hidden = !earlier?.room_id;
   if (box.hidden) return;
   const list = box.querySelector('.asst-earlier-list');
+  box.querySelector('summary').textContent = 'Earlier chats with ' + (earlier.name || 'Strategy Bot');
   let before = null, busy = false;
   const line = m => {
     const mine = m.from_actor === 'human:' + (S.me?.id || '');
@@ -135,7 +123,7 @@ function assistantEarlier(earlier, load) {
   list.onclick = ev => { if (ev.target.closest('[data-earlier-more]')) void more(); };
 }
 
-// The rail: the assistant's active tasks, its latest update, its files and its routines, each only when it has
+// The rail: the assistant's active tasks, its latest update and its files, each only when it has
 // some, as on a bot page (ui/app/bot-page.js); the whole rail only when one of them shows and the window is wide.
 function assistantRailFit() {
   const rail = $('#pane-tasks');
@@ -147,15 +135,9 @@ function assistantRailFit() {
 }
 let ASSISTANT_RAIL_WATCH = false;
 async function assistantRail(slug, load) {
-  const rail = $('#pane-tasks'), e = S.emps.find(x => x.name === slug);
+  const rail = $('#pane-tasks');
   if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.js loads after this file
   new MutationObserver(assistantRailFit).observe(rail, {subtree: true, attributes: true, attributeFilter: ['hidden']});
-  if (e) {
-    const rec = $('#asst-recurring');
-    rec.innerHTML = botRecurringHTML(e, slug);
-    bindRecurringRail(rec);
-    rec.hidden = !rec.innerHTML;
-  }
   window.botFiles?.mount($('#asst-files'), {slug, get, esc, openFile: openFileLink});
   const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);

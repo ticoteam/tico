@@ -2,8 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Incoming (backend/triggers.py): an address a sender calls. Routines on `webhook.<id>` and rules on `webhook.received`
-// listen to it. Outgoing (backend/webhooks.py): endpoints Tico posts its events to. Through Tico Gateway
+// Incoming (backend/triggers.py): an address a sender calls; automations with a webhook trigger listen to it. Outgoing (backend/webhooks.py): endpoints Tico posts its events to. Through Tico Gateway
 // (backend/hook_relay.py): a second address for an incoming webhook, held by Tico Gateway, for a server the internet
 // cannot reach. A secret is shown once, right after it is made, and is gone from the next screen.
 const WH_PRESETS = [['none', 'None'], ['hmac', 'HMAC'], ['github', 'GitHub'], ['standard', 'Standard Webhooks'], ['stripe', 'Stripe'], ['slack', 'Slack']];
@@ -18,7 +17,8 @@ const WH_TABS = [['incoming', 'Incoming'], ['outgoing', 'Outgoing'], ['gateway',
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
 const WH = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS = null;
-// The event catalog (backend/event_catalog.py): the rules editor, the routine editor and the endpoint picker read it.
+let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when the tab opens
+// The event catalog (backend/event_catalog.py): the endpoint picker reads it.
 let EVENT_TYPES = [], EVENT_TYPES_P = null;
 function eventTypesLoad() {
   EVENT_TYPES_P ||= get('/v2/event-types').then(d => (EVENT_TYPES = d.items || [])).catch(e => { EVENT_TYPES_P = null; throw e; });
@@ -109,8 +109,8 @@ function whSubmit(dialog, fn) {
 
 // ---------------------------------------------------------------------------------------------------------- Incoming
 async function whTriggersFresh() {
-  ROUTINE_TRIGGERS = (await get('/v2/triggers', {fresh: true})).triggers || [];
-  return ROUTINE_TRIGGERS;
+  WH_TRIGGERS = (await get('/v2/triggers', {fresh: true})).triggers || [];
+  return WH_TRIGGERS;
 }
 function whCountsHTML(t) {
   return `<span class="tnum">${t.received_24h} in 24h</span>${t.refused_24h ? ` · <span class="wh-bad tnum">${t.refused_24h} refused</span>` : ''}`;
@@ -131,27 +131,13 @@ async function whTriggers(el, run) {
   el.querySelector('[data-wh-new]').onclick = () => whTriggerDialog(null);
   el.querySelectorAll('[data-wh-open]').forEach(b => { b.onclick = () => { WH.trigger = b.dataset.whOpen; WH.shown = null; void renderSettingsWebhooks(); }; });
 }
-// Who a rule wakes: its own bot on a bot row, else the bot it names. A note does not wake.
-function whRuleWakes(r) {
-  if (r.then === 'wake') return r.scope_kind === 'bot' ? r.scope_id : r.params?.bot || '';
-  if (r.then !== 'action') return '';
-  return r.params?.action === 'wake_bot' ? r.params.bot || '' : r.params?.action === 'create_task' ? r.params.owner || '' : '';
-}
-function whRuleWords(r) {
-  const types = ruleList(r.when?.type);
-  return `<b>WHEN</b> ${types.length ? 'type ' + esc(types.join(' or ')) : 'any call'} <b>THEN</b> ${esc(ruleThenWords(r))}`;
-}
 async function whTriggerDetail(el, run) {
   const id = WH.trigger, path = `/v2/triggers/${encodeURIComponent(id)}`;
-  const [list, log, rules] = await Promise.all([whTriggersFresh(), get(path + '/deliveries', {fresh: true}),
-    get('/v2/rules?event=webhook.received&limit=200', {fresh: true}).catch(() => ({rules: []}))]);
+  const [list, log] = await Promise.all([whTriggersFresh(), get(path + '/deliveries', {fresh: true})]);
   if (run !== WH_RUN) return;
   const t = list.find(x => x.id === id);
   if (!t) { WH.trigger = ''; return whTriggers(el, run); }
   const mine = whMine(t), may = mine || (t.builtin && S.me?.role === 'owner');
-  const heard = (rules.rules || []).filter(r => !r.built_in && r.event === 'webhook.received' && (!r.when?.trigger || ruleList(r.when.trigger).includes(id)));
-  const routineBots = new Set(t.routines.map(r => r.bot));
-  const twice = [...new Set(heard.filter(r => r.enabled !== false).map(whRuleWakes).filter(b => b && routineBots.has(b)))];
   const rows = log.deliveries || [];
   const actions = mine ? `<button class="ghost" type="button" data-wh-edit>Edit</button><button class="ghost" type="button" data-wh-rotate>New secret</button>
       <button class="ghost" type="button" data-wh-sign>Signing</button><button class="ghost" type="button" data-wh-delete>Delete</button>`
@@ -169,19 +155,13 @@ async function whTriggerDetail(el, run) {
       <dt>24h</dt><dd>${whCountsHTML(t)}</dd>
     </dl>
     <h4 class="wr-sub">Listeners</h4>
-    ${twice.length ? `<p class="wh-warn" role="note" data-wh-twice>${esc(twice.map(empName).join(', '))}: a routine and a rule both act on every call.</p>` : ''}
-    <div class="wh-listeners" data-wh-listeners>${t.routines.map(r => `<div class="wh-li"><span class="pill">Routine</span>
-        <a href="#" data-wh-routine="${esc(r.id)}" data-bot="${esc(r.bot)}">${esc(r.title)}</a><span class="muted">${esc(empName(r.bot))}</span></div>`).join('')}
-      ${heard.map(r => `<div class="wh-li${r.enabled === false ? ' wr-off' : ''}"><span class="pill">Rule</span>
-        <span class="wr-text">${whRuleWords(r)}</span><span class="muted">${esc(ruleScopeWords(r))}</span></div>`).join('')}
-      ${t.routines.length || heard.length ? '' : '<span class="muted">None</span>'}</div>
-    ${rulesMayAdd() ? '<div class="row wh-li-add"><button class="ghost" type="button" data-wh-add-rule>Add rule</button></div>' : ''}
+    <div class="wh-listeners" data-wh-listeners><a href="${AUTOMATIONS}?q=${encodeURIComponent(t.name)}" data-wh-automations>Automations</a></div>
     <h4 class="wr-sub">Recent calls</h4>
     ${mine && rows.some(r => whRefused(r) && r.stored && !/\(recovered\)$/.test(r.reason || '')) ? `<div class="row wh-li-add"><button class="ghost" type="button" data-wh-recover
       title="Check the kept refused calls again with the current secret and preset">Recover refused calls</button></div>` : ''}
     ${rows.length ? `<div class="wh-calls" data-wh-calls>${rows.map(r => {
       const [tone, word] = WH_OUTCOMES[r.outcome] || ['', r.outcome];
-      const what = whRefused(r) ? esc(r.reason) : `${whPlural(r.tasks, 'task')} · ${whPlural(r.rules || 0, 'rule')}`;
+      const what = whRefused(r) ? esc(r.reason) : whPlural(r.tasks, 'task');
       return `<div class="wh-call" data-wh-call="${esc(r.delivery)}">
         <span class="wh-time" title="${esc(r.received_at)}">${esc(ago(r.received_at))}</span>
         <span class="wh-type">${r.type ? `<code>${esc(r.type)}</code>` : '<span class="muted">No type</span>'}</span>
@@ -205,15 +185,6 @@ async function whTriggerDetail(el, run) {
       void renderSettingsWebhooks();
     } catch (e) { toast(e.message, true); b.disabled = false; }
   });
-  on('[data-wh-add-rule]', async () => {
-    const dialog = await ruleEditor(null, {event: 'webhook.received', when: {trigger: id}});
-    dialog?.addEventListener('close', () => void renderSettingsWebhooks());
-  });
-  el.querySelectorAll('[data-wh-routine]').forEach(a => { a.onclick = async ev => {
-    ev.preventDefault();
-    const r = routineById(a.dataset.whRoutine) || ((await get(`/v2/bots/${encodeURIComponent(a.dataset.bot)}/routines`).catch(() => ({}))).routines || []).find(x => x.id === a.dataset.whRoutine);
-    if (r) routineEditorOpen({...r, employee: a.dataset.bot});
-  }; });
   el.querySelectorAll('[data-wh-call]').forEach(row => {
     const delivery = row.dataset.whCall;
     const view = row.querySelector('[data-wh-payload]'), again = row.querySelector('[data-wh-replay]');
@@ -222,7 +193,7 @@ async function whTriggerDetail(el, run) {
       again.disabled = true;
       try {
         const r = (await post(`${path}/deliveries/${encodeURIComponent(delivery)}/replay`, {})).replay;
-        toast(`Ran again: ${whPlural(r.tasks, 'task')}, ${whPlural(r.rules || 0, 'rule')}`);
+        toast(`Ran again: ${whPlural(r.tasks, 'task')}`);
         void renderSettingsWebhooks();
       } catch (e) { toast(e.message, true); again.disabled = false; }
     };
@@ -319,8 +290,7 @@ async function whRotate(t) {
   } catch (e) { toast(e.message, true); }
 }
 async function whTriggerDelete(t) {
-  const using = t.routines.length ? ` ${whPlural(t.routines.length, 'routine')} will stop running on it.` : '';
-  if (!confirm(`Delete “${t.name}”?${using}`)) return;
+  if (!confirm(`Delete “${t.name}”?`)) return;
   try {
     await post(`/v2/triggers/${encodeURIComponent(t.id)}/delete`, {});
     Object.assign(WH, {trigger: '', shown: null});

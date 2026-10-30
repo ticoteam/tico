@@ -41,7 +41,7 @@ TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
                                 "slack_ts", "created", "updated"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
-# credential_grants, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
+# credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
@@ -235,8 +235,9 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHERE attempt_id={q(who.attempt_id)}) "
                          "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
     else:
-        shared = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden
-                  and rooms.shared_member(c, auth, who.actor, row["slug"])]
+        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
+        member = rooms.shared_member_bots(c, auth, who.actor, visible)
+        shared = [slug for slug in visible if slug in member]
         room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
                     "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
         first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
@@ -611,6 +612,15 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             @property
             def read_cache(self):
                 return conn.read_cache
+
+            # The store's shared row cache (row_clock.parties and access rows). This connection only reads and never
+            # publishes, so it shares rows at the clock its own snapshot reads, like a pooled read connection does.
+            row_cache = getattr(c, "row_cache", None)
+            write_transaction = False
+
+            @property
+            def provenance_changes(self):
+                return conn.total_changes
 
             @property
             def in_transaction(self):

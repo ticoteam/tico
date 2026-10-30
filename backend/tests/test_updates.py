@@ -375,6 +375,26 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     assert own["id"] == week["id"] and own["drafted_by"] is None and own["edited_by"] is None
 
 
+def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
+    """BotOps, the Strategy Bot, the Librarian and the Task Manager get no node (so no empty "No update yet" row) in
+    either kind or scope; a bot below one hangs from the next node up, and an update one posted stays in the feed."""
+    from backend.tests.test_bot_contact import bot
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
+    for slug, name in (("botops", "BotOps"), ("goal-manager", "Strategy Bot"), ("librarian", "Librarian"),
+                       ("task-manager", "Task Manager")):
+        bot(api, slug, name, reports_to="human:ana")
+    bot(api, "scout", "Scout", reports_to="librarian")
+    with api.app.state.store.transaction() as c:
+        posted = updates.post(c, "librarian", "- Mapped the market", day="2026-09-29")
+    keys = lambda nodes: [k for n in nodes for k in (n["key"], *keys(n["children"]))]
+    for path in ("updates/tree", "updates/tree?scope=all", "updates/tree?kind=weekly&scope=all"):
+        tree = get(api, path)
+        assert not {"b:botops", "b:goal-manager", "b:librarian", "b:task-manager"} & set(keys(tree["roots"])), path
+        assert "b:scout" in [n["key"] for r in tree["roots"] for n in r["children"]], path + ": under the owner"
+        assert "Mapped the market" not in json.dumps(tree), path
+    assert posted["id"] in [u["id"] for u in get(api, "updates")["updates"]], "its own update stays in the feed"
+
+
 def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_alert(api, monkeypatch):
     from backend.tests.test_bot_contact import bot
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")

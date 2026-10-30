@@ -35,22 +35,29 @@ TERMINAL = ("done", "closed", "declined")
 
 def own_run(c, auth, attempt_id):
     """Whether this BotOps run is its own work, with its own wider rights (`Auth.botops_manages`): only a keeper wake
-    from BotOps' own schedule, the daily update or a timed routine only the owner (or the product) wrote. Everything
-    else the keeper wakes it with carries words someone else wrote: a service key's or a watcher's task, a stopped job's
-    request, a routine BotOps set itself while it worked for someone, a task someone commented on."""
+    from BotOps' own schedule, the daily update or a timed automation only the owner (or the product) wrote (a converted
+    routine too, when the routine was theirs). Everything else the keeper wakes it with carries words someone else wrote: a service key's or
+    a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
+    commented on."""
     from .store import H
     turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
                      (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
     msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
-    if not msg or msg["from_actor"] != H.KEEPER:
+    refs = (msg or {}).get("refs") or {}
+    # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
+    if not msg or msg["from_actor"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
         return False
-    refs = msg.get("refs") or {}
+    if msg["from_actor"] != H.KEEPER and not refs.get("automation"):
+        return False
     if any(refs.get(key) for key in OTHERS_WORDS):
         return False
     task_id = H.message_task_id(msg)
     if not task_id:
-        return msg["kind"] == "notice" and refs.get("wake") == "update"
-    return _owners_routine_task(c, auth, H.task(c, task_id))
+        return msg["from_actor"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
+    task = H.task(c, task_id)
+    if refs.get("automation"):
+        return _owners_automation_task(c, auth, task, refs)
+    return _owners_routine_task(c, auth, task)
 
 
 def _owners_routine_task(c, auth, task):
@@ -68,22 +75,69 @@ def _owners_routine_task(c, auth, task):
     schedule = c.execute("SELECT o.schedule_id FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id "
                          "WHERE o.task_id=? AND o.outcome<>'event' AND s.bot=? LIMIT 1",
                          (task["id"], H.FLEET_MAINTAINER)).fetchone()
-    if not schedule:
+    if not schedule or not _owners_routine(c, auth, schedule["schedule_id"]):
         return False
+    return _untouched(c, task, keeper)
+
+
+def _owners_automation_task(c, auth, task, refs):
+    """A task one of BotOps' timed automations opened, whose every version and change only the owner (or the product)
+    wrote, not through the Assistant or a token. A converted routine counts only when the routine itself was the
+    owner's (`_owners_routine`): one from a bot.yaml, or one BotOps set while it worked for someone, never does."""
+    from .store import H
+    botops = "bot:" + H.FLEET_MAINTAINER
+    automation_id = str(refs.get("automation") or "")
+    if not task or task["owner"] != botops or task["requester"] not in (H.KEEPER, botops):
+        return False
+    row = c.execute("SELECT owner, flow_json, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
+                    (automation_id,)).fetchone()
+    if not row or row["owner"] != botops or row["trigger_type"] != "schedule" \
+            or refs.get("trigger_source") != "automation:" + automation_id:
+        return False
+    # The run that opened this task is that automation's own, from its schedule or a Run now, not a chained event.
+    run = c.execute("SELECT 1 FROM automation_runs WHERE id=? AND automation_id=?",
+                    (str(refs.get("automation_run") or ""), automation_id)).fetchone()
+    if not run or refs.get("automation_chain"):
+        return False
+    source = (H._json(row["flow_json"], {}) or {}).get("source")
+    if isinstance(source, dict) and source.get("kind") == "routine":
+        found = c.execute("SELECT bot FROM schedules WHERE id=?", (source.get("id"),)).fetchone()
+        if not found or found["bot"] != H.FLEET_MAINTAINER or not _owners_routine(c, auth, source["id"]):
+            return False
+    actors = {r[0] for r in c.execute("SELECT actor FROM automation_versions WHERE automation_id=?", (automation_id,))}
+    for r in c.execute("SELECT actor, via FROM audit_log WHERE object=?", ("automation:" + automation_id,)):
+        if r["via"] == "assistant" or str(r["via"] or "").startswith("token:"):
+            return False
+        actors.add(r["actor"])
+    if not actors or any(a != H.KEEPER and not _is_owner(c, auth, a) for a in actors):
+        return False
+    return _untouched(c, task, task["requester"])
+
+
+def _owners_routine(c, auth, schedule_id):
+    """A routine created through the API and since changed only by the owner (or the product)."""
+    from .store import H
     writers = c.execute("SELECT action,actor,detail_json FROM events WHERE target=? "
-                        "AND action IN ('routine.created','routine.updated')", (schedule["schedule_id"],)).fetchall()
+                        "AND action IN ('routine.created','routine.updated')", (schedule_id,)).fetchall()
     if not any(w["action"] == "routine.created" for w in writers):
         return False                # a routine from a bot.yaml: whoever pushed that file wrote it
     for w in writers:
-        if w["actor"] == keeper:
+        if w["actor"] == H.KEEPER:
             continue
         if H._json(w["detail_json"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
             return False
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor<>? LIMIT 1",
-                 (task["id"], keeper)).fetchone():
+    return True
+
+
+def _untouched(c, task, writer):
+    """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
+    from .store import H
+    botops = "bot:" + H.FLEET_MAINTAINER
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
+                 (task["id"], writer, H.KEEPER)).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?) "
-                     "LIMIT 1", (task["id"], keeper, botops)).fetchone()
+    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?,?) "
+                     "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
     return not said
 
 
@@ -146,7 +200,7 @@ def _routes(*rows):
 DO = _routes(
     ("POST", r"bots"), ("POST", r"bots/register"),
     ("POST", rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
-             rf"onboarded|goals|updates|routines|tools|quarantine/clear|limit/retry)"),
+             rf"onboarded|goals|updates|tools|quarantine/clear|limit/retry)"),
     ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"), ("DELETE", rf"bots/{_S}/tools/{_S}"),
     # Copying a bot or a skill, bringing a copy up to date and suggesting its changes back: each is checked with the requester's own
     # rights on the bots it names (backend/bot_copy.py).
@@ -159,7 +213,11 @@ DO = _routes(
     ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
     ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
     ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
-    ("POST", rf"routines/{_S}"), ("POST", rf"routines/{_S}/(delete|run)"),
+    # Automations (backend/automations.py): the route checks the person's place on the org chart.
+    # Deleting one is CONFIRM below.
+    ("POST", r"automations"), ("PATCH", rf"automations/{_S}"),
+    ("POST", rf"automations/{_S}/run"), ("POST", rf"automations/{_S}/versions/{_S}/restore"),
+    ("DELETE", rf"automations/{_S}/versions/{_S}"), ("PATCH", rf"inboxes/{_S}"),
     ("POST", rf"settings/history/{_S}/undo"),
     ("POST", rf"settings/transitions/{_S}/(apply-without-checkpoint|cancel)"),
     # Goals and KPIs: a goal's or KPI's own rules decide who may change what.
@@ -173,6 +231,8 @@ DO = _routes(
     # checks); the computer removes it once the bot is idle.
     ("POST", rf"tasks/{_S}/worktrees(/attach)?"), ("DELETE", rf"tasks/{_S}/links/{_S}"),
     ("POST", r"docs"), ("PATCH", rf"docs/{_S}"), ("POST", rf"docs/{_S}/restore"),
+    # A page's cadence, data date, replacement, archive or restore: the route checks the person may manage its bot.
+    ("PATCH", rf"pages/{_S}"),
     ("POST", r"linked-docs"), ("PATCH", rf"linked-docs/{_S}"),
     ("POST", rf"meetings/{_S}/delete"), ("POST", "meetings/granola/sync"),
     ("POST", rf"meetings/{_S}/review"), ("POST", "meetings/review"), ("POST", "meetings/settings"),
@@ -208,11 +268,12 @@ DO = _routes(
     # BotOps' own right to manage every trigger while it works for someone.
     ("POST", r"triggers"), ("POST", rf"triggers/{_S}"), ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
     ("POST", rf"triggers/{_S}/deliveries/.+/replay"), ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
-    # Task types and tags (movers, a tag's owner), the release schedule and Release now, the team's run budget and
-    # Tico's own jobs (an owner or an admin): each route checks the person.
+    # Task types and tags (movers, a tag's owner), the release schedule and Release now, screening's modes and Test,
+    # the team's run budget and Tico's own jobs (an owner or an admin): each route checks the person.
     ("POST", r"task-types"), ("POST", rf"task-types/{_S}(/delete)?"), ("DELETE", rf"task-types/{_S}"),
     ("POST", r"tags"), ("POST", rf"tags/{_S}(/instances)?"),
     ("PATCH", r"release-schedule"), ("POST", r"release/now"),
+    ("PUT", r"screening"), ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
 )
@@ -229,11 +290,13 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 CONFIRM = _routes(
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
-    ("POST", rf"routines/{_S}/delete"),
+    ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),
     ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
+    # Deleting a file for good removes its bytes: always the owner's own tap.
+    ("DELETE", rf"files/{_S}"),
     ("PUT", r"directory"), ("POST", r"directory/sync"), ("POST", r"directory/preview"),
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
@@ -255,9 +318,9 @@ ADMIN_ONLY = _routes(
 # Tico, and a computer's one-time code (shown on the card once they tap, never in BotOps' answer).
 ALWAYS = _routes(("POST", r"access/owner"), ("POST", r"system/update"), ("POST", r"enrollments"))
 # Owner-only: a member or an admin is told so at once, not handed a card that fails (the Gateway connection included).
-OWNER_ONLY = _routes(("POST", r"access/owner")) + GATEWAY
+OWNER_ONLY = _routes(("POST", r"access/owner"), ("DELETE", rf"files/{_S}")) + GATEWAY
 # Team rules that set BotOps' own powers: a change to one of them is always the person's own tap.
-OWN_POWER_RULES = ("botops_direct", "botops_manages_bots")
+OWN_POWER_RULES = ("botops_direct", "botops_manages_bots", "managers_manage_reports")
 RULES = re.compile(API + r"access/rules")
 
 # Hand a secret's value back to whoever calls: BotOps acting for a person is refused, with where the person does it.
@@ -329,6 +392,16 @@ def owner_only(method, path, body=None):
             or (method == "PUT" and bool(RULES.fullmatch(path)) and own_powers(body)))
 
 
+AUTOMATION_DELETE = (re.compile(API + rf"automations/({_S})"), re.compile(API + rf"automations/({_S})/delete"))
+
+
+def automation_deleted(method, path):
+    """The automation id a delete names (DELETE automations/{id}, POST automations/{id}/delete), else None."""
+    path, method = normalize(path) or "", str(method or "").upper()
+    found = AUTOMATION_DELETE[0 if method == "DELETE" else 1].fullmatch(path) if method in ("DELETE", "POST") else None
+    return found.group(1) if found else None
+
+
 def own_powers(body):
     return isinstance(body, dict) and any(body.get(name) is not None for name in OWN_POWER_RULES)
 
@@ -366,6 +439,8 @@ SUMMARIES = [
     ("DELETE", re.compile(API + r"providers/gateway"), "Turn off the Tico AI Gateway (its saved key is forgotten)"),
     ("POST", re.compile(API + r"providers/gateway/automatic"), "Connect the Tico AI Gateway automatically again"),
     ("PUT", re.compile(API + rf"usage/(limits(/{_S})?|pools/.+)"), "Change a spending limit"),
+    ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
+    ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
 ]
 
 
@@ -393,6 +468,16 @@ def carried_lends(method, path):
     """Whether a carried request makes this call with the person's rights (CARRIED)."""
     path, method = normalize(path), str(method).upper()
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in CARRIED)
+
+
+# A manager bot's report, made, archived or restored by BotOps on the manager's ask (backend/report_managers.py).
+LIFECYCLE = _routes(("POST", r"bots"), ("POST", rf"bots/{_S}/archive"), ("POST", rf"bots/{_S}/restore"))
+
+
+def lifecycle_call(method, path):
+    """Whether this call creates, archives or restores a bot: the routes a manager bot's ask may reach through BotOps."""
+    path, method = normalize(path), str(method).upper()
+    return bool(path) and any(m == method and p.fullmatch(path) for m, p in LIFECYCLE)
 
 
 def admin_only(method, path):

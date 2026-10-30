@@ -1,6 +1,6 @@
-/* ui/styles/getting-started.css — After the wizard: tour and BotOps line.
+/* ui/styles/getting-started.css — After the wizard: the tour.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* After the wizard: the tour and the BotOps line under the org list (ui/getting-started.js) */
+/* After the wizard: the tour under the org list (ui/getting-started.js) */
 .help-actions{display:flex;align-items:center;gap:var(--s4);margin-top:var(--s4);flex-wrap:wrap}
 .gs-field{display:grid;gap:3px;margin:0 0 8px;max-width:520px}
 .gs-field[hidden]{display:none}
@@ -8,10 +8,10 @@
 .gs-field input:not([type=checkbox]):not([type=radio]),.gs-field textarea{width:100%}
 .gs-card-actions{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s2)}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.gs-org-hint{margin:6px 10px 2px;font-size:var(--t-sm);line-height:1.45;color:var(--muted)}
+.gs-org-hint{margin:6px 10px 2px;font-size:var(--t-sm);line-height:var(--lh);color:var(--muted)}
 .gs-org-hint a{color:var(--ink);font-weight:600}
 .hl-page{max-width:760px}
-.hl-page h2{font-size:var(--t-lg);margin:var(--s5) 0 var(--s2)}
+.hl-page h2{font-size:var(--t-lg);margin:var(--s5) 0 var(--s2);letter-spacing:var(--track-tight)}
 .hl-list,.hl-computers,.hl-bots,.hl-models,.hl-notes{list-style:none;margin:0;padding:0}
 .hl-notes li{padding:3px 0;font-size:var(--t-base)}
 .hl-check{display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--line)}
@@ -47,9 +47,9 @@
 .gs-form form{padding:var(--s4);display:grid;gap:var(--s3)}
 .gs-form header{display:flex;align-items:center;justify-content:space-between}
 .gs-form p[role=status]{margin:0;min-height:1em}
-.gs-link{display:inline-block;padding:6px 10px;border:1px solid var(--line);border-radius:6px;color:var(--ink);font-size:var(--t-base)}
+.gs-link{display:inline-block;padding:5px 10px;line-height:20px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-base)}
 .gs-tour{position:fixed;inset:0;z-index:2000}
-.gs-tour-hole{position:fixed;border-radius:8px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);outline:2px solid var(--accent);pointer-events:none}
+.gs-tour-hole{position:fixed;border-radius:8px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);outline:var(--focus-ring);pointer-events:none}
 .gs-tour-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:var(--s4);border-radius:12px;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 12px 40px rgba(0,0,0,.35)}
 .gs-tour-card h2{font-size:var(--t-md)}
 .gs-tour-count{margin:0 0 2px;font-size:var(--t-sm)}

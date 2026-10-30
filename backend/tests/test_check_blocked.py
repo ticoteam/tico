@@ -75,7 +75,7 @@ def test_waiting_qa_check_blocks_its_ticket_and_resumes_it(api):
         row = H.task(c, ticket["id"])
         assert row["status"] == "waiting" and row["blocked_kind"] == "check"
         assert row["blocked_reason"] == "QA blocked: GitHub refused the remote test run, waiting on Ana"
-        assert H._one(c, "SELECT name FROM task_steps WHERE id=?", (row["step_id"],))["name"] == "Blocked"
+        assert row["step_id"] == in_qa, "a hold keeps the ticket at its check step"
         assert len(check_notices(c, ticket["id"])) == 1
         assert not [m for m in to(c, "bot:cmo", ticket["id"]) if "QA blocked" in m["body"]], "not Head of Engineering"
         from backend import task_blocked

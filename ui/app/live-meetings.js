@@ -14,9 +14,9 @@ function liveMeetingsStop() {
 }
 window.liveMeetingsStop = liveMeetingsStop;
 
-async function pageLiveMeetings() {
+async function pageLiveMeetings(selected = '') {
   meetStop();
-  const state = LIVE_MEETINGS = {list: [], selected: '', detail: null, sources: new Map(), cursor: {},
+  const state = LIVE_MEETINGS = {list: [], selected, detail: null, sources: new Map(), cursor: {},
     poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: '',
     listVersion: 0, detailVersions: {}, chatSending: new Set()};
   $('#main').innerHTML = `<section class="live-page">
@@ -30,7 +30,7 @@ async function pageLiveMeetings() {
       <section class="live-detail"><div class="empty">Connect or choose a live meeting.</div></section></div>
     <div class="live-status" role="status" aria-live="polite"></div>
   </section>`;
-  $('#live-back').onclick = () => pageNotes();
+  $('#live-back').onclick = () => { location.hash = MEETINGS; if (S.route === MEETINGS) void pageNotes(); };
   $('#live-connect').onsubmit = event => {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     void liveConnect(state, {title: form.get('title'), reply_cap: Number(form.get('reply_cap')),
@@ -94,7 +94,7 @@ function livePaintList(state) {
   const host = $('.live-list');
   if (!state.list.length) { host.innerHTML = '<div class="empty">No connected meetings.</div>'; return; }
   host.innerHTML = state.list.map(meeting => `<button type="button" class="live-list-item${meeting.id === state.selected ? ' selected' : ''}" data-live-id="${esc(meeting.id)}">
-    <b>${esc(meeting.title)}</b><span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
+    <b>${esc(meeting.title)}</b>${meeting.client === 'tico-recorder' ? '<small>From Tico Recorder</small>' : ''}<span class="live-state ${esc(meeting.state)}">${esc(meeting.state)}</span>
     <small>${meeting.seq || 0} transcript chunks · ${meeting.bots?.length || 0} bots</small></button>`).join('');
   host.querySelectorAll('[data-live-id]').forEach(button => button.onclick = () => {
     state.selected = button.dataset.liveId; state.detail = null; livePaintList(state); void liveLoadDetail(state, state.selected);
@@ -165,7 +165,7 @@ function livePaintDetail(state, detail) {
   const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.bot)}${me && active ?
     ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
-    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2><span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
+    <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
       ${controls && detail.state === 'paused' ? '<button class="ghost" data-live-control="resume">Resume</button>' : ''}
       ${controls && active ? '<button class="danger" data-live-control="end">End</button>' : ''}

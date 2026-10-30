@@ -3,18 +3,17 @@
 A lens is one YAML file in `backend/lenses/`: a few steps asked one at a time (text, a list, scores, a choice), what the
 result shows (sections and one chart), and what data would sharpen it. A run is one row of `lens_runs`: the answers,
 then one model call with no runner (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own key; the
-job and its stale rule are backend/strategy_setup.py's), then a validated result: a summary, sections, a chart,
-findings tied to bets, the assumptions the model made for skipped steps, proposed changes to the strategy draft, and
-what would sharpen it. The model's JSON is never trusted: every part is clipped and checked, and a part that fails is
-dropped, not kept.
+job and its stale rule are backend/strategy_setup.py's), then a validated result: a summary, sections, a chart, findings
+tied to bets, the assumptions the model made for skipped steps, proposed changes to the strategy draft, and what would
+sharpen it. The model's JSON is never trusted: every part is clipped and checked, and a part that fails is dropped, not
+kept.
 
-Who: the owner starts a run on the published version or, on their own click, on the draft. The CEO Bot may start one;
-the Librarian may start a market one. A run on the draft is the owner's alone (like the draft); every other run is
+Who: the owner starts a run on the published version or, on their own click, on the draft. The Strategy Bot may start
+one; the Librarian may start a market one. A run on the draft is the owner's alone (like the draft); every other run is
 readable by every signed-in reader, bots included, since it only discusses what is published. Changes go to the draft
-through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the CEO Bot ran the
-lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
-card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables.
-"""
+through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the Strategy Bot ran
+the lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
+card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables."""
 import functools
 import json
 import logging
@@ -34,7 +33,7 @@ from .store import Problem
 log = logging.getLogger("tico.lenses")
 
 LENSES_DIR = Path(__file__).resolve().parent / "lenses"
-CEO = "bot:goal-manager"
+STRATEGY_BOT = "bot:goal-manager"
 LIBRARIAN = "bot:librarian"
 STALE_S = 600               # a run going this long was cut off by a restart
 PROMPT_CHARS = 24_000       # the whole model input
@@ -282,15 +281,17 @@ def read(c, who, run_id):
 # ----------------------------------------------------------------------------- starting a run
 def start(c, who, settings, store, lens_id, answers, on="published"):
     """A new run, `running` (the caller spawns `run` once this commits) or `no_model` at once, with the answers saved.
-    The owner starts any; the CEO Bot any strategy or market lens on the published version; the Librarian a market one."""
+    The owner starts any; the Strategy Bot any strategy or market lens on the published version; the Librarian a market
+    one."""
     from . import goal_routes
     the = lens(lens_id)
     if not the:
         raise Problem("not_found", f"There is no lens {lens_id}", 404)
     owner = goal_routes.company_editor(who)
     market = the["applies_to"] == "market"
-    if not (owner or who.actor == CEO or (market and who.actor == LIBRARIAN)):
-        raise Problem("forbidden", "Only the owner, the CEO Bot and, for a market lens, the Librarian run a lens", 403)
+    if not (owner or who.actor == STRATEGY_BOT or (market and who.actor == LIBRARIAN)):
+        raise Problem("forbidden", "Only the owner, the Strategy Bot and, "
+                                   "for a market lens, the Librarian run a lens", 403)
     on_draft = on == "draft" and not market
     if on_draft and not owner:
         raise Problem("forbidden", "Only the owner runs a lens on the draft", 403)
@@ -670,8 +671,8 @@ def run(store, run_id):
 
 
 def finish(c, run_id, raw):
-    """Check what the model said and save it. A run cut off before it answered writes nothing. A CEO Bot run with at
-    least one change files one `strategy_draft` proposal; an owner's never does."""
+    """Check what the model said and save it. A run cut off before it answered writes nothing. A Strategy Bot run with
+    at least one change files one `strategy_draft` proposal; an owner's never does."""
     row = _row(c, run_id)
     if not row or row["status"] != "running":
         return None
@@ -682,7 +683,7 @@ def finish(c, run_id, raw):
     if result is None:
         return _finish(c, row, "failed", error={"code": "empty", "message": "Nothing usable came back; run it again"})
     proposal_id = None
-    if row["created_by"] == CEO and result["changes"]:
+    if row["created_by"] == STRATEGY_BOT and result["changes"]:
         proposal_id = _propose(c, row, result)
     _finish(c, row, "done", result=result, proposal_id=proposal_id)
 
@@ -720,13 +721,13 @@ def merged(c, changes):
 
 
 def _propose(c, row, result):
-    """The CEO Bot's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when the
-    proposal is refused (the run is kept without one)."""
+    """The Strategy Bot's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when
+    the proposal is refused (the run is kept without one)."""
     from . import goals as G
     payload = merged(c, result["changes"])
     if not payload:
         return None
-    the = lens(row["lens"])
+    lens(row["lens"])
     payload = {**payload, "source": "lens", "lens": row["lens"]}
     c.execute("SAVEPOINT lens_proposal")
     try:
@@ -827,7 +828,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/lenses/{lens_id}/runs", status_code=202)
     def lens_run_start(request: Request, lens_id: str, body: M.LensRun):
-        """The owner, the CEO Bot and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
+        """The owner, the Strategy Bot and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
         Answers at once with the run (`running`; `no_model` when no model provider is set up, the answers saved)."""
         who = request.state.identity
         reader(who)

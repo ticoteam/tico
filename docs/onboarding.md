@@ -2,7 +2,7 @@
 
 The first time the owner opens a new environment, the app is a wizard at `#/welcome`: say what the team is building
 and confirm its first bets (a strategy draft), name the team, say what it does, build its team chart group by group, add a computer (a Linux Docker runner or a Mac), optionally connect your own
-external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the CEO Bot, and none of them can be archived.
+external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the Strategy Bot, and none of them can be archived.
 **Setup picks the chart, not the bots:** those built-ins are the only bots on day one, and they work at once. Every other role
 you picked is laid out as a **Recruiting** seat with its job description and reporting line: no bot, repository, computer slot
 or BotOps task until someone picks a bot for it ([A bot's stages](#a-bots-stages)).
@@ -39,6 +39,9 @@ Health ("Company file from setup not imported") until it is over: an import work
 team is set up on the welcome page, the server starts with the file fixed back to the one already applied or with no
 company file at all, or the owner presses **Dismiss** on the welcome page. A server start with the same broken file
 shows it again.
+
+**Unreleased:** A role's optional `team` (the name of its group) puts it in a group of that name: one group per name, made
+from the file, or the group that already has it. Without one, a role goes in its template's group.
 
 **Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
 it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
@@ -182,7 +185,7 @@ bets, `bet` is null and the answer is as before.
 **Create my team** (`POST /api/v2/setup/complete`) writes to the server only, in one request (a chart of 25 bots takes a fraction of a
 second). It reaches no computer.
 
-- BotOps, the assistant, the Librarian and the CEO Bot, so they exist before anything is addressed to them, each `planned`
+- BotOps, the assistant, the Librarian and the Strategy Bot, so they exist before anything is addressed to them, each `planned`
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
@@ -249,8 +252,8 @@ before, and no Active bot changes stage.
 
 ### Re-org suggestions
 
-Ask the CEO Bot to compare the company chart with one of Tico's published starter charts. It uses the bundled public models
-only; its suggestions do not read another company's bots or data. The CEO Bot can propose adding Recruiting seats as one
+Ask the Strategy Bot to compare the company chart with one of Tico's published starter charts. It uses the bundled public models
+only; its suggestions do not read another company's bots or data. The Strategy Bot can propose adding Recruiting seats as one
 confirmation card. No seat is added until the owner confirms, and the server checks the owner's authority when it applies the
 whole change. Members can add seats under themselves or someone below them; only the owner can add seats elsewhere.
 
@@ -280,8 +283,8 @@ The wizard is done once, by the owner. Everything after it is per human, so a te
 joins later gets the same help without the owner doing anything.
 
 ```
-wizard  ->  tour (once)  ->  "Talk to BotOps" line
-             replay: ?        until a bot of your own exists
+wizard  ->  tour (once)  ->  "Ask to add or edit your bots" line
+             replay: account  until a bot of your own exists
 ```
 
 ### The tour
@@ -290,14 +293,14 @@ Six spotlight steps: Updates, Tasks, your bots (the team list), Docs, Strategy, 
 on, **Skip** or **Esc** closes it, and focus stays inside it. On a phone it opens the navigation drawer
 and shows the same steps. It never opens over the wizard: the owner starts it with **Show me around** on the screen after Create, or it opens
 by itself once on their next visit (anyone else: their first visit). It can be replayed
-from **?** (How Tico works) with **Take the tour**. That it was seen is kept per human.
+from the account menu with **Take the tour**. That it was seen is kept per human.
 
 ### Bots
 
 There is no checklist, no card above any page and no card in the sidebar. While there are no bots of your own (the Create your
-first bot step is not done), one line of muted text sits under the team list: "Talk to BotOps to add or edit your bots",
-with **BotOps** linking to its chat (`#/bot/botops`). It shows only to humans who may add bots (the owner and bot administrators,
-`can_build`), and has nothing to close. Asking BotOps in chat is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
+first bot step is not done), one line of muted text sits under the team list: "Ask to add or edit your bots",
+with **Ask** opening the Assistant panel over the page. It shows only to humans who may add bots (the owner and bot administrators,
+`can_build`), and has nothing to close. Asking the Assistant (it hands the request to BotOps) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting
 an external agent you already have is the **Connect an external agent** button in the sidebar footer.
 
 ### An empty Market page
@@ -377,7 +380,7 @@ An unattended setup task prepares and checks the repository, then reports readin
 path and any missing Tool or Credential to the owner. It leaves activation to the owner in that case.
 An existing repository is checked and updated for the requested work, rather than overwritten.
 
-## The assistant, BotOps, the Librarian and the CEO Bot are built in
+## The assistant, BotOps, the Librarian and the Strategy Bot are built in
 
 Every team gets all four, and none is a choice: their cards are `required: true` in the wizard, so the wizard
 builds them whatever else is ticked, and they become active once a computer is enrolled ([Activating](#activating)).
@@ -394,14 +397,15 @@ whatever it says.
 The third, the [Librarian](librarian.md#built-in), answers questions from the team's docs. A team from before it existed gets it on
 update, without a click, once a model is chosen and a computer is enrolled; until then its owner gets **Turn on the Librarian** in Ask the Librarian.
 
-The fourth, the [CEO Bot](goals-and-kpis.md#the-ceo-bot), keeps the KPIs and sets goals' automatic colours. It is
+The fourth, the [Strategy Bot](goals-and-kpis.md#the-strategy-bot), keeps the KPIs and sets goals' automatic colours. It is
 built the same way (a required, bootstrap card; a team from before it existed gets it on update once a model is chosen
 and a computer is enrolled). Its routines start paused: the server arms the daily KPI pass once the first KPI exists, and the
-weekly goals review (the Monday note) stays paused until the owner raises the CEO Bot above **Passive** ([Your CEO Bot](ceo-bot.md)).
+weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
+**Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
-Settings > Bots, and one click on **Turn on Assistant** brings the same bot back with its history (or adds it from its
+Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
 template if it is missing), places it on BotOps' computer and activates it. From then on it cannot be archived again.
 While an assistant is off, or paused, what used to fall back to it goes to BotOps or to a human:
 
@@ -444,18 +448,18 @@ and creates a planned bot that waits for its setup conversation. External servic
 Open a seat from its row on the team chart (`person_search` icon, **Recruiting**) or right after Add bot makes it.
 `backend/recruiting.py` does the work; the page is `ui/app/recruit.js`.
 
-- **The job description.** When the owner opens a seat whose description no person wrote, the CEO Bot gets one task,
+- **The job description.** When the owner opens a seat whose description no person wrote, the Strategy Bot gets one task,
   "Draft the job description: <title>", and answers it with `hub seat draft <seat> --text "..."` (or `--file`; MCP
-  `hub_seat_draft`, `POST /api/v2/seats/{id}/draft`, the CEO Bot's own credential only). The seat shows "The CEO Bot is
+  `hub_seat_draft`, `POST /api/v2/seats/{id}/draft`, the Strategy Bot's own credential only). The seat shows "The Strategy Bot is
   drafting…" and fills in when the draft lands. Until then, or for anyone else, it shows the chart's text. Anyone who may
   change the seat edits the description (`PATCH /api/v2/seats/{id}`); from then on the words are theirs: a draft arriving
-  later is refused and its task declined, and nobody asks the CEO Bot again. Opening is `POST /api/v2/seats/{id}/open`;
-  reading is `GET /api/v2/seats/{id}`, with `draft.state` (`none`, `drafting`, `drafted`), `description_by` (`ceo_bot`,
+  later is refused and its task declined, and nobody asks the Strategy Bot again. Opening is `POST /api/v2/seats/{id}/open`;
+  reading is `GET /api/v2/seats/{id}`, with `draft.state` (`none`, `drafting`, `drafted`), `description_by` (`strategy_bot`,
   `chart` or `person`) and `can_edit`.
 - **Recruit** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
   task: up to three Tico catalog templates matched against the title and description, each with a one-line reason, and
   exactly one marked **Recommended**. Each carries the model the template suggests among the providers the team has turned
-  on, and the list of those models to choose another. Built-in bots (BotOps, the CEO Bot, the message bot) are never
+  on, and the list of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never
   candidates.
 - **The pick** (`POST /api/v2/seats/{id}/hire`, `{template, model}`) creates the bot through the same checks as any new bot:
   named after the seat, in the seat's place on the chart (`reports_to`) and group, owned by the person who picked, with the
@@ -505,7 +509,7 @@ Tico ships 98 role templates, by group, each with a card. `templates/catalog/` a
   text file before the first commit, and in the card's own words wherever a human reads it.
 - `required: true` means the wizard always includes it. `bootstrap: true` means the computer
   materializes it itself and no BotOps task is filed for it. Both are true for all four Built-in bots:
-  Assistant, BotOps, Librarian and CEO Bot.
+  Assistant, BotOps, Librarian and Strategy Bot.
 - `recommend_when` says who a card is for. The team builder reads only `sells_to_businesses` and `sells_to_consumers` (a business-only card is suggested last to a team that sells only to consumers); the rest
   (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox` card (the message bot) needs a
   human's mailbox chosen whenever it is switched on.

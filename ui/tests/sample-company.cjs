@@ -11,7 +11,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
-  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'CEO Bot'],
+  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'Strategy Bot'],
   ['librarian', 'Librarian']].map(([slug, display_name]) => ({slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));

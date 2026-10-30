@@ -1,6 +1,6 @@
 """A bot reads the runs of the bots below it on the org chart (`Auth.run_conversation`): their routine, task and
 wake-up runs, with cost and steps. A person's chat with a report stays theirs, and peers and reports see nothing."""
-from backend import rooms, routines
+from backend import rooms
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 
@@ -22,9 +22,12 @@ def finish(api, machine, attempt):
 
 
 def routine_run(api, machine, slug):
-    """One routine occurrence, opened as the scheduler does: it lands in the operator's chat room."""
-    with api.app.state.store.transaction() as c:
-        routines.open_task(c, api.app.state.auth, {"id": "s-" + slug, "bot": slug}, "Sweep", "Check prices.", H.now())
+    """One run of an automation (what a routine became) that gives `slug` a turn: a task of its own."""
+    aid = post(api, "automations", {"name": "Sweep", "owner": "person:ana", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
+                                               "prompt": "Check prices."}]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    api.app.state.store.automations.drain()
     return finish(api, machine, claim(api, machine, slug))
 
 

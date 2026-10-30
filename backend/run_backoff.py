@@ -289,8 +289,8 @@ def reset(c, bot):
 
 def fast(row, now):
     """Whether the run failed within FAST seconds of starting (its claim, for a run that never reported a start)."""
-    began = H.parse_ts(row["started"] or row["created"])
-    return bool(began) and (H.parse_ts(now) - began).total_seconds() < FAST
+    began, at = H.parse_ts(row["started"] or row["created"]), H.parse_ts(now)
+    return began is not None and at is not None and (at - began).total_seconds() < FAST
 
 
 def failed(c, settings, row, body, aid, now=None):
@@ -325,20 +325,37 @@ def failed(c, settings, row, body, aid, now=None):
 def hold(c, settings, bot, fails, kind, error, now):
     """Hold the bot: one Needs-you item for its operator, and an event. Its queued work is kept, and its first try is
     due PROBE_FIRST from now."""
+    from . import reconnects
+    # A sign-in a standing login card on its task already puts in front of the person who fixes it is that card, not
+    # a second item (backend/reconnects.py): the hold still stands, Health names it, and the card's fix releases it.
+    task_id = None if kind == SIGN_IN and reconnects.bot_open(c, bot, "login:") else _item(c, settings, bot, fails, kind, error)
+    c.execute("UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
+              (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot))
+    H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
+    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
+           H.KEEPER, revision=now)
+
+
+def _item(c, settings, bot, fails, kind, error):
     from . import bot_stops
     name = bot_stops.name_of(c, bot)
-    task_id = bot_stops.raise_item(
+    return bot_stops.raise_item(
         c, settings, bot, f"{name} stopped after {fails} failed runs in a row",
         f"Tico stopped {name}: its last {fails} runs each failed within a minute, with {CLASS_WORDS[kind]}.\n\n"
         f"Last error: {error or 'none was reported'}\n\n"
         f"Tico tries one run of {name} on its own, first in {PROBE_FIRST // 60} minutes and then at growing intervals, and "
         f"releases it when one completes. To start it sooner, check its last runs in Runs, fix the cause and release "
         f"{name} (Settings > Bots > {name}, or `hub bot release {bot}`). Everything queued for it is kept.")
-    c.execute("UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
-              (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot))
-    H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
-    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
-           H.KEEPER, revision=now)
+
+
+def raise_hold_item(c, settings, bot):
+    """A held bot whose login card stood for its item (backend/reconnects.py) lost that card unfixed: its own item."""
+    state = get(c, bot)
+    if state.get("held_at") and not state.get("task_id"):
+        task_id = _item(c, settings, bot, int(state.get("fails") or 0), state.get("error_class") or OTHER, state.get("error"))
+        c.execute("UPDATE run_backoff SET task_id=? WHERE bot=?", (task_id, bot))
+        return task_id
+    return None
 
 
 def release(c, actor, bot):
@@ -368,10 +385,10 @@ def words(c, bot):
     state = get(c, bot)
     name = bot_stops.name_of(c, bot)
     if state.get("held_at"):
-        cause = CLASS_WORDS.get(state.get("error_class")) or CLASS_WORDS[OTHER]
+        cause = CLASS_WORDS.get(state.get("error_class") or "") or CLASS_WORDS[OTHER]
         return (f"Tico stopped {name}: its last {state.get('fails')} runs failed within a minute ({cause}). "
                 "Tico tries one run on its own at growing intervals and releases it when one completes. "
                 "Check its last runs, or release it now.")
-    left = max(1, int((H.parse_ts(state.get("wait_until")) - H.parse_ts(H.now())).total_seconds())) \
-        if state.get("wait_until") and H.parse_ts(state["wait_until"]) else 0
+    until, at = H.parse_ts(state.get("wait_until")), H.parse_ts(H.now())
+    left = max(1, int((until - at).total_seconds())) if until is not None and at is not None else 0
     return f"{name} is pausing {left} s after a failed run before it tries again" if left else ""

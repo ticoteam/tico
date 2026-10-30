@@ -299,10 +299,13 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             elif pr.get("mergeable") is True or pr.get("mergeable_state") == "clean":
                 mergeable = "clean"
         match = PR_LINK.match(url)
-        c.execute("UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated=?,"
+        # A GitHub event is activity for the stale-PR find; an internal refresh of the PR's state is not.
+        activity = H.now() if action != "refresh" else link.get("activity_at")
+        c.execute("UPDATE task_links SET state=?,mergeable=?,repo=?,number=?,branch=?,updated=?,activity_at=?,"
                   "pr_sha=coalesce(?,pr_sha),pr_merged_at=coalesce(?,pr_merged_at) WHERE id=?",
                   (state, mergeable, match.group(1) + "/" + match.group(2) if match else None,
                    int(match.group(3)) if match else pr.get("number"), (pr.get("head") or {}).get("ref"), H.now(),
+                   activity,
                    pr.get("merge_commit_sha") if state == "merged" else None,
                    pr.get("merged_at") or H.now() if state == "merged" else None, link["id"]))
         author = str((pr.get("user") or {}).get("login") or "").lower()
@@ -687,6 +690,8 @@ def pr_signal(c, event, payload):
             wake = action == "created" and not _own_comment(c, task, payload, "comment", detail)
             item = f"{fields['pending_comments']} review comments on {label}"
             batch, who_key = "review", "comment"
+        if event in ("pull_request_review", "pull_request_review_comment"):
+            fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
         record_health_wait({**link, **fields}, detail)
         fields.update(detail_json=json.dumps(detail), updated=H.now())

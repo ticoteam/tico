@@ -4,18 +4,18 @@
 #team-add-menu button:hover,#team-add-menu button:focus-visible{background:var(--surface2)}
 #team-add-menu button[hidden]{display:none}
 .tmodal.team-add-dialog{width:min(440px,calc(100vw - 32px))}
-.team-add-dialog h2{margin:0;font-size:var(--t-lg);color:var(--ink)}
+.team-add-dialog h2{margin:0;font-size:var(--t-lg);color:var(--ink);letter-spacing:var(--track-tight)}
 .team-add-dialog .tmodal-body{padding-top:16px}
 .team-add-choices{display:grid;gap:10px}
 .team-add-choices button{display:grid;gap:6px;text-align:left;white-space:normal;padding:14px;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:8px;cursor:pointer}
 .team-add-choices button:hover{border-color:var(--accent)}
-.team-add-choices span{font-size:var(--t-sm);font-weight:400;color:var(--muted);line-height:1.5}
+.team-add-choices span{font-size:var(--t-sm);font-weight:400;color:var(--muted);line-height:var(--lh)}
 #team-add-human label{display:block;margin-bottom:14px}
 #team-add-human input{display:block;width:100%;margin-top:6px}
-#team-add-human p{font-size:var(--t-sm);line-height:1.5}
+#team-add-human p{font-size:var(--t-sm);line-height:var(--lh)}
 /* Recruiting seats on the org chart, and the seat dialog (ui/app/recruit.js). */
 #tree .node.seat{color:var(--muted)}
-#tree .seat-avatar{width:var(--size);height:var(--size);font-size:var(--size);line-height:1;flex:none;color:var(--muted)}
+#tree .seat-avatar{width:var(--size);height:var(--size);font-size:var(--size);line-height:var(--lh-none);flex:none;color:var(--muted)}
 #tree .tree-recruiting{margin-left:auto;font-size:var(--t-xs,11px);color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:0 6px;flex:none}
 .recruit-seat .tmodal-head{gap:8px;align-items:center}
 .pill.recruiting{border:1px dashed var(--line);color:var(--muted);background:none}
