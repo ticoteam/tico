@@ -16,7 +16,7 @@ use tico_recorder_native::{
     live::LiveSync,
     network::{self, Tico, Transcriber},
     settings::{self, AppLock, Settings},
-    signin,
+    signin, speech,
     store::{self, Recording, Store, Summary},
     stream,
     workspace::{Context, Item},
@@ -56,7 +56,15 @@ enum AddStep {
 /// How long Send waits for the last words of a stopped recording.
 const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
-const BACKGROUND: [&str; 6] = ["live", "calendar", "autodraft", "task", "ask", "roster"];
+const BACKGROUND: [&str; 7] = [
+    "live",
+    "calendar",
+    "autodraft",
+    "task",
+    "ask",
+    "roster",
+    "speech",
+];
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
 pub const DRAFT_INTERVAL: Duration = Duration::from_secs(10);
@@ -227,6 +235,8 @@ pub struct SettingsForm {
     pub streaming_model: String,
     /// A new xAI key for live text; empty keeps the saved one.
     pub xai_key: String,
+    /// "tico" (Your Tico) or "own" (Own keys); None leaves it as it is.
+    pub speech_source: Option<String>,
 }
 
 pub struct Recorder {
@@ -305,10 +315,17 @@ pub struct Recorder {
     notice_dismissed: String,
     /// Whether the window is on screen; level updates stop while it is not.
     pub visible: bool,
+    /// When the default Tico was last asked what speech it can handle, and which Tico it was.
+    services_at: Option<(Instant, String)>,
 }
 
 impl Recorder {
     pub fn new(store: Store, lock: Option<AppLock>, demo: bool) -> anyhow::Result<Self> {
+        // An install that already has its own keys keeps using them until the person chooses
+        // Your Tico. The demo library never reads the keychain.
+        if !demo && let Err(error) = speech::settle(store.root(), speech::own_keys) {
+            eprintln!("Speech source unchanged: {error:#}");
+        }
         let config = settings::read(store.root())?;
         let records = store.summaries()?;
         let (tx, rx) = mpsc::channel();
@@ -394,6 +411,7 @@ impl Recorder {
             inputs: Default::default(),
             notice_dismissed: String::new(),
             visible: true,
+            services_at: None,
         };
         if !demo {
             app.job("devices", || Ok(json!(capture::sources()?)));
@@ -647,6 +665,31 @@ impl Recorder {
             Ok(json!({"view":tico.sync_live(&store, &id)?}))
         });
     }
+    /// Asks the default Tico what speech it handles: when it is connected or changes, and every
+    /// few minutes while speech goes through it.
+    fn refresh_services(&mut self) {
+        if self.demo || speech::source(&self.config) != speech::TICO {
+            return;
+        }
+        let Some(destination) = speech::tico(&self.config).cloned() else {
+            return;
+        };
+        if self
+            .services_at
+            .as_ref()
+            .is_some_and(|(at, id)| *id == destination.id && at.elapsed() < speech::FRESH)
+        {
+            return;
+        }
+        if self.job("speech", move || Ok(json!(speech::refresh(&destination)?))) {
+            self.services_at = Some((
+                Instant::now(),
+                speech::tico(&self.config)
+                    .map(|row| row.id.clone())
+                    .unwrap_or_default(),
+            ));
+        }
+    }
     fn sync_calendar(&mut self) {
         self.last_calendar = Instant::now();
         let config = self.config.clone();
@@ -674,7 +717,7 @@ impl Recorder {
         let (config, store) = (self.config.clone(), self.store.clone());
         let id = self.meeting.clone().unwrap_or_default();
         self.job("ask", move || {
-            let key = settings::secret("transcription")?;
+            let (config, key) = speech::assist(&config)?;
             assist::ask(&store, &config, &key, &id, &question)?;
             Ok(json!({}))
         });
@@ -735,7 +778,7 @@ impl Recorder {
         }
         let (config, store) = (self.config.clone(), self.store.clone());
         self.job_for("autodraft", Some(id.clone()), move || {
-            let key = settings::secret("transcription")?;
+            let (config, key) = speech::assist(&config)?;
             Ok(json!({"added":assist::draft(&store, &config, &key, &id)?}))
         });
     }
@@ -797,6 +840,12 @@ impl Recorder {
                     if here && let Some(id) = &self.meeting {
                         self.context.chat = self.store.context(id).unwrap_or_default().chat;
                     }
+                    continue;
+                }
+                "speech" => {
+                    // Workers waiting for the Tico look again; the window shows the new state.
+                    self.store.poke();
+                    self.bump();
                     continue;
                 }
                 "autodraft" => {
@@ -873,6 +922,7 @@ impl Recorder {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
                             self.keep_destination();
+                            self.services_at = None;
                             self.tico_url.clear();
                             self.say(value["message"].as_str().unwrap_or_default());
                         }
@@ -880,6 +930,7 @@ impl Recorder {
                             self.config =
                                 settings::read(self.store.root()).unwrap_or(self.config.clone());
                             self.keep_destination();
+                            self.services_at = None;
                             self.say("Settings saved");
                             if !self.config.calendar_connection.is_empty() {
                                 self.sync_calendar();
@@ -989,6 +1040,7 @@ impl Recorder {
         {
             self.sync_calendar();
         }
+        self.refresh_services();
         self.auto_draft();
         // Added rows go once Tico's people list shows them (or after a while, if it never does).
         let shown = self.people_listed();
@@ -1700,7 +1752,11 @@ impl Recorder {
         } else {
             self.destination.clone()
         };
-        if let Some(on) = form.streaming.filter(|on| *on != self.streaming()) {
+        if let Some(source) = form.speech_source {
+            config.speech_source = source.trim().into();
+        }
+        // Unset follows the source, so compare against the source being saved.
+        if let Some(on) = form.streaming.filter(|on| *on != self.streaming_for(&config)) {
             config.streaming = Some(on);
         }
         config.streaming_model = match form.streaming_model.trim() {
@@ -1827,6 +1883,8 @@ impl Recorder {
             "sending": self.send_step().map(|(id, label)| json!({"id": id, "label": label})),
             "profile": synthetic_input(),
             "notice": self.input_notice().filter(|notice| *notice != self.notice_dismissed),
+            "speech": speech::view(&self.config, self.key_saved("transcription"),
+                self.streaming() && self.key_saved(stream::KEY_NAME)),
         })
     }
     fn library_view(&self) -> Value {
@@ -1909,6 +1967,8 @@ impl Recorder {
             "streaming": self.streaming(),
             "streaming_model": self.config.streaming_model,
             "xai_saved": self.key_saved(stream::KEY_NAME),
+            "speech_source": speech::source(&self.config),
+            "tico": speech::tico(&self.config).map(|row| row.name.clone()),
         })
     }
     /// Whether a keychain credential exists; never its value. The demo library (and every test)
@@ -1918,9 +1978,12 @@ impl Recorder {
     }
     /// `stream::enabled`, without the keychain read in the demo library.
     fn streaming(&self) -> bool {
-        self.config
-            .streaming
-            .unwrap_or_else(|| self.key_saved(stream::KEY_NAME))
+        self.streaming_for(&self.config)
+    }
+    fn streaming_for(&self, config: &Settings) -> bool {
+        config.streaming.unwrap_or_else(|| {
+            speech::source(config) == speech::TICO || self.key_saved(stream::KEY_NAME)
+        })
     }
     fn transcript_view(&mut self) -> Value {
         let Some(record) = self

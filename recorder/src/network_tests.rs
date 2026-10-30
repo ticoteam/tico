@@ -575,3 +575,154 @@ fn streamed_text_never_reaches_tico() {
         assert!(!body.contains("streamed"), "streamed text reached Tico: {body}");
     }
 }
+
+fn tico_settings(id: &str, base_url: &str) -> Settings {
+    Settings {
+        destinations: vec![Destination {
+            id: id.into(),
+            name: "Acme".into(),
+            base_url: base_url.into(),
+            actor: "human:test".into(),
+        }],
+        ..Default::default()
+    }
+}
+#[test]
+fn speech_goes_through_the_tico_once_connected_unless_own_keys_were_already_set_up() {
+    use crate::speech::{self, OWN, TICO};
+    let mut config = Settings::default();
+    assert_eq!(speech::source(&config), OWN, "no Tico yet");
+    config = tico_settings("speech-source", "https://runner.acme.example");
+    assert_eq!(speech::source(&config), TICO);
+    config.speech_source = OWN.into();
+    assert_eq!(speech::source(&config), OWN);
+    config.speech_source = TICO.into();
+    assert_eq!(
+        speech::source(&tico_settings("x", "https://a.example")),
+        TICO
+    );
+    // An install with keys of its own keeps them; one without follows the connection.
+    let unset = tico_settings("speech-source", "https://runner.acme.example");
+    assert_eq!(speech::settled(&unset, true), Some(OWN));
+    assert_eq!(speech::settled(&unset, false), None);
+    assert_eq!(speech::settled(&config, true), None, "a choice is kept");
+    let dir = tempfile::tempdir().unwrap();
+    // No settings file: a new install, nothing to keep and the keychain is not asked.
+    assert!(!speech::settle(dir.path(), || panic!("keychain read")).unwrap());
+    settings::write(dir.path(), &unset).unwrap();
+    assert!(speech::settle(dir.path(), || true).unwrap());
+    assert_eq!(settings::read(dir.path()).unwrap().speech_source, OWN);
+    // Settled once: later launches never ask again.
+    assert!(!speech::settle(dir.path(), || panic!("keychain read")).unwrap());
+    // Older settings files have no field; anything else is refused.
+    std::fs::write(
+        dir.path().join("settings.json"),
+        br#"{"transcription_model":"x"}"#,
+    )
+    .unwrap();
+    assert_eq!(settings::read(dir.path()).unwrap().speech_source, "");
+    let mut bad = unset.clone();
+    bad.speech_source = "xai".into();
+    assert!(settings::write(dir.path(), &bad).is_err());
+}
+#[test]
+fn your_tico_transcribes_through_its_relay_with_the_person_token() {
+    use crate::speech::{self, Services};
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"transcribe":true,"assist":true,"stream":false})),
+        Some(
+            json!({"text":"Hello there","words":[{"word":"Hello","start":0.1,"end":0.4,"speaker":"speaker_0"}]}),
+        ),
+    ]);
+    let config = Settings {
+        transcription_url: "https://openrouter.ai/api/v1".into(),
+        transcription_model: "my/custom-model".into(),
+        destinations: vec![tico.destination.clone()],
+        ..Default::default()
+    };
+    let services = speech::fetch(&tico.destination, "person-token").unwrap();
+    assert_eq!(
+        services,
+        Services {
+            transcribe: true,
+            assist: true,
+            stream: false
+        }
+    );
+    speech::remember(&tico.destination, Ok(services));
+    let (relay, token) = speech::transcription_with(&config, |id| {
+        assert_eq!(id, "synthetic");
+        Ok("person-token".into())
+    })
+    .unwrap();
+    assert_eq!(token, "person-token");
+    assert_eq!(
+        relay.transcription_url,
+        format!("{}/api/v2/recorder", tico.destination.base_url)
+    );
+    let (text, words) = transcribe_words(&relay, &token, b"RIFF", true).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        (text.as_str(), words[0].turn.as_str()),
+        ("Hello there", "speaker_0")
+    );
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests[0].0.starts_with("GET /api/v2/recorder/services "),
+        "{}",
+        requests[0].0
+    );
+    assert!(
+        requests[1]
+            .0
+            .starts_with("POST /api/v2/recorder/audio/transcriptions ")
+    );
+    // Scribe v2 by name, so the Tico asks for word timings and speaker labels.
+    assert_eq!(requests[1].1["model"], "elevenlabs/scribe-v2");
+    assert_eq!(
+        requests[1].1["provider"]["options"]["elevenlabs"]["diarize"],
+        true
+    );
+    // A Tico that can't transcribe now says so; nothing is sent.
+    speech::remember(&tico.destination, Ok(Services::default()));
+    let refused = speech::transcription_with(&config, |_| panic!("no token needed")).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "Your Tico can't transcribe right now. Audio is saved locally."
+    );
+    speech::remember(&tico.destination, Err("Tico request failed: Server returned HTTP 503 (unavailable). Check the connection or retry.".into()));
+    let down = speech::transcription_with(&config, |_| panic!("no token needed")).unwrap_err();
+    assert_eq!(
+        down.to_string(),
+        "Your Tico can't transcribe right now — HTTP 503"
+    );
+    let old = speech::plain(anyhow::anyhow!(OLD_TICO), "transcribe");
+    assert_eq!(
+        old.to_string(),
+        "Your Tico can't transcribe yet. Update Tico, or use your own keys."
+    );
+}
+#[test]
+fn your_tico_streams_over_its_own_address() {
+    let mut config = tico_settings("speech-stream", "https://runner.acme.example");
+    let plan = crate::stream::Plan::from_settings(&config).unwrap();
+    assert_eq!(plan.url, "wss://runner.acme.example/api/v2/recorder/stream");
+    assert!(plan.tico.is_some() && plan.key.is_none() && !plan.required);
+    assert!(
+        crate::stream::enabled(&config),
+        "on unless switched off; the Tico says if it can"
+    );
+    config.destinations[0].base_url = "http://127.0.0.1:8000".into();
+    assert_eq!(
+        crate::stream::Plan::from_settings(&config).unwrap().url,
+        "ws://127.0.0.1:8000/api/v2/recorder/stream"
+    );
+    config.streaming = Some(false);
+    assert!(crate::stream::Plan::from_settings(&config).is_none());
+    // Own keys keep the xAI address.
+    config.streaming = None;
+    config.speech_source = crate::speech::OWN.into();
+    let own = crate::stream::Plan::from_settings(&config).unwrap();
+    assert_eq!(own.url, crate::stream::DEFAULT_URL);
+    assert!(own.tico.is_none());
+}

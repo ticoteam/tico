@@ -10,6 +10,7 @@ pub mod network;
 pub mod qos;
 pub mod settings;
 pub mod signin;
+pub mod speech;
 pub mod store;
 pub mod stream;
 pub mod transcript;

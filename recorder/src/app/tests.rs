@@ -527,6 +527,12 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
     let mut app = app(store, directory.path());
     app.make_default("second");
     assert_eq!(settings::read(directory.path()).unwrap().destinations[0].id, "second");
+    // Connected and never chosen: speech goes through the default Tico, which hasn't said yet
+    // what it can do.
+    assert_eq!(
+        app.status_view()["speech"],
+        json!({"source":"tico","stream":false,"transcribe":false,"tico":"tico.team"})
+    );
     app.save_settings(SettingsForm {
         microphone: "Studio mic".into(),
         meeting_audio: false,
@@ -538,9 +544,14 @@ fn settings_save_over_connections_and_keep_keys_out_of_the_file() {
         streaming: Some(true),
         streaming_model: String::new(),
         xai_key: String::new(),
+        speech_source: Some("own".into()),
     });
     settle(&mut app, |app| !app.busy);
     let written = settings::read(directory.path()).unwrap();
+    assert_eq!(written.speech_source, "own");
+    // Own keys without a saved key can't transcribe.
+    assert_eq!(app.status_view()["speech"]["source"], "none");
+    assert_eq!(full_view(&mut app)["settings"]["data"]["speech_source"], "own");
     assert_eq!(written.microphone, "Studio mic");
     assert!(!written.meeting_audio);
     assert_eq!(written.transcription_language, "");

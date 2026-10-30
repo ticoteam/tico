@@ -106,6 +106,7 @@ fn plan(url: &str) -> Plan {
         model: DEFAULT_MODEL.into(),
         language: "en".into(),
         key: Some("fixture-key".into()),
+        tico: None,
         required: true,
         retry: Duration::from_millis(50),
     }
@@ -548,4 +549,68 @@ fn live_smoke_against_the_real_service() {
     assert!(status.error.is_empty(), "{status:?}");
     assert!(words.len() >= 5, "too few words came back: {words:?}");
     assert!(words.iter().all(|(_, at)| *at <= 8_500));
+}
+
+#[test]
+fn through_your_tico_live_text_follows_what_it_can_do() {
+    let destination = |id: &str, url: &str| Destination {
+        id: id.into(),
+        name: "Acme".into(),
+        base_url: url.replace("/v1/stt", ""),
+        actor: "human:test".into(),
+    };
+    // A Tico that can't stream: live text is off, quietly; chunks still go.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Tico off fixture").unwrap();
+    let quiet = destination("stream-off", "http://127.0.0.1:9");
+    speech::remember(
+        &quiet,
+        Ok(speech::Services {
+            transcribe: true,
+            assist: true,
+            stream: false,
+        }),
+    );
+    let mut off = plan("ws://127.0.0.1:9/api/v2/recorder/stream");
+    off.tico = Some(quiet);
+    off.key = None;
+    off.required = false;
+    let mut streams = Streams::new(store.clone(), record.id.clone(), off);
+    let _feed = streams.feed("me").unwrap();
+    wait_for("off", || state(&record.id, "me").state == "off");
+    assert!(state(&record.id, "me").error.is_empty());
+    // A Tico that can: the person's token goes in the header, never the address.
+    let (url, seen, server) = mock(vec![Box::new(|socket: &mut Server| {
+        created(socket);
+        until_done(socket);
+        send(socket, json!({"type":"transcript.done"}));
+    })]);
+    let relay = destination("stream-on", &url);
+    speech::remember(
+        &relay,
+        Ok(speech::Services {
+            transcribe: true,
+            assist: true,
+            stream: true,
+        }),
+    );
+    let record = store.create("Tico on fixture").unwrap();
+    let mut on = plan(&url.replace("/v1/stt", "/api/v2/recorder/stream"));
+    on.tico = Some(relay);
+    on.key = Some("person-token".into());
+    on.required = false;
+    let mut streams = Streams::new(store.clone(), record.id.clone(), on);
+    let feed = streams.feed("me").unwrap();
+    wait_for("live", || state(&record.id, "me").state == "live");
+    drop(feed);
+    wait_for("the stream to stop", || {
+        state(&record.id, "me").state == "stopped"
+    });
+    server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    let (uri, auth) = &requests[0];
+    assert!(uri.starts_with("/api/v2/recorder/stream?"), "{uri}");
+    assert!(!uri.contains("person-token"));
+    assert_eq!(auth, "Bearer person-token");
 }

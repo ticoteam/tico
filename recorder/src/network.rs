@@ -167,12 +167,21 @@ pub fn hash(value: &Value) -> String {
 }
 /// Transcribes the next queued chunk; false when nothing is queued.
 pub fn transcribe_next(store: &Store, config: &Settings, key: &str) -> Result<bool> {
+    transcribe_next_with(store, config, key, |error| error)
+}
+/// `transcribe_next`, with a failure put in words for where the audio went (`speech::plain`).
+pub fn transcribe_next_with(
+    store: &Store,
+    config: &Settings,
+    key: &str,
+    describe: impl Fn(anyhow::Error) -> anyhow::Error,
+) -> Result<bool> {
     let Some(chunk) = store.claim_transcription()? else {
         return Ok(false);
     };
     let result = (|| -> Result<(String, Vec<Word>)> {
         let bytes = std::fs::read(store.audio_path(&chunk)?)?;
-        transcribe_words(config, key, &bytes, chunk.channel != "me")
+        transcribe_words(config, key, &bytes, chunk.channel != "me").map_err(&describe)
     })();
     let (text, mut words, error) = match result {
         Ok((text, words)) => (text, words, String::new()),
@@ -258,18 +267,17 @@ impl Transcriber {
                                 cached = Some((version, settings::read(store.root())?));
                             }
                             let config = &cached.as_ref().expect("settings read").1;
-                            ensure!(
-                                !config.transcription_model.trim().is_empty(),
-                                "Choose a transcription model in Settings. Audio is saved locally."
-                            );
-                            let key = settings::secret("transcription")?;
-                            ensure!(
-                                !key.is_empty(),
-                                "Add a transcription API key in Settings. Audio is saved locally."
-                            );
+                            // Your Tico, or the saved endpoint and key.
+                            let (config, key) = crate::speech::transcription(config)?;
                             *status.lock().unwrap_or_else(|error| error.into_inner()) =
                                 String::new();
-                            transcribe_next(&store, config, &key)
+                            if crate::speech::source(&config) == crate::speech::TICO {
+                                transcribe_next_with(&store, &config, &key, |error| {
+                                    crate::speech::plain(error, "transcribe")
+                                })
+                            } else {
+                                transcribe_next(&store, &config, &key)
+                            }
                         })();
                         if let Err(error) = &result {
                             *status.lock().unwrap_or_else(|error| error.into_inner()) =
