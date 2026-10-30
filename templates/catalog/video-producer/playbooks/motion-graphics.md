@@ -12,5 +12,5 @@ For explainers, kinetic type and product callouts, built as HTML and rendered fr
 4. Render: `node software/video/render.mjs projects/<slug>/shots/<name>.html --out projects/<slug>/shots/<name>.mp4
    --size 1920x1080 --fps 30`.
 5. Write the sidecar: `kind` video, `tool` render.mjs, `parents` the HTML and the script version it follows.
-6. Check the frames against `knowledge/production-checklist.md`. The shots stage is self-moved, so the cut uses the
-   files as they are once they pass.
+6. Check the frames against `knowledge/production-checklist.md`. Once every shot passes, touch `.done` in the
+   `shots/` folder: the cut stays closed until then, and it uses only the shot files as they stand.

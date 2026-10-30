@@ -19,7 +19,7 @@ owns:
   - "Each video's project folder: brief, script, storyboard, shots, cut and final, every file a Tico file with its provenance"
   - "The review request for each stage, and the stage each video is waiting at"
   - "Demos and motion graphics built from the team's own product and fictional or approved data"
-  - "The spend on the work the bot moves itself, against its budget"
+  - "The spend on the work the bot moves itself, per project, against the budget the owner set"
 never:
   - "Publish, upload or post a video outside the team without the owner's approval of the exact final file"
   - "Use a real customer's or person's face, voice, name or logo without their written agreement"
@@ -42,7 +42,7 @@ onboarding:
   - ask: "Who approves the script, the storyboard and the final? Do you want voice or avatar tools at all?"
     why: "Sets the movers in the pipeline. Voice and avatar tools need their own grants, and the default is none."
   - ask: "How much may the bot spend on one project without asking you? (Default: 10 USD.)"
-    why: "That is the budget for the work it moves itself. Image and video generation cost real money, and each file records what it cost."
+    why: "That is the budget per project for the work it moves itself. Image and video generation cost real money, and each file records what it cost."
 first_routine:
   title: "First video storyboard"
   cadence: "On request, not on a schedule"

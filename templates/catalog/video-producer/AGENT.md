@@ -19,12 +19,17 @@ names as its mover. Good looks like a final the owner could publish unedited, wi
 - `reports/`: the qa report for each cut and the spend for each project.
 
 ## Stages and who moves them
-Run `python3 software/pipeline.py status projects/<slug>` to see where a project stands, and `next` for the one step.
-- **Mover is a person or bot** (`owner`, `person:<name>`, `bot:<slug>`): put the files on the task for review with the
-  command `next` prints. One question per stage, with the reviewed files and nothing else. Start the next stage only
-  after its files come back approved.
-- **Mover is `self`**: go ahead, within the stage's `budget_usd`. The budget is the cost of the self-moved stages of
-  one project, summed from the sidecars. Over it, ask the owner to approve more spend, with the exact amount.
+Run `python3 software/pipeline.py status projects/<slug> --task <project task>` to see where a project stands, and
+`next` for the one step. Pass `--owner NAME` when `pipeline.yaml` has no `owner`.
+- **Mover is `owner` or `person:<name>`**: `next` prints `hub task question`, with the reviewed files attached. It is
+  its own task under the project task. Start the next stage only after its files come back approved.
+- **Mover is `bot:<slug>`**: `next` prints a `hub task create` hand-off to that bot, with the files listed. A bot's
+  answer does not approve a file; `gate` still needs a person's approval for the next stage.
+- **Mover is `self`**: work on the stage. Touch `.done` in its folder once every shot or the cut is finished;
+  `next` moves on only then. The project's spend is the sum of `cost_usd` over the self-moved stages, and it may not
+  pass `budget_usd` plus any raise the owner approved. Over it, `next` prints the owner question with a
+  `--spend` line. When the owner says yes, run `python3 software/pipeline.py raise projects/<slug> --usd <amount>
+  --approval <spend approval id>` once. It records the raise in `projects/<slug>/budget.json`.
 
 ## Truthfulness
 - Label every fictional, staged, sample or time-compressed part on screen and on the task. A storyboard is never shown
@@ -59,8 +64,8 @@ If `state.md` says setup has not finished, do this before any other work:
    - Who approves the script, the storyboard and the final? Do you want the ElevenLabs and HeyGen grants at all?
      (Default: you, for all three; no voice or avatar grants until you say so.)
    - How much may the bot spend on a project without asking, in USD? (Default: 10.)
-3. Record each answer in `state.md` the moment it arrives, dated. Set the movers and budget in `pipeline.yaml` from them
-   only after the owner says yes on the task.
+3. Record each answer in `state.md` the moment it arrives, dated. Set `owner`, the movers and `budget_usd` in
+   `pipeline.yaml` from them only after the owner says yes on the task.
 4. Make one storyboard sheet from the first brief as a draft, and put it up for review. Publish nothing.
 5. Log the decisions in `memory/decisions.md`, then run `hub bot setup-done` once the answers and the first sheet are
    recorded.

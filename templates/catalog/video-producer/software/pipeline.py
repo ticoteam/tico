@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """The Video Producer's pipeline: where each project's files stand, what to do next, and whether a file may be used.
 
-    python3 software/pipeline.py status projects/<slug>            each stage, its mover, its files and approvals
-    python3 software/pipeline.py next projects/<slug> [--task ID]  the one step to take now: a hub command or "self: proceed"
-    python3 software/pipeline.py gate projects/<slug>/<stage>/<file>   exit 0 when the next stage may use the file
+    python3 software/pipeline.py status projects/<slug> [--task ID] [--owner NAME]
+    python3 software/pipeline.py next projects/<slug> [--task ID] [--owner NAME]   the one step to take now
+    python3 software/pipeline.py gate projects/<slug>/<stage>/<file>               exit 0 when the next stage may use it
+    python3 software/pipeline.py raise projects/<slug> --usd N --approval ID       record a budget raise the owner approved
 
-Stages, who moves each one and the budget come from pipeline.yaml at the repository root. A project is a folder per
+Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
-holding `cost_usd` among its fields. Approval is `hub file approved <path>`: exit 0 when approved, 1 when not.
+holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
+projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when not.
 Standard library only.
 """
 import argparse
@@ -23,60 +25,74 @@ PIPELINE = REPO / "pipeline.yaml"
 PROJECTS = REPO / "projects"
 MOVER = re.compile(r"owner|self|person:.+|bot:[a-z0-9][a-z0-9-]*")
 STAGE = re.compile(r"[a-z][a-z0-9-]*")
+NO_OWNER = ("waiting: no owner is named (pipeline.yaml `owner`, or --owner NAME): use the person who opened the project "
+            "task, then run next again with --owner NAME")
 
 
 class Problem(Exception):
     """Something the pipeline cannot answer for: a bad pipeline.yaml, a file outside a project, or hub failing."""
 
 
-# ----------------------------------------------------------------------------- the stages
+# ----------------------------------------------------------------------------- the pipeline file
 def parse_pipeline(text):
-    """The stages in order, from the small YAML subset pipeline.yaml uses: `stages:`, then `- id:` items with
-    `mover:` and optional `budget_usd:` lines. Comments and blank lines are skipped."""
-    items, item = [], None
+    """(top-level values, stage items) from the small YAML subset pipeline.yaml uses: `key: value` lines before
+    `stages:`, then `- id:` items with `key: value` lines. Comments and blank lines are skipped."""
+    top, items, item, in_stages = {}, [], None, False
     for raw in text.splitlines():
         line = re.sub(r"\s+#.*$", "", raw).strip()
-        if not line or line.startswith("#") or line == "stages:":
+        if not line or line.startswith("#"):
+            continue
+        if line == "stages:":
+            in_stages = True
             continue
         if line.startswith("- "):
+            if not in_stages:
+                raise Problem(f"pipeline.yaml: a list item before stages: {raw.strip()!r}")
             item = {}
             items.append(item)
             line = line[2:].strip()
         key, sep, value = line.partition(":")
-        if item is None or not sep:
+        if not sep:
             raise Problem(f"pipeline.yaml: cannot read {raw.strip()!r}")
-        item[key.strip()] = value.strip().strip('"')
-    return items
+        value = value.strip().strip('"')
+        if item is not None:
+            item[key.strip()] = value
+        elif not in_stages:
+            top[key.strip()] = value
+        else:
+            raise Problem(f"pipeline.yaml: {raw.strip()!r} is not in a stage")
+    return top, items
 
 
-def load(path=None):
-    """The stages in order, checked: {id, mover, budget} with budget a float or None."""
+def read(path=None):
+    """The pipeline, checked: {owner, budget (USD per project), stages: [{id, mover}]} in order."""
+    top, items = parse_pipeline(Path(path or PIPELINE).read_text())
+    try:
+        budget = float(top["budget_usd"])
+    except (KeyError, ValueError):
+        raise Problem("pipeline.yaml: budget_usd must be a number of USD per project")
     stages = []
-    for item in parse_pipeline(Path(path or PIPELINE).read_text()):
+    for item in items:
         stage_id, mover = item.get("id", ""), item.get("mover", "")
         if not STAGE.fullmatch(stage_id):
             raise Problem(f"pipeline.yaml: stage id {stage_id!r} must be lowercase words joined by dashes")
         if not MOVER.fullmatch(mover):
             raise Problem(f"pipeline.yaml: stage {stage_id} mover {mover!r} is not owner, self, person:<name> or bot:<slug>")
-        try:
-            budget = float(item["budget_usd"]) if "budget_usd" in item else None
-        except ValueError:
-            raise Problem(f"pipeline.yaml: stage {stage_id} budget_usd {item['budget_usd']!r} is not a number")
-        stages.append({"id": stage_id, "mover": mover, "budget": budget})
+        stages.append({"id": stage_id, "mover": mover})
     ids = [s["id"] for s in stages]
     if not ids or len(set(ids)) != len(ids):
         raise Problem("pipeline.yaml: needs at least one stage and no repeated stage id")
-    return stages
+    return {"owner": top.get("owner", ""), "budget": budget, "stages": stages}
 
 
-def stage_named(stages, stage_id):
-    return next((s for s in stages if s["id"] == stage_id), None)
+def stage_named(cfg, stage_id):
+    return next((s for s in cfg["stages"] if s["id"] == stage_id), None)
 
 
 # ----------------------------------------------------------------------------- the files
 def assets(stage_dir):
-    """The files in one stage folder, sorted. A provenance sidecar (`x.json` beside `x`) is not an asset; a `.json`
-    with no file beside it, such as a cut list, is."""
+    """The files in one stage folder, sorted. Hidden files (such as `.done`) and provenance sidecars (`x.json` beside
+    `x`) are not assets; a `.json` with no file beside it, such as a cut list, is."""
     if not stage_dir.is_dir():
         return []
     names = {p.name for p in stage_dir.iterdir() if p.is_file() and not p.name.startswith(".")}
@@ -101,9 +117,34 @@ def cost(asset):
         raise Problem(f"{asset.name}.json: cost_usd is not a number")
 
 
-def spent(project, stages):
-    """What the self-moved stages of one project have cost so far: the budget a self stage is checked against."""
-    return sum(cost(f) for s in stages if s["mover"] == "self" for f in assets(project / s["id"]))
+def spent(project, cfg):
+    """What the self-moved stages of one project have cost: the sum of their sidecars' cost_usd."""
+    return sum(cost(f) for s in cfg["stages"] if s["mover"] == "self" for f in assets(project / s["id"]))
+
+
+def budget_record(project):
+    """projects/<slug>/budget.json: {"extra_usd": the raises so far, "approval": the latest, "approvals": all of them}."""
+    path = project / "budget.json"
+    if not path.is_file():
+        return {"extra_usd": 0.0, "approval": "", "approvals": []}
+    try:
+        data = json.loads(path.read_text())
+    except ValueError:
+        raise Problem(f"{path}: not readable JSON")
+    return {"extra_usd": float(data.get("extra_usd") or 0), "approval": str(data.get("approval") or ""),
+            "approvals": [str(a) for a in data.get("approvals") or []]}
+
+
+def record_raise(project, usd, approval_id):
+    """Add an approved raise to the project's budget. The same approval id is recorded once, however often this runs."""
+    record = budget_record(project)
+    if approval_id in record["approvals"]:
+        return record
+    record = {"extra_usd": record["extra_usd"] + float(usd), "approval": approval_id,
+              "approvals": record["approvals"] + [approval_id]}
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "budget.json").write_text(json.dumps(record, indent=2) + "\n")
+    return record
 
 
 def rel(path):
@@ -131,54 +172,73 @@ def approval(asset):
 
 
 # ----------------------------------------------------------------------------- what to do next
-def ask(task, stage, files, question=None):
-    """The hub command that puts a stage's files to its mover for review."""
-    who = stage["mover"]
-    target = who.split(":", 1)[1] if who.startswith("person:") else who
-    text = question or f"Approve the {stage['id']} files?"
-    command = ["hub", "task", "question", task, "--on", target, "--ask", text]
+def question(task, person, text, files, extra=()):
+    """`hub task question`: one decision for a person, as its own task under the project task."""
+    command = ["hub", "task", "question", text, "--on", person, "--parent", task]
     for path in files:
         command += ["--review", rel(path)]
-    return shlex.join(command)
+    return shlex.join(command + list(extra))
 
 
-def self_step(project, stage, stages, task):
-    """A self-moved stage proceeds within its budget; over it, the owner is asked to approve more spend."""
-    used = spent(project, stages)
-    if stage["budget"] is None or used < stage["budget"]:
-        note = "" if stage["budget"] is None else f" ({used:.2f} of {stage['budget']:.2f} USD used)"
-        return f"self: proceed with {stage['id']}{note}"
-    owner = dict(stage, mover="owner")
-    return (f"over budget ({used:.2f} of {stage['budget']:.2f} USD): ask the owner: "
-            + ask(task, owner, [], f"Spend more on {stage['id']}? {used:.2f} of {stage['budget']:.2f} USD used."))
+def request(project, cfg, stage, files, task, owner):
+    """The step that puts a stage's unapproved files to its mover."""
+    mover = stage["mover"]
+    if mover == "owner" and not owner:
+        return NO_OWNER
+    if mover.startswith("bot:"):
+        body = "Review these files and answer on this task: " + ", ".join(rel(f) for f in files)
+        return shlex.join(["hub", "task", "create", "--owner", mover, "--parent", task,
+                           "--title", f"Review {stage['id']} files for {project.name}", "--body", body])
+    person = owner if mover == "owner" else mover.split(":", 1)[1]
+    return question(task, person, f"Approve the {stage['id']} files for {project.name}?", files)
 
 
-def next_step(project, stages, task="TASK-ID"):
-    """The one step to take now. Stages run in order: a self stage with files is done (it needs no approval), any
+def self_step(project, cfg, stage, task, owner):
+    """A self-moved stage proceeds while the project's spend is under its budget plus any raise the owner approved."""
+    used, limit = spent(project, cfg), cfg["budget"] + budget_record(project)["extra_usd"]
+    if used < limit:
+        return f"self: proceed with {stage['id']} ({used:.2f} of {limit:.2f} USD used)"
+    if not owner:
+        return NO_OWNER
+    raise_by = f"{cfg['budget']:g}"
+    options = [f"Raise budget -> the self-moved stages of {project.name} may spend {raise_by} USD more",
+               "Stop -> no more self-moved work on this project"]
+    extra = [item for option in options for item in ("--option", option)]
+    extra += ["--spend", f"Raise budget={raise_by}:{project.name} self-moved stages"]
+    return (f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner: "
+            + question(task, owner, f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used.",
+                       [], extra))
+
+
+def next_step(project, cfg, task="TASK-ID", owner=None):
+    """The one step to take now. Stages run in order. A self-moved stage holds until its `.done` file exists. Any
     other stage waits until each of its files is approved by its mover."""
-    for stage in stages:
-        folder, files = project / stage["id"], assets(project / stage["id"])
+    owner = owner or cfg["owner"]
+    for stage in cfg["stages"]:
+        folder = project / stage["id"]
         if stage["mover"] == "self":
-            if not files:
-                return self_step(project, stage, stages, task)
-            continue
+            if (folder / ".done").exists():
+                continue
+            return self_step(project, cfg, stage, task, owner)
+        files = assets(folder)
         if not files:
             return f"waiting: make the {stage['id']} files in {rel(folder)}, then run next again"
         pending = [f for f in files if not approval(f)[0]]
         if pending:
-            return ask(task, stage, pending)
-    return "nothing to do: every stage has its files approved"
+            return request(project, cfg, stage, pending, task, owner)
+    return "nothing to do: every stage is done or approved"
 
 
 def gate(asset):
     """Exit status for a file the next stage wants to use: 0 when its stage is self-moved or the file is approved."""
+    cfg = read()
     try:
         parts = Path(asset).resolve().relative_to(PROJECTS.resolve()).parts
     except ValueError:
         parts = ()
     if len(parts) < 3:
         raise Problem(f"{asset} is not a file in projects/<slug>/<stage>/")
-    stage = stage_named(load(), parts[1])
+    stage = stage_named(cfg, parts[1])
     if stage is None:
         raise Problem(f"{asset}: no stage {parts[1]!r} in pipeline.yaml")
     if stage["mover"] == "self":
@@ -192,22 +252,26 @@ def gate(asset):
     return 1
 
 
-def status(project, stages):
+def status(project, cfg, task="TASK-ID", owner=None):
+    owner = owner or cfg["owner"]
     lines = []
-    for stage in stages:
-        files = assets(project / stage["id"])
+    for stage in cfg["stages"]:
+        folder = project / stage["id"]
+        files = assets(folder)
+        if stage["mover"] == "self":
+            lines.append(f"{stage['id']:<11} {'self':<16} {'done' if (folder / '.done').exists() else 'in progress'}")
+            for f in files:
+                lines.append(f"{'':<11} {f.name:<28} {cost(f):.2f} USD")
+            continue
         if not files:
             lines.append(f"{stage['id']:<11} {stage['mover']:<16} (no files yet)")
         for f in files:
-            if stage["mover"] == "self":
-                state = "self-moved"
-            else:
-                state = "approved" if approval(f)[0] else "not approved"
+            state = "approved" if approval(f)[0] else "not approved"
             lines.append(f"{stage['id']:<11} {stage['mover']:<16} {f.name:<28} {state:<12} {cost(f):.2f} USD")
-        if stage["budget"] is not None and stage["mover"] == "self":
-            lines.append(f"{'':<11} budget {stage['budget']:.2f} USD for this stage, "
-                         f"{spent(project, stages):.2f} USD spent by self-moved stages")
-    lines.append("next: " + next_step(project, stages))
+    record = budget_record(project)
+    lines.append(f"budget {cfg['budget']:.2f} USD + {record['extra_usd']:.2f} raised, {spent(project, cfg):.2f} USD spent "
+                 "by self-moved stages")
+    lines.append("next: " + next_step(project, cfg, task, owner))
     return "\n".join(lines)
 
 
@@ -217,20 +281,26 @@ def main(argv=None):
     for name in ("status", "next"):
         sub = commands.add_parser(name)
         sub.add_argument("project", help="projects/<slug>")
-        if name == "next":
-            sub.add_argument("--task", default="TASK-ID", help="the Tico task the review question goes on")
+        sub.add_argument("--task", default="TASK-ID", help="the project's Tico task: review questions go under it")
+        sub.add_argument("--owner", default="", help="the person who approves owner stages (default: pipeline.yaml)")
     gate_cmd = commands.add_parser("gate")
     gate_cmd.add_argument("file", help="projects/<slug>/<stage>/<file>")
+    raise_cmd = commands.add_parser("raise")
+    raise_cmd.add_argument("project", help="projects/<slug>")
+    raise_cmd.add_argument("--usd", type=float, required=True, help="the amount the owner approved")
+    raise_cmd.add_argument("--approval", required=True, help="the spend approval id the owner's answer created")
     args = parser.parse_args(argv)
     try:
-        stages = load()
         if args.command == "gate":
             return gate(args.file)
+        if args.command == "raise":
+            record = record_raise(Path(args.project).resolve(), args.usd, args.approval)
+            print(f"budget raised: {record['extra_usd']:.2f} USD raised in total")
+            return 0
+        cfg = read()
         project = Path(args.project).resolve()
-        if args.command == "status":
-            print(status(project, stages))
-        else:
-            print(next_step(project, stages, args.task))
+        print(status(project, cfg, args.task, args.owner) if args.command == "status"
+              else next_step(project, cfg, args.task, args.owner))
         return 0
     except Problem as exc:
         print(f"error: {exc}", file=sys.stderr)
