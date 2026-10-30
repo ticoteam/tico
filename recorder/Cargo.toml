@@ -1,0 +1,73 @@
+[package]
+name = "tico-recorder-native"
+version = "0.2.0"
+edition = "2024"
+# cargo tauri build needs one default binary; the window is tico-recorder.
+default-run = "tico-recorder"
+rust-version = "1.92"
+license-file = "../LICENSE"
+description = "Native Tico meeting recorder: platform capture, durable audio, transcription and ordered meeting sync"
+
+[features]
+default = []
+# The desktop app: Tauri 2 on the system WebView, with the UI in ui/app.
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-updater", "diarize"]
+# Local speaker labels for meeting audio (onnxruntime and two ONNX models, fetched at build time).
+diarize = ["dep:pyannote-local"]
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+cpal = "0.18"
+fs2 = "0.4"
+pyannote-local = { path = "vendor/anarlog/pyannote-local", optional = true }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+hound = "3.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rtrb = "0.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+# The window. Cargo.lock keeps its runtime crates (tauri-runtime 2.11.3, tauri-runtime-wry
+# 2.11.4, tauri-utils 2.9.3, wry 0.55.1, tao 0.35.3) at the versions 2.11.5 builds with.
+tauri = { version = "=2.11.5", optional = true, features = ["custom-protocol"] }
+# Self-updates from the signed release feed (src/app/update.rs). The same version the Tico desktop app locks.
+tauri-plugin-updater = { version = "=2.11.0", optional = true, default-features = false, features = ["rustls-tls", "system-proxy"] }
+# Realtime streaming transcription: a blocking websocket on its own thread, TLS through the
+# same rustls/ring stack reqwest already uses.
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+webpki-roots = "=1.0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# CoreML runs the speaker models about 3x faster than the CPU path.
+pyannote-local = { path = "vendor/anarlog/pyannote-local", optional = true, features = ["coreml"] }
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "tico-recorder-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "tico-recorder"
+path = "src/app/main.rs"
+required-features = ["desktop"]
+
+[profile.release]
+lto = "thin"
+strip = true
