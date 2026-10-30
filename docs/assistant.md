@@ -2,8 +2,8 @@
 
 Every human has one private chat with the team's assistant (the `coo` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: the
-pill at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the same pill in the
-middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
+pill at the bottom left (or ⌘J / Ctrl+J) opens a small panel over the page, and on a phone the Liquid Dot in the
+middle of the tab bar opens it as a sheet (there is no second, floating button on a phone). The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. **Show chat** in the panel opens it
 as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
@@ -13,11 +13,28 @@ the rail: you ask the Assistant, and it hands its helpers what needs them (below
 `#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
-The **+** in the panel loops in help: **Tico support** (free) or **Tico team** (full management of your company).
-Either opens Support over the page for a request. While a request is open it is a member of the chat: its messages flow
-in with the Assistant's, by time, as green bubbles (yours on the right), and a reply seen there is read. Tap
-**Tico support** at the top to see only that conversation; the box then writes to support, and another tap shows the
-whole chat again. Its **×** takes it out of the panel (the request itself stays in Support).
+In the thread the Assistant's turns are plain text, with the dot beside the newest; yours are dark bubbles on the right.
+
+**Loop in Tico Support**, one switch under the thread, brings Tico support into the chat. It rides on your support
+requests ([Support](support.md)): while one of your open requests is in the chat, its chip **Tico Support ×** sits at
+the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
+time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
+support instead of the Assistant. The chip's **×**, or the switch, takes it out: "Tico Support can no longer see chats."
+The request itself stays open in Support; only this chat stops showing it (remembered on this browser), and the
+switch brings it back. With no open request the switch opens Support with a new request holding the chat's last few
+lines, which you read, change and send yourself. The **+** still opens **Tico support** (free) or **Tico team** (full
+management of your company) for a request of its own.
+
+A **peek** is one line beside the closed dot (above the tab bar on a phone) about a bot's question waiting on you:
+"BotOps asks: …". Tap it and the chat opens on that question; × dismisses it for good. One at a time, none in the first
+few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
+count on the dot.
+
+The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
+the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
+left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
+holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs and under 150 ms of work; with the
+CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
 
 What waits on you from elsewhere comes at the end of the chat as cards: a Confirm card BotOps (or another bot) left in
 its own chat, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to

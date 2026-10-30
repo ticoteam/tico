@@ -74,8 +74,9 @@
   --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);
   /* The Liquid Dot (liquid-dot.css): Tico, the assistant, and nothing else. A flat jade with a slight tonal fall, and
-     the soft shadow under it. The Ask pill's face it sits on. */
+     the soft shadow under it. The Ask pill's face it sits on; Tico Support's blue-gray in the chat (ask.css). */
   --dot:#56a578;--dot-hi:#5fb083;--dot-lo:#4d966c;--dot-shadow:rgba(0,0,0,.55);--ask-face:var(--g1);
+  --sup:#20253a;--sup-ink:#b9c2f0;
   --sans:"Inter","Inter Fallback",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */
   --read-width:800px;--read-size:var(--t-md);--read-leading:1.55;
@@ -89,6 +90,7 @@
   --wait-ink:#8a5a10;
   --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
   --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
+  --sup:#eef0fa;--sup-ink:#3d4a8a;
   color-scheme:light}
 @media (prefers-color-scheme:light){:root[data-theme="system"]{
   --g0:#fbfbf8;--g1:#f4f5f0;--g2:#eceee8;--g3:#dfe3db;--g4:#cdd3ca;--g5:#98a39c;--g6:#56635e;--g7:#3a4540;--g8:#172221;
@@ -98,4 +100,5 @@
   --wait-ink:#8a5a10;
   --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
   --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
+  --sup:#eef0fa;--sup-ink:#3d4a8a;
   color-scheme:light}}

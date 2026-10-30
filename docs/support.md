@@ -56,7 +56,7 @@ This is redacted technical evidence, not an anonymous ticket: the message and op
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
 Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask, on **Tico support**
-under its **+** and on the request's name at the top of the chat; Ask's button carries no count. Opening a
+under its **+**; Ask's button carries no count. Opening a
 conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
 Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
 refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
@@ -72,8 +72,9 @@ local ticket record. Closed requests remain readable.
 
 - **Tico support** is under the **+** in Ask (the button at the bottom left, or the phone's Ask tab). It opens Help
   with a new request, ready to write; **Tico team** opens one asking for full management. A link to `#/support` in a
-  chat opens it the same way. An open request's messages also show in the Ask chat as green bubbles, and you can reply
-  there ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
+  chat opens it the same way. **Loop in Tico Support**, the switch under the Ask chat, shows an open request's
+  messages in that chat as blue-gray bubbles and writes your replies to it, or starts a request with the chat's last
+  lines when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,

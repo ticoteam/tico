@@ -1,10 +1,12 @@
 // Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" pill at the bottom left
-// (or ⌘J) opens a panel that names the page it sees and sends it with the message; on a phone the same pill in the tab
-// bar opens a sheet and closes it again. Its dot flies into the panel to the newest Tico turn, on to a newer one, and
-// back. The + loops in Tico support or the Tico team (Support, ui/support.js); an open request's messages
-// flow into the chat as green bubbles, its name shows only them (the box then writes to support), and its × takes it
-// out. A Confirm card BotOps left in its own chat and a bot's question come at the end as cards, answered here. No
-// BotOps or Assistant rows in the rail. Fixtures only.
+// (or ⌘J) opens a panel that names the page it sees and sends it with the message, and the pill scales away; on a
+// phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies into the panel to the
+// newest Tico turn, on to a newer one, and back. "Loop in Tico Support" (one switch under the thread) has an open
+// request's messages in the chat as blue-gray bubbles under a headset, a chip in the header, the box writing to it,
+// and a line saying support came in; the chip's × or the switch takes it out, with a line saying so. The + still opens
+// Support or the Tico team. A Confirm card BotOps left in its own chat and a bot's question come at the end as cards,
+// answered here; on the phone a peek beside the dot points at a question and opens the chat on it. No BotOps or
+// Assistant rows in the rail. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -86,6 +88,8 @@ async function open(browser, viewport, state) {
     await fab.click();
     await panel.waitFor();
     assert.equal(await fab.getAttribute('aria-expanded'), 'true');
+    await page.waitForFunction(() => document.querySelector('#ask-fab').classList.contains('ask-gone'));
+    assert.equal(await fab.isVisible(), false, 'the pill scaled away');
     // The pill's dot flies into the panel, to the newest Tico turn, and lands there: the one live dot while it is open
     // (the pill's and the panel's own hold still).
     const dots = () => page.evaluate(() => ['#ask-fab [data-ask-dot]', '#ask-panel [data-ask-dot]', '#ask-panel .ask-turn-dot']
@@ -99,12 +103,23 @@ async function open(browser, viewport, state) {
     await box.waitFor();
     await page.waitForFunction(() => document.activeElement?.matches('#ask-panel .p-text'));
     assert.equal(await panel.locator('[data-ask-sees-name]').innerText(), await page.locator('#main h1, #main h2').first().innerText(), 'sees the page');
-    // An open request is in this chat: support's messages flow in as green bubbles, after the older chat, and are read.
-    const members = panel.locator('[data-ask-members]'), thread = panel.locator('[data-ask-thread]');
-    await members.waitFor();
-    await panel.locator('.ask-sup.them', {hasText: 'Try a hard reload.'}).waitFor();
+    // Tico's turns have no bubble; the newest has the dot beside it.
+    assert.equal(await panel.locator('.conv-run[data-message="a2"] .bubble').evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)');
+    // An open request is in this chat: the switch is on, its chip is in the header, a line says support came in, and
+    // its messages flow in (support's blue-gray under a headset, Ben's on the right) and are read. No members bar.
+    const thread = panel.locator('[data-ask-thread]'), sw = panel.getByRole('switch', {name: 'Loop in Tico Support'});
+    const chip = panel.locator('[data-ask-people] .ask-sup-chip');
+    await chip.waitFor();
+    assert.equal(await sw.getAttribute('aria-checked'), 'true');
+    assert.match(await chip.innerText(), /Tico Support/);
+    assert.equal(await panel.locator('[data-ask-members], [data-ask-ticket]').count(), 0, 'no members bar');
+    const them = panel.locator('.ask-sup.them', {hasText: 'Try a hard reload.'});
+    await them.waitFor();
+    assert.equal(await them.locator('.ask-sav').innerText(), 'headset_mic');
+    assert.equal(await them.locator('small').innerText(), 'Tico Support');
     assert.equal(await panel.locator('.ask-sup.you .ask-sup-body').first().innerText(), 'Board will not load');
-    await page.waitForFunction(() => document.querySelector('#ask-panel [data-ask-ticket]')?.textContent === 'Tico support');
+    assert.deepEqual(await panel.locator('.ask-sys').allInnerTexts(), ['You added Tico Support. They can now see chats.']);
+    await page.waitForFunction(() => document.querySelector('#ask-support')?.getAttribute('data-support-count') === null);
     assert.deepEqual(state.read, ['sup_1'], 'a reply seen here is read');
     // What waits on Ben from elsewhere: BotOps' Confirm card, confirmed here, and a bot's question, answered here.
     const card = thread.locator('[data-action-host="act9"]');
@@ -121,23 +136,34 @@ async function open(browser, viewport, state) {
     await question.getByRole('button', {name: 'Send'}).click();
     await question.waitFor({state: 'detached'});
     assert.deepEqual(state.answers, ['support@acme.test']);
-    // Its name shows only support, and the box then writes to it; again shows the whole chat.
-    const chip = panel.locator('[data-ask-ticket]');
-    await chip.click();
-    assert.equal(await chip.getAttribute('aria-pressed'), 'true');
-    assert.equal(await thread.locator('.bubble').count(), 0, 'only Tico support');
-    assert.equal(await box.getAttribute('placeholder'), 'Message Tico support');
+    // While support is in, the box writes to it, not to the Assistant.
+    assert.equal(await box.getAttribute('placeholder'), 'Message Tico Support');
     await box.fill('Still blank after a reload');
     await box.press('Enter');
     await panel.locator('.ask-sup.you', {hasText: 'Still blank after a reload'}).waitFor();
     assert.equal(state.sent.length, 0, 'not sent to the Assistant');
-    await chip.click();
-    assert.equal(await chip.getAttribute('aria-pressed'), 'false');
-    await thread.locator('.bubble', {hasText: 'In Docs.'}).waitFor();
-    // Its × takes it out of the chat.
-    await panel.getByRole('button', {name: 'Remove Tico support from this chat'}).click();
-    assert.equal(await members.isHidden(), true);
-    assert.equal(await panel.locator('.ask-sup').count(), 0);
+    assert.equal(await thread.locator('.bubble', {hasText: 'In Docs.'}).count(), 1, 'the whole chat stays');
+    // The chip's × takes support out: the switch goes off, a line says so, what support said stays for this visit,
+    // and the request stays open in Support (taken out of this chat only).
+    await chip.getByRole('button', {name: 'Remove Tico Support'}).click();
+    assert.equal(await sw.getAttribute('aria-checked'), 'false');
+    assert.equal(await chip.count(), 0);
+    assert.deepEqual(await panel.locator('.ask-sys').allInnerTexts(),
+      ['You added Tico Support. They can now see chats.', 'Tico Support can no longer see chats.']);
+    assert.equal(await them.count(), 1, 'what support said stays');
+    assert.equal(await box.getAttribute('placeholder'), 'Ask anything…');
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.hidden.ben'))), ['sup_1']);
+    await page.waitForFunction(() => !document.querySelector('.ask-fly'));
+    // The switch brings it back, and takes it out again.
+    await sw.click();
+    await chip.waitFor();
+    assert.equal(await sw.getAttribute('aria-checked'), 'true');
+    assert.equal(await panel.locator('.ask-sys').last().innerText(), 'You added Tico Support. They can now see chats.');
+    await page.waitForFunction(() => !document.querySelector('.ask-fly'));
+    assert.equal(await chip.isVisible(), true, 'the chip landed');
+    await sw.click();
+    assert.equal(await sw.getAttribute('aria-checked'), 'false');
+    assert.equal(await panel.locator('.ask-sys').last().innerText(), 'Tico Support can no longer see chats.');
     // A message goes with the page it was asked from; a link to Support in the reply opens Support over the page.
     await box.fill('The board will not load');
     await box.press('Enter');
@@ -173,8 +199,10 @@ async function open(browser, viewport, state) {
     assert.deepEqual(errors, []);
     await page.close();
 
-    // A phone: the Ask tab opens a sheet over the page, above the tab bar, and closes it.
-    state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: []};
+    // A phone: the dot in the middle of the tab bar opens a sheet over the page, above the tab bar, and closes it.
+    const ask = (id, who, body) => ({kind: 'ask', id, created: now, ask: {id, from_actor: who, to_actor: 'human:ben', body, created: now, refs: {}}});
+    state = {messages: [], sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
+      needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
     // The Ask tab is the pill too, words and all: the dot, or a close mark in its place while the sheet is open.
@@ -186,6 +214,18 @@ async function open(browser, viewport, state) {
     };
     assert.equal(await tab.locator('.ask-label').isVisible(), true, 'not icon-only');
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
+    // The dot sits in the middle of the bar, live, and there is no second, floating Ask button.
+    const centre = await page.evaluate(() => { const t = document.querySelector('#mobile-ask').getBoundingClientRect(); return t.left + t.width / 2; });
+    assert.ok(Math.abs(centre - 195) < 24, `the dot is in the middle of the tab bar (${centre})`);
+    assert.equal(await page.locator('#ask-fab').isVisible(), false, 'no floating Ask button on a phone');
+    assert.equal(await tab.locator('[data-ask-dot]').getAttribute('data-state'), 'idle');
+    // A peek: after a few seconds, one line above the bar about the first question waiting on Ben; × dismisses it.
+    const peek = page.locator('#ask-peek');
+    await peek.waitFor({timeout: 8000});
+    assert.equal(await peek.locator('[data-peek-text]').innerText(), 'BotOps asks: Which inbox should the bot answer?');
+    await peek.getByRole('button', {name: 'Dismiss'}).click();
+    assert.equal(await peek.isHidden(), true);
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m8']);
     await tab.click();
     await page.locator('#ask-panel').waitFor();
     await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
@@ -193,9 +233,21 @@ async function open(browser, viewport, state) {
     assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a sheet above the tab bar (${JSON.stringify([sheet, bar])})`);
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
+    assert.equal(await peek.isHidden(), true, 'no peek while the chat is open');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
+    // The next question peeks once the chat closes; tapping it opens the chat on that question.
+    await peek.waitFor();
+    assert.equal(await peek.locator('[data-peek-text]').innerText(), 'Assistant asks: Ship the launch post today?');
+    await peek.locator('[data-peek-go]').click();
+    await page.locator('#ask-panel').waitFor();
+    await page.locator('#ask-panel .ask-card[data-ask-q="m7"]').waitFor();
+    assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m7"]').isVisible(), true);
+    assert.equal(await peek.isHidden(), true);
+    await tab.click();
+    await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    assert.equal(await peek.isHidden(), true, 'each question peeks once');
     assert.deepEqual(errors, []);
     await page.close();
   } finally {
