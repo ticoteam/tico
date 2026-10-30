@@ -148,11 +148,12 @@ const stoppedChosen = run => run.decided || run.jobs?.find(job => job.decided)?.
 // this page's own click) was saved while the bot was busy.
 const stoppedWaits = run => !run.jobs || run.jobs.some(job => job.deferred !== false);
 // A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
-// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule (Chris, Oct 26).
-// Details opens that card (settings.js executionReview) with the evidence.
+// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule.
+// The issue's title opens that card (settings.js executionReview) with the evidence.
+const RETRY_HINT = 'The bot checks what already happened first';
 function stoppedLines(issue, list) {
   if (!issue.runs?.length) return '';
-  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
+  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${decision === 'resume' ? ` title="${RETRY_HINT}"` : ''}${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
   // When every run stopped the same routine way the card's own line already says it is not a bug.
   const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
   const line = (run, i) => `<li class="stopped-line" data-run-row="${i}"${run.decided ? ` data-decided="${esc(run.decided)}"` : ''}>
@@ -162,11 +163,8 @@ function stoppedLines(issue, list) {
       : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
     <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
   list.push(issue);
-  // Only while a risky line still offers Try again: not once it is decided or its saved requests chose Don't retry.
-  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided && stoppedChosen(run) !== 'dismiss');
   return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
-    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
-    ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;
+    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more</p>` : ''}`;
 }
 function bindStoppedLines(panel, list) {
   panel.querySelectorAll('[data-runs]').forEach(ul => {
@@ -225,19 +223,18 @@ function updateGroups(issues) {
 // Only the people who may decide a run see its buttons: the others read the same line with no choice to make.
 // The update's stop is timing, not proof its computer restarted, so Try all again is offered only when every run is
 // one the review card recommends retrying. Otherwise the row says how many ran commands Tico cannot check and offers
-// Don't retry for all of them; retrying any of them is that run's own choice under Details.
+// Don't retry for all of them; retrying any of them is that run's own choice on its line, under the title.
 const updateGroupRow = group => {
   const n = group.members.length, deciding = group.members.filter(m => m.issue.can_review && m.run.jobs).length;
-  const scope = deciding === n ? 'all of them' : `the ${deciding} you can decide`;
+  const scope = deciding === n ? 'Applies to all of them' : `Applies to the ${deciding} you can decide`;
   const risky = group.members.filter(m => !m.run.retry).length;
-  const risk = `${risky === n ? 'All of them' : `${risky} of them`} ran commands Tico can’t check: try ${risky === 1 ? 'it' : 'them'} one at a time under Details.`;
-  const resume = cls => `<button class="${cls}" type="button" data-group-decision="resume">Try all again</button>`;
-  const dismiss = cls => `<button class="${cls}" type="button" data-group-decision="dismiss">Don’t retry</button>`;
+  const resume = cls => `<button class="${cls}" type="button" data-group-decision="resume" title="${scope}. ${RETRY_HINT}">Try all again</button>`;
+  const dismiss = cls => `<button class="${cls}" type="button" data-group-decision="dismiss" title="${scope}">Don’t retry</button>`;
+  const line = !deciding ? 'Only each bot’s operator can decide' : risky ? `${risky === n ? 'All of them' : `${risky} of them`} ran commands Tico can’t check` : '';
   return `<div class="settings-issue stopped-group" data-update-group="${group.k}">
-    <div><strong>${n} run${n === 1 ? '' : 's'} stopped during Tico’s update at ${group.at.toISOString().slice(11, 16)} UTC</strong>
-    <p>${!deciding ? 'Only the operator of each bot can decide them.' : risky ? `${risk} Don’t retry applies to ${scope}.`
-      : `Try all again applies to ${scope}; each bot checks what already happened before repeating anything.`}</p></div>
-    <div class="issue-buttons">${deciding ? (risky ? dismiss('primary') : resume('primary') + dismiss('ghost')) : ''}<button class="ghost" type="button" data-group-details aria-expanded="false">Details</button></div>
+    <div>${needsTitle(`${n} run${n === 1 ? '' : 's'} stopped during Tico’s update at ${group.at.toISOString().slice(11, 16)} UTC`,
+      'button type="button" data-group-details aria-expanded="false"')}${line ? `<p>${line}</p>` : ''}</div>
+    <div class="issue-buttons">${deciding ? (risky ? dismiss('primary') : resume('primary') + dismiss('ghost')) : ''}</div>
     <ul class="stopped-lines" data-group-runs hidden></ul><p class="stopped-result" data-group-result role="status" aria-live="polite"></p></div>`;
 };
 function bindUpdateGroup(panel, group, stopped) {
@@ -253,7 +250,6 @@ function bindUpdateGroup(panel, group, stopped) {
   details.onclick = () => {
     runs.hidden = !runs.hidden;
     details.setAttribute('aria-expanded', String(!runs.hidden));
-    details.textContent = runs.hidden ? 'Details' : 'Hide details';
   };
   const picks = [...el.querySelectorAll('[data-group-decision]')];
   // The group's choices wait while a run's own choice saves, and stay closed once the group's are saved.
@@ -291,6 +287,13 @@ function bindUpdateGroup(panel, group, stopped) {
     void refresh(false);
   });
 }
+// A card is a title, at most one short line and at most two buttons. The title is the way to the details (the stopped
+// runs card, the bot, the computer, Health), so Details and Open bot are not buttons of their own; what the server
+// wrote in full stays on the title's tooltip.
+const needsTitle = (text, tag, tip = '') => `<${tag} class="needs-title"${tip ? ` title="${esc(tip)}"` : ''}><span>${esc(text)}</span><span class="nav-icon" aria-hidden="true">chevron_right</span></${tag.split(' ')[0]}>`;
+const needsTitleTag = issue => issue.kind === 'uncertain_work' && issue.bot ? `button type="button" data-execution-review="${esc(issue.bot)}"`
+  : issue.machine && !issue.bot ? 'a href="#/settings" data-gs-tab="devices"'
+  : issue.bot ? `a href="#/bot/${esc(issue.bot)}/more"` : 'a href="#/settings" data-gs-tab="health"';
 function needsYou() {
   document.querySelector('.needs-you')?.remove();
   const issues = (S.status?.health_issues || []).filter(needsPerson);
@@ -298,10 +301,13 @@ function needsYou() {
   const panel = document.createElement('section'); panel.className = 'needs-you';
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
   const stopped = [];
+  // Listed runs say it themselves, so their issue's own line goes; otherwise the line is the detail's first sentence.
+  const full = issue => [issue.detail, issue.action !== 'review' && issue.action].filter(Boolean).join(' ');
+  const line = issue => issue.runs?.length || !issue.detail ? '' : `<p>${esc(firstSentence(issue.detail))}</p>`;
   // The text and its lines take the full width; the actions sit under them, each as wide as its words.
-  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div><strong>${esc(issue.title)}</strong><p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p class="muted">${esc(issue.action)}</p>` : ''}${stoppedLines(issue, stopped)}</div>
-    <div class="issue-buttons">${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">${issue.runs?.length ? 'Details' : 'Review now'}</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div></div>`;
-  panel.innerHTML = `<header><h2>${issues.length === 1 ? 'One thing needs you' : `${issues.length} things need you`}</h2><button class="ghost" data-close aria-label="Close">Close</button></header>
+  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div>${needsTitle(issue.title, needsTitleTag(issue), full(issue))}${line(issue)}${stoppedLines(issue, stopped)}</div>
+    <div class="issue-buttons">${runnerRestartButton(issue)}</div></div>`;
+  panel.innerHTML = `<header><h2></h2><button class="ghost" data-close aria-label="Close">Close</button></header>
     <div data-list>${groups.map(updateGroupRow).join('')}${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
     <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
   const close = () => { needsYouRemember({seen: issues.map(needsYouKey)}); panel.remove(); };
@@ -314,6 +320,12 @@ function needsYou() {
   bindRunnerRestart(panel);
   bindStoppedLines(panel, stopped);
   groups.forEach(group => bindUpdateGroup(panel, group, stopped));
+  // An issue whose every run moved into an update's group would only repeat that group.
+  panel.querySelectorAll('[data-runs]').forEach(ul => {
+    if (!ul.children.length && !stopped[+ul.dataset.runs].more_runs) ul.closest('.settings-issue').hidden = true;
+  });
+  const n = panel.querySelectorAll('[data-list] > .settings-issue:not([hidden])').length;
+  panel.querySelector('h2').textContent = n === 1 ? 'One thing needs you' : `${n} things need you`;
   document.body.appendChild(panel);
   return panel;
 }

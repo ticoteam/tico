@@ -42,6 +42,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
     if (p === '/api/v2/messages/m9/answer') { state.answers.push(JSON.parse(route.request().postData()).text); state.needs = []; return json({ok: true}); }
+    if (p === '/api/v2/tasks/t7/answers') { state.picked.push(JSON.parse(route.request().postData()).answers['tone-2']); state.needs = []; return json({ok: true}); }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData());
       state.sent.push(body);
@@ -174,6 +175,26 @@ const words = text => text.trim().split(/\s+/).length;
     await question.getByRole('button', {name: 'Send'}).click();
     await question.waitFor({state: 'detached'});
     assert.deepEqual(state.answers, ['support@acme.test']);
+    // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
+    const need = (id, extra) => ({kind: 'question', id, created: now, ask: {id: 'q' + id, from_actor: 'bot:botops', to_actor: 'human:ben', created: now, ...extra}});
+    state.picked = [];
+    state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Plain'}, {label: 'Friendly'}, {label: 'Formal'}]}]}})];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    const tone = thread.locator('.ask-card[data-ask-q="t7"]');
+    await tone.locator('select').selectOption('2');
+    state.needs = [...state.needs, {...need('m10', {body: 'Anything else?', refs: {}}), kind: 'ask'}];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    await thread.locator('.ask-card[data-ask-q="m10"]').waitFor();
+    assert.equal(await tone.locator('select').inputValue(), '2', 'the pick stays across a redraw');
+    // Reworded (a new question id), the old pick is gone: the recommended option shows. Back to the pick for Send.
+    state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone-2', question: 'Which tone now?', options: [{label: 'Plain'}, {label: 'Friendly', recommended: true}, {label: 'Formal'}]}]}}), state.needs[1]];
+    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
+    await tone.getByText('Which tone now?').waitFor();
+    assert.equal(await tone.locator('select').inputValue(), '1', 'a reworded question starts at its recommended option');
+    await tone.locator('select').selectOption('2');
+    await tone.getByRole('button', {name: 'Send'}).click();
+    await tone.waitFor({state: 'detached'});
+    assert.deepEqual(state.picked, [['Formal']]);
     // While support is in, the box writes to it, not to the Assistant.
     assert.equal(await box.getAttribute('placeholder'), 'Message Tico Support');
     await box.fill('Still blank after a reload');

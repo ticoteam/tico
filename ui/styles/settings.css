@@ -320,6 +320,15 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 /* In the panel an issue's actions sit under its text, each as wide as its words, not a column as tall as the text. */
 .needs-you .settings-issue{grid-template-columns:minmax(0,1fr)}
 .issue-buttons{display:flex;flex-wrap:wrap;gap:8px;align-items:center;align-self:start}.issue-buttons:empty{display:none}
+/* An item's title is its way to its details (heartbeat.js needsTitle): one line, cut short, a chevron after it; the
+   line under it one line too, its whole sentence on hover. */
+.needs-title{display:flex;align-items:center;gap:2px;max-width:100%;padding:0;border:0;background:none;font:inherit;font-weight:600;color:var(--ink);text-align:left;text-decoration:none;cursor:pointer}
+.needs-title>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.needs-title .nav-icon{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+.needs-title:hover .nav-icon{color:var(--ink)}.needs-title[aria-expanded="true"] .nav-icon{transform:var(--chev-open)}
+.needs-title+p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* An issue's own runs read as part of it: no rule between the title and the first one. */
+.settings-issue>div>.stopped-lines{margin-top:2px}.settings-issue>div>.stopped-lines>.stopped-line:first-child{border-top:0;padding-top:4px}
 /* A bot's stopped runs in Needs you (heartbeat.js stoppedLines): one short line each, its own two buttons. */
 .stopped-lines{list-style:none;margin:8px 0 4px;padding:0}
 .stopped-line{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:7px 0;border-top:1px solid var(--line)}

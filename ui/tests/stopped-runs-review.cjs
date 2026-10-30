@@ -1,6 +1,6 @@
 // A bot's stopped runs are reviewed from a control a person can reach (Dev 280). One that holds queued work is
 // needs-person (backend/views.py uncertain_work): Settings > System checks lists it with "Review stopped runs" and
-// Needs you opens with one line per run, its own Try again / Don't retry, and Details. One that holds nothing stays a
+// Needs you opens with one line per run, its own Try again / Don't retry, and a title that opens Details. One that holds nothing stays a
 // note under Health and is still reviewed from there. In v0.3.63 every stopped run was not urgent, so the button rendered nowhere. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -90,7 +90,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const panel = page.locator('.needs-you');
     await panel.waitFor({timeout: t(5000)});
     assert.match(await panel.innerText(), /Builder has 2 stopped runs holding up work/);
-    assert.match(await panel.innerText(), /not a bug\. 3 queued requests wait until you decide\./);
+    // The runs say why they stopped, so the card's own sentence is only the title's tooltip.
+    const title = panel.locator('[data-execution-review="builder"]');
+    assert.match(await title.getAttribute('title'), /not a bug\. 3 queued requests wait until you decide\./);
+    assert.doesNotMatch(await panel.innerText(), /queued requests wait/);
     assert.doesNotMatch(await panel.innerText(), /"Dev 268"/);
     const lines = panel.locator('.stopped-line');
     assert.equal(await lines.count(), 2);
@@ -100,13 +103,15 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // The safe pick leads, by the review card's rule: a run that may have acted puts Don't retry first.
     assert.deepEqual(await lines.nth(0).locator('button').allInnerTexts(), ['Don’t retry', 'Try again']);
     assert.deepEqual(await lines.nth(1).locator('button').allInnerTexts(), ['Try again', 'Don’t retry']);
-    assert.match(await panel.innerText(), /Try again tells the bot/);
-    assert.match(await panel.innerText(), /And 1 more in Details\./);
-    assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Details');
+    // A title, its runs, two buttons each: the retry's hint is a tooltip, Open bot is in Details.
+    assert.equal(await lines.nth(0).locator('[data-run-decision=resume]').getAttribute('title'), 'The bot checks what already happened first');
+    assert.doesNotMatch(await panel.innerText(), /Try again tells the bot|Open bot/);
+    assert.match(await panel.innerText(), /And 1 more/);
+    assert.match(await title.innerText(), /^Builder has 2 stopped runs holding up work/);
     assert.equal(await panel.locator('[data-execution-review="writer"]').count(), 0);
     // On a phone: each run is two short lines, every button as tall as its words, the header beside Close and still
     // there once the list scrolls under it.
-    await page.setViewportSize({width: 390, height: 460});
+    await page.setViewportSize({width: 390, height: 360});
     const fit = await panel.evaluate(el => {
       const box = node => node.getBoundingClientRect();
       el.scrollTop = el.scrollHeight;
@@ -118,7 +123,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.ok(fit.scrolled, `the fixture is taller than the phone panel: ${JSON.stringify(fit.panel)}`);
     assert.ok(Math.abs(fit.header.top - fit.panel.top) <= 1.5, 'the header stays at the top while the list scrolls');
     assert.ok(fit.title.right <= fit.close.left && fit.close.right <= fit.panel.right, 'the title is not under Close');
-    assert.ok(fit.panel.top >= 0 && fit.panel.bottom <= 460 - 64, 'the panel sits between the top edge and the bottom tabs');
+    assert.ok(fit.panel.top >= 0 && fit.panel.bottom <= 360 - 64, 'the panel sits between the top edge and the bottom tabs');
     assert.ok(fit.buttons.every(h => h < 44), `buttons sized to their words: ${fit.buttons}`);
     assert.ok(fit.lines.every(h => h < 80), `one short entry per run: ${fit.lines}`);
     await shot('needs-you-stopped-phone');
@@ -155,6 +160,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await settings.innerText(), 'Review stopped runs');
     await settings.click();
     await page.locator('dialog.stopped-runs-dialog h2', {hasText: 'Stopped runs'}).waitFor({timeout: t(5000)});
+    // Open bot lives in Details now, not on the Needs you card.
+    assert.equal(await page.locator('dialog.stopped-runs-dialog [data-open-bot]').getAttribute('href'), '#/bot/builder/more');
     // The cause and decision fit above the two actions; the evidence stays folded.
     const card = page.locator('dialog.stopped-runs-dialog form[data-job="j1"]');
     await card.waitFor({timeout: t(5000)});
@@ -285,9 +292,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await mixed.locator('[data-result]').innerText(),
       'Choices saved. The bot is busy; Tico will apply them when its turn ends.');
     assert.equal(await mixed.locator('button:enabled').count(), 0);
-    // The only risky line still open can only be dismissed now, so the Try again hint is gone.
-    const builderCard = panel.locator('.settings-issue', {hasText: 'Builder has 2 stopped runs'});
-    assert.doesNotMatch(await builderCard.innerText(), /Try again tells the bot/);
     // The rest goes through at once, but the request saved earlier still waits for the bot's turn, so the line says so.
     deferred = false;
     await partway.locator('[data-run-decision=dismiss]').click();
@@ -311,7 +315,6 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await legal.locator('.stopped-picks').count(), 0);
     assert.equal(await legal.locator('.stopped-line').nth(1).locator('[data-result]').innerText(),
       'Choice saved. The bot is busy; Tico will dismiss this run when its turn ends.');
-    assert.doesNotMatch(await legal.innerText(), /Try again tells the bot/);
     assert.deepEqual(errors, []);
     console.log(`PASS: stopped runs are reviewed from Needs you, Settings and Health (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   } finally { await browser.close(); }
