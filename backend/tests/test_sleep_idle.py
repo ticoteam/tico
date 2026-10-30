@@ -47,6 +47,7 @@ def hq(api, monkeypatch):
     monkeypatch.setattr(sleep_idle, "TRANSPORT", httpx.MockTransport(fake))
     clock = [time.time()]
     monkeypatch.setattr(sleep_idle, "now", lambda: clock[0])
+    monkeypatch.setattr(sleep_idle, "POLICY", {"at": None, "minutes": None})
     fake.clock = clock
     service(api).started = 0                 # the server has been up longer than any setting
     system_jobs(api)                         # no system job or release hour is near, whatever the hour the test runs at
@@ -90,9 +91,9 @@ def add_routine(api, due, key="r1"):
                   (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
-def quiet(api, hours=1):
+def quiet(api, minutes=60):
     with api.app.state.store.read() as c:
-        return service(api).quiet(c, hours, sleep_idle.now())
+        return service(api).quiet(c, minutes, sleep_idle.now())
 
 
 def test_each_thing_that_keeps_the_server_up_is_named_and_stops_the_sleep(api, hq):
@@ -268,14 +269,19 @@ def test_a_send_waiting_for_a_far_retry_does_not_keep_the_server_up_but_sets_the
 
 
 class Cell:
-    """A Tico Cloud cell's updater listener, `POST /sleep` (setup/cell_updater.py), in memory."""
+    """A Tico Cloud cell's updater listener, `GET /sleep` (the idle policy) and `POST /sleep` (setup/cell_updater.py)."""
 
     def __init__(self):
-        self.sleeps, self.answer = [], (202, {"state": "sleeping", "wake_at": None})
+        self.sleeps, self.answer, self.minutes, self.down = [], (202, {"state": "sleeping", "wake_at": None}), None, False
 
     def __call__(self, request):
-        assert request.url.path == "/sleep" and request.method == "POST"
         assert request.headers["authorization"] == "Bearer cell-token"
+        if self.down:
+            raise httpx.ConnectError("the listener is down", request=request)
+        assert request.url.path == "/sleep"
+        if request.method == "GET":
+            return httpx.Response(200, json={"minutes": self.minutes})
+        assert request.method == "POST"
         self.sleeps.append(json.loads(request.content))
         status, answer = self.answer
         return httpx.Response(status, json=answer)
@@ -292,12 +298,19 @@ def cell(hq, monkeypatch):
     return fake
 
 
+def listener(cell, minutes):
+    """The listener's policy from now on. Its answer is kept a minute, so the next look is the first to see a change."""
+    cell.minutes = minutes
+    sleep_idle.POLICY.update(at=None)
+
+
 def test_a_cell_company_asks_its_cell_not_hq_and_sends_no_runners(api, hq, cell):
     at = hq.clock[0]
     wake = int(at + 3 * 3600)
     add_routine(api, wake)
     state = turn_on(api, 1, runners=False)
-    assert state["hosted"] and state["active"] and state["hours"] == 1 and state["hours_default"] is False
+    assert state["hosted"] and state["active"] and state["hours"] == 1
+    assert (state["minutes"], state["source"], state["managed"]) == (60, "owner", True)
     tick(api)
     assert cell.sleeps == [{"wake_at": sleep_idle.iso(wake), "reason": "idle"}]
     assert hq.calls == []                    # no Gateway key, no HQ question
@@ -305,22 +318,100 @@ def test_a_cell_company_asks_its_cell_not_hq_and_sends_no_runners(api, hq, cell)
     assert last["result"] == "requested" and last["wake_at"] == sleep_idle.iso(wake)
 
 
-def test_a_cell_never_set_sleeps_after_two_hours_and_an_explicit_zero_is_off(api, hq, cell):
+def test_a_cell_never_set_sleeps_after_fifteen_minutes_and_an_explicit_zero_is_off(api, hq, cell):
     state = get(api, "sleep")["sleep"]
-    assert state["hours"] == 2 and state["hours_default"] is True and state["active"] and state["hosted"]
-    service(api).started = hq.clock[0] - 90 * 60          # quiet for an hour and a half: not yet
+    assert state["hours"] == 0 and state["active"] and state["hosted"]
+    assert (state["minutes"], state["source"]) == (15, "default")
+    service(api).started = hq.clock[0] - 10 * 60          # quiet for ten minutes: not yet
     tick(api)
     assert cell.sleeps == []
-    hq.clock[0] += 31 * 60
+    hq.clock[0] += 6 * 60
     tick(api)
     assert len(cell.sleeps) == 1
 
-    state = post(api, "sleep", {"runners": False})["sleep"]    # a change to runners alone keeps the two hours
-    assert state["hours"] == 2 and state["hours_default"] is False
-    assert turn_on(api, 0)["hours"] == 0
+    state = post(api, "sleep", {"runners": False})["sleep"]    # runners alone leave the default alone
+    assert (state["minutes"], state["source"]) == (15, "default")
+    state = turn_on(api, 0)                                     # the owner's explicit 0
+    assert (state["minutes"], state["source"], state["active"]) == (0, "owner", False)
     hq.clock[0] += 3 * 3600
     tick(api)
-    assert len(cell.sleeps) == 1 and get(api, "sleep")["sleep"]["active"] is False
+    assert len(cell.sleeps) == 1
+
+
+def test_the_cells_minutes_from_its_listener_win_over_the_owners_hours(api, hq, cell):
+    turn_on(api, 2)
+    listener(cell, 5)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["hours"]) == (5, "cell", 2)
+    service(api).started = hq.clock[0] - 6 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_a_null_listener_policy_falls_back_to_the_owners_hours(api, hq, cell):
+    turn_on(api, 2)
+    listener(cell, None)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
+    service(api).started = hq.clock[0] - 119 * 60
+    tick(api)
+    assert cell.sleeps == []
+    hq.clock[0] += 2 * 60
+    tick(api)
+    assert len(cell.sleeps) == 1
+
+
+def test_a_zero_from_the_listener_means_never_sleep_whatever_the_owner_set(api, hq, cell):
+    turn_on(api, 1)
+    listener(cell, 0)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["active"]) == (0, "cell", False)
+    hq.clock[0] += 10 * 3600
+    tick(api)
+    assert cell.sleeps == []
+
+
+def test_a_listener_that_is_down_counts_as_no_policy(api, hq, cell):
+    cell.down = True
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["managed"]) == (15, "default", True)
+    turn_on(api, 3)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"]) == (180, "owner")
+
+
+def test_a_cell_looks_every_minute_and_any_other_install_every_five(api, hq, cell):
+    assert sleep_idle.every() == 60
+    assert sleep_idle.CELL_EVERY == 60 and sleep_idle.EVERY == 300
+
+
+def test_a_cell_sleeps_after_fifteen_minutes_and_waits_only_for_a_routine_within_fifteen(api, hq, cell):
+    base = int(hq.clock[0])
+    service(api).started = base - 16 * 60
+    add_routine(api, base + 10 * 60)                     # due in ten minutes: it keeps the cell up
+    tick(api)
+    assert cell.sleeps == [] and quiet(api, 15)["blocker"] == "routine_due"
+    with api.app.state.store.transaction() as c:         # moved to sixteen minutes: beyond the fifteen
+        c.execute("UPDATE automations SET next_due=?", (scheduler.stamp(
+            sleep_idle.datetime.fromtimestamp(base + 16 * 60, sleep_idle.timezone.utc)),))
+    tick(api)
+    assert cell.sleeps == [{"wake_at": sleep_idle.iso(base + 16 * 60), "reason": "idle"}]
+
+
+def test_a_cell_with_no_routine_near_sleeps_with_no_wake_time(api, hq, cell):
+    service(api).started = hq.clock[0] - 16 * 60
+    tick(api)
+    assert cell.sleeps == [{"wake_at": None, "reason": "idle"}]
+
+
+def test_the_view_gives_the_effective_minutes_their_source_and_that_a_cell_is_managed(api, hq, cell):
+    state = get(api, "sleep")["sleep"]
+    assert "hours_default" not in state
+    assert (state["minutes"], state["source"], state["managed"]) == (15, "default", True)
+    turn_on(api, 2)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
+    listener(cell, 30)
+    state = get(api, "sleep")["sleep"]
+    assert (state["minutes"], state["source"], state["hours"]) == (30, "cell", 2)
 
 
 def test_a_busy_cell_says_not_now_and_is_asked_again_after_fifteen_minutes(api, hq, cell):
@@ -375,7 +466,9 @@ def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api,
 
 def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_block(api, hq):
     state = get(api, "sleep")["sleep"]
-    assert state["hours"] == 0 and state["hours_default"] is False
+    assert (state["minutes"], state["source"], state["managed"]) == (0, "default", False)
+    turn_on(api, 2)
+    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
     r = runner(api, "ana")
     ready(api, r, [])
     with api.app.state.store.read() as c:
