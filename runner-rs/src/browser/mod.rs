@@ -603,16 +603,15 @@ struct Launched {
 
 /// Run as the bot: clear the lock a Chrome of another container left (it names that host) and the crash flag that
 /// would offer to restore pages, set "continue where you left off" (restore_on_startup 1: Chrome then keeps session
-/// cookies, so a sign-in without "remember me" survives a runner restart), then exec Chrome.
+/// cookies, so a sign-in without "remember me" survives a runner restart), then exec Chrome. Only a number is
+/// rewritten: `protection.macs` holds the same key with a string, and Chrome sets aside a profile it cannot parse.
 const START: &str = r#"p="$1"; shift
 rm -f "$p/SingletonLock" "$p/SingletonSocket" "$p/SingletonCookie"
 f="$p/Default/Preferences"
 if [ ! -e "$f" ] && [ ! -L "$f" ]; then mkdir -p "$p/Default" && printf '{"session":{"restore_on_startup":1}}' > "$f"
 elif [ -f "$f" ] && [ ! -L "$f" ]; then
-  sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/; s/"restore_on_startup":[0-9]*/"restore_on_startup":1/; s/"session":{}/"session":{"restore_on_startup":1}/' "$f"
-  if ! grep -q '"restore_on_startup"' "$f"; then
-    if grep -q '"session":{' "$f"; then sed -i 's/"session":{/"session":{"restore_on_startup":1,/' "$f"; else sed -i 's/^{/{"session":{"restore_on_startup":1},/' "$f"; fi
-  fi
+  sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/; s/"restore_on_startup":[0-9][0-9]*/"restore_on_startup":1/; s/"session":{}/"session":{"restore_on_startup":1}/' "$f"
+  grep -q '"restore_on_startup":[0-9]' "$f" || sed -i 's/^{/{"session":{"restore_on_startup":1},/' "$f"
 fi
 exec "$@""#;
 
@@ -804,6 +803,38 @@ mod live;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// START's edit of a profile Chrome wrote keeps it JSON (a broken one is set aside as Preferences.bad, and with
+    /// it every setting) and turns "continue where you left off" on, leaving the protection MACs alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_start_script_keeps_a_profile_readable_and_restoring() {
+        let dir = std::env::temp_dir().join(format!("tico-chrome-start-{}", uuid::Uuid::new_v4().simple()));
+        let run = |prefs: Option<&str>| -> Value {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("Default")).unwrap();
+            let f = dir.join("Default/Preferences");
+            if let Some(p) = prefs {
+                std::fs::write(&f, p).unwrap();
+            } else {
+                std::fs::remove_dir(dir.join("Default")).unwrap();
+            }
+            let ok = std::process::Command::new("/bin/sh").args(["-c", START, "tico-chrome"]).arg(&dir).arg("true").status().unwrap();
+            assert!(ok.success());
+            serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).expect("Preferences stays JSON")
+        };
+        let mac = "4A7F0C2E9B";
+        let written = format!(r#"{{"profile":{{"exit_type":"Crashed","exited_cleanly":false}},"protection":{{"macs":{{"session":{{"restore_on_startup":"{mac}"}}}}}},"session":{{"restore_on_startup":5}}}}"#);
+        let p = run(Some(&written));
+        assert_eq!((p["session"]["restore_on_startup"].clone(), p["protection"]["macs"]["session"]["restore_on_startup"].clone()), (json!(1), json!(mac)));
+        assert_eq!(p["profile"]["exit_type"], "Normal");
+        let reset = format!(r#"{{"protection":{{"macs":{{"session":{{"restore_on_startup":"{mac}"}}}}}},"session":{{}}}}"#);
+        assert_eq!(run(Some(&reset))["session"]["restore_on_startup"], 1);
+        let none = format!(r#"{{"protection":{{"macs":{{"session":{{"restore_on_startup":"{mac}"}}}}}}}}"#);
+        assert_eq!(run(Some(&none))["session"]["restore_on_startup"], 1);
+        assert_eq!(run(None)["session"]["restore_on_startup"], 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_a_chrome_tools_entry_opts_in() {
