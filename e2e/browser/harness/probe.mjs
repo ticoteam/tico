@@ -13,6 +13,8 @@ const servers = dump.servers || {};
 const base = (env.TICO_BROWSER_URL || '').replace(/\/$/, '');
 const practice = env.PRACTICE || '';
 const host = env.HOST || 'login.practice.test';
+// The practice site is plain http, which a login fills only when its site is saved as http://host.
+const site = (env.PRACTICE || '').startsWith('http://') ? 'http://' + host : host;
 const label = env.LABEL || 'Harness-login';
 const checks = [];
 const data = {};
@@ -139,7 +141,7 @@ async function main() {
     check('the hub MCP server is in the written config', Boolean(hubServer));
     if (hubServer) {
       const hubMcp = await openMcp(hubServer);
-      const card = await hubMcp.call('hub_credential_request', {kind: 'login', label, sites: [host]});
+      const card = await hubMcp.call('hub_credential_request', {kind: 'login', label, sites: [site]});
       let parsed = {};
       try { parsed = JSON.parse(card.text); } catch { /* the reply is text: no card id to report */ }
       data.card = parsed.id || parsed.request_id || parsed.card?.id || '';
